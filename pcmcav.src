@@ -1,0 +1,2453 @@
+C 25 Mar 10 - YLW,HL - add FIXPVA gradients for cavitation term
+C 14 Oct 09 - DGF - improve efficiency of area scaling
+C 12 Jan 09 - HL  - reduce memory for MTHALL=4
+C 15 Dec 08 - DGF - some changes for PCM cavitation energy gradients
+C 20 Nov 08 - MWS - PEDRA: clear unused X,Y,ZVAL memory for MTHALL=4
+C 23 Oct 08 - PFS,HL - hooks to call FIXPVA tesselation for C-PCM
+C 28 Aug 07 - HL  - pcm cavitation energy and gradients
+C 20 Aug 07 - DGF - decompose cavitation energy into fragment contribs
+C 24 Mar 07 - MWS - pad FRGINF common block
+C 14 Nov 05 - DGF - dynam. allocate PCM arrays; various PCM improvements
+C 19 Sep 05 - IA  - synchronize FRGINF common
+C  5 Jul 05 - MWS - SELECT NEW ATOM,BASIS,EFP,PCM,DAF DIMENSIONS
+C  7 Mar 05 - IA  - fix common block FRGINF
+C 13 Feb 05 - MWS - pad common block FRGINF
+C  7 Apr 04 - HL  - new tessellation GEPOL-AS
+C 12 Dec 03 - JAB - use generic functions
+C  3 Jul 03 - MWS - PEDRA: use dynamic memory
+C 23 Jun 03 - HL  - add gepol-rt. print control for gradients
+C  7 Aug 02 - HL  - PEDRA: parallelize gepol-gb, print a warning message
+C                   GAUBON: print a warning message for negative area
+C 17 Apr 02 - MWS - synch up frginf common
+C  8 Oct 01 - HL  - parallelize PCM
+C 13 Jun 01 - HL  - SEPARA: buffer/EFP+PCM, extra check for 2 cavities
+C 20 Feb 01 - BM  - PEDRA: additional argument for DERIVA call
+C 29 Dec 00 - BM  - corrected the gradient bug
+C  1 Nov 00 - PB  - fix the cases of IEF=1 and 2
+C 11 Oct 00 - PB,BM - interfaced EFP+PCM
+C 25 Aug 00 - BM  - added IEF solvation model
+C 12 Nov 98 - AG  - PEDRA: ensure -dr- is in angstroms here
+C 18 Mar 97 - PISA - NEW MODULE FOR PCM CAVITY DEFINITION
+C
+C*MODULE PCMCAV  *DECK PEDRAM
+      SUBROUTINE PEDRAM
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL SOME
+C
+      PARAMETER (MXATM=2000)
+      PARAMETER (MXVRT=20)
+C
+      LOGICAL GOPARR, DSKWRK, MASWRK
+C
+      COMMON /FMCOM / X(1)
+      COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /MACHIN/ NWDVAR,MAXFM,MAXSM,LIMFM,LIMSM
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMPAR/ IPCM,NFT26,NFT27,IKREP,IEF,IP_F,NFMOPCM
+      COMMON /PCMPNT/ LXYZRE,LSSFE,LLIST,LALPCM,LRINPCM,LINAPCM,LINFPCM,
+     *                LINIPCM,LMEPCM,LAXYZCT,LXYZCT2,LNVERT,LQSN,LQSE,
+     *                LQFS,LQIND,LISPHE,LVAD,LQOR,LVECMUL,LAIPRJ,LFIPRJ,
+     *                LPEL,LPCMCDR,LDAI,LIDDAI,LQSND,LQSED
+C
+C     ----- set memory pointers for polyhedra setup -----
+C
+      SOME = NPRINT.NE.-5
+C
+C     maximum number of tessalations is not known, take worst case
+C     maximum number of spheres is not known, take worst case
+C
+C     It seems that all routines except PEDRT assume variable maximum
+C     number (molecule-dependent), whereas PEDRT stores some fixed size
+C     info in arrays used for vertices, and the max value for the
+C     "vertix" dimension is 10 (which is 3*3+1, 3 being x,y,z).
+C     Since arrays are shared, MXVRT should be greater or equal to
+C     10. Arrays allocated as MXVRT should naturally be defined as
+C     such even where the maximum needed size is 10.
+C     PEDRT adds tesserae in triples, thus we try to set
+C     MXTS1 to MXTS*3.  Perhaps MXTS1 should be MXTS*3+1?
+C     ICAV1 seems to require MXSP+1 space allocated.
+C
+      CALL VALFM(LOADFM)
+      IF(NFMOPCM.EQ.0) THEN
+        LINTSP = LOADFM + 1
+        LVERT  = LINTSP + (MXTS*MXVRT-1)/NWDVAR+1
+        LCENTR = LVERT  + MXTS*MXVRT*3
+        LAST   = LCENTR + MXTS*MXVRT*3
+      ELSE
+        LAST=LOADFM + 1
+        LINTSP = LAST
+        LVERT  = LAST
+        LCENTR = LAST
+      ENDIF
+      LNEWSP = LAST
+      LICAV1 = LNEWSP + (MXSP*2-1)/NWDVAR+1
+      LICAV2 = LICAV1 + (MXSP+1-1)/NWDVAR+1
+      LX     = LICAV2 + (MXSP+1-1)/NWDVAR+1
+      LY     = LX     + MXTS
+      LZ     = LY     + MXTS
+      LINTSPT= LZ     + MXTS
+      LVERTT = LINTSPT+ (960*MXVRT-1)/NWDVAR+1
+      LCENTRT= LVERTT + 960*MXVRT*3
+      LXVALT = LCENTRT+ 960*MXVRT*3
+      LYVALT = LXVALT + 960
+      LZVALT = LYVALT + 960
+      MAST   = LZVALT + 960
+      LXCTST = MAST  + 960
+      LYCTST = LXCTST + 960
+      LZCTST = LYCTST + 960
+      LISPHET= LZCTST + 960
+      LNVERTT= LISPHET+ (960-1)/NWDVAR+1
+      LAST   = LNVERTT+ (960-1)/NWDVAR+1
+C
+      NEED = LAST - LOADFM - 1
+      IF(MASWRK.AND.NPRINT.NE.817) WRITE(IW,910) NEED
+      CALL GETFM(NEED)
+C         note, mws thinks only the 1st arg is different?
+      IF(NFG.EQ.0) THEN
+         CALL PEDRA(NAT,X(LINTSP),X(LVERT),X(LCENTR),X(LNEWSP),
+     *              X(LICAV1),X(LICAV2),X(LX),X(LY),X(LZ),
+     *              SOME,X(LINTSPT),X(LVERTT),X(LCENTRT),
+     *              X(LXVALT),X(LYVALT),X(LZVALT),X(MAST),
+     *              X(LXCTST),X(LYCTST),X(LZCTST),X(LISPHET),X(LNVERTT),
+     *              X(LAXYZCT),X(LAXYZCT+MXTS),X(LAXYZCT+MXTS*2),
+     *              X(LXYZCT2),X(LXYZCT2+MXTS),X(LXYZCT2+MXTS*2),
+     *              X(LAXYZCT+MXTS*3),X(LNVERT),X(LXYZRE),
+     *              X(LXYZRE+MXSP),X(LXYZRE+MXSP*2),X(LXYZRE+MXSP*3),
+     *              X(LSSFE),X(LISPHE),X(LALPCM),X(LRINPCM),
+     *              X(LINIPCM),X(LMEPCM))
+      ELSE
+         CALL PEDRA(NATFMO,X(LINTSP),X(LVERT),X(LCENTR),X(LNEWSP),
+     *              X(LICAV1),X(LICAV2),X(LX),X(LY),X(LZ),
+     *              SOME,X(LINTSPT),X(LVERTT),X(LCENTRT),
+     *              X(LXVALT),X(LYVALT),X(LZVALT),X(MAST),
+     *              X(LXCTST),X(LYCTST),X(LZCTST),X(LISPHET),X(LNVERTT),
+     *              X(LAXYZCT),X(LAXYZCT+MXTS),X(LAXYZCT+MXTS*2),
+     *              X(LXYZCT2),X(LXYZCT2+MXTS),X(LXYZCT2+MXTS*2),
+     *              X(LAXYZCT+MXTS*3),X(LNVERT),X(LXYZRE),
+     *              X(LXYZRE+MXSP),X(LXYZRE+MXSP*2),X(LXYZRE+MXSP*3),
+     *              X(LSSFE),X(LISPHE),X(LALPCM),X(LRINPCM),
+     *              X(LINIPCM),X(LMEPCM))
+      ENDIF
+C
+      CALL RETFM(NEED)
+      RETURN
+C
+  910 FORMAT(/1X,'MEMORY USED TO GENERATE CAVITY=',I10/)
+      END
+C*MODULE PCMCAV  *DECK PEDRA
+      SUBROUTINE PEDRA(NAT,INTSPH,VERT,CENTR,NEWSPH,ICAV1,ICAV2,
+     *                 XVAL,YVAL,ZVAL,SOME,
+     *                 INTSPT,VERTT,CENTRT,XVALT,YVALT,ZVALT,AST,
+     *                 XCTST,YCTST,ZCTST,ISPHET,NVERTT,XCTS,YCTS,ZCTS,
+     *                 XCTS2,YCTS2,ZCTS2,AS,NVERT,XE,YE,ZE,RE,SSFE,
+     *                 ISPHE,ALPHA,RIN,INITS,METHOD)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL SOME
+C
+      LOGICAL GOPARR, DSKWRK, MASWRK
+C
+      PARAMETER (MXFRG=1050,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12, MXVRT=20)
+C
+      DIMENSION INTSPH(MXTS,MXVRT),VERT(MXTS,MXVRT,3),
+     *          CENTR(MXTS,MXVRT,3),NEWSPH(MXSP,2),ICAV1(MXSP),
+     *          ICAV2(MXSP),XVAL(MXTS),YVAL(MXTS),ZVAL(MXTS),
+     *          INTSPT(960,MXVRT),VERTT(960,MXVRT,3),
+     *          CENTRT(960,MXVRT,3),XVALT(960),YVALT(960),ZVALT(960),
+     *          AST(960),XCTST(960),YCTST(960),ZCTST(960),ISPHET(960),
+     *          NVERTT(960),XCTS(*),YCTS(*),ZCTS(*),AS(*),XCTS2(*),
+     *          YCTS2(*),ZCTS2(*),NVERT(*),XE(*),YE(*),ZE(*),RE(*),
+     *          SSFE(*),ISPHE(*),ALPHA(*),RIN(*),INITS(*),
+     *          METHOD(*)
+      DIMENSION IDUM(360),THEV(24),FIV(24),JVT1(6,60),
+     *          PP(3),PP1(3),PTS(3,MXVRT),CCC(3,MXVRT),CV(122,3)
+C
+      COMMON /FMCOM / XX(1)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /MACHIN/ NWDVAR,MAXFM,MAXSM,LIMFM,LIMSM
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMOPT/ RABI,RASC,REFPOL,THRSLS,DENSLS,WB,WA,ETA2,GD,EVAC,
+     *                RHOW,PM,AREATL,AREAKP,BONDRY,OMEGA,RET,FRO,EPSINF,
+     *                EPS,DR,RSOLV,VMOL,TCE,STEN,DSTEN,CMF,TABS,IDIRCT,
+     *                IPCDER,IDP,ICOMP,IFIELD,ICAV,IDISP,IPRINT,IRETCAV,
+     *                ICENT,IFAST,NEVAL,IEFPOL,KEEPSM,IMGABI,IMGASC,NADD
+      COMMON /PCMPAR/ IPCM,NFT26,NFT27,IKREP,IEF,IP_F,NFMOPCM
+      COMMON /PCMPLY/ STOT,VOL,CCX,CCY,CCZ,RDIF,NESF,NESFP,NESFF,I_NESF,
+     *                L_AST
+      COMMON /PCMPNT/ LXYZRE,LSSFE,LLIST,LALPCM,LRINPCM,LINAPCM,LINFPCM,
+     *                LINIPCM,LMEPCM,LAXYZCT,LXYZCT2,LNVERT,LQSN,LQSE,
+     *                LQFS,LQIND,LISPHE,LVAD,LQOR,LVECMUL,LAIPRJ,LFIPRJ,
+     *                LPEL,LPCMCDR,LDAI,LIDDAI,LQSND,LQSED
+C
+      EQUIVALENCE (IDUM(1),JVT1(1,1))
+C
+      PARAMETER (TOANGS=0.52917724924D+00, ANTOAU=1.0D+00/TOANGS)
+C
+      DATA ZERO/0.0D+00/,FIRST/0.0174533D+00/
+C
+C     Angoli che individuano i centri e i vertici di un poliedro
+C     inscritto in una sfera di raggio unitario centrata nell'origine
+C
+      DATA THEV/0.6523581398D+00,1.107148718D+00,1.382085796D+00,
+     *          1.759506858D+00,2.034443936D+00,2.489234514D+00,
+     *                         0.3261790699D+00,0.5535743589D+00,
+     *          0.8559571251D+00,0.8559571251D+00,1.017221968D+00,
+     *          1.229116717D+00,1.229116717D+00,1.433327788D+00,
+     *          1.570796327D+00,1.570796327D+00,1.708264866D+00,
+     *          1.912475937D+00,1.912475937D+00,2.124370686D+00,
+     *          2.285635528D+00,2.285635528D+00,2.588018295D+00,
+     *          2.815413584D+00/
+      DATA FIV/               0.6283185307D+00,0.0000000000D+00,
+     *         0.6283185307D+00,0.0000000000D+00,0.6283185307D+00,
+     *         0.0000000000D+00,0.6283185307D+00,0.0000000000D+00,
+     *         0.2520539002D+00,1.004583161D+00,0.6283185307D+00,
+     *         0.3293628477D+00,0.9272742138D+00,0.0000000000D+00,
+     *         0.3141592654D+00,0.9424777961D+00,0.6283185307D+00,
+     *         0.2989556830D+00,0.9576813784D+00,0.0000000000D+00,
+     *         0.3762646305D+00,0.8803724309D+00,0.6283188307D+00,
+     *         0.0000000000D+00/
+      DATA FIR/1.256637061D+00/
+C
+C     Il vettore IDUM, ripreso nella matrice JVT1, indica quali sono
+C     i vertici delle varie tessere (using less than 19 continuations)
+C
+      DATA (IDUM(III),III=1,280)/
+     *   1, 6, 2, 32, 36, 37, 1, 2, 3, 33, 32, 38, 1, 3, 4, 34,
+     *   33, 39, 1, 4, 5, 35, 34, 40, 1, 5, 6, 36, 35, 41, 7, 2, 6, 51,
+     *   42, 37, 8, 3, 2, 47, 43, 38, 9, 4, 3, 48, 44, 39, 10, 5, 4,
+     *   49, 45, 40, 11, 6, 5, 50, 46, 41, 8, 2, 12, 62, 47, 52, 9,
+     *   3, 13, 63, 48, 53, 10, 4, 14, 64, 49, 54, 11, 5, 15, 65, 50,
+     *   55, 7, 6, 16, 66, 51, 56, 7, 12, 2, 42, 57, 52, 8, 13, 3,
+     *   43, 58, 53, 9, 14, 4, 44, 59, 54, 10, 15, 5, 45, 60, 55, 11,
+     *   16, 6, 46, 61, 56, 8, 12, 18, 68, 62, 77, 9, 13, 19, 69, 63,
+     *   78, 10, 14, 20, 70, 64, 79, 11, 15, 21, 71, 65, 80, 7, 16,
+     *   17, 67, 66, 81, 7, 17, 12, 57, 67, 72, 8, 18, 13, 58, 68, 73,
+     *   9, 19, 14, 59, 69, 74, 10, 20, 15, 60, 70, 75, 11, 21, 16,
+     *   61, 71, 76, 22, 12, 17, 87, 82, 72, 23, 13, 18, 88, 83, 73,
+     *   24, 14, 19, 89, 84, 74, 25, 15, 20, 90, 85, 75, 26, 16, 21,
+     *   91, 86, 76, 22, 18, 12, 82, 92, 77, 23, 19, 13, 83, 93, 78,
+     *   24, 20, 14, 84, 94, 79, 25, 21, 15, 85, 95, 80, 26, 17, 16,
+     *   86, 96, 81, 22, 17, 27, 102, 87, 97, 23, 18, 28, 103, 88, 98,
+     *   24, 19, 29, 104, 89, 99, 25, 20, 30, 105, 90, 100, 26, 21,
+     *   31, 106, 91, 101, 22, 28, 18, 92, 107, 98, 23, 29, 19, 93/
+      DATA (IDUM(III),III=281,360)/
+     *   108, 99, 24, 30, 20, 94, 109, 100, 25, 31, 21, 95, 110, 101,
+     *   26, 27, 17, 96, 111, 97, 22, 27, 28, 107, 102, 112, 23, 28,
+     *   29, 108, 103, 113, 24, 29, 30, 109, 104, 114, 25, 30, 31,
+     *   110, 105, 115, 26, 31, 27, 111, 106, 116, 122, 28, 27, 117,
+     *   118, 112, 122, 29, 28, 118, 119, 113, 122, 30, 29, 119, 120,
+     *   114, 122, 31, 30, 120, 121, 115, 122, 27, 31, 121, 117, 116 /
+C
+      CALL DERCHK(NDER)
+C
+C     It defines the solute's cavity and calculates vertices,
+C     representative points and areas of tesserae with the
+C     Gauss Bonnet Theorem.
+C
+C     this routine wants to work in Angstrom units - Alex Granovsky
+C
+      DR = DR / ANTOAU
+C
+C     New cavity to calculate dispersion and repulsion contributions
+C
+      IDISREP = 0
+      IF (IDISP.EQ.2) IDISREP = 1
+C
+C
+C  PEDRA prevede che i dati geometrici siano espressi in ANGSTROM :
+C  vengono trasformati, e solo alla fine i risultati tornano in bohr.
+C
+      DO I=1,I_NESF
+         RE(I)=RIN(I)
+         XE(I)=XE(I)/ANTOAU
+         YE(I)=YE(I)/ANTOAU
+         ZE(I)=ZE(I)/ANTOAU
+C        Hui: we now use this routine for FIXPVA cav+dis+rep
+C             but alpha is controled elsewhere
+         RE(I) = RE(I) * ALPHA(I)
+      ENDDO
+C
+C Se stiamo calcolando il contributo dispersivo e
+C repulsivo, costruisce una nuova cavita', i cui centri coincidono
+C con quelli iniziali, con i raggi incrementati di RSOLV.
+C In questo caso PEDRA e' stata chiamata da DISREP,
+C alla fine dei cicli PCM.
+C
+      IF(IDISREP.EQ.1) THEN
+         DO I = 1,I_NESF
+            RE(I) = RE(I) + RDIF
+         ENDDO
+         RET = 100.0D+00
+      END IF
+C
+C Se stiamo calcolando l'energia di cavitazione con il
+C metodo di Pierotti sfera per sfera, e vogliamo usare solo le sfere
+C iniziali (metodo Pierotti-Claverie), abbiamo IRETCAV=1.
+C
+      IF(IRETCAV.EQ.1) RET = 100.0D+00
+C
+C
+      IF(NFMOPCM.EQ.0) THEN
+        CALL VCLR(VERT,1,MXTS*MXVRT*3)
+        CALL VCLR(CENTR,1,MXTS*MXVRT*3)
+      ENDIF
+C
+C     ----- Creation of added spheres -----
+C
+      DO N = 1,I_NESF
+         NEWSPH(N,1) = 0
+         NEWSPH(N,2) = 0
+      ENDDO
+C
+C          save number of electrons to restore on exit...
+C
+C     NELEC=NE
+C
+      ITYPC = 0
+      OMEGA0=OMEGA*FIRST
+      SENOM=SIN(OMEGA0)
+      COSOM2=(COS(OMEGA0))**2
+      RTDD=RET+RSOLV
+      RTDD2=RTDD*RTDD
+      NET=I_NESF
+      NN=2
+      NE=I_NESF
+      NEV=I_NESF
+      GO TO 100
+  110 CONTINUE
+      NN=NE+1
+      NE=NET
+  100 CONTINUE
+C
+C     check on the number of spheres
+C
+      IF(NE.GT.MXSP) THEN
+         IF(MASWRK) WRITE(IW,*)
+     *       ' PEDRA: TOO MANY SPHERES, -MXSP- MUST BE LARGER.'
+         CALL ABRT
+         STOP
+      END IF
+C
+      DO 120 I=NN,NE
+      NES=I-1
+      DO 130 J=1,NES
+      RIJ2=(XE(I)-XE(J))**2+
+     $     (YE(I)-YE(J))**2+
+     $     (ZE(I)-ZE(J))**2
+      RIJ=SQRT(RIJ2)
+      RJD=RE(J)+RSOLV
+      TEST1=RE(I)+RJD+RSOLV
+      IF(RIJ.GE.TEST1) GO TO 130
+      REG=MAX(RE(I),RE(J))
+      REP=MIN(RE(I),RE(J))
+      REG2=REG*REG
+      REP2=REP*REP
+      TEST2=REP*SENOM+SQRT(REG2-REP2*COSOM2)
+      IF(RIJ.LE.TEST2) GO TO 130
+      REGD2=(REG+RSOLV)*(REG+RSOLV)
+      TEST3=(REGD2+REG2-RTDD2)/REG
+      IF(RIJ.GE.TEST3) GO TO 130
+      DO 140 K=1,NEV
+      IF(K.EQ.J .OR. K.EQ.I) GO TO 140
+      RJK2=(XE(J)-XE(K))**2+
+     $     (YE(J)-YE(K))**2+
+     $     (ZE(J)-ZE(K))**2
+      IF(RJK2.GE.RIJ2) GO TO 140
+      RIK2=(XE(I)-XE(K))**2+
+     $     (YE(I)-YE(K))**2+
+     $     (ZE(I)-ZE(K))**2
+      IF(RIK2.GE.RIJ2) GO TO 140
+       RJK=SQRT(RJK2)
+       RIK=SQRT(RIK2)
+       SP=(RIJ+RJK+RIK)/2.0D+00
+       HH=4*(SP*(SP-RIJ)*(SP-RIK)*(SP-RJK))/RIJ2
+       REO=RE(K)*FRO
+      IF(K.GE.NE)REO=0.0002D+00
+      REO2=REO*REO
+      IF(HH.LT.REO2) GO TO 130
+  140 CONTINUE
+      REPD2=(REP+RSOLV)**2
+      TEST8=SQRT(REPD2-RTDD2)+SQRT(REGD2-RTDD2)
+      IF(RIJ.LE.TEST8) GO TO 150
+      REND2=REGD2+REG2-(REG/RIJ)*(REGD2+RIJ2-REPD2)
+      IF(REND2.LE.RTDD2) GO TO 130
+      REN=SQRT(REND2)-RSOLV
+      FC=REG/(RIJ-REG)
+      TEST7=REG-RE(I)
+      KG=I
+      KP=J
+      IF(TEST7.LE.0.000000001D+00) GO TO 160
+      KG=J
+      KP=I
+  160 FC1=FC+1.0D+00
+      XEN=(XE(KG)+FC*XE(KP))/FC1
+      YEN=(YE(KG)+FC*YE(KP))/FC1
+      ZEN=(ZE(KG)+FC*ZE(KP))/FC1
+      ITYPC = 1
+      GO TO 170
+  150 R2GN=RIJ-REP+REG
+      RGN=R2GN/2.0D+00
+      FC=R2GN/(RIJ+REP-REG)
+      FC1=FC+1.0D+00
+      TEST7=REG-RE(I)
+      KG=I
+      KP=J
+      IF(TEST7.LE.0.000000001D+00) GO TO 180
+      KG=J
+      KP=I
+  180 XEN=(XE(KG)+FC*XE(KP))/FC1
+      YEN=(YE(KG)+FC*YE(KP))/FC1
+      ZEN=(ZE(KG)+FC*ZE(KP))/FC1
+      REN=SQRT(REGD2+RGN*(RGN-(REGD2+RIJ2-REPD2)/RIJ))-RSOLV
+  170 NET=NET+1
+      XE(NET)=XEN
+      YE(NET)=YEN
+      ZE(NET)=ZEN
+      RE(NET)=REN
+C
+C     The numbers of the spheres, which generate the new sphere
+C     NET are memorized in the matrix NEWSPH(NESF,2):
+C     if the latter is of type A or B both these numbers are positive,
+C     if it is of type C the number of the main sphere is negative.
+C     For the definition of the types see JCC 11 (1990) 1047.
+C
+      IF(ITYPC.EQ.0) THEN
+        NEWSPH(NET,1) = KG
+        NEWSPH(NET,2) = KP
+      ELSE IF(ITYPC.EQ.1) THEN
+        NEWSPH(NET,1) = - KG
+        NEWSPH(NET,2) = KP
+      END IF
+C
+  130 CONTINUE
+      NEV=NET
+  120 CONTINUE
+      IF(NET.NE.NE) GO TO 110
+C NESF has to be updated!!
+      NESF=NET
+      I_NESF=NET
+      NSP=NET
+C
+C
+C
+C
+C
+C
+C
+C     ----- Partition of the cavity surface into tesserae -----
+C
+      VOL=ZERO
+      STOT=ZERO
+C
+C*****COORDINATES OF VERTICES OF TESSERAE IN A SPHERE WITH UNIT RADIUS.
+C
+C     Vengono memorizzati i vertici (nella matrice CV) e i centri (nei
+C     vettori XC,YC,ZC) di 240 tessere (60 grandi divise in 4 piu'
+C     piccole) La matrice JVT1(i,j) indica quale e' il numero d'ordine
+C     del vertice i-esimo della j-esima tessera grande. In ogni tessera
+C     grande i 6 vertici sono cosi' disposti:
+C
+C                                    1
+C
+C                                 4     5
+C
+C                              3     6     2
+C
+      CV(1,1)=0.0D+00
+      CV(1,2)=0.0D+00
+      CV(1,3)=1.0D+00
+      CV(122,1)=0.0D+00
+      CV(122,2)=0.0D+00
+      CV(122,3)=-1.0D+00
+      II=1
+      DO 200 I=1,24
+      TH=THEV(I)
+      FI=FIV(I)
+      CTH=COS(TH)
+      STH=SIN(TH)
+      DO 210 J=1,5
+      FI=FI+FIR
+      IF(J.EQ.1) FI=FIV(I)
+      II=II+1
+      CV(II,1)=STH*COS(FI)
+      CV(II,2)=STH*SIN(FI)
+      CV(II,3)=CTH
+  210 CONTINUE
+  200 CONTINUE
+C
+C
+C
+C     Controlla se ciascuna tessera e' scoperta o va tagliata
+C     Loop over setting up each atom's sphere's tesselation
+C
+C
+      IF(METHOD(1).EQ.4 .AND. NDER.GT.0) THEN
+        CALL VALFM(LOADFM)
+        IF(NFMOPCM.EQ.0) THEN
+          LDAI   = LOADFM + 1
+          LDAIT  = LDAI   + 3*20*MXTS
+          LIDDAI = LDAIT  + 3*960*20
+          LIDTMP = LIDDAI + 21*MXTS/NWDVAR + 1
+          LTMP   = LIDTMP + 21*960/NWDVAR + 1
+          LAST   = LTMP   + 3*NSP
+        ELSE
+C         LDAI and LIDDAI are allocated in PCMMEM2
+          LDAIT  = LOADFM + 1
+          LIDTMP = LDAIT  + 3*960*20
+          LTMP   = LIDTMP + 21*960/NWDVAR + 1
+          LAST   = LTMP   + 3*NSP
+        ENDIF
+        NEED   = LAST   - LOADFM -1
+        CALL GETFM(NEED)
+        CALL VCLR(XX(LDAI),1,3*20*MXTS)
+        CALL VICLR(XX(LIDDAI),1,21*MXTS)
+        CALL VCLR(XX(LDAIT),1,3*960*20)
+        CALL VICLR(XX(LIDTMP),1,21*960)
+        CALL VCLR(XX(LTMP),1,3*NSP)
+      END IF
+C
+      NN = 0
+      DO 300 NSFE = 1, NSP
+      IF(RE(NSFE).LT.0.010D+00) GO TO 300
+      XEN = XE(NSFE)
+      YEN = YE(NSFE)
+      ZEN = ZE(NSFE)
+      REN = RE(NSFE)
+C
+      NSFECPY = NSFE
+      IF(METHOD(NSFE).EQ.1.OR.METHOD(NSFE).EQ.2) THEN
+        CALL PEDGB(INITS(NSFECPY),NSFECPY,XEN,YEN,ZEN,REN,NN,JVT1,
+     *             CV,PTS,CCC,PP,PP1,INTSPH,XCTST,YCTST,ZCTST,XVALT,
+     *             YVALT,ZVALT,AST,ISPHET,NVERTT,VERTT,CENTRT,INTSPT,
+     *             XVAL,YVAL,ZVAL,VERT,CENTR,XCTS,YCTS,ZCTS,AS,NVERT,XE,
+     *             YE,ZE,RE,ISPHE)
+      ELSE IF(METHOD(NSFE).EQ.3) THEN
+C         10 in TESTMP is not the maximum number of vertices.
+C         It comes from 3*3+1, where 3 is x,y,z and 1 is for
+C         some other info.
+        MXTS1=MXTS*3
+        CALL VALFM(LOADFM)
+        LTESTMP= LOADFM + 1
+        LAST   = LTESTMP+ MXTS1*10
+        NEED = LAST - LOADFM - 1
+        CALL GETFM(NEED)
+        CALL PEDRT(INITS(NSFECPY),NSFECPY,XEN,YEN,ZEN,REN,NN,JVT1,
+     *             CV,PTS,CCC,PP,PP1,INTSPH, XVAL,YVAL,ZVAL,VERT,CENTR,
+     *             XX(LTESTMP),MXTS1,XCTS,YCTS,ZCTS,AS,NVERT,XE,YE,ZE,
+     *             RE,ISPHE)
+        CALL RETFM(NEED)
+      ELSE IF(METHOD(NSFE).EQ.4) THEN
+        IF(NDER.GT.0) THEN
+        CALL FIXPVA(INITS(NSFECPY),NSFECPY,XEN,YEN,ZEN,REN,NN,JVT1,
+     *              CV,XCTST,YCTST,ZCTST,AST,XCTS,YCTS,ZCTS,AS,
+     *              XE,YE,ZE,RE,ISPHE,XX(LDAI),XX(LIDDAI),XX(LDAIT),
+     *              XX(LIDTMP),XX(LTMP))
+        ELSE
+        CALL FIXPVA(INITS(NSFECPY),NSFECPY,XEN,YEN,ZEN,REN,NN,JVT1,
+     *              CV,XCTST,YCTST,ZCTST,AST,XCTS,YCTS,ZCTS,AS,
+     *              XE,YE,ZE,RE,ISPHE,DUM1,DUM2,DUM3,
+     *              DUM4,DUM5)
+        END IF
+        CALL VCLR(XVAL,1,NN)
+        CALL VCLR(YVAL,1,NN)
+        CALL VCLR(ZVAL,1,NN)
+      END IF
+ 300  CONTINUE
+C
+C        end loop setting up each atom's sphere's tesselation,
+C        we now know the number of tessera
+C
+      NTS = NN
+C
+C        note that this record cannot use runtime dimension NTS
+C        since the number of tesserae changes as the molecular
+C        geometry changes.  No. of spheres can be the true number.
+C
+      IF(METHOD(1).EQ.4 .AND. NDER.GT.0) THEN
+        CALL DAWRIT(IDAF,IODA,XX(LDAI)  ,3*20*MXTS         ,334,0)
+        CALL DAWRIT(IDAF,IODA,XX(LIDDAI),(21*MXTS)/NWDVAR+1,335,1)
+        CALL RETFM(NEED)
+      END IF
+C
+C     -- GEPOL-AS modifies the tessera areas according to their
+C        distances to neighboring tesserae
+C
+C     check if any sphere uses area scaling.
+      IDOAS=0
+      DO I=1,NTS
+        IF(METHOD(ISPHE(I)).EQ.2) THEN
+          IDOAS=1
+          GOTO 340
+        ENDIF
+      ENDDO
+  340 CONTINUE
+      IF(IDOAS.EQ.0) GOTO 370
+C
+      DO 350 I = 1, NTS-1
+      IF(AS(I).EQ.ZERO) GO TO 350
+      XI = XCTS(I)
+      YI = YCTS(I)
+      ZI = ZCTS(I)
+      VECXI=(XI-XE(ISPHE(I)))/RE(ISPHE(I))
+      VECYI=(YI-YE(ISPHE(I)))/RE(ISPHE(I))
+      VECZI=(ZI-ZE(ISPHE(I)))/RE(ISPHE(I))
+      II = I + 1
+      DO 360 J = II , NTS
+      IF(ISPHE(I).EQ.ISPHE(J).OR.AS(J).EQ.ZERO) GO TO 360
+      IF(METHOD(ISPHE(I)).NE.2 .AND. METHOD(ISPHE(J)).NE.2) GO TO 360
+      XJ = XCTS(J)
+      YJ = YCTS(J)
+      ZJ = ZCTS(J)
+      ISPHJ=ISPHE(J)
+      REJ=RE(ISPHJ)
+      RIJ = (XI-XJ)**2 + (YI-YJ)**2 + (ZI-ZJ)**2
+      IF(RIJ.GT.2.0D+00.OR.RIJ.GT.(AS(I)+AS(J))/2.50D+00) GO TO 360
+C
+      SMODIF=3.0D+00*RIJ/(AS(I)+AS(J)+2.0D+00*SQRT(AS(I)*AS(J)))
+      VECXJ=(XJ-XE(ISPHJ))/REJ
+      VECYJ=(YJ-YE(ISPHJ))/REJ
+      VECZJ=(ZJ-ZE(ISPHJ))/REJ
+      ANGLE=VECXI*VECXJ+VECYI*VECYJ+VECZI*VECZJ
+      SCALE = (0.250D+00*(1.0D+00-ANGLE)**4+0.250D+00)**2
+      SMODIF=SMODIF/SCALE
+C
+      IF(SMODIF.GT.1.0D+00) GO TO 360
+      AS(I) = AS(I)*SMODIF
+      AS(J) = AS(J)*SMODIF
+C
+ 360  CONTINUE
+ 350  CONTINUE
+      IF(MASWRK) WRITE(IW,*) 'DONE WITH AREA SCALING.'
+      CALL TIMIT(1)
+ 370  CONTINUE
+C
+C
+C
+C     Verifica se due tessere sono troppo vicine
+C     Skip for FMO-PCM.
+C
+      IF(NFMOPCM.EQ.0) THEN
+      TEST = 0.020D+00
+      TEST2 = TEST*TEST
+      DO 400 I = 1, NTS-1
+      IF(AS(I).EQ.ZERO) GO TO 400
+      XI = XCTS(I)
+      YI = YCTS(I)
+      ZI = ZCTS(I)
+      II = I + 1
+      DO 410 J = II , NTS
+      IF(ISPHE(I).EQ.ISPHE(J)) GO TO 410
+      IF(AS(J).EQ.ZERO) GO TO 410
+      XJ = XCTS(J)
+      YJ = YCTS(J)
+      ZJ = ZCTS(J)
+      RIJ = (XI-XJ)**2 + (YI-YJ)**2 + (ZI-ZJ)**2
+      IF(RIJ.GT.TEST2) GO TO 410
+C
+C     La routine originaria sostituiva le due tessere troppo vicine
+C     con una sola tessera. Nel caso Gauss-Bonnet, anche i vertici
+C     delle tessere e i centri degli archi vengono memorizzati ed e'
+C     impossibile sostituirli nello stesso modo: percio' si limitera'
+C     ad avvisare che due tessere sono molto vicine (in CCVE dovrebbero
+C     essere comunque escluse dall'auto- polarizzazione).
+C
+      IF(MASWRK) WRITE(IW,9010) I,J,SQRT(RIJ),TEST
+ 410  CONTINUE
+ 400  CONTINUE
+      ENDIF
+C
+C     Calcola il volume della cavita' con la formula (t. di Gauss):
+C                V=SOMMAsulleTESSERE{A r*n}/3
+C     dove r e' la distanza del punto rappresentativo dall'origine,
+C     n e' il versore normale alla tessera, A l'area della tessera,
+C     e * indica il prodotto scalare.
+C
+      VOL = ZERO
+      DO ITS = 1, NTS
+         NSFE = ISPHE(ITS)
+C
+C     Trova il versore normale
+C
+         XN = (XCTS(ITS) - XE(NSFE)) / RE(NSFE)
+         YN = (YCTS(ITS) - YE(NSFE)) / RE(NSFE)
+         ZN = (ZCTS(ITS) - ZE(NSFE)) / RE(NSFE)
+C
+C     Trova il prodotto scalare
+C
+         PROD = XCTS(ITS)*XN + YCTS(ITS)*YN + ZCTS(ITS)*ZN
+         VOL = VOL + AS(ITS) * PROD / 3.0D+00
+      ENDDO
+C
+C     Stampa la geometria della cavita'
+C
+      DO 500 I=1,NSP
+         SSFE(I)=ZERO
+  500 CONTINUE
+      DO 510 I=1,NTS
+         K=ISPHE(I)
+         SSFE(K)=SSFE(K)+AS(I)
+  510 CONTINUE
+      STOT=ZERO
+      DO I=1,NSP
+         STOT=STOT+SSFE(I)
+      ENDDO
+C
+      IF(NPRINT.NE.817  .AND.  MASWRK) THEN
+         WRITE(IW,9020) NSP
+         DO I=1,NSP
+            WRITE(IW,9030) I,XE(I),YE(I),ZE(I),RE(I),SSFE(I)
+         ENDDO
+         WRITE(IW,9040) NTS,STOT,VOL
+      END IF
+C
+C     ----- set up for possible gradient calculation -----
+C     Se richiesto calcola la derivata dell'area e del punto
+C     rappresentativo di ciascuna tessera rispetto
+C     alle coordinate dei centri delle sfere originarie.
+C
+      CALL DERCHK(NDER)
+      IF(NDER.GT.0.AND.IPCDER.EQ.1) THEN
+C
+         IF(NFMOPCM.NE.0) CALL ABRT
+         IF(IP_F.EQ.0)THEN
+           IF(NESFP.GT.NAT) THEN
+             IF(MASWRK) WRITE(IW,9050) NESFP,NAT
+             CALL ABRT
+             STOP
+           ENDIF
+         ELSE
+           NATNEW=NAT+3*NFRG
+           IF(I_NESF.GT.NATNEW)THEN
+             IF(MASWRK) WRITE(IW,9050)I_NESF,NATNEW
+             CALL ABRT
+             STOP
+           END IF
+         END IF
+C
+         CALL VALFM(LOADFM)
+         LDRPNT = LOADFM + 1
+         LDRTES = LDRPNT + NTS*NAT*3*3
+         LDRCNT = LDRTES + NTS*NAT*3
+         LDRRAD = LDRCNT + NSP*NAT*3*3
+         LAST   = LDRRAD + NSP*NAT*3
+         NEEDG = LAST - LOADFM - 1
+C        IF(SOME .AND. MASWRK) WRITE(IW,9060) NEEDG
+         IF(MASWRK) WRITE(IW,9060) NEEDG
+         CALL GETFM(NEEDG)
+C
+         CALL VCLR(XX(LDRCNT),1,NSP*NAT*3*3)
+         CALL VCLR(XX(LDRRAD),1,NSP*NAT*3)
+         NESFT=NSP
+         DO NSFE = 1,NAT
+            NATSPH=0
+            NSFER=NSFE
+            NSFECPY = NSFE
+            DO ICOORD = 1, 3
+               IF(NATSPH.EQ.0) THEN
+                  ICRDCPY = ICOORD
+                  CALL DERIVA(NSFECPY,NSFER,ICRDCPY,INTSPH,VERT,CENTR,
+     *                        NEWSPH,XX(LDRPNT),XX(LDRTES),XX(LDRCNT),
+     *                        XX(LDRRAD),NAT,NESFT,XCTS,YCTS,ZCTS,AS,
+     *                        NVERT,XE,YE,ZE,RE,ISPHE)
+               END IF
+            ENDDO
+         ENDDO
+C
+C     store results, this is -before- the d-inverse matrix
+C
+         CALL SEQREW(NFT26)
+         CALL SQWRIT(NFT26,XX(LDRPNT),NTS*NAT*3*3)
+         CALL SQWRIT(NFT26,XX(LDRTES),NTS*NAT*3)
+         CALL SQWRIT(NFT26,XX(LDRCNT),NSP*NAT*3*3)
+         CALL SQWRIT(NFT26,XX(LDRRAD),NSP*NAT*3)
+C
+         CALL RETFM(NEEDG)
+      END IF
+C
+C     Trasform results in bohr
+C
+      DO I=1,NSP
+         RE(I)=RE(I)*ANTOAU
+         XE(I)=XE(I)*ANTOAU
+         YE(I)=YE(I)*ANTOAU
+         ZE(I)=ZE(I)*ANTOAU
+      ENDDO
+      CALL DSCAL(NTS,ANTOAU*ANTOAU,AS,1)
+      CALL DSCAL(NTS,ANTOAU,XCTS,1)
+      CALL DSCAL(NTS,ANTOAU,YCTS,1)
+      CALL DSCAL(NTS,ANTOAU,ZCTS,1)
+C
+C     the ?CTS2 arrays are not allocated storage for FMO-PCM.
+C     See more about this in pcmmem2.
+      IF(NFMOPCM.EQ.0) THEN
+         CALL DCOPY(NTS,XVAL,1,XCTS2,1)
+         CALL DCOPY(NTS,YVAL,1,YCTS2,1)
+         CALL DCOPY(NTS,ZVAL,1,ZCTS2,1)
+         CALL DSCAL(NTS,ANTOAU,XCTS2,1)
+         CALL DSCAL(NTS,ANTOAU,YCTS2,1)
+         CALL DSCAL(NTS,ANTOAU,ZCTS2,1)
+      ENDIF
+Cdgf  remove after debugging
+C     DO I=1,NTS
+C        AS(I)=AS(I)*ANTOAU*ANTOAU
+C        XCTS(I)=XCTS(I)*ANTOAU
+C        YCTS(I)=YCTS(I)*ANTOAU
+C        ZCTS(I)=ZCTS(I)*ANTOAU
+C        XCTS(I+NTS)=XVAL(I)*ANTOAU
+C        YCTS(I+NTS)=YVAL(I)*ANTOAU
+C        ZCTS(I+NTS)=ZVAL(I)*ANTOAU
+C     ENDDO
+      CCX = CCX * ANTOAU
+      CCY = CCY * ANTOAU
+      CCZ = CCZ * ANTOAU
+      DR = DR * ANTOAU
+C
+C
+C
+C B. Mennucci/1999
+C     If IEF is equal to 1 or 2 (anisotropic dielectrics and ionic
+C     solutions) store results, this is -before- the d-inverse matrix
+C
+      IF(IEF.GT.0.AND.IEF.LT.3)THEN
+         IF(NFMOPCM.NE.0) CALL ABRT
+         CALL VALFM(LOADFM)
+         LVERT  = LOADFM + 1
+         LCENTR = LVERT  + NTS*3*MXVRT
+         LAST   = LCENTR + NTS*3*MXVRT
+         NEEDG  = LAST - LOADFM - 1
+C
+         IF(SOME .AND. MASWRK) WRITE(IW,9061) NEEDG
+         CALL GETFM(NEEDG)
+C
+         IV=0
+         DO I=1,NTS
+         DO J=1,MXVRT
+           DO L=1,3
+             IV=IV+1
+             XX(LVERT-1+IV) = VERT(I,J,L)*ANTOAU
+             XX(LCENTR-1+IV) = CENTR(I,J,L)*ANTOAU
+          ENDDO
+         ENDDO
+         ENDDO
+C
+         IF(NDER.LE.0)CALL SEQREW(NFT26)
+         CALL SQWRIT(NFT26,XX(LVERT),NTS*3*MXVRT)
+         CALL SQWRIT(NFT26,XX(LCENTR),NTS*3*MXVRT)
+C
+         CALL RETFM(NEEDG)
+      ENDIF
+C
+      IF(IPRINT.GE.1 .AND. MASWRK) THEN
+         WRITE(IW,9070)
+         WRITE(IW,9080)
+         WRITE(IW,9090) (I,ISPHE(I),AS(I),XCTS(I),YCTS(I),ZCTS(I),
+     *             XVAL(I)*ANTOAU,YVAL(I)*ANTOAU,ZVAL(I)*ANTOAU,I=1,NTS)
+C    *                   XCTS(NTS+I),YCTS(NTS+I),ZCTS(NTS+I), I=1,NTS)
+      END IF
+C----------------------------------------------------------------------
+C     NE=NELEC
+C
+C     Call the routine which checks if the cavity is single or divided.
+C     NEWSPH is used as temporary array of size MXSP.
+C
+      CALL SEPARA(ICAV1,ICAV2,NEWSPH,NCAV1,NCAV2,XE,YE,ZE,RE)
+C
+C     The dispersion calculation is allowed only in the case of
+C     single cavity.
+C
+      IF(NCAV2.NE.0) IDISP=0
+C
+      IDISREP = 0
+      IRETCAV = 0
+      IF (IDISP.EQ.2) IDISP = 1
+      RETURN
+C
+ 9010 FORMAT(1X,'WARNING: THE DISTANCE BETWEEN TESSERAE ',I6,
+     *       ' AND ',I6,' IS ',F6.4,' A, LESS THAN ',F6.4,' A')
+ 9020 FORMAT(/1X,'TOTAL NUMBER OF SPHERES=',I6/
+     *        1X,'SPHERE           CENTER  (X,Y,Z) (A)            ',
+     *           '   RADIUS (A)      AREA(A*A)')
+ 9030 FORMAT(I6,4F14.9,F14.9)
+ 9040 FORMAT(/1X,'TOTAL NUMBER OF TESSERAE=',I8/
+     *        1X,'SURFACE AREA=',F15.8,'(A**2)',4X,'CAVITY VOLUME=',
+     *            F16.8,' (A**3)')
+ 9050 FORMAT(1X,'PEDRA: CONFUSION ABOUT SPHERE COUNTS. NESFP,NAT=',2I6)
+ 9060 FORMAT(/1X,'ADDITIONAL MEMORY NEEDED TO SETUP GRADIENT RUN=',I10)
+ 9061 FORMAT(/1X,'ADDITIONAL MEMORY NEEDED TO SETUP IEF RUN=',I10)
+ 9070 FORMAT(1X,'***  SUDDIVISIONE DELLA SUPERFICIE  ***')
+ 9080 FORMAT(' TESSERA  SFERA   AREA   X Y Z CENTRO TESSERA  ',
+     *       'X Y Z PUNTO NORMALE')
+ 9090 FORMAT(2I6,7F12.7)
+      END
+C*MODULE PCMCAV  *DECK TESSERA
+      SUBROUTINE TESSERA(NS,NV,PTS,CCC,PP,PP1,AREA,INTSPT,XE,YE,ZE,RE)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      PARAMETER (MXVRT=20)
+C
+      DIMENSION PTS(3,MXVRT),CCC(3,MXVRT),PP(3),PP1(3),
+     *          INTSPT(MXVRT),P1(3),P2(3),P3(3),P4(3),POINT(3),
+     *          PSCR(3,MXVRT),CCCP(3,MXVRT),POINTL(3,MXVRT),IND(MXVRT),
+     *          LTYP(MXVRT),INTSCR(MXVRT),XE(*),YE(*),ZE(*),RE(*)
+C
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PCMPLY/ STOT,VOL,CCX,CCY,CCZ,RDIF,NESF,NESFP,NESFF,I_NESF,
+     *                L_AST
+C
+      AREA = 0.0D+00
+C
+C     copy the sphere center coordinates to
+C     CCC(*,*).
+C
+      DO J=1, 3
+        CCC(1,J) = XE(NS)
+        CCC(2,J) = YE(NS)
+        CCC(3,J) = ZE(NS)
+      ENDDO
+C
+C     copy the sphere number to INTSPT(*,*)
+C     note the 3 initial vertices are copied
+C
+      DO N = 1, 3
+        INTSPT(N) = NS
+      ENDDO
+C
+C     loop over other spheres
+C     note the number of vertices are changing in the loop
+C
+      DO 150 NSFE1=1,I_NESF
+      IF(NSFE1.EQ.NS) GO TO 150
+C
+C
+      IF(NSFE1.EQ.NS .OR. RE(NSFE1).LT.0.020D+00)    GOTO 150
+      IF(ABS(XE(NS)-XE(NSFE1)).GT.(RE(NS)+RE(NSFE1)))GOTO 150
+      IF(ABS(YE(NS)-YE(NSFE1)).GT.(RE(NS)+RE(NSFE1)))GOTO 150
+      IF(ABS(ZE(NS)-ZE(NSFE1)).GT.(RE(NS)+RE(NSFE1)))GOTO 150
+C
+      R12 = SQRT((XE(NS)-XE(NSFE1))**2 +
+     *            (YE(NS)-YE(NSFE1))**2 +
+     *            (ZE(NS)-ZE(NSFE1))**2  )
+      IF(R12.GE.RE(NS)+RE(NSFE1)) GO TO 150
+      IF(R12.LE.ABS(RE(NS)-RE(NSFE1)) .AND.
+     *   RE(NSFE1).LT.RE(NS)) GO TO 150
+      IF(R12.LE.ABS(RE(NS)-RE(NSFE1)) .AND.
+     *   RE(NSFE1).GT.RE(NS)) RETURN
+C
+      IF(NV.EQ.3) THEN
+      DDD1=SQRT((PTS(1,1)-PTS(1,2))**2 +
+     *           (PTS(2,1)-PTS(2,2))**2 +
+     *           (PTS(3,1)-PTS(3,2))**2  )
+      DDD2=SQRT((PTS(1,3)-PTS(1,2))**2 +
+     *           (PTS(2,3)-PTS(2,2))**2 +
+     *           (PTS(3,3)-PTS(3,2))**2  )
+      DDD3=SQRT((PTS(1,3)-PTS(1,1))**2 +
+     *           (PTS(2,3)-PTS(2,1))**2 +
+     *           (PTS(3,3)-PTS(3,1))**2  )
+      IF(DDD1.LT.1.0D-05 .OR.
+     *   DDD2.LT.1.0D-05 .OR.
+     *   DDD3.LT.1.0D-05) RETURN
+      END IF
+C
+C     copy sphere number into temperary INTSCR(J)
+C     copy vertix coordinates into temp PSCR(I,J)
+C     copy center point coordinates of the sphere into temp CCCP(I,J)
+C
+      DO J =1, NV
+        INTSCR(J) = INTSPT(J)
+      DO I = 1,3
+        PSCR(I,J) = PTS(I,J)
+        CCCP(I,J) = CCC(I,J)
+      ENDDO
+      ENDDO
+C
+      ICOP = 0
+      DO J =1, MXVRT
+        IND(J) = 0
+        LTYP(J) = 0
+      ENDDO
+C
+C
+C
+      DO 100 I=1,NV
+        DELR2=(PTS(1,I)-XE(NSFE1))**2+(PTS(2,I)-YE(NSFE1))**2+
+     *  (PTS(3,I)-ZE(NSFE1))**2
+        DELR=SQRT(DELR2)
+        IF(DELR.LT.RE(NSFE1)) THEN
+          IND(I) = 1
+          ICOP = ICOP+1
+        END IF
+ 100  CONTINUE
+C
+C     if all the vertices are overlapped by any one of
+C     the other sphere, finish
+C
+      IF(ICOP.EQ.NV) RETURN
+C                    ******
+C
+C
+C     classify the sidelines into 5 types:
+C     0. whole line in the sphere
+C     1. head out of the sphere but the end in the sphere
+C     2. head in the sphere but the end out the sphere
+C     3. both head and end out, but middle part in the sphere
+C     4. whole line out of the sphere
+C
+      DO L = 1, NV
+        IV1 = L
+        IV2 = L+1
+        IF(L.EQ.NV) IV2 = 1
+        IF(IND(IV1).EQ.1.AND.IND(IV2).EQ.1) THEN
+          LTYP(L) = 0
+        ELSE IF(IND(IV1).EQ.0.AND.IND(IV2).EQ.1) THEN
+          LTYP(L) = 1
+        ELSE IF(IND(IV1).EQ.1.AND.IND(IV2).EQ.0) THEN
+          LTYP(L) = 2
+        ELSE IF(IND(IV1).EQ.0.AND.IND(IV2).EQ.0) THEN
+          LTYP(L) = 4
+C
+          RC2 = (CCC(1,L)-PTS(1,L))**2 + (CCC(2,L)-PTS(2,L))**2 +
+     *          (CCC(3,L)-PTS(3,L))**2
+          RC = SQRT(RC2)
+C
+C     Su ogni lato si definiscono 11 punti equispaziati, che vengono
+C     controllati
+C
+          TOL = - 1.0D-10
+          DO II = 1, 11
+          POINT(1) = PTS(1,IV1) + II * (PTS(1,IV2)-PTS(1,IV1)) / 11
+          POINT(2) = PTS(2,IV1) + II * (PTS(2,IV2)-PTS(2,IV1)) / 11
+          POINT(3) = PTS(3,IV1) + II * (PTS(3,IV2)-PTS(3,IV1)) / 11
+          POINT(1) = POINT(1) - CCC(1,L)
+          POINT(2) = POINT(2) - CCC(2,L)
+          POINT(3) = POINT(3) - CCC(3,L)
+          DNORM = SQRT(POINT(1)**2 + POINT(2)**2 + POINT(3)**2)
+          POINT(1) = POINT(1) * RC / DNORM + CCC(1,L)
+          POINT(2) = POINT(2) * RC / DNORM + CCC(2,L)
+          POINT(3) = POINT(3) * RC / DNORM + CCC(3,L)
+          DIST = SQRT( (POINT(1)-XE(NSFE1))**2 +
+     *    (POINT(2)-YE(NSFE1))**2 + (POINT(3)-ZE(NSFE1))**2 )
+          IF((DIST - RE(NSFE1)) .LT. TOL) THEN
+C         IF(DIST.LT.RE(NSFE1)) then
+            LTYP(L) = 3
+            DO JJ = 1, 3
+              POINTL(JJ,L) = POINT(JJ)
+            ENDDO
+            GO TO 160
+          END IF
+          ENDDO
+        END IF
+ 160    CONTINUE
+      ENDDO
+C
+C      determine how many cut points for the tessera.
+C      type 1 and 2 have 1 cut point
+C      type 3 has 2 cut points.
+C      if a tessera has more than 2 cut points at
+C      any one of the other spheres, finish, because
+C      it means this tessera is too close to other sphere
+C
+C
+      ICUT = 0
+      DO L = 1, NV
+        IF(LTYP(L).EQ.1.OR.LTYP(L).EQ.2) ICUT = ICUT + 1
+        IF(LTYP(L).EQ.3) ICUT = ICUT + 2
+      ENDDO
+      ICUT = ICUT / 2
+      IF(ICUT.GT.1) RETURN
+C
+C     find out the cut points for each line and the
+C     intersection cycle if the line is in type=1
+C     or type=3
+C
+      N = 1
+      DO 300 L = 1, NV
+        IV1 = L
+        IV2 = L+1
+        IF(L.EQ.NV) IV2 = 1
+C
+C++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+C
+C      if type=0, whole line in the other sphere
+C
+        IF(LTYP(L).EQ.0) GO TO 300
+C++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+C
+C      if type=1, head out, end in
+C
+        IF(LTYP(L).EQ.1) THEN
+        DO JJ = 1, 3
+          PTS(JJ,N) = PSCR(JJ,IV1)
+          CCC(JJ,N) = CCCP(JJ,IV1)
+        ENDDO
+        INTSPT(N) = INTSCR(IV1)
+        N = N+1
+C
+C     determine the cut point (P4) through P1, P2, P3
+C     with INTER
+C
+C     P1 = head of the line
+C     P2 = end of the line
+C     P3 = center of the sphere where the line locats
+C     P4 = the cut point
+C
+        DO JJ = 1, 3
+          P1(JJ) = PSCR(JJ,IV1)
+          P2(JJ) = PSCR(JJ,IV2)
+          P3(JJ) = CCCP(JJ,IV1)
+        ENDDO
+        CALL INTER(P1,P2,P3,P4,NSFE1,0,XE,YE,ZE,RE)
+C
+C     copy the cut point to PTS(*,*)
+C
+        DO JJ = 1,3
+          PTS(JJ,N) = P4(JJ)
+        ENDDO
+C
+C     determine the center of the intesection cycle between
+C     the sphere NS and the other sphere NSFE1
+C
+        DE2 = (XE(NSFE1)-XE(NS))**2+(YE(NSFE1)-YE(NS))**2+
+     *        (ZE(NSFE1)-ZE(NS))**2
+        CCC(1,N)=XE(NS)+(XE(NSFE1)-XE(NS))*
+     *           (RE(NS)**2-RE(NSFE1)**2+DE2)/(2.0D+00*DE2)
+        CCC(2,N)=YE(NS)+(YE(NSFE1)-YE(NS))*
+     *           (RE(NS)**2-RE(NSFE1)**2+DE2)/(2.0D+00*DE2)
+        CCC(3,N)=ZE(NS)+(ZE(NSFE1)-ZE(NS))*
+     *           (RE(NS)**2-RE(NSFE1)**2+DE2)/(2.0D+00*DE2)
+        INTSPT(N) = NSFE1
+        N = N+1
+        END IF
+C
+C++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+C     if type=2, head in, end out
+C
+        IF(LTYP(L).EQ.2) THEN
+C
+C     determine the cut point (P4) through P1, P2, P3
+C     with INTER
+C
+C     P1 = head of the line
+C     P2 = end of the line
+C     P3 = center of the sphere where the line locats
+C     P4 = the cut point
+C
+        DO JJ = 1, 3
+          P1(JJ) = PSCR(JJ,IV1)
+          P2(JJ) = PSCR(JJ,IV2)
+          P3(JJ) = CCCP(JJ,IV1)
+        ENDDO
+        CALL INTER(P1,P2,P3,P4,NSFE1,1,XE,YE,ZE,RE)
+C
+C     copy the cut point to PTS(*,*)
+C
+        DO JJ = 1,3
+          PTS(JJ,N) = P4(JJ)
+          CCC(JJ,N) = CCCP(JJ,IV1)
+        ENDDO
+        INTSPT(N) = INTSCR(IV1)
+        N = N+1
+        END IF
+C++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+C     if type=3, middle in, head and end out
+C
+        IF(LTYP(L).EQ.3) THEN
+        DO JJ = 1, 3
+          PTS(JJ,N) = PSCR(JJ,IV1)
+          CCC(JJ,N) = CCCP(JJ,IV1)
+        ENDDO
+        INTSPT(N) = INTSCR(IV1)
+        N = N+1
+C
+C     determine the cut point (P4) through P1, P2, P3
+C     with INTER
+C
+C     P1 = head of the line
+C     P2 = end of the line
+C     P3 = center of the sphere where the line locats
+C     P4 = the cut point
+C
+        DO JJ = 1, 3
+          P1(JJ) = PSCR(JJ,IV1)
+          P2(JJ) = POINTL(JJ,L)
+          P3(JJ) = CCCP(JJ,IV1)
+        ENDDO
+        CALL INTER(P1,P2,P3,P4,NSFE1,0,XE,YE,ZE,RE)
+C
+C     copy the cut point to PTS(*,*)
+C
+        DO JJ = 1,3
+          PTS(JJ,N) = P4(JJ)
+        ENDDO
+C
+C     determine the center of the intesection sphere between
+C     the sphere NS and the other sphere NSFE1
+C
+        DE2 = (XE(NSFE1)-XE(NS))**2+(YE(NSFE1)-YE(NS))**2+
+     *        (ZE(NSFE1)-ZE(NS))**2
+        CCC(1,N)=XE(NS)+(XE(NSFE1)-XE(NS))*
+     *           (RE(NS)**2-RE(NSFE1)**2+DE2)/(2.0D+00*DE2)
+        CCC(2,N)=YE(NS)+(YE(NSFE1)-YE(NS))*
+     *           (RE(NS)**2-RE(NSFE1)**2+DE2)/(2.0D+00*DE2)
+        CCC(3,N)=ZE(NS)+(ZE(NSFE1)-ZE(NS))*
+     *           (RE(NS)**2-RE(NSFE1)**2+DE2)/(2.0D+00*DE2)
+        INTSPT(N) = NSFE1
+        N = N+1
+C
+C     determine the cut point (P4) through P1, P2, P3
+C     with INTER
+C
+C     P1 = head of the line
+C     P2 = end of the line
+C     P3 = center of the sphere where the line locats
+C     P4 = the cut point
+C
+        DO JJ = 1, 3
+          P1(JJ) = POINTL(JJ,L)
+          P2(JJ) = PSCR(JJ,IV2)
+          P3(JJ) = CCCP(JJ,IV1)
+        ENDDO
+        CALL INTER(P1,P2,P3,P4,NSFE1,1,XE,YE,ZE,RE)
+C
+C     copy the cut point to PTS(*,*)
+C
+        DO JJ = 1,3
+          PTS(JJ,N) = P4(JJ)
+          CCC(JJ,N) = CCCP(JJ,IV1)
+        ENDDO
+        INTSPT(N) = INTSCR(IV1)
+        N = N + 1
+        END IF
+C
+C++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+C     if type=4, whole line out
+C
+        IF(LTYP(L).EQ.4) THEN
+        DO JJ = 1, 3
+          PTS(JJ,N) = PSCR(JJ,IV1)
+          CCC(JJ,N) = CCCP(JJ,IV1)
+        ENDDO
+        INTSPT(N) = INTSCR(IV1)
+        N = N+1
+        END IF
+C
+ 300  CONTINUE
+C
+      NV = N - 1
+C
+C     Check if the number of vertices is over MXVRT
+C
+      IF(NV.GT.MXVRT) THEN
+         WRITE(IW,*)
+     *   ' ERROR: THE NUMBER OF VERTICES IS OVER',MXVRT,NV
+         CALL ABRT
+         STOP
+      END IF
+ 150  CONTINUE
+C
+C     calculate the area of the tessera
+C
+      CALL GAUBON(NV,NS,PTS,CCC,PP,PP1,AREA,INTSPT,XE,YE,ZE,RE)
+      RETURN
+      END
+C*MODULE PCMCAV  *DECK INTER
+      SUBROUTINE INTER(P1,P2,P3,P4,NS,I,XE,YE,ZE,RE)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      DIMENSION P1(3),P2(3),P3(3),P4(3),XE(*),YE(*),ZE(*),RE(*)
+C
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+C
+C     Trova il punto P4, sull`arco P1-P2 sotteso dal centro P3, che
+C     si trova sulla superficie della sfera NS
+C     P4 e' definito come combinazioe lineare di P1 e P2, con
+C     il parametro ALPHA ottimizzato per tentativi.
+C
+      R2 = (P1(1)-P3(1))**2+(P1(2)-P3(2))**2+(P1(3)-P3(3))**2
+      R = SQRT(R2)
+      TOL = 1.0D-10
+      ALPHA = 0.5D+00
+      DELTA = 0.0D+00
+      DIFF=0
+      M = 1
+  10  CONTINUE
+      IF (M.GT.1000) THEN
+         WRITE(IW,*) 'WARNING: NOT CONVERGED IN INTER',ABS(DIFF),TOL
+C        CALL ABRT
+         RETURN
+C        STOP
+      END IF
+      ALPHA = ALPHA + DELTA
+      DNORM = 0.0D+00
+      DO JJ = 1,3
+       P4(JJ)=P1(JJ)+ALPHA*(P2(JJ)-P1(JJ))-P3(JJ)
+       DNORM = DNORM + P4(JJ)**2
+      ENDDO
+      DNORM = SQRT(DNORM)
+      DO JJ = 1,3
+       P4(JJ)= P4(JJ)*R/DNORM + P3(JJ)
+      ENDDO
+      DIFF2=(P4(1)-XE(NS))**2 + (P4(2)-YE(NS))**2 + (P4(3)-ZE(NS))**2
+      DIFF = SQRT(DIFF2) - RE(NS)
+C
+      IF(ABS(DIFF).LT.TOL) RETURN
+C                          ******
+      IF(I.EQ.0) THEN
+       IF(DIFF.GT.0.0D+00) DELTA =  1.0D+00/(2.0D+00**(M+1))
+       IF(DIFF.LT.0.0D+00) DELTA = -1.0D+00/(2.0D+00**(M+1))
+       M = M + 1
+       GO TO 10
+      END IF
+      IF(I.EQ.1) THEN
+       IF(DIFF.GT.0.0D+00) DELTA = -1.0D+00/(2.0D+00**(M+1))
+       IF(DIFF.LT.0.0D+00) DELTA =  1.0D+00/(2.0D+00**(M+1))
+       M = M + 1
+       GO TO 10
+      END IF
+C          the code probably never reaches this return
+      RETURN
+      END
+C*MODULE PCMCAV  *DECK GAUBON
+      SUBROUTINE GAUBON(NV,NS,PTS,CCC,PP,PP1,AREA,INTSPT,XE,YE,ZE,RE)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL GOPARR, DSKWRK, MASWRK
+      PARAMETER (MXVRT=20)
+C
+      DIMENSION PTS(3,MXVRT),CCC(3,MXVRT),PP(3),PP1(3),
+     *          INTSPT(MXVRT),XE(*),YE(*),ZE(*),RE(*)
+      DIMENSION P1(3),P2(3),P3(3),U1(3),U2(3)
+C
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMOPT/ RABI,RASC,REFPOL,THRSLS,DENSLS,WB,WA,ETA2,GD,EVAC,
+     *                RHOW,PM,AREATL,AREAKP,BONDRY,OMEGA,RET,FRO,EPSINF,
+     *                EPS,DR,RSOLV,VMOL,TCE,STEN,DSTEN,CMF,TABS,IDIRCT,
+     *                IPCDER,IDP,ICOMP,IFIELD,ICAV,IDISP,IPRINT,IRETCAV,
+     *                ICENT,IFAST,NEVAL,IEFPOL,KEEPSM,IMGABI,IMGASC,NADD
+C
+      DATA PI/3.141592653589793D+00/
+      DATA ZERO/0.0D+00/
+C
+C     Sfrutta il teorema di Gauss-Bonnet per calcolare l'area
+C     della tessera con vertici PTS(3,NV). Consideriamo sempre
+C     che il lato N della tessera e' quello compreso tra i vertici
+C     N e N+1 (oppure NV e 1). In CCC(3,NV) sono le posizioni dei
+C     centri degli archi che sottendono i vari lati della tessera.
+C     La formula di Gauss-Bonet per le sfere e':
+C            Area=R^2[2pi+S(Phi(N)cosT(N))-S(Beta(N))]
+C     dove Phi(N) e' la lunghezza d'arco (in radianti) del lato N,
+C     T(N) e' l'angolo polare del lato N, Beta(N) l'angolo esterno
+C     relativo al vertice N.
+C
+      TPI=2*PI
+C
+C     Calcola la prima sommatoria
+      SUM1 = ZERO
+      DO 100 N = 1, NV
+      X1 = PTS(1,N) - CCC(1,N)
+      Y1 = PTS(2,N) - CCC(2,N)
+      Z1 = PTS(3,N) - CCC(3,N)
+      IF(N.LT.NV) THEN
+        X2 = PTS(1,N+1) - CCC(1,N)
+        Y2 = PTS(2,N+1) - CCC(2,N)
+        Z2 = PTS(3,N+1) - CCC(3,N)
+      ELSE
+        X2 = PTS(1,1) - CCC(1,N)
+        Y2 = PTS(2,1) - CCC(2,N)
+        Z2 = PTS(3,1) - CCC(3,N)
+      END IF
+      DNORM1 = X1*X1 + Y1*Y1 + Z1*Z1
+      DNORM2 = X2*X2 + Y2*Y2 + Z2*Z2
+      SCAL = X1*X2 + Y1*Y2 + Z1*Z2
+      COSPHIN = SCAL / (SQRT(DNORM1*DNORM2))
+      IF(COSPHIN.GT.1.0D+00) COSPHIN = 1.0D+00
+      IF(COSPHIN.LT.-1.0D+00) COSPHIN = -1.0D+00
+      PHIN = ACOS(COSPHIN)
+C
+C     NSFE1 e' la sfera con cui la sfera NS si interseca (eventualmente)
+        NSFE1 = INTSPT(N)
+        X1 = XE(NSFE1) - XE(NS)
+        Y1 = YE(NSFE1) - YE(NS)
+        Z1 = ZE(NSFE1) - ZE(NS)
+      DNORM1 = SQRT(X1*X1 + Y1*Y1 + Z1*Z1)
+      IF(DNORM1.LT.1.0D-06) DNORM1 = 1.0D+00
+C     IF(DNORM1.EQ.ZERO) DNORM1 = 1.0D+00
+        X2 = PTS(1,N) - XE(NS)
+        Y2 = PTS(2,N) - YE(NS)
+        Z2 = PTS(3,N) - ZE(NS)
+      DNORM2 = SQRT(X2*X2 + Y2*Y2 + Z2*Z2)
+      COSTN = (X1*X2+Y1*Y2+Z1*Z2)/(DNORM1*DNORM2)
+      SUM1 = SUM1 + PHIN * COSTN
+ 100  CONTINUE
+C
+C     Calcola la seconda sommatoria: l'angolo esterno Beta(N) e'
+C     definito usando i versori (u(N-1),u(N)) tangenti alla sfera
+C     nel vertice N lungo le direzioni dei lati N-1 e N:
+C                cos( Pi-Beta(N) )=u(N-1)*u(N)
+C            u(N-1) = [V(N) x (V(N) x V(N-1))]/NORM
+C            u(N) = [V(N) x (V(N) x V(N+1))]/NORM
+C     dove V(I) e' il vettore posizione del vertice I RISPETTO AL
+C     CENTRO DELL'ARCO CHE SI STA CONSIDERANDO.
+C
+      SUM2 = ZERO
+C     Loop sui vertici
+      DO 200 N = 1, NV
+      DO JJ = 1, 3
+      P1(JJ) = ZERO
+      P2(JJ) = ZERO
+      P3(JJ) = ZERO
+      ENDDO
+      N1 = N
+      IF(N.GT.1) N0 = N - 1
+      IF(N.EQ.1) N0 = NV
+      IF(N.LT.NV) N2 = N + 1
+      IF(N.EQ.NV) N2 = 1
+C     Trova i vettori posizione rispetto ai centri corrispondenti
+C     e i versori tangenti
+C
+C     Lato N0-N1:
+      DO JJ = 1, 3
+      P1(JJ) = PTS(JJ,N1) - CCC(JJ,N0)
+      P2(JJ) = PTS(JJ,N0) - CCC(JJ,N0)
+      ENDDO
+C
+      CALL VECP(P1,P2,P3,DNORM3)
+      DO JJ = 1, 3
+      P2(JJ) = P3(JJ)
+      ENDDO
+      CALL VECP(P1,P2,P3,DNORM3)
+      DO JJ = 1, 3
+      U1(JJ) = P3(JJ)/DNORM3
+      ENDDO
+C
+C     Lato N1-N2:
+      DO JJ = 1, 3
+      P1(JJ) = PTS(JJ,N1) - CCC(JJ,N1)
+      P2(JJ) = PTS(JJ,N2) - CCC(JJ,N1)
+      ENDDO
+C
+      CALL VECP(P1,P2,P3,DNORM3)
+      DO JJ = 1, 3
+      P2(JJ) = P3(JJ)
+      ENDDO
+      CALL VECP(P1,P2,P3,DNORM3)
+      DO JJ = 1, 3
+      U2(JJ) = P3(JJ)/DNORM3
+      ENDDO
+C
+      BETAN = U1(1)*U2(1)+U1(2)*U2(2)+U1(3)*U2(3)
+      IF(BETAN.GT. 1.0D+00) BETAN= 1.0D+00
+      IF(BETAN.LT.-1.0D+00) BETAN=-1.0D+00
+      BETAN = ACOS(BETAN)
+C     BETAN = ACOS(U1(1)*U2(1)+U1(2)*U2(2)+U1(3)*U2(3))
+      SUM2 = SUM2 + (PI - BETAN)
+ 200  CONTINUE
+C     Calcola l'area della tessera
+        AREA = RE(NS)*RE(NS)*(TPI + SUM1 - SUM2)
+C     Trova il punto rappresentativo (come media dei vertici)
+C     determine the center point of the tessera
+C
+      DO JJ = 1, 3
+      PP(JJ) = ZERO
+      ENDDO
+      DO I = 1, NV
+      PP(1) = PP(1) + (PTS(1,I)-XE(NS))
+      PP(2) = PP(2) + (PTS(2,I)-YE(NS))
+      PP(3) = PP(3) + (PTS(3,I)-ZE(NS))
+      ENDDO
+      DNORM = ZERO
+      DO JJ = 1, 3
+      DNORM = DNORM + PP(JJ)*PP(JJ)
+      ENDDO
+      PP(1) = XE(NS) + PP(1) * RE(NS) / SQRT(DNORM)
+      PP(2) = YE(NS) + PP(2) * RE(NS) / SQRT(DNORM)
+      PP(3) = ZE(NS) + PP(3) * RE(NS) / SQRT(DNORM)
+C     Trova il punto sulla normale (interna!) distante DR dal punto
+C     rappresentativo
+      PP1(1) = XE(NS) + (PP(1) - XE(NS)) * (RE(NS) - DR) / RE(NS)
+      PP1(2) = YE(NS) + (PP(2) - YE(NS)) * (RE(NS) - DR) / RE(NS)
+      PP1(3) = ZE(NS) + (PP(3) - ZE(NS)) * (RE(NS) - DR) / RE(NS)
+C
+C     A causa delle approssimazioni numeriche, l'area di alcune piccole
+C     tessere puo' risultare negativa, e viene in questo caso trascurata
+      IF(AREA.LT.ZERO)THEN
+        IF(NPRINT.NE.817.AND.MASWRK) WRITE(IW,1000) NS,AREA
+ 1000   FORMAT(1X,'WARNING: THE AREA OF A TESSERA ON SPHERE ',I6,
+     *  ' IS NEGATIVE (',E10.3,' A^2 ), THUS DISCARDED')
+        AREA = ZERO
+      END IF
+C
+C     IF(AREA.LT.1.0D-04.AND.METHOD(NS).EQ.1)THEN
+C       IF(NPRINT.NE.817) WRITE(IW,1005) NS,AREA
+C1005   FORMAT(1X,'WARNING: THE AREA OF A TESSERA ON SPHERE ',I6,
+C    *  ' IS TOO SMALL (',E10.3,' A^2 )')
+C     END IF
+C
+C          THE AREAS ARE NOT EQUAL FOR NTS=240 OR 960!
+C     IF(AREA.GT.1.10*12.567*(RE(NS)**2)/DBLE(INITS(NS)))THEN
+C       IF(NPRINT.NE.817) WRITE(IW,1010) NS,AREA
+C1010   FORMAT(1X,'WARNING: THE AREA OF A TESSERA ON SPHERE ',I6,
+C    *  ' IS TOO LARGE (',E10.3,' A^2 )')
+C     END IF
+      RETURN
+      END
+C*MODULE PCMCAV  *DECK VECP
+      SUBROUTINE VECP(P1,P2,P3,DNORM3)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      DIMENSION P1(3),P2(3),P3(3)
+C
+C     Esegue il prodotto vettoriale P3 = P1 x P2
+C
+      P3(1) = P1(2)*P2(3) - P1(3)*P2(2)
+      P3(2) = P1(3)*P2(1) - P1(1)*P2(3)
+      P3(3) = P1(1)*P2(2) - P1(2)*P2(1)
+      DNORM3 = SQRT(P3(1)*P3(1) + P3(2)*P3(2) + P3(3)*P3(3))
+      RETURN
+      END
+C*MODULE PCMCAV  *DECK SEPARA
+      SUBROUTINE SEPARA(ICAV1,ICAV2,ICAVSET,NCAV1,NCAV2,XE,YE,ZE,RE)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      DIMENSION ICAV1(*),ICAV2(*),ICAVSET(*),XE(*),YE(*),ZE(*),RE(*)
+C
+      LOGICAL GOPARR, DSKWRK, MASWRK
+C
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMPLY/ STOT,VOL,CCX,CCY,CCZ,RDIF,NESF,NESFP,NESFF,I_NESF,
+     *                L_AST
+C
+C  QUESTA ROUTINE CONTROLLA SE IL SOLUTO E' CONTENUTO IN UNA
+C  UNICA CAVITA' O IN CAVITA' DISTINTE: IN TAL CASO I NUMERI
+C  D'ORDINE DELLE SFERE CHE COSTITUISCONO LA PRIMA E LA SECONDA
+C  CAVITA' VENGONO MEMORIZZATI RISPETTIVAMENTE IN ICAV1 E ICAV2
+C
+      CALL TIMIT(1)
+C
+      CALL VICLR(ICAV1,1,MXSP+1)
+      CALL VICLR(ICAVSET,1,MXSP)
+      NCAV1=0
+      NCAV2=0
+      N1=1
+      N2=1
+      NN=1
+      ICAV1(N1)=1
+      ICAVSET(1)=1
+      N1=N1+1
+C
+  50  CONTINUE
+      CALL VICLR(ICAV2,1,MXSP+1)
+      N2=1
+      N=ICAV1(NN)
+C
+      DO 100 ICEN=1,I_NESF
+        IF(ICEN.EQ.N) GO TO 100
+C       N11=N1-1
+C       DO I=1,N11
+C         IF(ICEN.EQ.ICAV1(I)) GO TO 100
+C       ENDDO
+        IF(ICAVSET(ICEN).NE.0) GO TO 100
+C
+        X=XE(N)-XE(ICEN)
+        Y=YE(N)-YE(ICEN)
+        Z=ZE(N)-ZE(ICEN)
+        RR=X*X+Y*Y+Z*Z
+        SUM=RE(N)+RE(ICEN)
+        SUM2=SUM*SUM
+        IF(SUM2.GT.RR) THEN
+          ICAV1(N1)=ICEN
+          ICAVSET(ICEN)=1
+          N1=N1+1
+        ELSE
+          ICAV2(N2)=ICEN
+          N2=N2+1
+        END IF
+ 100  CONTINUE
+      NN=NN+1
+      IF(ICAV1(NN).NE.0) GO TO 50
+      NCAV1=NN-1
+      NCAV2=I_NESF-NCAV1
+C
+C         this is Hui Li's double check if there's really two cavities
+C
+      NNCAV2=NCAV2
+      DO I = 1,NCAV1
+         DO J = 1,NCAV2
+            IF(ICAV2(J).EQ.ICAV1(I)) NNCAV2=NNCAV2-1
+         ENDDO
+      ENDDO
+      NCAV2=NNCAV2
+C
+      IF(MASWRK) THEN
+         IF(NCAV2.EQ.0) THEN
+            WRITE(IW,200)
+         ELSE
+            WRITE(IW,300) NCAV1,NCAV2
+            WRITE(IW,400)
+            WRITE(IW,410) (ICAV1(I),I=1,NCAV1)
+            WRITE(IW,500)
+            WRITE(IW,410) (ICAV2(I),I=1,NCAV2)
+         END IF
+      END IF
+      IF(MASWRK) WRITE(6,*) 'DONE CHECKING SEPARATION.'
+      CALL TIMIT(1)
+      RETURN
+C
+  200 FORMAT(/10X,'THE SOLUTE IS ENCLOSED IN ONE CAVITY')
+  300 FORMAT(/10X,'THE SOLUTE IS ENCLOSED IN TWO DISTINCT CAVITIES'/
+     *        10X,'OF',I4,' AND',I4,' SPHERE(S), RESPECTIVELY')
+  400 FORMAT(/10X,'THE FIRST CAVITY IS FORMED BY SPHERE(S) :'/)
+  410 FORMAT(1X,10I6)
+  500 FORMAT(/10X,'THE SECOND CAVITY IS FORMED BY SPHERE(S) :'/)
+      END
+C*MODULE PCMCAV  *DECK EFIELD
+      SUBROUTINE EFIELD(XCTS,YCTS,ZCTS,QSN,QSE,ISPHE)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      PARAMETER (MXATM=2000)
+C
+      LOGICAL GOPARR, DSKWRK, MASWRK
+      DIMENSION XCTS(*),YCTS(*),ZCTS(*),QSN(*),QSE(*),ISPHE(*)
+C
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMTX,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /FMCOM / XX(1)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMABC/ AXYZ(3),BXYZ(3),CXYZ(3),NAB,NAC
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMOPT/ RABI,RASC,REFPOL,THRSLS,DENSLS,WB,WA,ETA2,GD,EVAC,
+     *                RHOW,PM,AREATL,AREAKP,BONDRY,OMEGA,RET,FRO,EPSINF,
+     *                EPS,DR,RSOLV,VMOL,TCE,STEN,DSTEN,CMF,TABS,IDIRCT,
+     *                IPCDER,IDP,ICOMP,IFIELD,ICAV,IDISP,IPRINT,IRETCAV,
+     *                ICENT,IFAST,NEVAL,IEFPOL,KEEPSM,IMGABI,IMGASC,NADD
+      DATA ZERO/0.0D+00/
+C
+C     this routine is called for final PCM computations:
+C       a) optional reaction field due to the apparent surface charges.
+C       b) optional computation of the cavitation energy.
+C
+C-----------------------------------------------------
+C                        INPUT
+C
+C   COORD.(in ANG) OF HIGHER LEFT CORNER OF THE MAP
+C     AXYZ(1),AXYZ(2),AXYZ(3)
+C   COORD.(in ANG) OF LOWER LEFT CORNER OF THE MAP
+C     BXYZ(1),BXYZ(2),BXYZ(3)
+C   COORD.(in ANG) OF HIGHER RIGHT CORNER OF THE MAP
+C     CXYZ(1),CXYZ(2),CXYZ(3)
+C   VERTICAL (NAB), AND ORIZONTAL(NAC) SUBDIVISION
+C     NAB,NAC
+C-----------------------------------------------------
+C
+      IF(IFIELD.EQ.2) THEN
+         NAB1=NAB + 1
+         NAC1=NAC + 1
+         MXP=NAB1*NAC1
+      ELSE
+         MXP=1
+      ENDIF
+C
+      CALL VALFM(LOADFM)
+      LCEX  = LOADFM + 1
+      LCEY  = LCEX   + MXP
+      LCEZ  = LCEY   + MXP
+      LPTZ  = LCEZ   + MXP
+      LCEI  = LPTZ   + MXP
+      LRTX  = LCEI   + MXP
+      LRTY  = LRTX   + MXP
+      LRTZ  = LRTY   + MXP
+      LAST  = LRTZ   + MXP
+      NEED = LAST - LOADFM - 1
+      IF(IFIELD.EQ.2 .AND. MASWRK) WRITE(IW,9010) NEED
+      CALL GETFM(NEED)
+C
+C-----------------------------------------------------------------------
+C     REACTION FIELD AND REACTION POTENTIAL
+C-----------------------------------------------------------------------
+C
+      IF(IPRINT.GE.1) THEN
+         IF(MASWRK) WRITE(IW,1400)
+         DO 130 I=1,NTS
+            L=ISPHE(I)
+            IF(MASWRK) WRITE(IW,1450)
+     *       L,I,XCTS(I),YCTS(I),ZCTS(I),QSE(I)+QSN(I)
+  130    CONTINUE
+      END IF
+C
+C     ----- ON THE NUCLEI ------
+C
+      IF(IFIELD.EQ.1) THEN
+Cnb     This code uses ZAN,C and will not work for FMO.
+         IF(MASWRK) WRITE(IW,1500)
+         DO 150 I=1,NAT
+            IF(ZAN(I).EQ.0) GO TO 150
+            CEXA=ZERO
+            CEYA=ZERO
+            CEZA=ZERO
+            PTZA=ZERO
+            DO 140 J=1,NTS
+               QS=QSE(J)+QSN(J)
+               XU=XCTS(J)-C(1,I)
+               YU=YCTS(J)-C(2,I)
+               ZU=ZCTS(J)-C(3,I)
+               R1=SQRT((XU**2+YU**2+ZU**2)**3)
+               R2=SQRT( XU**2+YU**2+ZU**2)
+               CEXA=CEXA+QS*XU/R1
+               CEYA=CEYA+QS*YU/R1
+               CEZA=CEZA+QS*ZU/R1
+               PTZA=PTZA+QS/R2
+  140       CONTINUE
+            CEIA=SQRT(CEXA**2+CEYA**2+CEZA**2)
+            IF(MASWRK) WRITE(IW,1600) I,ZAN(I),CEXA,CEYA,CEZA,CEIA,PTZA
+  150    CONTINUE
+      END IF
+C
+C     ---- REACTION FIELD ON a grid of points ----
+C
+      IF(IFIELD.EQ.2) THEN
+C
+         CALL RTIC(XX(LRTX),XX(LRTY),XX(LRTZ),NAB1,NAC1,MXP)
+C
+         DO 200 J=1,MXP
+            XX(LCEX-1+J)=ZERO
+            XX(LCEY-1+J)=ZERO
+            XX(LCEZ-1+J)=ZERO
+            XX(LPTZ-1+J)=ZERO
+            DO 190 I=1,NTS
+               QS=QSE(I)+QSN(I)
+               XU=XCTS(I)-XX(LRTX-1+J)
+               YU=YCTS(I)-XX(LRTY-1+J)
+               ZU=ZCTS(I)-XX(LRTZ-1+J)
+               R1=SQRT((XU**2+YU**2+ZU**2)**3)
+               R2=SQRT(XU**2+YU**2+ZU**2)
+               XX(LCEX-1+J)=XX(LCEX-1+J)+QS*XU/R1
+               XX(LCEY-1+J)=XX(LCEY-1+J)+QS*YU/R1
+               XX(LCEZ-1+J)=XX(LCEZ-1+J)+QS*ZU/R1
+               XX(LPTZ-1+J)=XX(LPTZ-1+J)+QS/R2
+  190       CONTINUE
+         XX(LCEI-1+J) = SQRT(XX(LCEX-1+J)**2+
+     *                       XX(LCEY-1+J)**2+
+     *                       XX(LCEZ-1+J)**2)
+  200    CONTINUE
+C
+        IF(IPRINT.GE.1) THEN
+          DO I=1,MXP
+           IF(MASWRK) WRITE(IW,6070)
+     *       XX(LRTX-1+I),XX(LRTY-1+I),XX(LRTZ-1+I),
+     *       XX(LCEX-1+I),XX(LCEY-1+I),XX(LCEZ-1+I),XX(LCEI-1+I),
+     *       XX(LPTZ-1+I)*627.50959D+00
+          ENDDO
+        END IF
+      END IF
+      CALL RETFM(NEED)
+C
+      RETURN
+C
+ 1400 FORMAT(/,' SFERA,TESSERA,X,Y,Z,CARICA')
+ 1450 FORMAT(I3,2X,I4,3F10.6,2X,F10.6)
+ 1500 FORMAT(//1X,'PCM ELECTRIC REACTION FIELD AND REACTION POTENTIAL',
+     *            ' AT THE NUCLEI'/
+     *         1X,'ATOM/NUC.CHARGE     FIELD COMPONENTS (X,Y,Z)       ',
+     *            'STRENGTH   POTENTIAL (A.U.)')
+ 1600 FORMAT(1X,I5,F6.2,5F12.6)
+ 6070 FORMAT(//,' SITE ',3F10.5,/,'   REACTION FIELD COMPONENTS '
+     *,3F7.3,' INTENSITY ',F10.5,' REACT. POTENTIAL ',F7.3)
+ 9010 FORMAT(1X,'IFIELD.GT.0 COMPUTATION USES',I10,' WORDS.')
+C
+      END
+C*MODULE PCMCAV  *DECK CAVITM
+      SUBROUTINE CAVITM
+C
+      IMPLICIT DOUBLE PRECISION (A-H, O-Z)
+C
+      CHARACTER*8 FRGNME
+C
+      LOGICAL GOPARR,DSKWRK,MASWRK
+C
+      PARAMETER (MXATM=2000, MXPT=2000, MXFRG=1050, MXFGPT=12000,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12, OFFSET=1.0D-06)
+C
+      COMMON /EFMULT/ EFC(3,MXFGPT),EFCHG(2,MXFGPT),EFATRM(MXFGPT),
+     *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
+     *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
+     *                EFOCT(10,MXFGPT),FRGNME(MXFGPT)
+      COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
+     *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
+     *                ATORQ(3,MXFRG)
+      COMMON /FMCOM / X(1)
+      COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMOPT/ RABI,RASC,REFPOL,THRSLS,DENSLS,WB,WA,ETA2,GD,EVAC,
+     *                RHOW,PM,AREATL,AREAKP,BONDRY,OMEGA,RET,FRO,EPSINF,
+     *                EPS,DR,RSOLV,VMOL,TCE,STEN,DSTEN,CMF,TABS,IDIRCT,
+     *                IPCDER,IDP,ICOMP,IFIELD,ICAV,IDISP,IPRINT,IRETCAV,
+     *                ICENT,IFAST,NEVAL,IEFPOL,KEEPSM,IMGABI,IMGASC,NADD
+      COMMON /PCMPAR/ IPCM,NFT26,NFT27,IKREP,IEF,IP_F,NFMOPCM
+      COMMON /PCMPLY/ STOT,VOL,CCX,CCY,CCZ,RDIF,NESF,NESFP,NESFF,I_NESF,
+     *                L_AST
+      COMMON /PCMPNT/ LXYZRE,LSSFE,LLIST,LALPCM,LRINPCM,LINAPCM,LINFPCM,
+     *                LINIPCM,LMEPCM,LAXYZCT,LXYZCT2,LNVERT,LQSN,LQSE,
+     *                LQFS,LQIND,LISPHE,LVAD,LQOR,LVECMUL,LAIPRJ,LFIPRJ,
+     *                LPEL,LPCMCDR,LDAI,LIDDAI,LQSND,LQSED
+      COMMON /PCMPRT/ GCAVP,GCAVS,GDISP,GREP,EHFGAS
+      COMMON /PCMTMP/ IDSP(MXATM+MXFRG*5),DPCMFRG(6,MXFRG),
+     *                EGPCM(3,MXATM)
+C
+      DIMENSION DIS(6), T3(3,3)
+C
+      DATA AUTOKAL /627.509541D+00/
+      PARAMETER (ZERO=0.0D+00, TOANGS=0.52917724924D+00)
+C
+C     HUI LI
+C     LINCOLN, NEBRASKA, AUG 14, 2007
+C
+C
+      CALL MAKCVM
+      KKKK = -100
+      CALL CAVIT(0,X(LMEPCM),KKKK)
+      CALL DERCHK(MAXDER)
+      IF(KKKK.EQ.4) RETURN
+      IF(MAXDER.EQ.0) RETURN
+C
+C
+C     -- POSSIBLE NUMERICAL GRADIENTS --
+C
+      CALL VALFM(LOADFM)
+      LTEMP1= LOADFM + 1
+      LTEMP2= LTEMP1 + MXSP*4
+      LTEMP3= LTEMP2 + MXSP*4
+      LEFCSV= LTEMP3 + MXPT*3
+      LAST  = LEFCSV + MXPT*3
+      NEED  = LAST   - LOADFM - 1
+      CALL GETFM(NEED)
+C
+      NPRTBK = NPRINT
+      NPRINT = 817
+      GCAVP0 = GCAVP
+      NATG=NAT
+      IF(NFMOPCM.GT.0) NATG=NATFMO
+      IF(NATG.NE.I_NESF) THEN
+        IF(MASWRK) WRITE(IW,9000) NATG,I_NESF
+        CALL ABRT
+      ENDIF
+      CALL VCLR(X(LPCMCDR),1,3*NATG)
+      CALL VCLR(DPCMFRG,1,6*MXFRG)
+C
+C     -- QM ATOMS --
+C
+      IPCOUNT = ME - 1
+C
+      DO 200 IAT = 1, NATG
+C
+         IF(GOPARR) THEN
+            IPCOUNT = IPCOUNT +1
+            IF(MOD(IPCOUNT,NPROC).NE.0) GOTO 200
+         END IF
+C
+C        -- BACKUP THE SPHERES IN TEMP1 --
+         I_NESFBK = I_NESF
+         DO ISP = 1, MXSP
+            X(LTEMP1       +ISP-1) = X(LXYZRE         +ISP-1)
+            X(LTEMP1+MXSP  +ISP-1) = X(LXYZRE + MXSP  +ISP-1)
+            X(LTEMP1+MXSP*2+ISP-1) = X(LXYZRE + MXSP*2+ISP-1)
+            X(LTEMP1+MXSP*3+ISP-1) = X(LRINPCM        +ISP-1)
+         ENDDO
+C
+C        -- IDENTIFY AND STORE LOCAL SPHERES IN TEMP2 --
+         I_NESF = 1
+         X(LTEMP2       ) = X(LXYZRE        + IAT -1)
+         X(LTEMP2+MXSP  ) = X(LXYZRE+MXSP   + IAT -1)
+         X(LTEMP2+MXSP*2) = X(LXYZRE+MXSP*2 + IAT -1)
+         X(LTEMP2+MXSP*3) = X(LRINPCM+IAT-1)
+         IF(X(LRINPCM+IAT-1).LT.0.02D+00) GOTO 202
+         DO 201 JAT = 1, I_NESFBK
+            IF(JAT.EQ.IAT) GOTO 201
+            IF(X(LRINPCM+JAT-1).LT.0.02D+00) GOTO 201
+            DR = (X(LRINPCM+IAT-1)+X(LRINPCM+JAT-1) + 0.02D+00)/TOANGS
+            DXCT=ABS(X(LXYZRE+JAT-1)-X(LXYZRE+IAT-1))
+            IF(DXCT.GT.DR) GOTO 201
+            DYCT=ABS(X(LXYZRE+MXSP+JAT-1)-X(LXYZRE+MXSP+IAT-1))
+            IF(DYCT.GT.DR) GOTO 201
+            DZCT=ABS(X(LXYZRE+MXSP*2+JAT-1)-X(LXYZRE+MXSP*2+IAT-1))
+            IF(DZCT.GT.DR) GOTO 201
+            DISCT = DXCT*DXCT + DYCT*DYCT + DZCT*DZCT
+            IF(DISCT.GT. DR*DR) GOTO 201
+            I_NESF = I_NESF + 1
+            X(LTEMP2        + I_NESF-1) = X(LXYZRE        + JAT -1)
+            X(LTEMP2+MXSP   + I_NESF-1) = X(LXYZRE+MXSP   + JAT -1)
+            X(LTEMP2+MXSP*2 + I_NESF-1) = X(LXYZRE+MXSP*2 + JAT -1)
+            X(LTEMP2+MXSP*3 + I_NESF-1) = X(LRINPCM+JAT-1)
+ 201     CONTINUE
+ 202     CONTINUE
+C
+C        -- STORE LOCAL SPHERES IN XE(*), YE(*), ZE(*) --
+         DO ISP = 1, MXSP
+            X(LXYZRE          +ISP-1) = X(LTEMP2        +ISP-1)
+            X(LXYZRE + MXSP   +ISP-1) = X(LTEMP2+MXSP   +ISP-1)
+            X(LXYZRE + MXSP*2 +ISP-1) = X(LTEMP2+MXSP*2 +ISP-1)
+            X(LRINPCM         +ISP-1) = X(LTEMP2+MXSP*3 +ISP-1)
+         ENDDO
+C
+         CALL CAVIT(1,X(LMEPCM),KKKK)
+         GCAV0=GCAVP
+C
+         DO 210 IC = 1, 3
+C
+C           -- DISPLACEMENT --
+C              NOTE IT IS A.U. FOR XE=X(LXYZRE)
+C              1.0D-06 IS GOOD, CANNOT BE SMALLER
+C
+C           -- COMPUTE CAVITATION ENERGY --
+C              NOTE: THIS IS DONE WITH LOCAL SPHERES
+C
+            IF(IC.EQ.1)X(LXYZRE)       =X(LXYZRE)       +OFFSET
+            IF(IC.EQ.2)X(LXYZRE+MXSP)  =X(LXYZRE+MXSP)  +OFFSET
+            IF(IC.EQ.3)X(LXYZRE+MXSP*2)=X(LXYZRE+MXSP*2)+OFFSET
+            GCAVP = GCAV0
+            IF(X(LRINPCM).GT.0.02D+00) CALL CAVIT(1,X(LMEPCM),KKKK)
+C
+C           -- COMPUTE DCAVQM --
+C              NOTE IT IS ALSO A.U. HERE
+C
+            DCAVQM=(GCAVP-GCAV0)/OFFSET/AUTOKAL
+            IF(DCAVQM.GT.0.05D+00)DCAVQM=0.05D+00
+            IF(DCAVQM.LT.-0.05D+00)DCAVQM=-0.05D+00
+C           PCMCDR(IC,IAT) = DCAVQM
+            X(LPCMCDR+IC-1+(IAT-1)*3) = DCAVQM
+C
+            IF(IC.EQ.1)X(LXYZRE)       =X(LXYZRE)       -OFFSET
+            IF(IC.EQ.2)X(LXYZRE+MXSP)  =X(LXYZRE+MXSP)  -OFFSET
+            IF(IC.EQ.3)X(LXYZRE+MXSP*2)=X(LXYZRE+MXSP*2)-OFFSET
+ 210     CONTINUE
+C
+C        -- RESTORE SPHERES FROM TEMP1 --
+         I_NESF = I_NESFBK
+         DO ISP = 1, MXSP
+            X(LXYZRE         +ISP-1) = X(LTEMP1       +ISP-1)
+            X(LXYZRE + MXSP  +ISP-1) = X(LTEMP1+MXSP  +ISP-1)
+            X(LXYZRE + MXSP*2+ISP-1) = X(LTEMP1+MXSP*2+ISP-1)
+            X(LRINPCM        +ISP-1) = X(LTEMP1+MXSP*3+ISP-1)
+         ENDDO
+C
+ 200  CONTINUE
+C
+      IF(GOPARR) THEN
+        CALL DDI_GSUMF(2407,X(LPCMCDR),3*NATG)
+      END IF
+C
+C
+C     -- EFP FRAGMENTS --
+C
+      DO ICRD =1, 6
+         DIS(ICRD) = ZERO
+      END DO
+C
+      IPCOUNT = ME - 1
+C
+      IPT = 0
+      DO 300 IFRG = 1,NFRG
+C
+         IF(GOPARR) THEN
+            IPCOUNT = IPCOUNT +1
+            IF(MOD(IPCOUNT,NPROC).NE.0) THEN
+               IPT = IPT + NMPTS(IFRG)
+               GOTO 300
+            END IF
+         END IF
+C
+         DO III = 1, NMPTS(IFRG)
+            X(LEFCSV       +III-1) = EFC(1,IPT+III)
+            X(LEFCSV+MXPT  +III-1) = EFC(2,IPT+III)
+            X(LEFCSV+MXPT*2+III-1) = EFC(3,IPT+III)
+         END DO
+C
+         DO 310 ICRD = 1, 6
+            DIS(ICRD)=OFFSET
+            CALL EFROTT(DIS(4),DIS(5),DIS(6),T3)
+            DO III=1, NMPTS(IFRG)
+               DO J=1,3
+               X(LTEMP3+(III-1)*3+J-1) = EFC(J,IPT+III)-EFCENT(J,IFRG)
+               ENDDO
+            END DO
+            CALL MRARBR(T3,3,3,3,X(LTEMP3),3,NMPTS(IFRG),EFC(1,IPT+1),3)
+            DO III = 1, NMPTS(IFRG)
+               DO J=1,3
+                  EFC(J,IPT+III)=EFC(J,IPT+III)+EFCENT(J,IFRG)+DIS(J)
+               END DO
+               DO ISP = 1, I_NESF
+                  DX=ABS(X(LXYZRE       +ISP-1) - EFC(1,IPT+III))
+                  DY=ABS(X(LXYZRE+MXSP  +ISP-1) - EFC(2,IPT+III))
+                  DZ=ABS(X(LXYZRE+MXSP*2+ISP-1) - EFC(3,IPT+III))
+                  IF((DX+DY+DZ).LE.1.0D-02)THEN
+                     X(LXYZRE       +ISP-1) = EFC(1,IPT+III)
+                     X(LXYZRE+MXSP  +ISP-1) = EFC(2,IPT+III)
+                     X(LXYZRE+MXSP*2+ISP-1) = EFC(3,IPT+III)
+                  END IF
+               END DO
+            END DO
+            GCAVP = GCAVP0
+            CALL CAVIT(1,X(LMEPCM),KKKK)
+            DCAVEF=(GCAVP-GCAVP0)/OFFSET/AUTOKAL
+            IF(DCAVEF.GT.0.1D+00)DCAVEF=0.1D+00
+            IF(DCAVEF.LT.-0.1D+00)DCAVEF=-0.1D+00
+            DPCMFRG(ICRD,IFRG) = DCAVEF
+            DO III = 1, NMPTS(IFRG)
+               EFC(1,IPT+III) = X(LEFCSV       +III-1)
+               EFC(2,IPT+III) = X(LEFCSV+MXPT  +III-1)
+               EFC(3,IPT+III) = X(LEFCSV+MXPT*2+III-1)
+               DO ISP = 1, I_NESF
+                  DX=ABS(X(LXYZRE       +ISP-1) - EFC(1,IPT+III))
+                  DY=ABS(X(LXYZRE+MXSP  +ISP-1) - EFC(2,IPT+III))
+                  DZ=ABS(X(LXYZRE+MXSP*2+ISP-1) - EFC(3,IPT+III))
+                  IF((DX+DY+DZ).LE.1.0D-02)THEN
+                     X(LXYZRE       +ISP-1) = EFC(1,IPT+III)
+                     X(LXYZRE+MXSP  +ISP-1) = EFC(2,IPT+III)
+                     X(LXYZRE+MXSP*2+ISP-1) = EFC(3,IPT+III)
+                  END IF
+               END DO
+            END DO
+            DIS(ICRD) = ZERO
+ 310     CONTINUE
+         IPT = IPT + NMPTS(IFRG)
+ 300  CONTINUE
+C
+      IF(GOPARR) THEN
+        CALL DDI_GSUMF(2408,DPCMFRG,6*MXFRG)
+      END IF
+C
+      CALL RETFM(NEED)
+C
+      NPRINT = NPRTBK
+      GCAVP  = GCAVP0
+      RETURN
+ 9000 FORMAT(1X,'ICAV=1 GRADIENT REQUIRES THAT EACH ATOM HAS EXACTLY ',
+     *          ' ONE SPHERE IN PCM.',/)
+      END
+C*MODULE PCMCAV  *DECK CAVIT
+      SUBROUTINE CAVIT(NUMDIF,METHOD,KKKK)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      COMMON /FMCOM / X(1)
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /MACHIN/ NWDVAR,MAXFM,MAXSM,LIMFM,LIMSM
+      COMMON /PCMPNT/ LXYZRE,LSSFE,LLIST,LALPCM,LRINPCM,LINAPCM,LINFPCM,
+     *                LINIPCM,LMEPCM,LAXYZCT,LXYZCT2,LNVERT,LQSN,LQSE,
+     *                LQFS,LQIND,LISPHE,LVAD,LQOR,LVECMUL,LAIPRJ,LFIPRJ,
+     *                LPEL,LPCMCDR,LDAI,LIDDAI,LQSND,LQSED
+C
+      DIMENSION METHOD(*)
+C
+      CALL DERCHK(NDER)
+C
+      KKKK = METHOD(1)
+      IF(METHOD(1).EQ.4 .AND. NDER.GT.0) THEN
+         CALL VALFM(LOADFM)
+         LLDAI   = LOADFM + 1
+         LLIDDAI = LLDAI   + 3*20*MXTS
+         LAST    = LLIDDAI + 21*MXTS/NWDVAR + 1
+         NEED    = LAST   - LOADFM -1
+         CALL GETFM(NEED)
+         CALL CAVITX(NUMDIF,X(LAXYZCT),X(LAXYZCT+MXTS),
+     *            X(LAXYZCT+MXTS*2),
+     *            X(LAXYZCT+MXTS*3),X(LNVERT),X(LXYZRE),X(LXYZRE+MXSP),
+     *            X(LXYZRE+MXSP*2),X(LXYZRE+MXSP*3),X(LSSFE),X(LISPHE),
+     *            X(LRINPCM),X(LLDAI),X(LLIDDAI),METHOD,X(LPCMCDR),
+     *            X(LALPCM))
+         CALL RETFM(NEED)
+      ELSE
+         CALL CAVITX(NUMDIF,X(LAXYZCT),X(LAXYZCT+MXTS),
+     *            X(LAXYZCT+MXTS*2),
+     *            X(LAXYZCT+MXTS*3),X(LNVERT),X(LXYZRE),X(LXYZRE+MXSP),
+     *            X(LXYZRE+MXSP*2),X(LXYZRE+MXSP*3),X(LSSFE),X(LISPHE),
+     *            X(LRINPCM),DUM1,DUM2,METHOD,X(LPCMCDR),
+     *            X(LALPCM))
+      END IF
+C
+      RETURN
+      END
+C*MODULE PCMCAV  *DECK CAVITX
+      SUBROUTINE CAVITX(NUMDIF,XCTS,YCTS,ZCTS,AS,NVERT,XE,YE,ZE,RE,SSFE,
+     *                  ISPHE,RIN,DAI,IDDAI,METHOD,PCMCDR,ALPHA)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL GOPARR, DSKWRK, MASWRK
+      DIMENSION XCTS(*),YCTS(*),ZCTS(*),AS(*),NVERT(*),XE(*),YE(*),
+     *          ZE(*),RE(*),SSFE(*),ISPHE(*),RIN(*),METHOD(*),ALPHA(*)
+      DIMENSION PCMCDR(3,MXSP)
+      DIMENSION DAI(3,20,MXTS),IDDAI(21,MXTS)
+C
+      COMMON /FMCOM / XX(1)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /MACHIN/ NWDVAR,MAXFM,MAXSM,LIMFM,LIMSM
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMOPT/ RABI,RASC,REFPOL,THRSLS,DENSLS,WB,WA,ETA2,GD,EVAC,
+     *                RHOW,PM,AREATL,AREAKP,BONDRY,OMEGA,RET,FRO,EPSINF,
+     *                EPS,DR,RSOLV,VMOL,TCE,STEN,DSTEN,CMF,TABS,IDIRCT,
+     *                IPCDER,IDP,ICOMP,IFIELD,ICAV,IDISP,IPRINT,IRETCAV,
+     *                ICENT,IFAST,NEVAL,IEFPOL,KEEPSM,IMGABI,IMGASC,NADD
+      COMMON /PCMPAR/ IPCM,NFT26,NFT27,IKREP,IEF,IP_F,NFMOPCM
+      COMMON /PCMPLY/ STOT,VOL,CCX,CCY,CCZ,RDIF,NESF,NESFP,NESFF,I_NESF,
+     *                L_AST
+      COMMON /PCMPRT/ GCAVP,GCAVS,GDISP,GREP,EHFGAS
+C
+      PARAMETER (TOANGS=0.52917724924D+00)
+      PARAMETER (TOANGS2=TOANGS*TOANGS)
+C
+      DATA PT5,ONE,TWO/0.5D+00,1.0D+00,2.0D+00/
+      DATA GC,AVGDR,CEKM/1.9865D+00,0.60228D+00,0.0014389D+00/
+      DATA PI,ZERO/  3.141592653589793D+00, 0.0D+00/
+      DATA AUTOKAL /627.509541D+00/
+C
+      CALL DERCHK(MAXDER)
+C
+C     - SAVE ALPHA(I) -
+      CALL VALFM(LOADFM)
+      LALPHA = LOADFM  + 1
+      LAST   = LALPHA  + I_NESF
+      NEED   = LAST    - LOADFM - 1
+      CALL GETFM(NEED)
+      DO I = 1, I_NESF
+        XX(LALPHA + I - 1) = ALPHA(I)
+      ENDDO
+C
+      FPI=4*PI
+C
+C     CAVITATION FREE ENERGY
+C
+      DMOL = 2.0D+00 * RSOLV
+C-----------------------------------------------------------------------
+C   CAVITATION ENERGY:    R.A. PIEROTTI
+C                         CHEM. REVIEW, 76,717,(1976).
+C-----------------------------------------------------------------------
+C     Creates a new cavity with the initial spheres for the
+C     cavitation energy calculation
+C
+      IF(MASWRK.AND.NPRINT.NE.817) WRITE(IW,1000)
+      IRETCAV = 1
+      IF(METHOD(1).NE.4) THEN
+         CALL PEDFSM(XCTS,YCTS,ZCTS,AS,NVERT,
+     *               XE,YE,ZE,RE,SSFE,ISPHE,RIN)
+      ELSE IF(METHOD(1).EQ.4) THEN
+         LFIXPV = 3*20*MXTS
+         LFIXPV2=   21*MXTS
+         IF(MAXDER.GT.0) THEN
+            CALL  VCLR(DAI  ,1,LFIXPV)
+            CALL VICLR(IDDAI,1,LFIXPV2)
+         END IF
+         CALL MAKCVM
+         DO I = 1, I_NESF
+            ALPHA(I) = ONE
+         ENDDO
+         CALL PEDRAM
+         DO I = 1, I_NESF
+            ALPHA(I) = XX(LALPHA + I - 1)
+         ENDDO
+         IF(MAXDER.GT.0) THEN
+            CALL DAREAD(IDAF,IODA,  DAI,LFIXPV          ,334,0)
+            CALL DAREAD(IDAF,IODA,IDDAI,LFIXPV2/NWDVAR+1,335,1)
+         END IF
+      ENDIF
+C
+      IF(MASWRK.AND.NPRINT.NE.817)THEN
+      WRITE(IW,*)
+      WRITE(IW,*) ' ************************************'
+      WRITE(IW,*) '        CAVITATION FREE ENERGY'
+      WRITE(IW,*) ' ************************************'
+      END IF
+C
+C     A single cavity
+C
+      DCAV=EXP(LOG(6.0D+00*VOL/PI)/3.0D+00)
+      TABS2=TABS**2
+      DENUM=AVGDR/VMOL
+      YP=DENUM*PI*DMOL**3/6.0D+00
+      YPM1=ONE-YP
+      RP=DCAV/DMOL
+      ECF=TCE*GC*TABS2*YP/(YPM1**3)
+      EC=ECF*(YPM1**2+3.0D+00*YPM1*RP
+     *               +3.0D+00*(ONE+TWO*YP)*RP*RP)/1000.0D+00
+      SIG=(DCAV+DMOL)*PT5
+      RAP=YP/YPM1
+      RAP2=RAP**2
+      PK0=-LOG(YPM1)+4.5D+00*RAP2
+      PK1=-(6.0D+00*RAP+18.0D+00*RAP2)/DMOL
+      PK2=(12.0D+00*RAP+18*RAP2)/DMOL**2
+      ELC=(PK2*SIG+PK1)*SIG+PK0
+      ELC=ELC*GC*TABS/1000.0D+00
+      IF(MASWRK.AND.NPRINT.NE.817) WRITE (IW,1100)
+     *        ' VOLUME',ELC,EC,TCE,DENUM,DMOL,DCAV
+      DCAV=SQRT(STOT/PI)
+      TABS2=TABS**2
+      DENUM=AVGDR/VMOL
+      YP=DENUM*PI*DMOL**3/6.0D+00
+      YPM1=ONE-YP
+      RP=DCAV/DMOL
+      ECF=TCE*GC*TABS2*YP/(YPM1**3)
+      EC=ECF*(YPM1**2+3.0D+00*YPM1*RP
+     *               +3.0D+00*(ONE+TWO*YP)*RP*RP)/1000.0D+00
+      SIG=(DCAV+DMOL)*PT5
+      RAP=YP/YPM1
+      RAP2=RAP**2
+      PK0=-LOG(YPM1)+4.5D+00*RAP2
+      PK1=-(6.0D+00*RAP+18.0D+00*RAP2)/DMOL
+      PK2=(12.0D+00*RAP+18*RAP2)/DMOL**2
+      ELC=(PK2*SIG+PK1)*SIG+PK0
+      ELC=ELC*GC*TABS/1000.0D+00
+      IF(MASWRK.AND.NPRINT.NE.817) WRITE (IW,1100)
+     *   'SURFACE',ELC,EC,TCE,DENUM,DMOL,DCAV
+C
+C     - INITIALIZE PARALLEL
+      IPCOUNT = ME - 1
+      ELCPIER = ZERO
+      EC      = ZERO
+      DO 100 I=1,I_NESF
+C        - GO PARALLEL
+         IF(GOPARR) THEN
+            IPCOUNT = IPCOUNT + 1
+            IF(MOD(IPCOUNT,NPROC).NE.0) GOTO 100
+         END IF
+C
+         RSFE = RE(I)*TOANGS
+         SUPEFF = ZERO
+         DO J=1,NTS
+            L = ISPHE(J)
+            IF (L.EQ.I) THEN
+               SUPEFF = SUPEFF + AS(J)*TOANGS2
+            END IF
+         ENDDO
+         AREATOT = FPI * RSFE * RSFE
+         DUMMY   = 1.0D+00/AREATOT
+         FRAZ    = SUPEFF*DUMMY
+         DCAV=2.0D+00 * RSFE
+         TABS2=TABS**2
+         DENUM=AVGDR/VMOL
+         YP=DENUM*PI*DMOL**3/6.0D+00
+         YPM1=ONE-YP
+         RP=DCAV/DMOL
+         ECF=TCE*GC*TABS2*YP/(YPM1**3)
+         EC=EC+ECF*(YPM1**2+3.0D+00*YPM1*RP
+     *                  +3.0D+00*(ONE+TWO*YP)*RP*RP)/1000.0D+00
+         SIG=(DCAV+DMOL)*PT5
+         RAP=YP/YPM1
+         RAP2=RAP**2
+         PK0=-LOG(YPM1)+4.5D+00*RAP2
+         PK1=-(6.0D+00*RAP+18.0D+00*RAP2)/DMOL
+         PK2=(12.0D+00*RAP+18*RAP2)/DMOL**2
+         ELC=(PK2*SIG+PK1)*SIG+PK0
+         ELCPI=ELC*GC*TABS/1000.0D+00
+         ELCPIER = ELCPIER + ELCPI * FRAZ
+         IF(NFMOPCM.NE.0.AND.NUMDIF.EQ.0) CALL MONECAV(I,ELCPI*FRAZ)
+  100 CONTINUE
+C     - SUM UP
+      IF(GOPARR) THEN
+         CALL DDI_GSUMF(2405,ELCPIER,1)
+         CALL DDI_GSUMF(2406,EC,1)
+      END IF
+C
+      IF(METHOD(1).EQ.4 .AND. MAXDER.GT.0) THEN
+C        - INITIALIZE PARALLEL
+         IPCOUNT = ME - 1
+         CALL VCLR(PCMCDR,1,3*MXSP)
+         DO 200 IAT = 1, I_NESF
+C           - GO PARALLEL
+            IF(GOPARR) THEN
+               IPCOUNT = IPCOUNT + 1
+               IF(MOD(IPCOUNT,NPROC).NE.0) GOTO 200
+            END IF
+C
+            DO 210 ITS = 1, NTS
+               DO 220 III = 1, IDDAI(21,ITS)
+                  IF(IAT.EQ.IDDAI(III,ITS)) THEN
+                     DSUPX  = DAI(1,III,ITS)
+                     DSUPY  = DAI(2,III,ITS)
+                     DSUPZ  = DAI(3,III,ITS)
+                     RSFE   = RE(ISPHE(ITS))
+                     AREATOT = FPI * RSFE * RSFE
+                     DUMMY   = ONE/AREATOT
+                     FRAZX = DSUPX*DUMMY
+                     FRAZY = DSUPY*DUMMY
+                     FRAZZ = DSUPZ*DUMMY
+                     DCAV=2.0D+00 * RSFE *TOANGS
+                     TABS2=TABS**2
+                     DENUM=AVGDR/VMOL
+                     YP=DENUM*PI*DMOL**3/6.0D+00
+                     YPM1=ONE-YP
+                     RP=DCAV/DMOL
+                     SIG=(DCAV+DMOL)*PT5
+                     RAP=YP/YPM1
+                     RAP2=RAP**2
+                     PK0=-LOG(YPM1)+4.5D+00*RAP2
+                     PK1=-(6.0D+00*RAP+18.0D+00*RAP2)/DMOL
+                     PK2=(12.0D+00*RAP+18*RAP2)/DMOL**2
+                     ELC=(PK2*SIG+PK1)*SIG+PK0
+                     ELCPI=ELC*GC*TABS/1000.0D+00
+                     PCMCDR(1,IAT)=PCMCDR(1,IAT)+ELCPI*FRAZX/AUTOKAL
+                     PCMCDR(2,IAT)=PCMCDR(2,IAT)+ELCPI*FRAZY/AUTOKAL
+                     PCMCDR(3,IAT)=PCMCDR(3,IAT)+ELCPI*FRAZZ/AUTOKAL
+                  END IF
+ 220           CONTINUE
+ 210        CONTINUE
+ 200     CONTINUE
+C        - SUM UP
+         IF(GOPARR) THEN
+            CALL DDI_GSUMF(2409,PCMCDR,3*MXSP)
+         END IF
+      END IF
+C
+      IF(MASWRK.AND.NPRINT.NE.817) WRITE (IW,1200)
+     *  ELCPIER,EC,TCE,DENUM,DMOL
+      GCAVP = ELCPIER
+C
+ 1000 FORMAT(/1X,'CREATION OF A NEW CAVITY WITH THE ORIGINAL SPHERE'/
+     *       1X,'SIZES FOR THE COMPUTATION OF THE CAVITATION ENERGY.')
+ 1100 FORMAT(/' PIEROTTI (SINGLE SPHERE, RADIUS FROM TOTAL ',A7,'):',
+     * F11.5,' KCAL/MOL'/
+     * ' CAVITATION ENERGY (ENTHALPY) =',F11.5,' KCAL/MOL'/
+     * ' THERMAL EXPANSION COEF. =',F14.6/
+     * ' NUMERAL DENSITY =',F22.6/
+     * ' SOLVENT MOLECULE DIAMETER =',F12.6,' ANG.'/
+     * ' CAVITY DIAMETER =',F22.6,' ANG.')
+ 1200 FORMAT(/' CLAVERIE-PIEROTTI (SPHERE BY SPHERE, SURFACE):',F11.5,
+     * '  KCAL/MOL'/
+     * ' CAVITATION ENERGY (ENTHALPY) =',F11.5,' KCAL/MOL'/
+     * ' THERMAL EXPANSION COEF. =',F14.6/
+     * ' NUMERAL DENSITY =',F22.6/
+     * ' SOLVENT MOLECULE DIAMETER =',F12.6,' ANG.')
+C
+C-----------------------------------------------------------------------
+C    CAVITATION ENERGY:  BIRNSTOCK, HOFMANN, KOHLER
+C                             T.C.A. 42,311,(1976)
+C-----------------------------------------------------------------------
+C
+      DCAV=SQRT(STOT/PI)
+      RP=DCAV/DMOL
+      CMFM=(CMF-ONE)/RP**2+ONE
+      ELCSIN=STEN*CMFM*STOT*CEKM
+      EC=ELCSIN*(ONE+DSTEN-TWO*TABS*TCE/3.0D+00)
+      IF(MASWRK.AND.NPRINT.NE.817) WRITE (IW,1300)
+     *  ELCSIN,EC,CMF,STEN,DSTEN,TABS,DCAV
+      GCAVS = ELCSIN
+C
+1300  FORMAT(/' SINANOGLU (SINGLE SPHERE, RADIUS FROM TOTAL SURFACE):',
+     * F11.5,' KCAL/MOL'/
+     * ' CAVITATION ENERGY (ENTHALPY) =',F13.5,' KCAL/MOL'/
+     * ' MICROSCOPIC CAVITY FACTOR =',F12.6/
+     * ' SURFACE TENSION =',F22.6/
+     * ' SURFACE TENSION DERIVATIVE = ',F10.6/
+     * ' ABSOLUTE TEMPERATURE =',F17.6/
+     * ' CAVITY DIAMETER =',F22.6,' ANG.')
+C
+      CALL RETFM(NEED)
+      RETURN
+      END
+C*MODULE PCMCAV  *DECK RTIC
+      SUBROUTINE RTIC(RTX,RTY,RTZ,NAB1,NAC1,MXP)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      DIMENSION RTX(MXP),RTY(MXP),RTZ(MXP)
+C
+      LOGICAL GOPARR, DSKWRK, MASWRK
+C
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMABC/ AXYZ(3),BXYZ(3),CXYZ(3),NAB,NAC
+C
+      PARAMETER (TOANGS=0.52917724924D+00, ANTOAU=1.0D+00/TOANGS)
+C
+C
+      AX=AXYZ(1)
+      AY=AXYZ(2)
+      AZ=AXYZ(3)
+      BX=BXYZ(1)
+      BY=BXYZ(2)
+      BZ=BXYZ(3)
+      CX=CXYZ(1)
+      CY=CXYZ(2)
+      CZ=CXYZ(3)
+      DXC=(CX-AX)/NAC
+      DYC=(CY-AY)/NAC
+      DZC=(CZ-AZ)/NAC
+      DXB=(BX-AX)/NAB
+      DYB=(BY-AY)/NAB
+      DZB=(BZ-AZ)/NAB
+C
+      K=0
+      DO 210 J=1,NAB1
+         DO 200 I=1,NAC1
+            K=K+1
+            IF(K.GT.MXP .AND. MASWRK) THEN
+               WRITE(IW,*) ' RTIC: EXCEEDED -MXP- DIMENSION'
+               CALL ABRT
+               STOP
+            END IF
+            RTX(K)=(AX + (I-1)*DXC + (J-1)*DXB)*ANTOAU
+            RTY(K)=(AY + (I-1)*DYC + (J-1)*DYB)*ANTOAU
+            RTZ(K)=(AZ + (I-1)*DZC + (J-1)*DZB)*ANTOAU
+  200    CONTINUE
+  210 CONTINUE
+      RETURN
+      END
+C*MODULE PCMCAV  *DECK MONECAV
+      SUBROUTINE MONECAV(I,ECAVI)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      COMMON /FMCOM / X(1)
+      COMMON /FMOPNT/ LICHFG,LMULFG,LIDMREC,LFRGNAM,LLAYFRG,LINDAT,
+     *                LNCBS,LFMOZAN,LFMOC,LFMOMAS,LIZBAS,LIAGLOB,LIBDGH,
+     *                LIABDFG,LJABDFG,LNCAO,LIDXCAO,LIAPRJO,LJAPRJO,
+     *                LCOREAO,LOCCCOR,LSHIFTB,LIODFMO,LFMODA,LFMODB,
+     *                LFMOESPA,LFMOESPB,LLOCFMO,LSCFFRG,LFMOSCF,LRIJ,
+     *                LPOPMUL,LPOPMAT,LIALOC,LINDBD,LIATFRG,LINDFRG,
+     *                LINDGFRG,LNATFRG,LNAT0FRG,LIANFRG,LZANFRG,LCFRG,
+     *                LLIBISH,LLIBNSH,LLIBNG,LINDATG,LFMOBUF(3),LFMODE,
+     *                LNUMFRG,LLOCTAT,LIAOGLOB,LLOADM,LFMOGE,LDGRID,
+     *                LIODCFMO,LJOB2GRP,LFMOPG,LEMOCDR,LUNTXYZ,LUNTROT,
+     *                LSTONEP,LMAPSU,LFRGMUL,LCLMO,LIALMO,LINDLMO,
+     *                LATCLMO,LLMOBDF,LFGFLMO,LNFGLMO,LLFGLMO,LPFGLMO,
+     *                LPOPDMAT
+C
+C     This subroutine ASSUMES that sphere numbers are exactly same as
+C     atomic numbers.
+C
+      IAT=I
+      IFG=IXFTCH(X(LINDAT),IAT)
+C     write(6,*) 'wwwec',iat,ifg,ecavi
+      X(LEMOCDR+(IFG-1)*3)=X(LEMOCDR+(IFG-1)*3)+ECAVI
+      RETURN
+      END

@@ -1,0 +1,464 @@
+C 23 OCT 08 - NM  - TDEFP: CHANGE SIGN AND DOUBLE POLARIZATION TERM
+C 21 APR 08 - SHY - GENERATE ELECTRIC FIELD INTEGRALS
+C  4 MAR 08 - SHY - FINALIZE INITIAL IMPLEMENTATION OF EFP WITH TD-DFT
+C 28 AUG 07 - SHY - NEW MODULE FOR INCLUDING EFP WITH TD-DFT
+C
+C*MODULE TDDEFP  *DECK TDEFPINIT
+      SUBROUTINE TDEFPINIT
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL         GOPARR,MASWRK,DSKWRK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+      IF (MASWRK) THEN
+         CALL TDEFPPOL
+      END IF
+C
+      RETURN
+C
+      END
+C*MODULE TDDEFP  *DECK TDEFP
+      SUBROUTINE TDEFP (PA,F,XEFI,YEFI,ZEFI,L2,L1,NV)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      CHARACTER*8     POLNAM,DPOLNAM
+C
+      PARAMETER (MXFRG=1050, MXFGPT=12000,MXIFRQ=12,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
+     *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
+     *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
+     *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ*MXFGPT),
+     *                POLSCR(MXFGPT),IPLSCR,INDSCR
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /IJPAIR/ IA(8192)
+C
+      DIMENSION PA(L1,L1,NV)
+      DIMENSION F(L2,NV)
+      DIMENSION XEFI(L2), YEFI(L2), ZEFI(L2)
+C
+      DATA HALF/0.5D+00/
+C
+      NFT25 = 25
+C
+      CALL SEQREW (NFT25)
+C
+      DO IFP = 1, NPTTPT
+         CALL SQREAD(NFT25,XEFI,L2)
+         CALL SQREAD(NFT25,YEFI,L2)
+         CALL SQREAD(NFT25,ZEFI,L2)
+         POLXX = EFPOL(1,IFP)
+         POLYY = EFPOL(2,IFP)
+         POLZZ = EFPOL(3,IFP)
+         POLXY = EFPOL(4,IFP)
+         POLXZ = EFPOL(5,IFP)
+         POLYZ = EFPOL(6,IFP)
+         POLYX = EFPOL(7,IFP)
+         POLZX = EFPOL(8,IFP)
+         POLZY = EFPOL(9,IFP)
+C
+         DO IMO=1,NV
+C---  FOR \INT \PSI_I \PSI_A .. DR
+            ABFLDX = 0.0D+00
+            ABFLDY = 0.0D+00
+            ABFLDZ = 0.0D+00
+            DO I=1,L1
+               DO J=1,I
+                  DIJ = PA(I,J,IMO) + PA(J,I,IMO)
+                  IF (I.EQ.J) THEN
+                     DIJ = HALF*DIJ
+                  END IF
+                  NIJ=IA(I)+J
+                  XI = XEFI(NIJ)
+                  YI = YEFI(NIJ)
+                  ZI = ZEFI(NIJ)
+                  ABFLDX = ABFLDX + XI * DIJ
+                  ABFLDY = ABFLDY + YI * DIJ
+                  ABFLDZ = ABFLDZ + ZI * DIJ
+               END DO
+            END DO
+C
+            PMUX = POLXX*ABFLDX + POLXY*ABFLDY + POLXZ*ABFLDZ
+            PMUY = POLYX*ABFLDX + POLYY*ABFLDY + POLYZ*ABFLDZ
+            PMUZ = POLZX*ABFLDX + POLZY*ABFLDY + POLZZ*ABFLDZ
+C                  IF (I.EQ.J) FACTIJ=FACTIJ+FACTIJ
+            DO K=1, L1
+               DO  L=1,K
+                  NKL=IA(K)+L
+                  XK = XEFI(NKL)
+                  YK = YEFI(NKL)
+                  ZK = ZEFI(NKL)
+C
+                  PMUXK = POLXX*XK + POLXY*YK + POLXZ*ZK
+                  PMUYK = POLYX*XK + POLYY*YK + POLYZ*ZK
+                  PMUZK = POLZX*XK + POLZY*YK + POLZZ*ZK
+C
+                  FKI = XK*PMUX + YK*PMUY + ZK*PMUZ
+                  FIK = ABFLDX*PMUXK + ABFLDY*PMUYK + ABFLDZ*PMUZK
+C
+C       POLARIZATION AND ELECTROSTATICS SHOULD HAVE OPPOSITE
+C       SIGN CONTRIBUTIONS.  DOUBLING IS NEEDED SINCE THIS IS
+C       CLOSED SHELL, SO THE CONTRIBUTION ALPHA=BETA.
+C-ORIG-           VAL = 0.5D+00*(FIK + FKI)
+C
+                  VAL = -(FIK + FKI)
+                  F(NKL,IMO)=F(NKL,IMO) + VAL + VAL
+               END DO
+            END DO
+         END DO
+      END DO
+C
+      RETURN
+C
+      END
+C
+C*MODULE TDDEFP  *DECK TDEFPPOL
+      SUBROUTINE TDEFPPOL
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      PARAMETER (MXATM=2000)
+C
+      COMMON /FMCOM / X(1)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+C
+      L1 = NUM
+      L2 = (L1*L1+L1)/2
+C
+      CALL VALFM(LOADFM)
+      LPEX = LOADFM + 1
+      LPEY = LPEX + L2
+      LPEZ = LPEY + L2
+      LAST = LPEZ + L2
+      NEED = LAST - LOADFM - 1
+      CALL GETFM(NEED)
+C
+      CALL TDEFPPOLINT(X(LPEX),X(LPEY),X(LPEZ),L2)
+C
+      CALL RETFM(NEED)
+C
+      END
+C
+C*MODULE TDDEFP  *DECK TDEFPPOLINT
+      SUBROUTINE TDEFPPOLINT(PEX,PEY,PEZ,NUM2)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      CHARACTER*8 POLNAM,DPOLNAM
+C
+      LOGICAL IANDJ,NORM,DOUBLE,OUT
+C
+      PARAMETER (MXATM=2000, MXSH=5000, MXGTOT=20000,
+     *           MXFRG=1050, MXFGPT=12000, MXIFRQ=12,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      DIMENSION PEX(NUM2),PEY(NUM2),PEZ(NUM2)
+C
+      DIMENSION XIN(128),YIN(128),ZIN(128),
+     1          PLX(100),PLY(100),PLZ(100)
+      DIMENSION DIJ(100),FIJ(100)
+      DIMENSION IX(20),IY(20),IZ(20),JX(20),JY(20),JZ(20)
+      DIMENSION IJX(100),IJY(100),IJZ(100)
+C
+      COMMON /CSSTV / CX,CY,CZ
+      COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
+     *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
+     *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
+     *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ*MXFGPT),
+     *                POLSCR(MXFGPT),IPLSCR,INDSCR
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     1                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     2                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /ROOT  / XX,U(13),W(13),NROOTS
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+      COMMON /STV   / XINT,YINT,ZINT,T,X0,Y0,Z0,XI,YI,ZI,XJ,YJ,ZJ,NI,NJ
+C
+      DATA JX / 0, 1, 0, 0, 2, 0, 0, 1, 1, 0,
+     1          3, 0, 0, 2, 2, 1, 0, 1, 0, 1/
+      DATA IX / 1, 5, 1, 1, 9, 1, 1, 5, 5, 1,
+     1         13, 1, 1, 9, 9, 5, 1, 5, 1, 5/
+      DATA JY / 0, 0, 1, 0, 0, 2, 0, 1, 0, 1,
+     1          0, 3, 0, 1, 0, 2, 2, 0, 1, 1/
+      DATA IY / 1, 1, 5, 1, 1, 9, 1, 5, 1, 5,
+     1          1,13, 1, 5, 1, 9, 9, 1, 5, 5/
+      DATA JZ / 0, 0, 0, 1, 0, 0, 2, 0, 1, 1,
+     1          0, 0, 3, 0, 1, 0, 1, 2, 2, 1/
+      DATA IZ / 1, 1, 1, 5, 1, 1, 9, 1, 5, 5,
+     1          1, 1,13, 1, 5, 1, 5, 9, 9, 5/
+C
+      DATA ZERO,ONE/0.0D+00,1.0D+00/
+      DATA PI212 /1.1283791670955D+00/
+      DATA SQRT3 /1.73205080756888D+00/
+      DATA SQRT5 /2.23606797749979D+00/
+      DATA RLN10 /2.30258D+00/
+      DATA DBUGME  /8HINT1    /
+C
+C------- THIS VERSION HAS THE METHOD=1 STUFF OF HONDO CUT OUT.
+C
+      OUT = NPRINT.EQ.3 .OR. EXETYP.EQ.DBUGME
+C
+      NEFP = NPTTPT
+      TOL=RLN10*ITOL
+      NORM=NORMF.NE.1.OR.NORMP.NE.1
+C
+C        THE ELECTRIC FIELD INTEGRAL IS TO BE A DISTRIBUTED FILE
+C
+      NFT25 = 25
+      CALL SEQREW(NFT25)
+C
+      DO 9200 IC=1,NEFP
+C
+      DO 41 I=1,NUM2
+      PEX(I) = ZERO
+      PEY(I) = ZERO
+      PEZ(I) = ZERO
+  41  CONTINUE
+C     IF(MASWRK) WRITE(6,*)'FOR POLARIZABLE POINT ',IC
+      CX=EFP(1,IC)
+      CY=EFP(2,IC)
+      CZ=EFP(3,IC)
+C
+C     ----- ISHELL
+C
+      DO 9000 II=1,NSHELL
+      I=KATOM(II)
+      XI=C(1,I)
+      YI=C(2,I)
+      ZI=C(3,I)
+      I1=KSTART(II)
+      I2=I1+KNG(II)-1
+      LIT=KTYPE(II)
+      MINI=KMIN(II)
+      MAXI=KMAX(II)
+      LOCI=KLOC(II)-MINI
+C
+C     ----- JSHELL
+C
+      DO 8000 JJ=1,II
+C
+      J=KATOM(JJ)
+      XJ=C(1,J)
+      YJ=C(2,J)
+      ZJ=C(3,J)
+      J1=KSTART(JJ)
+      J2=J1+KNG(JJ)-1
+      LJT=KTYPE(JJ)
+      MINJ=KMIN(JJ)
+      MAXJ=KMAX(JJ)
+      LOCJ=KLOC(JJ)-MINJ
+      NROOTS=(LIT+LJT+1-2)/2 + 1
+      RR=(XI-XJ)**2+(YI-YJ)**2+(ZI-ZJ)**2
+      IANDJ=II.EQ.JJ
+C
+C     ----- PREPARE INDICES FOR PAIRS OF (I,J) FUNCTIONS
+C
+      IJ=0
+      MAX=MAXJ
+      DO 50 I=MINI,MAXI
+      NX=IX(I)
+      NY=IY(I)
+      NZ=IZ(I)
+      IF(IANDJ) MAX=I
+      DO 50 J=MINJ,MAX
+      IJ=IJ+1
+      IJX(IJ)=NX+JX(J)
+      IJY(IJ)=NY+JY(J)
+      IJZ(IJ)=NZ+JZ(J)
+   50 CONTINUE
+      DO 60 I=1,IJ
+      PLX(I) = ZERO
+      PLY(I) = ZERO
+  60  PLZ(I) = ZERO
+C
+C     ----- I PRIMITIVE
+C
+      JGMAX=J2
+      DO 7000 IG=I1,I2
+      AI=EX(IG)
+      ARRI=AI*RR
+      AXI=AI*XI
+      AYI=AI*YI
+      AZI=AI*ZI
+      CSI=CS(IG)
+      CPI=CP(IG)
+      CDI=CD(IG)
+      CFI=CF(IG)
+C
+C     ----- J PRIMITIVE
+C
+      IF(IANDJ) JGMAX=IG
+      DO 6000 JG=J1,JGMAX
+      AJ=EX(JG)
+      AA=AI+AJ
+      AA1=ONE/AA
+      DUM=AJ*ARRI*AA1
+      IF(DUM.GT.TOL) GO TO 6000
+      FAC=EXP(-DUM)
+      CSJ=CS(JG)
+      CPJ=CP(JG)
+      CDJ=CD(JG)
+      CFJ=CF(JG)
+      AX=(AXI+AJ*XJ)*AA1
+      AY=(AYI+AJ*YJ)*AA1
+      AZ=(AZI+AJ*ZJ)*AA1
+C
+C     ----- DENSITY FACTOR
+C
+      DOUBLE=IANDJ.AND.IG.NE.JG
+      MAX=MAXJ
+      NN=0
+      DO 310 I=MINI,MAXI
+      GO TO ( 70, 80,180,180, 90,180,180,100,180,180,
+     1       110,180,180,120,180,180,180,180,180,130),I
+   70 DUM1=CSI*FAC
+      GO TO 180
+   80 DUM1=CPI*FAC
+      GO TO 180
+   90 DUM1=CDI*FAC
+      GO TO 180
+  100 IF(NORM) DUM1=DUM1*SQRT3
+      GO TO 180
+  110 DUM1=CFI*FAC
+      GO TO 180
+  120 IF(NORM) DUM1=DUM1*SQRT5
+      GO TO 180
+  130 IF(NORM) DUM1=DUM1*SQRT3
+  180 IF(IANDJ) MAX=I
+      DO 310 J=MINJ,MAX
+      GO TO (190,200,300,300,210,300,300,220,300,300,
+     1       230,300,300,240,300,300,300,300,300,250),J
+  190 DUM2=DUM1*CSJ
+      IF(.NOT.DOUBLE) GO TO 300
+      IF(I.GT.1) GO TO 195
+      DUM2=DUM2+DUM2
+      GO TO 300
+  195 DUM2=DUM2+CSI*CPJ*FAC
+      GO TO 300
+  200 DUM2=DUM1*CPJ
+      IF(DOUBLE) DUM2=DUM2+DUM2
+      GO TO 300
+  210 DUM2=DUM1*CDJ
+      IF(DOUBLE) DUM2=DUM2+DUM2
+      GO TO 300
+  220 IF(NORM) DUM2=DUM2*SQRT3
+      GO TO 300
+  230 DUM2=DUM1*CFJ
+      IF(DOUBLE) DUM2=DUM2+DUM2
+      GO TO 300
+  240 IF(NORM) DUM2=DUM2*SQRT5
+      GO TO 300
+  250 IF(NORM) DUM2=DUM2*SQRT3
+  300 NN=NN+1
+  310 DIJ(NN)=DUM2
+C
+      AAX=AA*AX
+      AAY=AA*AY
+      AAZ=AA*AZ
+      DUM=PI212*AA1
+      DUM=DUM+DUM
+      DO 800 I=1,IJ
+  800 FIJ(I)=DIJ(I)*DUM
+C
+      XX=AA*((AX-CX)**2+(AY-CY)**2+(AZ-CZ)**2)
+      IF(NROOTS.LE.3) CALL RT123
+      IF(NROOTS.EQ.4) CALL ROOT4
+      MM=0
+      DO 830 K=1,NROOTS
+      UU=AA*U(K)
+      WW=W(K)
+      WW=WW*UU
+      TT=ONE/(AA+UU)
+      T=SQRT(TT)
+      X0=(AAX+UU*CX)*TT
+      Y0=(AAY+UU*CY)*TT
+      Z0=(AAZ+UU*CZ)*TT
+      IN=-4+MM
+      DO 820 I=1,LIT
+      IN=IN+4
+      NI=I
+      DO 820 J=1,LJT
+      JN=IN+J
+      NJ=J
+      CALL STVINT
+      XIN(JN)=XINT
+      YIN(JN)=YINT
+      ZIN(JN)=ZINT*WW
+      CALL POLXYZ
+      XIN(JN+64)=XINT
+      YIN(JN+64)=YINT
+      ZIN(JN+64)=ZINT*WW
+  820 CONTINUE
+  830 MM=MM+16
+      DO 850 I=1,IJ
+      NX=IJX(I)
+      NY=IJY(I)
+      NZ=IJZ(I)
+      DUMX=ZERO
+      DUMY=ZERO
+      DUMZ=ZERO
+      MM=0
+      DO 840 K=1,NROOTS
+      DUMX=DUMX+XIN(NX+MM+64)*YIN(NY+MM   )*ZIN(NZ+MM   )
+      DUMY=DUMY+XIN(NX+MM   )*YIN(NY+MM+64)*ZIN(NZ+MM   )
+      DUMZ=DUMZ+XIN(NX+MM   )*YIN(NY+MM   )*ZIN(NZ+MM+64)
+  840 MM=MM+16
+      DUM=FIJ(I)
+      PLX(I) = PLX(I) + DUM*DUMX
+      PLY(I) = PLY(I) + DUM*DUMY
+      PLZ(I) = PLZ(I) + DUM*DUMZ
+  850 CONTINUE
+C
+ 6000 CONTINUE
+ 7000 CONTINUE
+C
+C
+      MAX=MAXJ
+      NN=0
+      DO 7500 I=MINI,MAXI
+      LI=LOCI+I
+      IN = (LI*(LI-1))/2
+      IF(IANDJ) MAX=I
+      DO 7500 J=MINJ,MAX
+      LJ=LOCJ+J
+      JN=LJ+IN
+      NN=NN+1
+      PEX(JN)=PLX(NN)
+      PEY(JN)=PLY(NN)
+      PEZ(JN)=PLZ(NN)
+ 7500 CONTINUE
+C     ----- END
+ 8000 CONTINUE
+ 9000 CONTINUE
+C
+C  COLLECT MATRICES ON DISK FOR TWO ELECTRON OPERATOR CONSTRUCTION
+C
+      CALL SQWRIT(NFT25,PEX,NUM2)
+      CALL SQWRIT(NFT25,PEY,NUM2)
+      CALL SQWRIT(NFT25,PEZ,NUM2)
+C
+      IF(OUT) THEN
+         WRITE(IW,9500)
+      END IF
+C
+ 9200 CONTINUE
+C
+      RETURN
+ 9500 FORMAT(/1X,'X, Y, AND Z COMPONENTS OF THE INDUCED DIPOLE',
+     *       ' ONE ELECTRON INTEGRALS')
+      END

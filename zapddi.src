@@ -1,0 +1,4819 @@
+C 14 OCT 09 - DGF - SAVE SCS-MP2 ENERGY IN /ENRGMP/
+C 17 JAN 06 - MWS - USE NEW DDI TRANSF COMMON TRFDMS
+C 19 NOV 05 - DGF - PAD COMMON BLOCK ENRGYS
+C 19 SEP 05 - GDF - PAD SHLNRM COMMON FOR H AND I FUNCTIONS
+C  5 JUL 05 - MWS - SELECT NEW ATOM,BASIS,EFP,PCM,DAF DIMENSIONS
+C 27 JUN 05 - CMA - ZETAEPS: CORRECT THE TFTRI HANG
+C  1 JUN 05 - CMA - ADD MODULE FOR DISTRIBUTED DATA ZAPT2 GRADIENT
+C
+C*MODULE ZAPDDI   *DECK ZPAR1PDM
+      SUBROUTINE ZPAR1PDM(CMO,EORB,PMAT,PSCF,WMAT,SCHWA,MOLABS,XYEXC
+     *,                   TIA)
+C
+C -----------------------------------------------------------------
+C  ZAPT2 1-PARTICLE DENSITY DRIVING ROUTINE (ZPAR1PDM,ZAPTWP,ZFNSHW)
+C -----------------------------------------------------------------
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      PARAMETER (MXSH=5000, MXATM=2000, MXIRR=14)
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00, TWO=2.0D+00)
+      PARAMETER (HALF=0.5D+00)
+      LOGICAL GOPARR,DSKWRK,MASWRK,OUTPUT,MP2ENG,ABELPT,UMP2GD,ZAPTGD
+      INTEGER MOLABS(*),A
+      DOUBLE PRECISION CMO(NBF,*),EORB(*),PMAT(NBF,*),PSCF(NBF,*)
+     *,      WMAT(NBF,*),SCHWA(*),XYEXC(*),TIA(*)
+C
+      COMMON /FMCOM / XX(1)
+      COMMON /IOFILE/ IR,IW,IP,IJK,IPK,IDAF,NAV,IODA(950)
+      COMMON /MP2XTR/ NBF,NACORE,NBSQ,NBTR,NSTR,MXSHL,NACT,NOCC
+     *,               NVIR,NOV,NOSQ,NVSQ,NOTR,NVTR,NCP1,NOP1
+     *,               NATR,ICHANL,OUTPUT,MP2ENG,IOST,NMOS,UMP2GD
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /SYMTRY/ MAPSHL(MXSH,48),MAPCTR(MXATM,48),
+     *                TSYM(432),INVT(48),NT
+      COMMON /ZAPTGR/ NOCD,NOCD1,NOCS,NOCSTR,IXYEXC,ICHIX,ITIA,IZ
+     *,               ZAPTGD
+C
+      INTEGER         D_OOOO,D_VOOO,D_VVOO,D_VOVO,D_VVVO,D_VVVV,
+     *                D_OOOOAB,D_OOOOBB,D_VOOOAB,D_VOOOBA,D_VOOOBB,
+     *                D_VVOOAB,D_VVOOBA,D_VVOOBB,D_VOVOAB,D_VOVOBB,
+     *                D_U,D_UB,D_E,D_EB
+      LOGICAL         NDOOOO,NDVOOO,NDVVOO,NDVOVO,NDVVVO,NDVVVV,NDCORE,
+     *                NDVVOOBA,NDVVOOAB,NDVVOOBB,NDVOVOAB,NDVOVOBB,
+     *                NDVOOOBA,NDVOOOAB,NDVOOOBB,NDOOOOAB,NDOOOOBB
+      COMMON /TRFDMS/ D_OOOO,D_VOOO,D_VVOO,D_VOVO,D_VVVO,D_VVVV,
+     *                D_OOOOAB,D_OOOOBB,D_VOOOAB,D_VOOOBA,D_VOOOBB,
+     *                D_VVOOAB,D_VVOOBA,D_VVOOBB,D_VOVOAB,D_VOVOBB,
+     *                D_U,D_UB,D_E,D_EB,
+     *                NDOOOO,NDVOOO,NDVVOO,NDVOVO,NDVVVO,NDVVVV,NDCORE,
+     *                NDVVOOBA,NDVVOOAB,NDVVOOBB,NDVOVOAB,NDVOVOBB,
+     *                NDVOOOBA,NDVOOOAB,NDVOOOBB,NDOOOOAB,NDOOOOBB
+C
+      IF (OUTPUT) THEN
+        WRITE(ICHANL,1)
+        CALL FLSHBF(ICHANL)
+      END IF
+C
+C  CONSTRUCT TERMS OF P(2), W(2), AND LAGRANGIAN
+C
+      CALL VALFM(LOADFM)
+      IFXY  = 1     + LOADFM
+      ITXY  = IFXY  + NOCS*NOCS
+      ITXY4 = ITXY  + NOCS*NOCS
+      IWXYN = ITXY4 + NOCS*NOCS
+      ITMP1 = IWXYN + NOCS*NOCS
+      ITMP2 = ITMP1 + NBSQ
+      ITMP3 = ITMP2 + NBSQ
+      LAST  = ITMP3 + MAX(NBTR,MAX(NOCS*NOCS*NVIR*(NOCD-NACORE),NMOS))
+      NEED  = LAST  - LOADFM
+      CALL GETFM(NEED)
+      CALL ZAPTWP(PMAT
+     *,           WMAT
+     *,           EORB
+     *,           XYEXC,XX(IFXY)
+     *,           XX(ITXY),XX(ITXY4),XX(ICHIX),XX(IWXYN)
+     *,           XX(ITMP1),XX(ITMP2),XX(ITMP3),TIA)
+      CALL ZAPTPE(PMAT,WMAT,EORB)
+      CALL ZLAGPG(PMAT,WMAT,XX(ITMP1),XX(ITMP2))
+      CALL ZSUMPE(PMAT,WMAT,CMO,XX(ITMP1),XX(ITMP2),XX(ITMP3))
+      CALL RETFM(NEED)
+C
+C  COMPUTE VVVO TERMS OF THE LAGRANGIAN
+C
+      CALL LAGVVV(WMAT,PMAT,CMO,EORB,SCHWA)
+C
+C  GLOBAL SUM OF W(2)
+C
+      CALL DDI_GSUMF(1002,WMAT,NBSQ)
+C
+C  SET UP VARIABLES FOR CPHF EQUATIONS
+C
+      NDS = NOCD * NOCS
+      NDV = NOCD * NVIR
+      NSV = NOCS * NVIR
+C
+C  COMBINE TERMS OF LAGRANGIAN - COPY INTO XX(IZ) (IN ZAPTGR)
+C
+      CALL VALFM(LOADFM)
+      IRLAG = 1     + LOADFM
+      IBUF5 = IRLAG + (NDS + NDV + NSV)
+      IBUF6 = IBUF5 + NOTR                                 ! ZETA IJ/XY
+      IEPS  = IBUF6 + NVIR*NOCC                            ! ZETA AR
+      LAST  = IEPS  + NOTR                                 ! EPS
+      NEEDZ = LAST  - LOADFM
+      CALL GETFM(NEEDZ)
+      IA = IZ - 1
+      DO A = NOCD1, NOCC
+        DO I = 1, NOCD
+          IA = IA + 1
+          IF (MOLABS(I).EQ.MOLABS(A)) THEN
+            XX(IA) = WMAT(A,I) + WMAT(I,A)
+          ELSE
+            XX(IA) = ZERO
+          END IF
+        END DO
+      END DO
+      DO I = 1, NOCD
+        DO A = NOP1, NMOS
+          IA = IA + 1
+          IF (MOLABS(I).EQ.MOLABS(A)) THEN
+            XX(IA) = WMAT(A,I) + WMAT(I,A)
+          ELSE
+            XX(IA) = ZERO
+          END IF
+        END DO
+      END DO
+      DO I = NOCD1, NOCC
+        DO A = NOP1, NMOS
+          IA = IA + 1
+          IF (MOLABS(I).EQ.MOLABS(A)) THEN
+            XX(IA) = WMAT(A,I) + WMAT(I,A)
+          ELSE
+            XX(IA) = ZERO
+          END IF
+        END DO
+      END DO
+      IF (OUTPUT) THEN
+        WRITE(ICHANL,2)
+        CALL FLSHBF(ICHANL)
+      END IF
+C
+C  SOLVE Z-MATRIX EQUATION
+C
+      CALL VALFM(LOADFM)
+      ITMP = 1    + LOADFM
+      NSYM = ITMP + MXIRR
+      NVSM = NSYM + NMOS
+      LVSM = NVSM + MXIRR
+      NDSM = LVSM + MXIRR*NMOS
+      LDSM = NDSM + MXIRR
+      LAST = LDSM + MXIRR*NMOS
+      NEEDS= LAST - LOADFM
+      CALL GETFM(NEEDS)
+C
+C  IN CASE OF NON-ABELIAN POINT GROUPS...
+C
+      NTSAVE = NT
+      IF (.NOT.ABELPT()) NT = 1
+C
+C  GROUP VIRTUAL MOS ACCORDING TO SYMMETRY
+C
+      CALL SYMVMO(MOLABS,XX(ITMP),XX(NSYM)
+     *,           XX(NVSM),XX(LVSM),MXIRR,NOCC,NOP1,NMOS
+     *,           XX(NDSM),XX(LDSM),NOCD,ZAPTGD)
+C
+C  FORM REDUCED LAGRANGIAN
+C
+      LENRL = NDS + NDV + NSV
+      CALL ZSYMRL(MOLABS,XX(IZ),XX(IRLAG),LENRL,LOFF1,LOFF2,NOCD,NOCD1
+     *,           NOCC,NOP1,NMOS)
+      IF (LENRL.EQ.0) GO TO 100
+      LEN = LENRL
+C
+C  CREATE THE DM FOR STORING THE TRIAL VECTORS
+C
+      MAXC = 50
+      CALL DDI_CREATE(LEN,MAXC,D_U)
+C
+C  ALLOCATE WORKSPACES FOR CPHF SOLVER
+C
+      CALL VALFM(LOADFM)
+      ITMP1  = 1      + LOADFM
+      ITMP2  = ITMP1  + LEN                                  ! U
+      ITMP3  = ITMP2  + LEN                                  ! UNXT
+      ITMP4  = ITMP3  + LEN                                  ! PRHS
+      ITMP5  = ITMP4  + MAXC                                 ! B
+      ITMP6  = ITMP5  + MAXC                                 ! CC
+      ITMP7  = ITMP6  + MAXC                                 ! UU
+      ITMP8  = ITMP7  + MAXC*MAXC                            ! UAU
+      ITMP9  = ITMP8  + MAX0(MAX0(NVSQ,NOSQ),MAX0(MAXC,LEN)) ! BUF
+      ITMP10 = ITMP9  + MAX0(NVSQ,MAX0(MAXC,NVIR*MAX0(NOCD,NOCS)))
+      ITMP11 = ITMP10 + NBTR                                 ! BUF2
+      ITMP12 = ITMP11 + MAXC*MAXC                            ! ALPHA
+      IBUF3  = ITMP12 + MAXC                                 ! WK1
+      IBUF4  = IBUF3  + NBTR                                 ! ZETA1 AB
+      IHAM   = IBUF4  + NVTR                                 ! ZETA2 AB
+      LAST   = IHAM   + NBTR                                 ! H
+      NEED   = LAST   - LOADFM
+      CALL GETFM(NEED)
+C
+C  NOW SOLVE FOR THE REDUCED Z-VECTOR
+C
+      CALL ZVECTR(EORB,XX(IRLAG)
+     *,           XX(ITMP1),XX(ITMP2),XX(ITMP3)
+     *,           XX(ITMP4),XX(ITMP5),XX(ITMP6),XX(ITMP7)
+     *,           XX(ITMP8),XX(ITMP9),XX(ITMP10)
+     *,           XX(ITMP11),XX(ITMP12)
+     *,           MOLABS,XX(NSYM),XX(NVSM),XX(LVSM)
+     *,           MAXC,LEN,MXIRR
+     *,           XX(IBUF3),XX(IBUF4),XX(IBUF5),XX(IBUF6)
+     *,           XX(IEPS),XX(IHAM),CMO,XX(NDSM),XX(LDSM),LOFF1,LOFF2)
+      CALL RETFM(NEED)
+      CALL DDI_DESTROY( D_U )
+  100 CONTINUE
+      CALL RETFM(NEEDS)
+C
+C  RESTORE SOLUTION VECTOR TO FULL P(OV)
+C
+      CALL ZSYMPOV(MOLABS,XX(IZ),XX(IRLAG),LENRL,NOCD,NOCD1,NOCC
+     *,            NOP1,NMOS)
+C
+C  IN CASE OF NON-ABELIAN GROUPS...
+C
+      NT = NTSAVE
+      IF (OUTPUT) THEN
+        WRITE(ICHANL,3)
+        CALL FLSHBF(ICHANL)
+      END IF
+C
+C  TERMS OF THE W(2) DEPENDENT ON THE P(OV)
+C
+      CALL VALFM(LOADFM)
+      ITMP1 = 1     + LOADFM
+      ITMP2 = ITMP1 + NOSQ
+      ITMP3 = ITMP2 + MAX0(NVTR,NOTR)
+      LAST  = ITMP3 + NVSQ
+      NEED  = LAST  - LOADFM
+      CALL GETFM(NEED)
+      CALL ZFNSHW(PMAT,XX(IZ),WMAT,XX(ITMP1),XX(ITMP2)
+     *,           XX(ITMP3),XX(IEPS),XX(IBUF5),XX(IBUF6),NOCD,NOCD1)
+      CALL RETFM(NEED)
+      CALL RETFM(NEEDZ)
+C
+C  DONE WITH THE (VV|OO) INTEGRALS
+C
+      CALL DDI_DESTROY( D_VVOO )
+C
+C  FINISH OFF 1-PARTICLE DENSITY MATRICES
+C
+      CALL VALFM(LOADFM)
+      ITMP1 = 1     + LOADFM
+      ITMP2 = ITMP1 + NBSQ
+      ITMP3 = ITMP2 + NBSQ
+      LAST  = ITMP3 + NBTR
+      NEED  = LAST  - LOADFM
+      CALL GETFM(NEED)
+C
+C  BACK-TRANSFORM P(2) TO AO-BASIS
+C
+      CALL CACT(NBF,NMOS
+     *,         PMAT,NBF
+     *,         CMO,NBF
+     *,         XX(ITMP1),NBF,XX(ITMP2))
+C
+C  SYMMETRISE P(2)
+C
+      CALL SQTR(XX(ITMP1),PMAT,NBF)
+C
+C  FORM P(SCF)
+C
+      CALL DGEMM('N','T',  NBF,NBF,NOCD
+     *,           TWO,CMO,NBF
+     *,           CMO,NBF
+     *,           ZERO,XX(ITMP1),NBF)
+      CALL DGEMM('N','T',  NBF,NBF,NOCS
+     *,           ONE,CMO(1,NOCD1),NBF
+     *,           CMO(1,NOCD1),NBF
+     *,           ONE,XX(ITMP1),NBF)
+C
+C  SYMMETRISE P(SCF)
+C
+      CALL SQTR(XX(ITMP1),PSCF,NBF)
+C
+C  SAVE P(SCF) ON DAF RECORD 308
+C
+      CALL DAWRIT(IDAF,IODA,PSCF,NBTR,308,0)
+C
+C  P(MP2) = P(2) + P(SCF)
+C
+      CALL DCOPY(NBTR,PSCF,1,XX(ITMP1),1)
+      CALL DAXPY(NBTR,ONE,PMAT,1,XX(ITMP1),1)
+C
+C  SAVE P(MP2) TO DISC
+C  (PUT HALF IN ALPHA DENSITY AND HALF IN BETA DENSITY)
+C
+      CALL DSCAL(NBTR,HALF,XX(ITMP1),1)
+      CALL DAWRIT(IDAF,IODA,XX(ITMP1),NBTR,16,0)
+      CALL DAWRIT(IDAF,IODA,XX(ITMP1),NBTR,20,0)
+C
+C  BACK-TRANSFORM W(2) TO AO-BASIS
+C
+      CALL CACT(NBF,NMOS
+     *,         WMAT,NBF
+     *,         CMO,NBF
+     *,         XX(ITMP1),NBF,XX(ITMP2))
+C
+C  SYMMETRISE W(2)
+C
+      CALL SQTR(XX(ITMP1),XX(ITMP3),NBF)
+C
+C  FORM W(SCF)
+C
+      CALL DAREAD(IDAF,IODA,XX(ITMP1),NBTR,36,0)
+C
+C  W(MP2) = W(2) + W(SCF)
+C
+      CALL DAXPY(NBTR,ONE,XX(ITMP3),1,XX(ITMP1),1)
+C
+C  SAVE W(MP2) TO DISC
+C
+      CALL DAWRIT(IDAF,IODA,XX(ITMP1),NBTR,309,0)
+C
+C  FREE WORKSPACE
+C
+      CALL RETFM(NEED)
+C
+C  RESET DLB COUNTER - THIS SEEMS TO BE NEEDED FOR
+C  RUNNING THE 1-PARTICLE GRADIENT IN PARALLEL
+C
+      IF (IBTYP.EQ.1) CALL DDI_DLBRESET()
+      RETURN
+1     FORMAT(/,6X,'COMPUTING CONTRIBUTIONS TO THE 1-PARTICLE DENSITY',
+     *            ' MATRICES')
+2     FORMAT(/,6X,'SOLVING FOR Z-VECTOR')
+3     FORMAT(/,6X,'COMPUTING LAST CONTRIBUTIONS TO THE 1-PARTICLE',
+     *            ' DENSITY')
+      END
+C*MODULE ZAPDDI   *DECK ZAPTWP
+      SUBROUTINE ZAPTWP(PMAT,WMAT,EORB,XYEXC,FXY,TXY,TXY4,CHIX,
+     *                  WXYNEW,BUF1,BUF2,BUF3,TIA)
+C
+C -----------------------------------------------------------------
+C  CONSTRUCT TERMS OF W(2) AND P(2) FOR ZAPT GRADIENTS
+C -----------------------------------------------------------------
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      PARAMETER (ZERO=0.0D+00, HALF=0.5D+00, ONE=1.0D+00, TWO=2.0D+00)
+      PARAMETER (SMALL=1.0D-06)
+      LOGICAL GOPARR,DSKWRK,MASWRK,OUTPUT,MP2ENG,UMP2GD,ZAPTGD
+      INTEGER A,B,AB,BA
+      DOUBLE PRECISION PMAT(NBF,NBF),WMAT(NBF,NBF),EORB(NBF)
+     *,      XYEXC(NOCS),FXY(NOCS,NOCS),BUF1(NBF*NBF),BUF2(NBF*NBF)
+     *,      BUF3(*),TIA(*),TXY(NOCS,NOCS),TXY4(NOCS,NOCS),CHIX(NOCS)
+     *,      WXYNEW(NOCS,NOCS)
+C
+      COMMON /MP2XTR/ NBF,NACORE,NBSQ,NBTR,NSTR,MXSHL,NACT,NOCC
+     *,               NVIR,NOV,NOSQ,NVSQ,NOTR,NVTR,NCP1,NOP1
+     *,               NATR,ICHANL,OUTPUT,MP2ENG,IOST,NMOS,UMP2GD
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /ZAPTGR/ NOCD,NOCD1,NOCS,NOCSTR,IXYEXC,ICHIX,ITIA,IZVEC
+     *,               ZAPTGD
+C
+      INTEGER         D_OOOO,D_VOOO,D_VVOO,D_VOVO,D_VVVO,D_VVVV,
+     *                D_OOOOAB,D_OOOOBB,D_VOOOAB,D_VOOOBA,D_VOOOBB,
+     *                D_VVOOAB,D_VVOOBA,D_VVOOBB,D_VOVOAB,D_VOVOBB,
+     *                D_U,D_UB,D_E,D_EB
+      LOGICAL         NDOOOO,NDVOOO,NDVVOO,NDVOVO,NDVVVO,NDVVVV,NDCORE,
+     *                NDVVOOBA,NDVVOOAB,NDVVOOBB,NDVOVOAB,NDVOVOBB,
+     *                NDVOOOBA,NDVOOOAB,NDVOOOBB,NDOOOOAB,NDOOOOBB
+      COMMON /TRFDMS/ D_OOOO,D_VOOO,D_VVOO,D_VOVO,D_VVVO,D_VVVV,
+     *                D_OOOOAB,D_OOOOBB,D_VOOOAB,D_VOOOBA,D_VOOOBB,
+     *                D_VVOOAB,D_VVOOBA,D_VVOOBB,D_VOVOAB,D_VOVOBB,
+     *                D_U,D_UB,D_E,D_EB,
+     *                NDOOOO,NDVOOO,NDVVOO,NDVOVO,NDVVVO,NDVVVV,NDCORE,
+     *                NDVVOOBA,NDVVOOAB,NDVVOOBB,NDVOVOAB,NDVOVOBB,
+     *                NDVOOOBA,NDVOOOAB,NDVOOOBB,NDOOOOAB,NDOOOOBB
+C
+      NACD = NACT - NOCS
+C
+C  MAKE SURE LEADING DIMENSIONS ARE NOT ZERO
+C
+      NOCSLD = NOCS
+      IF (NOCS.EQ.0) NOCSLD = 1
+      NACDLD = NACD
+      IF (NACD.EQ.0) NACDLD = 1
+      NCPOFF = NACORE*NOCC + NCP1
+      NCAOFF = NACORE*NOCC + 1
+      NCDOFF = NACORE*NOCC + NOCD1
+      NDCOFF = NOCD*NOCC   + NCP1
+      NVAOFF = NACORE*NVIR + 1
+C
+C  GET SINGLES INTEGRALS, (XY|XY)
+C  CALCULATE "INTEGRAL COMPONENT" TO SOCC ORBITAL ENERGIES (XYEXC)
+C  CALCULATE FXY = HALF*SUMW[(YW|YW)-(XW|XW)]
+C
+      CALL DCOPY(NOCS,ZERO,0,XYEXC,1)
+      CALL DCOPY(NOCS*NOCS,ZERO,0,FXY,1)
+      CALL DCOPY(NOCS*NOCS,ZERO,0,TXY,1)
+      CALL DCOPY(NOCS*NOCS,ZERO,0,TXY4,1)
+      CALL DCOPY(NOCS*NOCS,ZERO,0,WXYNEW,1)
+      CALL DDI_DISTRIB(D_VOOO,ME,IL_VOOO,IH_VOOO,JL_VOOO,JH_VOOO)
+      CALL DDI_DISTRIB(D_VOVO,ME,IL_VOVO,IH_VOVO,JL_VOVO,JH_VOVO)
+C
+C  NOTE: OOOO, VOVO, VVOO INTEGRALS DISTRIBUTED WITH THE SAME COLUMNS
+C  ON A GIVEN PROCESSOR.  IF THIS EVER CHANGES IN DDI, NEED TO
+C  ADD MORE DISTRIBUTION CALLS
+C
+      IXY = 0
+      DO IX = 1, NOCS
+        DO IY = 1, IX
+          IXY = IXY + 1
+          NX  = IX + NOCD
+          NY  = IY + NOCD
+          IJ  = (NX*NX-NX)/2 + NY
+          IF (IJ.GE.JL_VOVO.AND.IJ.LE.JH_VOVO) THEN
+            CALL DDI_GET(D_OOOO,1,NOTR,IJ,IJ,BUF1)
+            XYXY = HALF*BUF1(IJ)
+            XYEXC(IY) = XYEXC(IY) + XYXY
+            IF (IX.NE.IY) XYEXC(IX) = XYEXC(IX) + XYXY
+              DO IZ = 1, NOCS
+                FXY(IZ,IY) = FXY(IZ,IY) + XYXY
+                FXY(IX,IZ) = FXY(IX,IZ) - XYXY
+                IF (IX.NE.IY) THEN
+                  FXY(IZ,IX) = FXY(IZ,IX) + XYXY
+                  FXY(IY,IZ) = FXY(IY,IZ) - XYXY
+                END IF
+              END DO
+          END IF
+        END DO
+      END DO
+      CALL DDI_GSUMF(991,XYEXC,NOCS)
+      CALL DDI_GSUMF(992,FXY,NOCS*NOCS)
+C
+      CALL DCOPY(NBSQ,ZERO,0,WMAT,1)
+      CALL DCOPY(NBSQ,ZERO,0,PMAT,1)
+C
+C  TERMS INVOLVING VOVO-TYPE INTEGRALS ONLY:
+C  VIRTUAL BLOCK OF P(2) AND TERM OF VIRTUAL BLOCK OF W(2)
+C  (TERM 1-VV (WITH P,Q VIRTUAL) AND TERM 2)
+C
+      DO I = NCP1, NOCC
+       DO J = NCP1, I
+        IJ = (I*I-I)/2 + J
+        IF (IJ.GE.JL_VOVO.AND.IJ.LE.JH_VOVO) THEN
+         CALL DDI_GET(D_VOVO,1,NVSQ,IJ,IJ,BUF2)
+C
+C  SET UP COEFFICIENTS AND ORBITAL ENERGIES
+C
+         CPQ = TWO
+         IF (I.GT.NOCD .AND. J.GT.NOCD) CPQ = ONE
+         C = TWO
+         IF (I.GT.NOCD .OR. J.GT.NOCD) C = ONE
+         EI = EORB(I)
+         EJ = EORB(J)
+         IF (I.GT.NOCD) EI = EI - XYEXC(I-NOCD)
+         IF (J.GT.NOCD) EJ = EJ - XYEXC(J-NOCD)
+C
+         BA = 0
+         DO A = 1, NVIR
+          AB = A - NVIR
+          DO B = 1, NVIR
+           BA = BA + 1
+           AB = AB + NVIR
+           BUF1(BA) = C*(CPQ*BUF2(AB)-BUF2(BA))/
+     *              (EI+EJ-EORB(NOCC+A)-EORB(NOCC+B))
+          END DO
+         END DO
+         CALL DGEMM('N','N',NVIR,NVIR,NVIR
+     *,             -ONE,BUF2,NVIR
+     *,             BUF1,NVIR
+     *,             ONE,WMAT(NOP1,NOP1),NBF)
+         IF (I.NE.J) THEN
+          CALL DGEMM('T','T',NVIR,NVIR,NVIR
+     *,              -ONE,BUF2,NVIR
+     *,              BUF1,NVIR
+     *,              ONE,WMAT(NOP1,NOP1),NBF)
+         END IF
+         BA = 0
+         DO A = 1, NVIR
+          AB = A - NVIR
+          DO B = 1, NVIR
+           BA = BA + 1
+           AB = AB + NVIR
+           BUF2(BA) = BUF2(BA)/
+     *              (EI+EJ-EORB(NOCC+A)-EORB(NOCC+B))
+          END DO
+         END DO
+         CALL DGEMM('T','T',NVIR,NVIR,NVIR
+     *,             ONE,BUF1,NVIR
+     *,             BUF2,NVIR
+     *,             ONE,PMAT(NOP1,NOP1),NBF)
+         IF (I.NE.J) THEN
+          CALL DGEMM('N','N',NVIR,NVIR,NVIR
+     *,              ONE,BUF1,NVIR
+     *,              BUF2,NVIR
+     *,              ONE,PMAT(NOP1,NOP1),NBF)
+         END IF
+        END IF
+       END DO
+      END DO
+C
+C  OCCUPIED BLOCK OF P(2) AND TERM OF OCCUPIED BLOCK OF W(2)
+C  (TERM 1-VV (WITH P,Q VIRTUAL) AND TERM 2)
+C
+      ITASK = 0
+      DO A = 1, NVIR
+       DO B = 1, A
+         ITASK = ITASK + 1
+         IF (MOD(ITASK,NPROC).EQ.ME) THEN
+C
+C  GET BLOCK OF VOVO INTEGRALS FOR ALL OCC-INDICES
+C
+         AB = (A-1)*NVIR + B
+         CALL DDI_GET(D_VOVO,AB,AB,1,NOTR,BUF1)
+         IC = 0
+         DO I = 1, NOCC
+           DO J = 1, I
+             IC = IC + 1
+             JI = (J-1)*NOCC + I
+             IJ = (I-1)*NOCC + J
+             BUF2(JI) = BUF1(IC)
+             BUF2(IJ) = BUF1(IC)
+           END DO
+         END DO
+         IF (A.NE.B) THEN
+           BA = (B-1)*NVIR + A
+           CALL DDI_GET(D_VOVO,BA,BA,1,NOTR,BUF1)
+           IC = 0
+           DO I = 1, NOCC
+             DO J = 1, I
+               IC = IC + 1
+               IJ = (I-1)*NOCC + J
+               BUF2(IJ) = BUF1(IC)
+             END DO
+           END DO
+         END IF
+         DO I = NCP1, NOCC
+          EI = EORB(I)
+          IF (I.GT.NOCD) EI = EI - XYEXC(I-NOCD)
+          DO J = NCP1, NOCC
+           IJ = (I-1)*NOCC + J
+           JI = (J-1)*NOCC + I
+C
+C  SET UP COEFFICIENTS (AND ORBITAL ENERGIES)
+C
+           CPQ = TWO
+           IF (I.GT.NOCD .AND. J.GT.NOCD) CPQ = ONE
+           C = TWO
+           IF (I.GT.NOCD .OR. J.GT.NOCD) C = ONE
+           EJ = EORB(J)
+           IF (J.GT.NOCD) EJ = EJ - XYEXC(J-NOCD)
+C
+C  CALCULATE AMPLITUDE AND DO MATRIX MULTIPLIES
+C
+           BUF1(IJ) = C*(CPQ*BUF2(JI)-BUF2(IJ))/
+     *       (EI+EJ-EORB(NOCC+A)-EORB(NOCC+B))
+          END DO
+         END DO
+C
+C  FIRST, WIJ(ACT,ACT) 1-VV AND 2 TERMS
+C
+         CALL DGEMM('N','N',NACD,NACD,NACT
+     *,             -ONE,BUF2(NCPOFF),NOCC
+     *,             BUF1(NCPOFF),NOCC
+     *,             ONE,WMAT(NCP1,NCP1),NBF)
+         IF (A.NE.B) THEN
+          CALL DGEMM('T','T',NACD,NACD,NACT
+     *,              -ONE,BUF2(NCPOFF),NOCC
+     *,              BUF1(NCPOFF),NOCC
+     *,              ONE,WMAT(NCP1,NCP1),NBF)
+         END IF
+C
+C  NEXT, WXY(SOCC,SOCC) TERM 2
+C
+         CALL DGEMM('N','N',NOCS,NOCS,NACT
+     *,             -ONE,BUF2(NCDOFF),NOCC
+     *,             BUF1(NDCOFF),NOCC
+     *,             ONE,WMAT(NOCD1,NOCD1),NBF)
+         IF (A.NE.B) THEN
+          CALL DGEMM('T','T',NOCS,NOCS,NACT
+     *,              -ONE,BUF2(NDCOFF),NOCC
+     *,              BUF1(NCDOFF),NOCC
+     *,              ONE,WMAT(NOCD1,NOCD1),NBF)
+         END IF
+C
+C  NEXT, WXR(SOCC,DOCC&CORE) TERM 2
+C
+         CALL DGEMM('N','N',NOCS,NOCD,NACT
+     *,             -ONE,BUF1(NCDOFF),NOCC
+     *,             BUF2(NCP1),NOCC
+     *,             ONE,WMAT(NOCD1,1),NBF)
+         IF (A.NE.B) THEN
+          CALL DGEMM('T','T',NOCS,NOCD,NACT
+     *,              -ONE,BUF1(NDCOFF),NOCC
+     *,              BUF2(NCAOFF),NOCC
+     *,              ONE,WMAT(NOCD1,1),NBF)
+         END IF
+C
+C  NEXT, LXI(SOCC,DOCC) TERMS 1-VV AND 3 (PUT IN WIX)
+C
+         CALL DGEMM('N','N',NACD,NOCS,NACT
+     *,             ONE,BUF1(NCPOFF),NOCC
+     *,             BUF2(NDCOFF),NOCC
+     *,             ONE,WMAT(NCP1,NOCD1),NBF)
+         IF (A.NE.B) THEN
+          CALL DGEMM('T','T',NACD,NOCS,NACT
+     *,              ONE,BUF1(NCPOFF),NOCC
+     *,              BUF2(NCDOFF),NOCC
+     *,              ONE,WMAT(NCP1,NOCD1),NBF)
+         END IF
+C
+C  NEXT, PMI(CORE,ACTIVE) TERMS 1-VV AND 2
+C
+         CALL DGEMM('N','N',NACORE,NACD,NACT
+     *,             ONE,BUF2(NCAOFF),NOCC
+     *,             BUF1(NCPOFF),NOCC
+     *,             ONE,PMAT(1,NCP1),NBF)
+         IF (A.NE.B) THEN
+           CALL DGEMM('T','T',NACORE,NACD,NACT
+     *,               ONE,BUF2(NCP1),NOCC
+     *,               BUF1(NCPOFF),NOCC
+     *,               ONE,PMAT(1,NCP1),NBF)
+         END IF
+C
+C  ADJUST DENOMINATOR FOR P(OCC,OCC) MATRIX MULTIPLIES
+C
+         DO I = NCP1, NOCC
+          EI = EORB(I)
+          IF (I.GT.NOCD) EI = EI - XYEXC(I-NOCD)
+          DO J = NCP1, NOCC
+           IJ = (I-1)*NOCC + J
+           EJ = EORB(J)
+           IF (J.GT.NOCD) EJ = EJ - XYEXC(J-NOCD)
+           BUF2(IJ) = BUF2(IJ)/
+     *       (EI+EJ-EORB(NOCC+A)-EORB(NOCC+B))
+          END DO
+         END DO
+C
+C  MATRIX MULTIPLIES FOR PIJ(ACT,ACT) TERMS 1-VV AND 2
+C
+         CALL DGEMM('T','T',NACD,NACD,NACT
+     *,             -ONE,BUF1(NCPOFF),NOCC
+     *,             BUF2(NCPOFF),NOCC
+     *,             ONE,PMAT(NCP1,NCP1),NBF)
+         IF (A.NE.B) THEN
+          CALL DGEMM('N','N',NACD,NACD,NACT
+     *,              -ONE,BUF1(NCPOFF),NOCC
+     *,              BUF2(NCPOFF),NOCC
+     *,              ONE,PMAT(NCP1,NCP1),NBF)
+         END IF
+C
+C  NEXT, TXY(SOCC,SOCC) (TERM 2) FOR USE IN PXY, WXYNEW, CHIX, ETC.
+C
+         CALL DGEMM('N','N',NOCS,NOCS,NACT
+     *,             ONE,BUF1(NCDOFF),NOCC
+     *,             BUF2(NDCOFF),NOCC
+     *,             ONE,TXY,NOCSLD)
+         IF (A.NE.B) THEN
+          CALL DGEMM('T','T',NOCS,NOCS,NACT
+     *,              ONE,BUF1(NDCOFF),NOCC
+     *,              BUF2(NCDOFF),NOCC
+     *,              ONE,TXY,NOCSLD)
+         END IF
+        END IF
+       END DO
+      END DO
+C
+C  CREATE CHIX, WXYNEW, PXY TERMS (TERM 2)
+C
+      DO I = 1, NOCS
+        CHIX(I) = TXY(I,I)
+        DO J = 1, NOCS
+          DIFFE = ABS(EORB(I+NOCD) - EORB(J+NOCD))
+          FAC = ZERO
+          IF (DIFFE.GT.SMALL) THEN
+            FAC = FXY(J,I)/(EORB(I+NOCD) - EORB(J+NOCD))
+          END IF
+          PMAT(J+NOCD,I+NOCD) = (FAC-ONE)*TXY(J,I)
+        END DO
+        DO J = 1, I
+          IF (I.NE.J) WXYNEW(J,I) = FXY(J,I) * TXY(J,I)
+        END DO
+      END DO
+C
+C  TERMS INVOLVING BOTH VOVO AND VOOO-TYPE INTEGRALS:
+C  VIRTUAL-OCCUPIED BLOCK OF W(2)
+C  (STORED IN THE OCCUPIED-VIRTUAL BLOCK OF W(2)).
+C
+      IJ = 0
+      DO K = 1, NOCC
+       DO J = 1, K
+        IJ = IJ + 1
+        IF (IJ.GE.JL_VOVO.AND.IJ.LE.JH_VOVO) THEN
+         CALL DDI_GET(D_VOVO,1,NVSQ,IJ,IJ,BUF2)
+C
+C  SET UP COEFFICIENTS AND ORBITAL ENERGIES
+C
+         CPQ = TWO
+         IF (K.GT.NOCD .AND. J.GT.NOCD) CPQ = ONE
+         C = TWO
+         IF (K.GT.NOCD .OR. J.GT.NOCD) C = ONE
+         EK = EORB(K)
+         EJ = EORB(J)
+         IF (K.GT.NOCD) EK = EK - XYEXC(K-NOCD)
+         IF (J.GT.NOCD) EJ = EJ - XYEXC(J-NOCD)
+         BA = 0
+         DO A = 1, NVIR
+          AB = A - NVIR
+          DO B = 1, NVIR
+           BA = BA + 1
+           AB = AB + NVIR
+           BUF1(BA) = C*(CPQ*BUF2(AB)-BUF2(BA))/
+     *              (EJ+EK-EORB(NOCC+A)-EORB(NOCC+B))
+          END DO
+         END DO
+         IA = 1
+         DO I = 1, NOCC
+          IF (I.GE.K) THEN
+           JK = ((I*I-I)/2+K-1)*NOCC + J
+          ELSE
+           JK = ((K*K-K)/2+I-1)*NOCC + J
+          END IF
+          CALL DDI_GET(D_VOOO,1,NVIR,JK,JK,BUF2(IA))
+          IA = IA + NVIR
+         END DO
+C
+C  VIRT-OCC TERM OF W(2)
+C
+         IF (J.LE.NACORE.OR.K.LE.NACORE) THEN
+C  (SKIP CORE INDICES)
+         ELSE
+         CALL DGEMM('T','N',NVIR,NOCC,NVIR
+     *,             -ONE,BUF1,NVIR
+     *,             BUF2,NVIR
+     *,             ONE,WMAT(NOP1,1),NBF)
+         END IF
+C
+         IF (J.NE.K) THEN
+          IA = 1
+          DO I = 1, NOCC
+           IF (I.GE.J) THEN
+            JK = ((I*I-I)/2+J-1)*NOCC + K
+           ELSE
+            JK = ((J*J-J)/2+I-1)*NOCC + K
+           END IF
+           CALL DDI_GET(D_VOOO,1,NVIR,JK,JK,BUF2(IA))
+           IA = IA + NVIR
+          END DO
+C
+C  OCC-VIRT TERM OF W(2)
+C
+         IF (J.LE.NACORE.OR.K.LE.NACORE) THEN
+C  (SKIP CORE INDICES)
+         ELSE
+         CALL DGEMM('N','N',NVIR,NOCC,NVIR
+     *,             -ONE,BUF1,NVIR
+     *,             BUF2,NVIR
+     *,             ONE,WMAT(NOP1,1),NBF)
+         END IF
+         END IF
+        END IF
+       END DO
+      END DO
+C
+C NEXT, DO 1-S AND 1-SS TERMS FOR P AND W MATRIX BLOCKS
+C
+      CALL DCOPY(NOCS*NOCS,ZERO,0,TXY,1)
+      DO J = NCP1, NOCD
+        EJ = EORB(J)
+        DO K = NOCD1, NOCC
+          JK = (K*K-K)/2 + J
+          EK = EORB(K) + XYEXC(K-NOCD)
+          IF (JK.GE.JL_VOVO.AND.JK.LE.JH_VOVO) THEN
+C
+C  READ IN ALL OOOO INTEGRALS FOR LOCAL JK PAIR
+C
+            CALL DDI_GET(D_OOOO,1,NOTR,JK,JK,BUF1)
+            ISTART = (K*K-K)/2 + NCP1
+            IEND   = ISTART + NACD - 1
+            IOFF   = 1
+C
+C  MAKE OOOO AMPLITUDES
+C
+            DO L = NOCD1, NOCC
+              JL = (L*L-L)/2 + J
+              CALL DDI_GET(D_OOOO,ISTART,IEND,JL,JL,BUF3(IOFF))
+              IOFF = IOFF + NACD
+            END DO
+C
+            IA = 1
+            DO L = NOCD1, NOCC
+              EL = EORB(L) + XYEXC(L-NOCD)
+              IC = (L*L-L)/2 + NCP1
+              DO I = NCP1, NOCD
+                DENOM = EORB(I) + EJ - EK - EL
+                BUF3(IA) = (BUF1(IC) - BUF3(IA))/DENOM
+                BUF2(IA) = BUF1(IC)
+                IA = IA + 1
+                IC = IC + 1
+              END DO
+            END DO
+C
+C  DO MATRIX MULTIPLY FOR WIJ (1-SS) AND WXY (1-S):
+C
+            CALL DGEMM('N','T',NACD,NACD,NOCS
+     *,                -ONE,BUF2,NACDLD
+     *,                BUF3,NACDLD
+     *,                ONE,WMAT(NCP1,NCP1),NBF)
+            CALL DGEMM('T','N',NOCS,NOCS,NACD
+     *,                -ONE,BUF2,NACDLD
+     *,                BUF3,NACDLD
+     *,                ONE,WMAT(NOCD1,NOCD1),NBF)
+C
+C
+C  ADJUST DENOMINATOR TO DO PIJ AND PXY TERMS
+C
+            IA = 1
+            DO L = NOCD1, NOCC
+              EL = EORB(L) + XYEXC(L-NOCD)
+              DO I = NCP1, NOCD
+                DENOM = EORB(I) + EJ - EK - EL
+                BUF2(IA) = BUF2(IA)/DENOM
+                IA = IA + 1
+              END DO
+            END DO
+C
+C  DO MATRIX MULTIPLY FOR PIJ (1-SS) AND PXY (1-S) (PUT IN TXY):
+C
+            CALL DGEMM('N','T',NACD,NACD,NOCS
+     *,                -ONE,BUF2,NACDLD
+     *,                BUF3,NACDLD
+     *,                ONE,PMAT(NCP1,NCP1),NBF)
+            CALL DGEMM('T','N',NOCS,NOCS,NACD
+     *,                ONE,BUF2,NACDLD
+     *,                BUF3,NACDLD
+     *,                ONE,TXY,NOCSLD)
+C
+C  SELECT APPROPRIATE INTEGRALS FROM BUF1 AND DO MATRIX MULTIPLY FOR
+C  FOLLOWING BLOCKS OF MATRICES
+C  PMI (1-SS):
+C
+            IF (NACORE.NE.0) THEN
+              IA = 1
+              DO L = NOCD1, NOCC
+                IC = (L*L-L)/2 + 1
+                DO M = 1, NACORE
+                  BUF2(IA) = BUF1(IC)
+                  IA = IA + 1
+                  IC = IC + 1
+                END DO
+              END DO
+              CALL DGEMM('N','T',NACORE,NACD,NOCS
+     *,                  ONE,BUF2,NACORE
+     *,                  BUF3,NACDLD
+     *,                  ONE,PMAT(1,NCP1),NBF)
+            END IF
+C
+C  LIX (1-SS):
+C
+            DO L = NOCD1, NOCC
+              IA = (L-NOCD1)*NOCS
+              IC = (L*L-L)/2 + NOCD
+              DO M = NOCD1, L
+                IA = IA + 1
+                IB = (M-NOCD1)*NOCS + L - NOCD
+                IC = IC + 1
+                BUF2(IA) = BUF1(IC)
+                BUF2(IB) = BUF1(IC)
+              END DO
+            END DO
+            CALL DGEMM('N','N',NACD,NOCS,NOCS
+     *,                ONE,BUF3,NACDLD
+     *,                BUF2,NOCSLD
+     *,                ONE,WMAT(NCP1,NOCD1),NBF)
+C
+C  WXR (1-S)
+C
+            DO I =  NCP1, NOCD
+              IA = (I-NCP1)*NOCD
+              IC = (I*I-I)/2
+              DO L = 1, I
+                IA = IA + 1
+                IC = IC + 1
+                BUF2(IA) = BUF1(IC)
+                IF (L.GT.NACORE .AND. L.LT.I) THEN
+                  IB = (L-NCP1)*NOCD + I
+                  BUF2(IB) = BUF1(IC)
+                END IF
+              END DO
+            END DO
+            CALL DGEMM('T','T',NOCS,NOCD,NACD
+     *,                -ONE,BUF3,NACDLD
+     *,                BUF2,NOCD
+     *,                ONE,WMAT(NOCD1,1),NBF)
+C
+C  READ IN APPROPRIATE VOOO INTEGRALS FOR LIA AND LXA
+C  (COMMUNICATION REQUIRED)
+C
+            IOFF = 1
+            DO I = NCP1, NOCC
+              IJK = (JK-1)*NOCC + I
+              CALL DDI_GET(D_VOOO,1,NVIR,IJK,IJK,BUF2(IOFF))
+              IOFF = IOFF + NVIR
+            END DO
+C
+C  LIA (1-SS)
+C
+            CALL DGEMM('N','T',NACD,NVIR,NOCS
+     *,                ONE,BUF3,NACDLD
+     *,                BUF2(NACD*NVIR+1),NVIR
+     *,                ONE,WMAT(NCP1,NOP1),NBF)
+C
+C  LXA (1-S)
+C
+            CALL DGEMM('T','T',NOCS,NVIR,NACD
+     *,                ONE,BUF3,NACDLD
+     *,                BUF2,NVIR
+     *,                ONE,WMAT(NOCD1,NOP1),NBF)
+          END IF
+C
+C  CREATE VOOO AMPLITUDES FOR 1-SV, 1-VS AND RELATED TERMS
+C
+          CALL DCOPY(NVIR*NACD,ZERO,0,BUF2,1)
+          CALL DCOPY(NVIR*NACD,ZERO,0,BUF3,1)
+          IOFF = 1
+          DO I = NCP1, NOCD
+            EI  = EORB(I)
+            JKI = (JK-1)*NOCC + I
+            IK  = (K*K-K)/2 + I
+            IJK = (IK-1)*NOCC + J
+            IF (IJK.GE.JL_VOOO.AND.IJK.LE.JH_VOOO) THEN
+              CALL DDI_GET(D_VOOO,1,NVIR,IJK,IJK,BUF1)
+              DO A = 1, NVIR
+                DENOM = EI + EJ - EK - EORB(A+NOCC)
+                BUF1(A) = BUF1(A)/DENOM
+              END DO
+              CALL DAXPY(NVIR, TWO,BUF1,1,BUF2(IOFF),1)
+              CALL DAXPY(NVIR,-ONE,BUF1,1,BUF3(IOFF),1)
+            END IF
+            IF (JKI.GE.JL_VOOO.AND.JKI.LE.JH_VOOO) THEN
+              CALL DDI_GET(D_VOOO,1,NVIR,JKI,JKI,BUF1)
+              DO A = 1, NVIR
+                DENOM = EI + EJ - EK - EORB(A+NOCC)
+                BUF1(A) = BUF1(A)/DENOM
+              END DO
+              CALL DAXPY(NVIR, TWO,BUF1,1,BUF3(IOFF),1)
+              CALL DAXPY(NVIR,-ONE,BUF1,1,BUF2(IOFF),1)
+            END IF
+            IOFF = IOFF + NVIR
+          END DO
+C
+C  READ IN VOOO INTEGRALS FOR 1-SV MATRIX MULTIPLIES
+C
+          IOFF = 1
+          DO I = 1, NOCD
+            IK  = (K*K-K)/2 + I
+            IJK = (IK-1)*NOCC + J
+            CALL DDI_GET(D_VOOO,1,NVIR,IJK,IJK,BUF1(IOFF))
+            IOFF = IOFF + NVIR
+          END DO
+C
+C  MATRIX MULTIPLY FOR PMI (1-SV):
+C
+          CALL DGEMM('T','N',NACORE,NACD,NVIR
+     *,              ONE,BUF1,NVIR
+     *,              BUF2,NVIR
+     *,              ONE,PMAT(1,NCP1),NBF)
+C
+C  MATRIX MULTIPLY FOR WIJ (1-SV):
+C
+          CALL DGEMM('T','N',NACD,NACD,NVIR
+     *,              -ONE,BUF1(NVAOFF),NVIR
+     *,              BUF2,NVIR
+     *,              ONE,WMAT(NCP1,NCP1),NBF)
+C
+C  ADJUST DENOMINATOR TO DO PIJ
+C
+          IOFF = NVAOFF
+          DO I = NCP1, NOCD
+            EI = EORB(I)
+            DO A = 1, NVIR
+              DENOM = EI + EJ - EK - EORB(A+NOCC)
+              BUF1(IOFF) = BUF1(IOFF)/DENOM
+              IOFF = IOFF + 1
+            END DO
+          END DO
+C
+C  MATRIX MULTIPLY FOR PIJ (1-SV):
+C
+          CALL DGEMM('T','N',NACD,NACD,NVIR
+     *,              -ONE,BUF1(NVAOFF),NVIR
+     *,              BUF2,NVIR
+     *,              ONE,PMAT(NCP1,NCP1),NBF)
+C
+C  READ IN VOOO INTEGRALS FOR 1-VS MATRIX MULTIPLIES
+C
+          IOFF = 1
+          DO I = 1, NOCD
+            JKI = (JK-1)*NOCC + I
+            CALL DDI_GET(D_VOOO,1,NVIR,JKI,JKI,BUF1(IOFF))
+            IOFF = IOFF + NVIR
+          END DO
+C
+C  MATRIX MULTIPLY FOR PMI (1-VS):
+C
+          CALL DGEMM('T','N',NACORE,NACD,NVIR
+     *,              ONE,BUF1,NVIR
+     *,              BUF3,NVIR
+     *,              ONE,PMAT(1,NCP1),NBF)
+C
+C  MATRIX MULTIPLY FOR WIJ (1-VS):
+C
+          CALL DGEMM('T','N',NACD,NACD,NVIR
+     *,              -ONE,BUF1(NVAOFF),NVIR
+     *,              BUF3,NVIR
+     *,              ONE,WMAT(NCP1,NCP1),NBF)
+C
+C  MATRIX MULTIPLY FOR WAB (1-S):
+C
+          CALL DGEMM('N','T',NVIR,NVIR,NACD
+     *,              -ONE,BUF1(NVAOFF),NVIR
+     *,              BUF3,NVIR
+     *,              ONE,WMAT(NOP1,NOP1),NBF)
+C
+C  ADJUST DENOMINATOR TO DO PIJ AND PAB
+C
+          IOFF = NVAOFF
+          DO I = NCP1, NOCD
+            EI = EORB(I)
+            DO A = 1, NVIR
+              DENOM = EI + EJ - EK - EORB(A+NOCC)
+              BUF1(IOFF) = BUF1(IOFF)/DENOM
+              IOFF = IOFF + 1
+            END DO
+          END DO
+C
+C  MATRIX MULTIPLY FOR PIJ (1-VS):
+C
+          CALL DGEMM('T','N',NACD,NACD,NVIR
+     *,              -ONE,BUF1(NVAOFF),NVIR
+     *,              BUF3,NVIR
+     *,              ONE,PMAT(NCP1,NCP1),NBF)
+C
+C  MATRIX MULTIPLY FOR PAB (1-S):
+C
+          CALL DGEMM('N','T',NVIR,NVIR,NACD
+     *,              ONE,BUF1(NVAOFF),NVIR
+     *,              BUF3,NVIR
+     *,              ONE,PMAT(NOP1,NOP1),NBF)
+C
+C  READ IN VOOO INTEGRALS FOR LIX (1-SV) MATRIX MULTIPLY
+C
+          IOFF = 1
+          DO I = NOCD1, NOCC
+            IK = (I*I-I)/2 + K
+            IF (K.GT.I) IK = (K*K-K)/2 + I
+            IJK = (IK-1)*NOCC + J
+            CALL DDI_GET(D_VOOO,1,NVIR,IJK,IJK,BUF1(IOFF))
+            IOFF = IOFF + NVIR
+          END DO
+          CALL DGEMM('T','N',NACD,NOCS,NVIR
+     *,              ONE,BUF2,NVIR
+     *,              BUF1,NVIR
+     *,              ONE,WMAT(NCP1,NOCD1),NBF)
+C
+C  READ IN VOOO INTEGRALS FOR LIX (1-VS) MATRIX MULTIPLY
+C
+          IOFF = 1
+          DO I = NOCD1, NOCC
+            IJK = (JK-1)*NOCC + I
+            CALL DDI_GET(D_VOOO,1,NVIR,IJK,IJK,BUF1(IOFF))
+            IOFF = IOFF + NVIR
+          END DO
+          CALL DGEMM('T','N',NACD,NOCS,NVIR
+     *,              ONE,BUF3,NVIR
+     *,              BUF1,NVIR
+     *,              ONE,WMAT(NCP1,NOCD1),NBF)
+C
+C  READ IN VOVO INTEGRALS FOR LIA (1-SV) MATRIX MULTIPLY
+C
+          CALL DDI_GET(D_VOVO,1,NVSQ,JK,JK,BUF1)
+          CALL DGEMM('T','T',NACD,NVIR,NVIR
+     *,              ONE,BUF2,NVIR
+     *,              BUF1,NVIR
+     *,              ONE,WMAT(NCP1,NOP1),NBF)
+C
+C  READ IN VVOO INTEGRALS FOR LIA (1-VS) MATRIX MULTIPLY
+C  (NO LONGER NEED AMPS IN BUF2)
+C
+          IA = 0
+          CALL DDI_GET(D_VVOO,1,NVTR,JK,JK,BUF2)
+          DO A = 1, NVIR
+            AB = (A-1)*NVIR
+            DO B = 1, A
+              IA = IA + 1
+              AB = AB + 1
+              BA = (B-1)*NVIR + A
+              BUF1(AB) = BUF2(IA)
+              BUF1(BA) = BUF2(IA)
+            END DO
+          END DO
+          CALL DGEMM('T','N',NACD,NVIR,NVIR
+     *,              ONE,BUF3,NVIR
+     *,              BUF1,NVIR
+     *,              ONE,WMAT(NCP1,NOP1),NBF)
+C
+C  READ IN OOOO INTEGRALS FOR WAR (1-S) MATRIX MULTIPLY
+C
+          CALL DDI_GET(D_OOOO,1,NOTR,JK,JK,BUF2)
+          IOFF = 1
+          DO I = NCP1, NOCD
+            DO L = 1, NOCC
+              IL = (I*I-I)/2 + L
+              IF (L.GT.I) IL = (L*L-L)/2 + I
+              BUF1(IOFF) = BUF2(IL)
+              IOFF = IOFF + 1
+            END DO
+          END DO
+          CALL DGEMM('N','T',NVIR,NOCC,NACD
+     *,              -ONE,BUF3,NVIR
+     *,              BUF1,NOCC
+     *,              ONE,WMAT(NOP1,1),NBF)
+C
+        END DO
+      END DO
+C
+C THIS NEXT SECTION CONTAINS THE FINAL TERM 1 CONTRIBUTIONS
+C
+      DO I = NCP1, NOCD
+        EI = EORB(I)
+        DO J = NCP1, NOCD
+          EJ = EORB(J)
+C
+C  CREATE VOOO AMPLITUDES FOR FINAL 1-V TERMS
+C
+          CALL DCOPY(NVIR*NOCS,ZERO,0,BUF3,1)
+          CALL DCOPY(NVIR*NOCS,ZERO,0,BUF2,1)
+          IOFF = 1
+          DO K = NOCD1, NOCC
+            EK  = EORB(K) + XYEXC(K-NOCD)
+            IK  = (K*K-K)/2 + I
+            IJK = (IK-1)*NOCC + J
+            JK  = (K*K-K)/2 + J
+            JKI = (JK-1)*NOCC + I
+            CALL DDI_GET(D_VOOO,1,NVIR,IJK,IJK,BUF2(IOFF))
+            IF (IJK.GE.JL_VOOO.AND.IJK.LE.JH_VOOO) THEN
+              DO A = 1, NVIR
+                DENOM = EI + EJ - EK - EORB(A+NOCC)
+                BUF1(A) = BUF2(IOFF+A-1)/DENOM
+              END DO
+              CALL DAXPY(NVIR, TWO,BUF1,1,BUF3(IOFF),1)
+            END IF
+            IF (JKI.GE.JL_VOOO.AND.JKI.LE.JH_VOOO) THEN
+              CALL DDI_GET(D_VOOO,1,NVIR,JKI,JKI,BUF1)
+              DO A = 1, NVIR
+                DENOM = EI + EJ - EK - EORB(A+NOCC)
+                BUF1(A) = BUF1(A)/DENOM
+              END DO
+              CALL DAXPY(NVIR,-ONE,BUF1,1,BUF3(IOFF),1)
+            END IF
+            IOFF = IOFF + NVIR
+          END DO
+C
+C  DO 1-V TERM FOR WXY:
+C
+          CALL DGEMM('T','N',NOCS,NOCS,NVIR
+     *,              -ONE,BUF2,NVIR
+     *,              BUF3,NVIR
+     *,              ONE,WMAT(NOCD1,NOCD1),NBF)
+C
+C  ADJUST DENOMINATOR AND DO PXY 1-V TERM (ADD INTO TXY)
+C
+          IA = 0
+          DO K = NOCD1,NOCC
+            EK  = EORB(K) + XYEXC(K-NOCD)
+            DO A = 1, NVIR
+              IA = IA + 1
+              DENOM = EI + EJ - EK - EORB(A+NOCC)
+              BUF2(IA) = BUF2(IA)/DENOM
+            END DO
+          END DO
+          CALL DGEMM('T','N',NOCS,NOCS,NVIR
+     *,              ONE,BUF2,NVIR
+     *,              BUF3,NVIR
+     *,              ONE,TXY,NOCSLD)
+C
+C NOW, GET INTEGRALS FOR WXR 1-V TERM
+C
+          IOFF = 1
+          DO K = 1, NOCD
+            IK = (I*I-I)/2 + K
+            IF (K.GT.I) IK = (K*K-K)/2 + I
+            IJK = (IK-1)*NOCC + J
+            CALL DDI_GET(D_VOOO,1,NVIR,IJK,IJK,BUF2(IOFF))
+            IOFF = IOFF + NVIR
+          END DO
+          CALL DGEMM('T','N',NOCS,NOCD,NVIR
+     *,              -ONE,BUF3,NVIR
+     *,              BUF2,NVIR
+     *,              ONE,WMAT(NOCD1,1),NBF)
+C
+C  FINALLY, GET INTEGRALS FOR LXA 1-V TERM
+C
+          IJ = (I*I-I)/2 + J
+          IF (J.GT.I) IJ = (J*J-J)/2 + I
+          CALL DDI_GET(D_VOVO,1,NVSQ,IJ,IJ,BUF2)
+          IF (I.GE.J) THEN
+            CALL DGEMM('T','T',NOCS,NVIR,NVIR
+     *,                ONE,BUF3,NVIR
+     *,                BUF2,NVIR
+     *,                ONE,WMAT(NOCD1,NOP1),NBF)
+          ELSE
+            CALL DGEMM('T','N',NOCS,NVIR,NVIR
+     *,                ONE,BUF3,NVIR
+     *,                BUF2,NVIR
+     *,                ONE,WMAT(NOCD1,NOP1),NBF)
+          END IF
+        END DO
+      END DO
+C
+C  CREATE CHIX, WXYNEW, PXY TERMS
+C
+      DO I = 1, NOCS
+        CHIX(I) = CHIX(I) + TXY(I,I)
+        DO J = 1, NOCS
+          DIFFE = ABS(EORB(I+NOCD) - EORB(J+NOCD))
+          FAC = ZERO
+          IF (DIFFE.GT.SMALL) THEN
+            FAC = FXY(J,I)/(EORB(I+NOCD) - EORB(J+NOCD))
+          END IF
+          PMAT(J+NOCD,I+NOCD) = PMAT(J+NOCD,I+NOCD)+(FAC+ONE)*TXY(J,I)
+        END DO
+        DO J = 1, I
+          IF (I.NE.J) WXYNEW(J,I) = WXYNEW(J,I)+FXY(J,I)*TXY(J,I)
+        END DO
+      END DO
+C
+C  TERMS INVOLVING INTEGRALS OF (DS|SV) TYPE:
+C  FIRST READ THIS TYPE OF INTEGRAL INTO REPLICATED BUFFER
+C  AND DIVIDE BY APPROPRIATE DENOMINATOR TERM
+C
+      CALL DCOPY(NOCS*NOCS*NVIR*NACD,ZERO,0,BUF3,1)
+      IOFF = 1
+      DO J = NOCD1, NOCC
+        EJ = EORB(J) + XYEXC(J-NOCD)
+        DO K = NOCD1, NOCC
+          EK = EORB(K) - XYEXC(K-NOCD)
+          DO I = NCP1, NOCD
+             EI = EORB(I)
+             IJ = (J*J-J)/2 + I
+             IJK = (IJ-1)*NOCC + K
+             IF (IJK.GE.JL_VOOO.AND.IJK.LE.JH_VOOO) THEN
+               CALL DDI_GET(D_VOOO,1,NVIR,IJK,IJK,BUF3(IOFF))
+               DO A = 1, NVIR
+                 DENOM = EI + EK - EJ - EORB(A+NOCC)
+                 BUF3(IOFF+A-1) = BUF3(IOFF+A-1)/DENOM
+               END DO
+             END IF
+             IOFF = IOFF + NVIR
+          END DO
+        END DO
+      END DO
+      CALL DDI_GSUMF(1003,BUF3,NOCS*NOCS*NVIR*NACD)
+C
+C  NOW DO TERM 3 CONTRIBUTIONS TO BLOCKS OF P(2) AND W(2)
+C
+      IOFF1 = 1
+      DO J = NOCD1, NOCC
+        EJ = EORB(J) + XYEXC(J-NOCD)
+        DO K = NOCD1, NOCC
+          EK = EORB(K) - XYEXC(K-NOCD)
+          IOFF2 = 1
+          CALL DCOPY(NVIR*NOCD,ZERO,0,BUF2,1)
+          DO I = 1, NOCD
+            IJ = (J*J-J)/2 + I
+            IJK = (IJ-1)*NOCC + K
+            IF (IJK.GE.JL_VOOO.AND.IJK.LE.JH_VOOO) THEN
+              CALL DDI_GET(D_VOOO,1,NVIR,IJK,IJK,BUF2(IOFF2))
+            END IF
+            IOFF2 = IOFF2 + NVIR
+          END DO
+C
+C  VIRT-VIRT, OCC-OCC BLOCKS OF W(2); CORE-ACT BLOCK OF P(2) (TERM 3)
+C
+          CALL DGEMM('N','T',NVIR,NVIR,NACD
+     *,              -ONE,BUF2(NVAOFF),NVIR
+     *,              BUF3(IOFF1),NVIR
+     *,              ONE,WMAT(NOP1,NOP1),NBF)
+          CALL DGEMM('T','N',NACD,NACD,NVIR
+     *,              -ONE,BUF2(NVAOFF),NVIR
+     *,              BUF3(IOFF1),NVIR
+     *,              ONE,WMAT(NCP1,NCP1),NBF)
+          CALL DGEMM('T','N',NACORE,NACD,NVIR
+     *,              ONE,BUF2,NVIR
+     *,              BUF3(IOFF1),NVIR
+     *,              ONE,PMAT(1,NCP1),NBF)
+C
+C  ADJUST DENOMINATOR SO WE CAN DO P(2):
+C
+          IA = NVAOFF
+          DO I = NCP1, NOCD
+            EI = EORB(I)
+            DO A = 1, NVIR
+              DENOM = EI + EK - EJ - EORB(A+NOCC)
+              BUF2(IA) = BUF2(IA)/DENOM
+              IA = IA + 1
+            END DO
+          END DO
+C
+C  VIRT-VIRT, ACT-ACT BLOCKS OF P(2) (TERM 3)
+C
+          CALL DGEMM('N','T',NVIR,NVIR,NACD
+     *,              ONE,BUF2(NVAOFF),NVIR
+     *,              BUF3(IOFF1),NVIR
+     *,              ONE,PMAT(NOP1,NOP1),NBF)
+          CALL DGEMM('T','N',NACD,NACD,NVIR
+     *,              -ONE,BUF2(NVAOFF),NVIR
+     *,              BUF3(IOFF1),NVIR
+     *,              ONE,PMAT(NCP1,NCP1),NBF)
+C
+C  ACT-SOCC BLOCK OF LAGRANGIAN: LIX (TERM 5)
+C
+          IOFF2 = 1
+          CALL DCOPY(NVIR*NOCS,ZERO,0,BUF2,1)
+          DO I = NOCD1, NOCC
+            IJ = (J*J-J)/2 + I
+            IF (I.GT.J) IJ = (I*I-I)/2 + J
+            IJK = (IJ-1)*NOCC + K
+            IF (IJK.GE.JL_VOOO.AND.IJK.LE.JH_VOOO) THEN
+              CALL DDI_GET(D_VOOO,1,NVIR,IJK,IJK,BUF2(IOFF2))
+            END IF
+            IOFF2 = IOFF2 + NVIR
+          END DO
+          CALL DGEMM('T','N',NACD,NOCS,NVIR
+     *,              ONE,BUF3(IOFF1),NVIR
+     *,              BUF2,NVIR
+     *,              ONE,WMAT(NCP1,NOCD1),NBF)
+C
+C  ACT-VIRT BLOCK OF LAGRANGIAN: LIA (TERM 5)
+C
+          IJ = (J*J-J)/2 + K
+          IF (J.LT.K) IJ = (K*K-K)/2 + J
+          IF (IJ.GE.JL_VOVO.AND.IJ.LE.JH_VOVO) THEN
+            CALL DDI_GET(D_VOVO,1,NVSQ,IJ,IJ,BUF2)
+            IF (J.LE.K) THEN
+              CALL DGEMM('T','N',NACD,NVIR,NVIR
+     *,                  ONE,BUF3(IOFF1),NVIR
+     *,                  BUF2,NVIR
+     *,                  ONE,WMAT(NCP1,NOP1),NBF)
+            ELSE
+              CALL DGEMM('T','T',NACD,NVIR,NVIR
+     *,                  ONE,BUF3(IOFF1),NVIR
+     *,                  BUF2,NVIR
+     *,                  ONE,WMAT(NCP1,NOP1),NBF)
+            END IF
+          END IF
+C
+C  INCREMENT OFFSET
+C
+          IOFF1 = IOFF1 + NVIR*NACD
+C
+        END DO
+      END DO
+C
+C  MORE TERMS THAT USE (DS|SV) INTEGRALS:
+C  START WITH WXY, PXY, AND RELATED TERMS
+C
+      CALL DCOPY(NOCS*NOCS,ZERO,0,TXY,1)
+      DO K = NOCD1, NOCC
+        DO I = NCP1, NOCD
+          IK = (K*K-K)/2 + I
+          IOFF1 = (K-NOCD1)*NVIR*NACD + (I-NCP1)*NVIR + 1
+          IOFF2 = 1
+          CALL DCOPY(NVIR*NOCC,ZERO,0,BUF2,1)
+          DO J = 1, NOCC
+            IJ = (J*J-J)/2 + I
+            IF (J.LT.I) IJ = (I*I-I)/2 + J
+            IJK = (IJ-1)*NOCC + K
+            IF (IJK.GE.JL_VOOO.AND.IJK.LE.JH_VOOO) THEN
+              CALL DDI_GET(D_VOOO,1,NVIR,IJK,IJK,BUF2(IOFF2))
+            END IF
+            IOFF2 = IOFF2 + NVIR
+          END DO
+C
+C  NOW DO WXY (TERM 3A)
+C
+          CALL DGEMM('T','N',NOCS,NOCS,NVIR
+     *,              -ONE,BUF2(NVIR*NOCD+1),NVIR
+     *,              BUF3(IOFF1),NVIR*NOCSLD*NACDLD
+     *,              ONE,WMAT(NOCD1,NOCD1),NBF)
+C
+C  NEXT DO WXR (TERM 3A)
+C
+          CALL DGEMM('T','N',NOCS,NOCD,NVIR
+     *,              -ONE,BUF3(IOFF1),NVIR*NOCSLD*NACDLD
+     *,              BUF2,NVIR
+     *,              ONE,WMAT(NOCD1,1),NBF)
+C
+C  ADJUST DENOMINATOR SO WE CAN DO PXY PART (TERM 3A)
+C
+          JA = NVIR*NOCD
+          DO J = NOCD1, NOCC
+            EK = EORB(K) - XYEXC(K-NOCD)
+            EI = EORB(I)
+            EJ = EORB(J) + XYEXC(J-NOCD)
+            DO A = 1, NVIR
+              JA = JA + 1
+              DENOM = EI + EK - EJ - EORB(A+NOCC)
+              BUF2(JA) = BUF2(JA)/DENOM
+            END DO
+          END DO
+C
+C  NOW DO TXY (TERM 3A IN PXY)
+C
+          CALL DGEMM('T','N',NOCS,NOCS,NVIR
+     *,              ONE,BUF2(NVIR*NOCD+1),NVIR
+     *,              BUF3(IOFF1),NVIR*NOCSLD*NACDLD
+     *,              ONE,TXY,NOCS)
+C
+C  NOW CREATE TERM 5A OF LAGRANGIAN(VIRT,SOCC) - PUT IN WMAT(SOCC,VIRT)
+C  LXA (TERM 5A):
+C
+          IF (IK.GE.JL_VOVO.AND.IK.LE.JH_VOVO) THEN
+            CALL DDI_GET(D_VOVO,1,NVSQ,IK,IK,BUF2)
+            CALL DGEMM('T','N',NOCS,NVIR,NVIR
+     *,                ONE,BUF3(IOFF1),NVIR*NOCSLD*NACDLD
+     *,                BUF2,NVIR
+     *,                ONE,WMAT(NOCD1,NOP1),NBF)
+          END IF
+C
+C  NEXT, CREATE SIMILAR B TERMS:
+C  NOW DO WXY (TERM 3B) AND WXR (TERM 3B)
+C
+          IOFF1 = (K-NOCD1)*NVIR*NACD*NOCS + (I-NCP1)*NVIR + 1
+          IOFF2 = 1
+          CALL DCOPY(NVIR*NOCC,ZERO,0,BUF2,1)
+          IJK = (IK-1)*NOCC
+          DO J = 1, NOCC
+            IJK = IJK + 1
+            IF (IJK.GE.JL_VOOO.AND.IJK.LE.JH_VOOO) THEN
+              CALL DDI_GET(D_VOOO,1,NVIR,IJK,IJK,BUF2(IOFF2))
+            END IF
+            IOFF2 = IOFF2 + NVIR
+          END DO
+          CALL DGEMM('T','N',NOCS,NOCS,NVIR
+     *,              -ONE,BUF2(NVIR*NOCD+1),NVIR
+     *,              BUF3(IOFF1),NVIR*NACDLD
+     *,              ONE,WMAT(NOCD1,NOCD1),NBF)
+          CALL DGEMM('T','N',NOCS,NOCD,NVIR
+     *,              -ONE,BUF3(IOFF1),NVIR*NACDLD
+     *,              BUF2,NVIR
+     *,              ONE,WMAT(NOCD1,1),NBF)
+C
+C  ADJUST DENOMINATOR SO WE CAN DO PXY PART (TERM 3B)
+C
+          JA = NVIR*NOCD
+          DO J = NOCD1, NOCC
+            EK = EORB(K) + XYEXC(K-NOCD)
+            EI = EORB(I)
+            EJ = EORB(J) - XYEXC(J-NOCD)
+            DO A = 1, NVIR
+              JA = JA + 1
+              DENOM = EI + EJ - EK - EORB(A+NOCC)
+              BUF2(JA) = BUF2(JA)/DENOM
+            END DO
+          END DO
+C
+C  NOW CREATE TXY4 (TERM 3B IN PXY)
+C
+          CALL DGEMM('T','N',NOCS,NOCS,NVIR
+     *,              ONE,BUF2(NVIR*NOCD+1),NVIR
+     *,              BUF3(IOFF1),NVIR*NACDLD
+     *,              ONE,TXY4,NOCSLD)
+C
+C  NOW CREATE TERM 3 OF WMAT(VIRT,SOCC/DOCC/CORE)
+C  AND TERM 5B OF LAGRANGIAN(VIRT,SOCC)  (PUT IN WMAT(SOCC,VIRT))
+C
+          ISTART = (NOCD*NOCD+NOCD)/2 + 1
+          IF (IK.GE.JL_VOVO.AND.IK.LE.JH_VOVO) THEN
+            CALL DDI_GET(D_OOOO,ISTART,NOTR,IK,IK,BUF1)
+            IC = 0
+            JL = 0
+            DO J = NOCD1, NOCC
+              DO L = 1, J
+                IC = IC + 1
+                JL = (J-NOCD1)*NOCC + L
+                BUF2(JL) = BUF1(IC)
+                IF (L.GT.NOCD) THEN
+                  LJ = (L-NOCD1)*NOCC + J
+                  BUF2(LJ) = BUF1(IC)
+                END IF
+              END DO
+            END DO
+C
+C  WAR (TERM 3):
+C
+            CALL DGEMM('N','T',NVIR,NOCC,NOCS
+     *,                -ONE,BUF3(IOFF1),NVIR*NACDLD
+     *,                BUF2,NOCC
+     *,                ONE,WMAT(NOP1,1),NBF)
+          END IF
+          IF (IK.GE.JL_VOVO.AND.IK.LE.JH_VOVO) THEN
+            CALL DDI_GET(D_VVOO,1,NVTR,IK,IK,BUF1)
+            IC = 0
+            JL = 0
+            DO J = 1, NVIR
+              DO L = 1, J
+                IC = IC + 1
+                JL = (J-1)*NVIR + L
+                LJ = (L-1)*NVIR + J
+                BUF2(JL) = BUF1(IC)
+                BUF2(LJ) = BUF1(IC)
+              END DO
+            END DO
+C
+C  LXA (TERM 5B):
+C
+            CALL DGEMM('T','N',NOCS,NVIR,NVIR
+     *,                ONE,BUF3(IOFF1),NVIR*NACDLD
+     *,                BUF2,NVIR
+     *,                ONE,WMAT(NOCD1,NOP1),NBF)
+C
+          END IF
+C
+        END DO
+      END DO
+C
+C  CREATE CHIX, WXYNEW, PXY TERMS FOR TERM 3
+C
+      DO I = 1, NOCS
+        CHIX(I) = CHIX(I) + TXY(I,I) + TXY4(I,I)
+        DO J = 1, NOCS
+          DIFFE = ABS(EORB(I+NOCD) - EORB(J+NOCD))
+          FAC = ZERO
+          IF (DIFFE.GT.SMALL) THEN
+            FAC = FXY(J,I)/(EORB(I+NOCD) - EORB(J+NOCD))
+          END IF
+          PMAT(J+NOCD,I+NOCD) = PMAT(J+NOCD,I+NOCD)
+     *                        + (FAC+ONE)*TXY(J,I) + (FAC-ONE)*TXY4(J,I)
+        END DO
+        DO J = 1, I
+          IF (I.NE.J) WXYNEW(J,I) = WXYNEW(J,I)
+     *                            + FXY(J,I)*(TXY(J,I)+TXY4(J,I))
+        END DO
+      END DO
+C
+C  CHIX IS FINISHED, SO WE CAN ACCUMULATE IT ONTO ALL PROCESSORS
+C
+      CALL DDI_GSUMF(993,CHIX,NOCS)
+C
+C  FIX DENOMINATORS OF FOCK-LIKE AMPLITUDES SO WE CAN DO EACH TERM 4
+C  ( TERMS WITH INTEGRALS (IX|XA) )
+C  PUT THE HALF FOR EACH TERM IN THE AMPLITUDES
+C
+      IOFF = 1
+      DO J = 1, NOCS
+        EXCJ = TWO*XYEXC(J)
+        IOFF = ((J-1)*NOCS + (J-1))*NACD*NVIR + 1
+        DO I = NCP1, NOCD
+          EI = EORB(I)
+          DO A = 1, NVIR
+            DENOM1 = EI - EXCJ - EORB(A+NOCC)
+            DENOM2 = EI - EORB(A+NOCC)
+            BUF3(IOFF) = HALF*BUF3(IOFF)*DENOM1/DENOM2
+            IOFF = IOFF + 1
+          END DO
+        END DO
+      END DO
+C
+C  DO TERM 4 FOR PMI, WIJ, LIX(#8), WAB, PIJ, PAB, LIA(#7), AND WAR
+C  FIRST, READ IN (IX|XA) INTEGRALS
+C
+      DO J = NOCD1, NOCC
+        IOFF2 = 1
+        CALL DCOPY(NVIR*NOCC,ZERO,0,BUF2,1)
+        DO I = 1, NOCC
+          IJ = (J*J-J)/2 + I
+          IF (I.GT.J) IJ = (I*I-I)/2 + J
+          IJJ = (IJ-1)*NOCC + J
+          IF (IJJ.GE.JL_VOOO.AND.IJJ.LE.JH_VOOO) THEN
+            CALL DDI_GET(D_VOOO,1,NVIR,IJJ,IJJ,BUF2(IOFF2))
+          END IF
+          IOFF2 = IOFF2 + NVIR
+        END DO
+        ISTART = NVAOFF
+C
+        DO K = NOCD1, NOCC
+          IOFF1 = ((K-NOCD1)*NOCS + K-NOCD1)*NACD*NVIR + 1
+C
+C  THEN, DO MATRIX MULTIPLICATIONS FOR: PMI (TERM 4)
+C
+          CALL DGEMM('T','N',NACORE,NACD,NVIR
+     *,              ONE,BUF2,NVIR
+     *,              BUF3(IOFF1),NVIR
+     *,              ONE,PMAT(1,NCP1),NBF)
+C
+C  FOR: WIJ (TERM 4)
+C
+          CALL DGEMM('T','N',NACD,NACD,NVIR
+     *,              -ONE,BUF2(NVAOFF),NVIR
+     *,              BUF3(IOFF1),NVIR
+     *,              ONE,WMAT(NCP1,NCP1),NBF)
+C
+C  FOR: LIX (TERM 8) (PUT IN WIX)
+C
+          CALL DGEMM('T','N',NACD,NOCS,NVIR
+     *,              ONE,BUF3(IOFF1),NVIR
+     *,              BUF2(NOCD*NVIR+1),NVIR
+     *,              ONE,WMAT(NCP1,NOCD1),NBF)
+C
+C  FOR: WAB (TERM 4)
+C
+          CALL DGEMM('N','T',NVIR,NVIR,NACD
+     *,              -ONE,BUF2(NVAOFF),NVIR
+     *,              BUF3(IOFF1),NVIR
+     *,              ONE,WMAT(NOP1,NOP1),NBF)
+        END DO
+C
+C  DIVIDE (IX|XA) INTEGRALS BY (EI - EA) TO DO PMAT BLOCKS
+C
+        DO I = NCP1,NOCD
+          EI = EORB(I)
+          DO A = 1, NVIR
+            DENOM = EI - EORB(A+NOCC)
+            BUF2(ISTART) = BUF2(ISTART)/DENOM
+            ISTART = ISTART+1
+          END DO
+        END DO
+C
+        DO K = NOCD1, NOCC
+          IOFF1 = ((K-NOCD1)*NOCS + K-NOCD1)*NACD*NVIR + 1
+C
+C  NOW, DO MATRIX MULTS FOR: PIJ (TERM 4)
+C
+          CALL DGEMM('T','N',NACD,NACD,NVIR
+     *,              -ONE,BUF2(NVAOFF),NVIR
+     *,              BUF3(IOFF1),NVIR
+     *,              ONE,PMAT(NCP1,NCP1),NBF)
+C
+C  FOR: PAB (TERM 4)
+C
+          CALL DGEMM('N','T',NVIR,NVIR,NACD
+     *,              ONE,BUF2(NVAOFF),NVIR
+     *,              BUF3(IOFF1),NVIR
+     *,              ONE,PMAT(NOP1,NOP1),NBF)
+        END DO
+C
+C  NEXT, READ IN (VS|VS) INTEGRALS AND COMPUTE LIA(TERM 7) (IN WIA)
+C
+        IJ = (J*J+J)/2
+        IF (IJ.GE.JL_VOVO.AND.IJ.LE.JH_VOVO) THEN
+          CALL DDI_GET(D_VOVO,1,NVSQ,IJ,IJ,BUF2)
+          DO K = NOCD1, NOCC
+            IOFF1 = ((K-NOCD1)*NOCS + K-NOCD1)*NACD*NVIR + 1
+            CALL DGEMM('T','N',NACD,NVIR,NVIR
+     *,                ONE,BUF3(IOFF1),NVIR
+     *,                BUF2,NVIR
+     *,                ONE,WMAT(NCP1,NOP1),NBF)
+          END DO
+        END IF
+      END DO
+C
+C  FINALLY, DO THE LAST FOUR FOCK-LIKE TERMS: WAR, LXA, WXY, WXR
+C  FIRST: DO SUM OVER J FOR (IJ|JA)/(EI-EA); J IS SOCC ORBITAL
+C  (ADD CONTRIBUTIONS FROM J=2,3,...,NOCS INTO MEMORY OF J=1)
+C
+      CALL VCLR(TIA,1,NACD*NVIR)
+      IOFF = 1
+      DO J = 1, NOCS
+        IOFF = ((J-1)*NOCS + (J-1))*NACD*NVIR + 1
+        IA = 1
+        DO I = NCP1, NOCD
+          DO A = 1, NVIR
+            TIA(IA) = TIA(IA) + BUF3(IOFF)
+            IOFF = IOFF + 1
+            IA = IA + 1
+          END DO
+        END DO
+      END DO
+C
+C  NOW DO WAR TERM 4:
+C
+      DO K = 1, NOCC
+        DO J = NOCD1, NOCC
+        ISTART = (J*J-J)/2 + NCP1
+          JK = (J*J-J)/2 + K
+          IF (K.GT.J) JK = (K*K-K)/2 + J
+          IF (JK.GE.JL_VOVO.AND.JK.LE.JH_VOVO) THEN
+            CALL DDI_GET(D_OOOO,ISTART,ISTART+NACD-1,JK,JK,BUF1)
+            CALL DGEMM('N','N',NVIR,1,NACD
+     *,                -ONE,TIA,NVIR
+     *,                BUF1,NACDLD
+     *,                ONE,WMAT(NOP1,K),NBF)
+          END IF
+        END DO
+      END DO
+C
+C  NOW DO LXA TERM 7, FOLLOWED BY WXY TERM 4 AND WXR TERM 4
+C
+      IOFF1 = 1
+      DO I = NCP1, NOCD
+        DO J = NOCD1, NOCC
+          IJ = (J*J-J)/2 + I
+          IF (IJ.GE.JL_VOVO.AND.IJ.LE.JH_VOVO) THEN
+            CALL DDI_GET(D_VVOO,1,NVTR,IJ,IJ,BUF1)
+            IC = 0
+            AB = 0
+            DO A = 1, NVIR
+              DO B = 1, A
+                IC = IC + 1
+                AB = (A-1)*NVIR + B
+                BA = (B-1)*NVIR + A
+                BUF2(AB) = BUF1(IC)
+                BUF2(BA) = BUF1(IC)
+              END DO
+            END DO
+C
+C  LXA (TERM 7A):
+C
+            CALL DGEMM('T','N',1,NVIR,NVIR
+     *,                ONE,TIA(IOFF1),NVIR
+     *,                BUF2,NVIR
+     *,                ONE,WMAT(J,NOP1),NBF)
+          END IF
+          IF (IJ.GE.JL_VOVO.AND.IJ.LE.JH_VOVO) THEN
+            CALL DDI_GET(D_VOVO,1,NVSQ,IJ,IJ,BUF2)
+C
+C  LXA (TERM 7B):
+C
+            CALL DGEMM('T','N',1,NVIR,NVIR
+     *,                ONE,TIA(IOFF1),NVIR
+     *,                BUF2,NVIR
+     *,                ONE,WMAT(J,NOP1),NBF)
+          END IF
+        END DO
+C
+C  WXR (TERM 4A AND 4B):
+C
+        ISTART = (I-NCP1)*NVIR+1
+        DO J = 1, NOCD
+          IJ = (J*J-J)/2 + I
+          IF (I.GT.J) IJ = (I*I-I)/2 + J
+          DO K = NOCD1, NOCC
+            IK = (K*K-K)/2 + I
+            IJK = (IJ-1)*NOCC + K
+            IKJ = (IK-1)*NOCC + J
+            IF (IKJ.GE.JL_VOOO.AND.IKJ.LE.JH_VOOO) THEN
+              CALL DDI_GET(D_VOOO,1,NVIR,IKJ,IKJ,BUF2)
+              WMAT(K,J) = WMAT(K,J) - DDOT(NVIR,BUF2,1,TIA(ISTART),1)
+            END IF
+            IF (IJK.GE.JL_VOOO.AND.IJK.LE.JH_VOOO) THEN
+              CALL DDI_GET(D_VOOO,1,NVIR,IJK,IJK,BUF2)
+              WMAT(K,J) = WMAT(K,J) - DDOT(NVIR,BUF2,1,TIA(ISTART),1)
+            END IF
+          END DO
+        END DO
+C
+C  WXY (TERM 4):
+C
+        DO K = NOCD1, NOCC
+          DO J = NOCD1, NOCC
+            IJ = (J*J-J)/2 + I
+            IJK = (IJ-1)*NOCC + K
+            IF (IJK.GE.JL_VOOO.AND.IJK.LE.JH_VOOO) THEN
+              CALL DDI_GET(D_VOOO,1,NVIR,IJK,IJK,BUF2)
+              WMAT(J,K) = WMAT(J,K)-TWO*DDOT(NVIR,BUF2,1,TIA(ISTART),1)
+            END IF
+          END DO
+        END DO
+      IOFF1 = IOFF1 + NVIR
+C
+      END DO
+C
+C  CALCULATE THE ZAPT ENERGY FROM DIAGONAL ELEMENTS OF WMAT
+C
+      CALL ZPTNRG(WMAT)
+C
+C  ADD THE WXYNEW CONTRIBUTION
+C
+      DO IX = NOCD1, NOCC
+        NX = IX - NOCD
+        DO IY = NOCD1, IX-1
+          NY = IY - NOCD
+          WMAT(IY,IX) = WMAT(IY,IX) + WXYNEW(NY,NX)
+        END DO
+      END DO
+C
+C  NOW CALCULATE THE TERMS INVOLVING CHIX (PXY,WXY,WXR,LXA)
+C
+      CALL DCOPY(NOCS*NOCS,ZERO,0,TXY,1)
+      DO IZ = NOCD1, NOCC
+        NZ = IZ - NOCD
+        DO IY = NOCD1, NOCC
+          NY = IY - NOCD
+          CHI = CHIX(NY) + CHIX(NZ)
+          IJ = (IZ*IZ-IZ)/2 + IY
+          IF (IY.GT.IZ) IJ = (IY*IY-IY)/2 + IZ
+          DO IX = 1, NOCC
+            NX = IX - NOCD
+            IF(IX.LE.IZ) THEN
+              ISTART = (IZ*IZ-IZ)/2 + IX
+              IF (IJ.GE.JL_VOVO.AND.IJ.LE.JH_VOVO) THEN
+                CALL DDI_GET(D_OOOO,ISTART,ISTART,IJ,IJ,BUF1)
+                IF (IX.LE.NOCD) THEN
+                  WMAT(IY,IX) = WMAT(IY,IX) - HALF*CHI*BUF1(1)
+                ELSE
+                TXY(NX,NY) = TXY(NX,NY) + CHI*BUF1(1)
+                END IF
+              END IF
+            ELSE
+              ISTART = (IX*IX-IX)/2 + IZ
+              IF (IJ.GE.JL_VOVO.AND.IJ.LE.JH_VOVO) THEN
+                CALL DDI_GET(D_OOOO,ISTART,ISTART,IJ,IJ,BUF1)
+                TXY(NX,NY) = TXY(NX,NY) + CHI*BUF1(1)
+              END IF
+            END IF
+          END DO
+          IJJ = (IJ-1)*NOCC + IZ
+          IF (IJJ.GE.JL_VOOO.AND.IJJ.LE.JH_VOOO) THEN
+            CALL DDI_GET(D_VOOO,1,NVIR,IJJ,IJJ,BUF1)
+            IA = 0
+            DO A = 1, NVIR
+              IA = IA + 1
+              WMAT(IY,A+NOCC) = WMAT(IY,A+NOCC) + HALF*CHI*BUF1(IA)
+            END DO
+          END IF
+        END DO
+      END DO
+C
+C  DIVIDE BY DENOMINATOR, SYMMETRIZE, AND PUT IN CORRECT MATRIX
+C
+      DO IY = NOCD1, NOCC
+        NY = IY - NOCD
+        DO IX = NOCD1, NOCC
+          NX = IX - NOCD
+          DIFFE = ABS(EORB(IY) - EORB(IX))
+          IF (DIFFE.GT.SMALL) THEN
+            DENOM=TWO*(EORB(IY) - EORB(IX))
+            PMAT(IX,IY) = PMAT(IX,IY) + (TXY(NX,NY)-TXY(NY,NX))/DENOM
+          END IF
+          IF (IX.EQ.IY) THEN
+            WMAT(IX,IY) = WMAT(IX,IY) - TXY(NX,NY)/TWO
+          END IF
+        END DO
+      END DO
+C
+C  SYMMETRIZE CORE-VALENCE BLOCK OF P(2) AND CREATE THIS BLOCK OF W(2)
+C
+      DO J = NCP1, NOCD
+       DO I = 1, NACORE
+        WMAT(I,J) = -PMAT(I,J)
+        PMAT(I,J) = PMAT(I,J)/(EORB(J)-EORB(I))
+        PMAT(J,I) = PMAT(I,J)
+       END DO
+      END DO
+C
+C  NOW DO A GLOBAL-SUM OF P(2)
+C
+      CALL DDI_GSUMF(1001,PMAT,NBSQ)
+C
+      RETURN
+      END
+C*MODULE ZAPDDI   *DECK ZPTNRG
+      SUBROUTINE ZPTNRG(WMAT)
+C
+C -----------------------------------------------------------------
+C  COMPUTE ZAPT MP2 ENERGY FROM DIAGONAL ELEMENTS OF WMAT
+C -----------------------------------------------------------------
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      PARAMETER (MXRT=100)
+      PARAMETER (PT25 = 0.25D+00)
+      LOGICAL OUTPUT,MP2ENG,UMP2GD
+      DOUBLE PRECISION WMAT(NBF,NBF)
+      COMMON /MP2XTR/ NBF,NACORE,NBSQ,NBTR,NSTR,MXSHL,NACT,NOCC
+     *,               NVIR,NOV,NOSQ,NVSQ,NOTR,NVTR,NCP1,NOP1
+     *,               NATR,ICHANL,OUTPUT,MP2ENG,IOST,NMOS,UMP2GD
+      COMMON /ENRGYS/ ENUC,EELEC,ETOT,SZ,SZZ,ECORE,ESCF,EERD,E1,E2,
+     *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2)
+      COMMON /ENRGMP/ EMP2,EMP3,EMP4,EMP2A
+C
+      IF (OUTPUT) WRITE(ICHANL,1) ESCF
+      EZ = 0
+      DO I = 1,NBF
+        EZ = EZ - WMAT(I,I)
+      END DO
+      CALL DDI_GSUMF(994,EZ,1)
+      EZ = EZ*PT25
+C
+      EMP2 = ESCF + EZ
+      EMP2A= 0 
+      IF (OUTPUT) THEN
+        WRITE(ICHANL,2) EZ, EMP2
+        CALL FLSHBF(ICHANL)
+      END IF
+      RETURN
+1     FORMAT(21X,'E(SCF)= ',1F20.10)
+2     FORMAT(18X,'ZAPT E(2)= ',1F20.10/
+     *       21X,'E(MP2)= ',1F20.10)
+      END
+C*MODULE ZAPDDI   *DECK ZAPTPE
+      SUBROUTINE ZAPTPE(PMAT,WMAT,EORB)
+C
+C -----------------------------------------------------------------
+C  COMPUTE P*EPSILON TERMS FOR W AND L MATRICES (PUT IN WMAT)
+C -----------------------------------------------------------------
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      LOGICAL GOPARR,DSKWRK,MASWRK,OUTPUT,MP2ENG,UMP2GD,DLB,DOTASK
+     *,       ZAPTGD
+      DOUBLE PRECISION PMAT(NBF,NBF),WMAT(NBF,NBF),EORB(NBF)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /MP2XTR/ NBF,NACORE,NBSQ,NBTR,NSTR,MXSHL,NACT,NOCC
+     *,               NVIR,NOV,NOSQ,NVSQ,NOTR,NVTR,NCP1,NOP1
+     *,               NATR,ICHANL,OUTPUT,MP2ENG,IOST,NMOS,UMP2GD
+      COMMON /ZAPTGR/ NOCD,NOCD1,NOCS,NOCSTR,IXYEXC,ICHIX,ITIA,IZVEC
+     *,               ZAPTGD
+C
+C  SET UP LOAD BALANCING
+C
+      DLB = IBTYP.EQ.1
+      IF (DLB) THEN
+        CALL DDI_DLBRESET()
+        CALL DDI_DLBNEXT( MYTASK )
+      END IF
+      LOCTSK=0
+C
+C  ADD -P*E CONTRIBUTION TO APPROPRIATE BLOCK OF WMAT
+C
+      DO I = 1, NBF
+C
+C  LOAD BALANCER
+C
+        IF (DLB) THEN
+          DOTASK = LOCTSK.EQ.MYTASK
+        ELSE
+          DOTASK = MOD(LOCTSK,NPROC).EQ.ME
+        END IF
+        IF (DOTASK) THEN
+          EI = EORB(I)
+C
+C  CORE-ACTIVE BLOCK
+C
+          IF (I.LE.NACORE) THEN
+            DO J = NCP1, NOCD
+              EJ = EORB(J)
+              WMAT(J,I) = WMAT(J,I) - PMAT(J,I)*(EI+EJ)
+            END DO
+C
+C  ACT-ACT
+C
+          ELSE IF (I.LE.NOCD) THEN
+            DO J = NCP1, NOCD
+              WMAT(J,I) = WMAT(J,I) - PMAT(J,I)*EI
+            END DO
+C
+C  SOCC-SOCC
+C
+          ELSE IF (I.LE.NOCC) THEN
+            DO J = NOCD1, NOCC
+              WMAT(J,I) = WMAT(J,I) - PMAT(J,I)*EI
+            END DO
+C
+C  VIRT-VIRT
+C
+          ELSE
+            DO J = NOP1, NBF
+              WMAT(J,I) = WMAT(J,I) - PMAT(J,I)*EI
+            END DO
+          END IF
+C
+C  GET NEXT TASK
+C
+          IF (DLB) CALL DDI_DLBNEXT( MYTASK )
+        END IF       !  LOAD BALANCER
+        LOCTSK = LOCTSK + 1
+      END DO
+C
+      RETURN
+      END
+C*MODULE ZAPDDI   *DECK ZLAGPG
+      SUBROUTINE ZLAGPG(PMAT,WMAT,BUF1,BUF2)
+C
+C -----------------------------------------------------------------
+C  COMPUTE P*G TERMS FOR L MATRIX (PUT IN WMAT)
+C -----------------------------------------------------------------
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      PARAMETER (PT25=0.25D+00, HALF=0.5D+00, ONE=1.0D+00, TWO=2.0D+00)
+      LOGICAL GOPARR,DSKWRK,MASWRK,OUTPUT,MP2ENG,UMP2GD
+      LOGICAL ZAPTGD
+      DOUBLE PRECISION PMAT(NBF,NBF),WMAT(NBF,NBF),BUF1(*),BUF2(*)
+      INTEGER A,B,AB,BA
+C
+      COMMON /MP2XTR/ NBF,NACORE,NBSQ,NBTR,NSTR,MXSHL,NACT,NOCC
+     *,               NVIR,NOV,NOSQ,NVSQ,NOTR,NVTR,NCP1,NOP1
+     *,               NATR,ICHANL,OUTPUT,MP2ENG,IOST,NMOS,UMP2GD
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /ZAPTGR/ NOCD,NOCD1,NOCS,NOCSTR,IXYEXC,ICHIX,ITIA,IZVEC
+     *,               ZAPTGD
+C
+      INTEGER         D_OOOO,D_VOOO,D_VVOO,D_VOVO,D_VVVO,D_VVVV,
+     *                D_OOOOAB,D_OOOOBB,D_VOOOAB,D_VOOOBA,D_VOOOBB,
+     *                D_VVOOAB,D_VVOOBA,D_VVOOBB,D_VOVOAB,D_VOVOBB,
+     *                D_U,D_UB,D_E,D_EB
+      LOGICAL         NDOOOO,NDVOOO,NDVVOO,NDVOVO,NDVVVO,NDVVVV,NDCORE,
+     *                NDVVOOBA,NDVVOOAB,NDVVOOBB,NDVOVOAB,NDVOVOBB,
+     *                NDVOOOBA,NDVOOOAB,NDVOOOBB,NDOOOOAB,NDOOOOBB
+      COMMON /TRFDMS/ D_OOOO,D_VOOO,D_VVOO,D_VOVO,D_VVVO,D_VVVV,
+     *                D_OOOOAB,D_OOOOBB,D_VOOOAB,D_VOOOBA,D_VOOOBB,
+     *                D_VVOOAB,D_VVOOBA,D_VVOOBB,D_VOVOAB,D_VOVOBB,
+     *                D_U,D_UB,D_E,D_EB,
+     *                NDOOOO,NDVOOO,NDVVOO,NDVOVO,NDVVVO,NDVVVV,NDCORE,
+     *                NDVVOOBA,NDVVOOAB,NDVVOOBB,NDVOVOAB,NDVOVOBB,
+     *                NDVOOOBA,NDVOOOAB,NDVOOOBB,NDOOOOAB,NDOOOOBB
+C
+      CALL DDI_DISTRIB(D_VOOO,ME,IL_VOOO,IH_VOOO,JL_VOOO,JH_VOOO)
+      CALL DDI_DISTRIB(D_VOVO,ME,IL_VOVO,IH_VOVO,JL_VOVO,JH_VOVO)
+C
+C  J,K <- DOCC
+C
+      DO K = NCP1, NOCD
+       DO J = NCP1, NOCD
+        IF (K.GE.J) THEN
+          JK = (K*K-K)/2 + J
+        ELSE
+          JK = (J*J-J)/2 + K
+        END IF
+C
+C  P(2)*VOOO TERM OF LAGRANGIAN
+C
+         DO I = 1, NOCC
+          FAC = ONE
+          IF (I.GT.NOCD) FAC = HALF
+          IJK = (JK-1)*NOCC + I
+          IF (K.GE.I) THEN
+            IK = (K*K-K)/2 + I
+          ELSE
+            IK = (I*I-I)/2 + K
+          END IF
+          JIK = (IK-1)*NOCC + J
+          IF (J.GE.I) THEN
+            IJ = (J*J-J)/2 + I
+          ELSE
+            IJ = (I*I-I)/2 + J
+          END IF
+          KIJ = (IJ-1)*NOCC + K
+          IF (IJK.GE.JL_VOOO.AND.IJK.LE.JH_VOOO) THEN
+            CALL DDI_GET(D_VOOO,1,NVIR,IJK,IJK,BUF1)
+            IA = 0
+            DO A = NOP1, NMOS
+             IA = IA + 1
+             XIAJB = FAC*BUF1(IA)
+             WMAT(I,A) = WMAT(I,A) + XIAJB*PMAT(J,K)*TWO
+            END DO
+           END IF
+          IF (JIK.GE.JL_VOOO.AND.JIK.LE.JH_VOOO) THEN
+            CALL DDI_GET(D_VOOO,1,NVIR,JIK,JIK,BUF1)
+            IA = 0
+            DO A = NOP1, NMOS
+             IA = IA + 1
+             XIAJB = FAC*BUF1(IA)
+             WMAT(I,A) = WMAT(I,A) - XIAJB*PMAT(J,K)*HALF
+            END DO
+           END IF
+          IF (KIJ.GE.JL_VOOO.AND.KIJ.LE.JH_VOOO) THEN
+            CALL DDI_GET(D_VOOO,1,NVIR,KIJ,KIJ,BUF1)
+            IA = 0
+            DO A = NOP1, NMOS
+             IA = IA + 1
+             XIAJB = FAC*BUF1(IA)
+             WMAT(I,A) = WMAT(I,A) - XIAJB*PMAT(J,K)*HALF
+            END DO
+           END IF
+         END DO
+C
+C  P(2)*OOOO TERM OF LAGRANGIAN
+C
+         ISTART = (NOCD*NOCD+NOCD)/2 + 1
+         IF (JK.GE.JL_VOVO.AND.JK.LE.JH_VOVO) THEN
+           CALL DDI_GET(D_OOOO,ISTART,NOTR,JK,JK,BUF1)
+           IL = 0
+           DO L = NOCD1, NOCC
+             DO I = 1, L
+               IL = IL + 1
+               IF (I.LE.NOCD) THEN
+                 XIAJB = BUF1(IL)
+                 WMAT(I,L) = WMAT(I,L) + XIAJB*PMAT(J,K)
+               END IF
+             END DO
+           END DO
+         END IF
+         DO I = 1, NOCD
+          IF (K.GE.I) THEN
+            IK = (K*K-K)/2 + I
+          ELSE
+            IK = (I*I-I)/2 + K
+          END IF
+          IF (J.GE.I) THEN
+            IJ = (J*J-J)/2 + I
+          ELSE
+            IJ = (I*I-I)/2 + J
+          END IF
+          IF (IK.GE.JL_VOVO.AND.IK.LE.JH_VOVO) THEN
+            CALL DDI_GET(D_OOOO,ISTART,NOTR,IK,IK,BUF1)
+            IL = J
+            DO L = NOCD1, NOCC
+             XIAJB = BUF1(IL)
+             WMAT(I,L) = WMAT(I,L) - XIAJB*PMAT(J,K)*PT25
+             IL = IL + L
+            END DO
+          END IF
+          IF (IJ.GE.JL_VOVO.AND.IJ.LE.JH_VOVO) THEN
+            CALL DDI_GET(D_OOOO,ISTART,NOTR,IJ,IJ,BUF1)
+            IL = K
+            DO L = NOCD1, NOCC
+             XIAJB = BUF1(IL)
+             WMAT(I,L) = WMAT(I,L) - XIAJB*PMAT(J,K)*PT25
+             IL = IL + L
+            END DO
+          END IF
+         END DO
+C
+       END DO
+      END DO
+C
+C  K <- DOCC, J <- CORE
+C
+      DO K = NCP1, NOCD
+       DO J = 1, NACORE
+        JK = (K*K-K)/2 + J
+C
+C  P(2)*VOOO TERM OF LAGRANGIAN
+C
+         DO I = 1, NOCC
+          FAC = TWO
+          IF (I.GT.NOCD) FAC = ONE
+          IJK = (JK-1)*NOCC + I
+          IF (K.GE.I) THEN
+            IK = (K*K-K)/2 + I
+          ELSE
+            IK = (I*I-I)/2 + K
+          END IF
+          JIK = (IK-1)*NOCC + J
+          IF (J.GE.I) THEN
+            IJ = (J*J-J)/2 + I
+          ELSE
+            IJ = (I*I-I)/2 + J
+          END IF
+          KIJ = (IJ-1)*NOCC + K
+          IF (IJK.GE.JL_VOOO.AND.IJK.LE.JH_VOOO) THEN
+            CALL DDI_GET(D_VOOO,1,NVIR,IJK,IJK,BUF1)
+            IA = 0
+            DO A = NOP1, NMOS
+             IA = IA + 1
+             XIAJB = FAC*BUF1(IA)
+             WMAT(I,A) = WMAT(I,A) + XIAJB*PMAT(J,K)*TWO
+            END DO
+           END IF
+          IF (JIK.GE.JL_VOOO.AND.JIK.LE.JH_VOOO) THEN
+            CALL DDI_GET(D_VOOO,1,NVIR,JIK,JIK,BUF1)
+            IA = 0
+            DO A = NOP1, NMOS
+             IA = IA + 1
+             XIAJB = FAC*BUF1(IA)
+             WMAT(I,A) = WMAT(I,A) - XIAJB*PMAT(J,K)*HALF
+            END DO
+           END IF
+          IF (KIJ.GE.JL_VOOO.AND.KIJ.LE.JH_VOOO) THEN
+            CALL DDI_GET(D_VOOO,1,NVIR,KIJ,KIJ,BUF1)
+            IA = 0
+            DO A = NOP1, NMOS
+             IA = IA + 1
+             XIAJB = FAC*BUF1(IA)
+             WMAT(I,A) = WMAT(I,A) - XIAJB*PMAT(J,K)*HALF
+            END DO
+           END IF
+         END DO
+C
+C  P(2)*OOOO TERM OF LAGRANGIAN
+C
+         ISTART = (NOCD*NOCD+NOCD)/2 + 1
+         IF (JK.GE.JL_VOVO.AND.JK.LE.JH_VOVO) THEN
+           CALL DDI_GET(D_OOOO,ISTART,NOTR,JK,JK,BUF1)
+           IL = 0
+           DO L = NOCD1, NOCC
+             DO I = 1, L
+               IL = IL + 1
+               IF (I.LE.NOCD) THEN
+                 XIAJB = BUF1(IL)
+                 WMAT(I,L) = WMAT(I,L) + TWO*XIAJB*PMAT(J,K)
+               END IF
+             END DO
+           END DO
+         END IF
+         DO I = 1, NOCD
+          IF (K.GE.I) THEN
+            IK = (K*K-K)/2 + I
+          ELSE
+            IK = (I*I-I)/2 + K
+          END IF
+          IF (J.GE.I) THEN
+            IJ = (J*J-J)/2 + I
+          ELSE
+            IJ = (I*I-I)/2 + J
+          END IF
+          IF (IK.GE.JL_VOVO.AND.IK.LE.JH_VOVO) THEN
+            CALL DDI_GET(D_OOOO,ISTART,NOTR,IK,IK,BUF1)
+            IL = J
+            DO L = NOCD1, NOCC
+             XIAJB = BUF1(IL)
+             WMAT(I,L) = WMAT(I,L) - XIAJB*PMAT(J,K)*HALF
+             IL = IL + L
+            END DO
+          END IF
+          IF (IJ.GE.JL_VOVO.AND.IJ.LE.JH_VOVO) THEN
+            CALL DDI_GET(D_OOOO,ISTART,NOTR,IJ,IJ,BUF1)
+            IL = K
+            DO L = NOCD1, NOCC
+             XIAJB = BUF1(IL)
+             WMAT(I,L) = WMAT(I,L) - XIAJB*PMAT(J,K)*HALF
+             IL = IL + L
+            END DO
+          END IF
+         END DO
+C
+       END DO
+      END DO
+C
+C  J,K <- SOCC
+C
+      DO K = NOCD1, NOCC
+       DO J = NOCD1, NOCC
+        IF (K.GE.J) THEN
+          JK = (K*K-K)/2 + J
+        ELSE
+          JK = (J*J-J)/2 + K
+        END IF
+C
+C  P(2)*VOOO TERM OF LAGRANGIAN
+C
+         DO I = 1, NOCC
+          FAC = ONE
+          IF (I.GT.NOCD) FAC = HALF
+          IJK = (JK-1)*NOCC + I
+          IF (K.GE.I) THEN
+            IK = (K*K-K)/2 + I
+          ELSE
+            IK = (I*I-I)/2 + K
+          END IF
+          JIK = (IK-1)*NOCC + J
+          IF (J.GE.I) THEN
+            IJ = (J*J-J)/2 + I
+          ELSE
+            IJ = (I*I-I)/2 + J
+          END IF
+          KIJ = (IJ-1)*NOCC + K
+          IF (IJK.GE.JL_VOOO.AND.IJK.LE.JH_VOOO) THEN
+            CALL DDI_GET(D_VOOO,1,NVIR,IJK,IJK,BUF1)
+            IA = 0
+            DO A = NOP1, NMOS
+             IA = IA + 1
+             XIAJB = FAC*BUF1(IA)
+             WMAT(I,A) = WMAT(I,A) + XIAJB*PMAT(J,K)*TWO
+            END DO
+           END IF
+          IF (JIK.GE.JL_VOOO.AND.JIK.LE.JH_VOOO) THEN
+            CALL DDI_GET(D_VOOO,1,NVIR,JIK,JIK,BUF1)
+            IA = 0
+            DO A = NOP1, NMOS
+             IA = IA + 1
+             XIAJB = FAC*BUF1(IA)
+             WMAT(I,A) = WMAT(I,A) - XIAJB*PMAT(J,K)*HALF
+            END DO
+           END IF
+          IF (KIJ.GE.JL_VOOO.AND.KIJ.LE.JH_VOOO) THEN
+            CALL DDI_GET(D_VOOO,1,NVIR,KIJ,KIJ,BUF1)
+            IA = 0
+            DO A = NOP1, NMOS
+             IA = IA + 1
+             XIAJB = FAC*BUF1(IA)
+             WMAT(I,A) = WMAT(I,A) - XIAJB*PMAT(J,K)*HALF
+            END DO
+           END IF
+         END DO
+C
+C  P(2)*OOOO TERM OF LAGRANGIAN
+C
+         ISTART = (NOCD*NOCD+NOCD)/2 + 1
+         IF (JK.GE.JL_VOVO.AND.JK.LE.JH_VOVO) THEN
+           CALL DDI_GET(D_OOOO,ISTART,NOTR,JK,JK,BUF1)
+           IL = 0
+           DO L = NOCD1, NOCC
+             DO I = 1, L
+               IL = IL + 1
+               IF (I.LE.NOCD) THEN
+                 XIAJB = BUF1(IL)
+                 WMAT(I,L) = WMAT(I,L) + XIAJB*PMAT(J,K)
+               END IF
+             END DO
+           END DO
+         END IF
+         DO I = NOCD1, NOCC
+          IF (K.GE.I) THEN
+            IK = (K*K-K)/2 + I
+          ELSE
+            IK = (I*I-I)/2 + K
+          END IF
+          IF (J.GE.I) THEN
+            IJ = (J*J-J)/2 + I
+          ELSE
+            IJ = (I*I-I)/2 + J
+          END IF
+          ISTART = (J*J-J)/2 + 1
+          IF (IK.GE.JL_VOVO.AND.IK.LE.JH_VOVO) THEN
+            CALL DDI_GET(D_OOOO,ISTART,NOTR,IK,IK,BUF1)
+            IL = 1
+            DO L = 1, NOCD
+             XIAJB = BUF1(IL)
+             WMAT(L,I) = WMAT(L,I) - XIAJB*PMAT(J,K)*PT25
+             IL = IL + 1
+            END DO
+          END IF
+          ISTART = (K*K-K)/2 + 1
+          IF (IJ.GE.JL_VOVO.AND.IJ.LE.JH_VOVO) THEN
+            CALL DDI_GET(D_OOOO,ISTART,NOTR,IJ,IJ,BUF1)
+            IL = 1
+            DO L = 1,NOCD
+             XIAJB = BUF1(IL)
+             WMAT(L,I) = WMAT(L,I) - XIAJB*PMAT(J,K)*PT25
+             IL = IL + 1
+            END DO
+          END IF
+         END DO
+C
+       END DO
+      END DO
+C
+C  TERMS INVOLVING VVOO- AND VOVO- TYPE INTEGRALS:
+C  SOCC-DOCC/CORE BLOCK OF LAGRANGIAN.
+C
+      IJ = 0
+      DO J = NOCD1, NOCC
+       DO I = 1, NOCD
+        IJ = (J*J-J)/2 + I
+        IF (IJ.GE.JL_VOVO.AND.IJ.LE.JH_VOVO) THEN
+         CALL DDI_GET(D_VVOO,1,NVTR,IJ,IJ,BUF1)
+         CALL DDI_GET(D_VOVO,1,NVSQ,IJ,IJ,BUF2)
+         DO B = 1, NVIR
+          DO A = 1, NVIR
+           AB = (A*A-A)/2 + B
+           IF (A.LT.B) AB = (B*B-B)/2 + A
+           XIAJB = BUF1(AB)
+           WMAT(I,J) = WMAT(I,J) + XIAJB*PMAT(A+NOCC,B+NOCC)
+           AB = (B-1)*NVIR + A
+           BA = (A-1)*NVIR + B
+           XIAJB = BUF2(AB)
+           XIBJA = BUF2(BA)
+           WMAT(I,J) = WMAT(I,J)-(XIAJB+XIBJA)*PMAT(A+NOCC,B+NOCC)*PT25
+          END DO
+         END DO
+        END IF
+       END DO
+      END DO
+C
+      RETURN
+      END
+C*MODULE ZAPDDI   *DECK ZSUMPE
+      SUBROUTINE ZSUMPE(PMAT,WMAT,CMO,FA,FB,SCR)
+C
+C -----------------------------------------------------------------
+C  COMPUTE SUM(P*EPS) TERMS FOR W,L MATRICES (PUT IN WMAT)
+C -----------------------------------------------------------------
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      INTEGER A,B,X,Y,AA,XX
+      PARAMETER (ZERO=0.0D+00, HALF=0.5D+00, ONE=1.0D+00)
+      LOGICAL GOPARR,DSKWRK,MASWRK,OUTPUT,MP2ENG,UMP2GD
+      LOGICAL ZAPTGD
+      DOUBLE PRECISION PMAT(NBF,NBF),WMAT(NBF,NBF),CMO(NBF,*)
+     *,               FA(*),FB(*),SCR(*)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /MP2XTR/ NBF,NACORE,NBSQ,NBTR,NSTR,MXSHL,NACT,NOCC
+     *,               NVIR,NOV,NOSQ,NVSQ,NOTR,NVTR,NCP1,NOP1
+     *,               NATR,ICHANL,OUTPUT,MP2ENG,IOST,NMOS,UMP2GD
+      COMMON /ZAPTGR/ NOCD,NOCD1,NOCS,NOCSTR,IXYEXC,ICHIX,ITIA,IZVEC
+     *,               ZAPTGD
+C
+C READ IN ALPHA AND BETA FOCK MATRICES IN AO BASIS
+C
+      CALL DAREAD(IDAF,IODA,FA,NBTR,14,0)
+      CALL DAREAD(IDAF,IODA,FB,NBTR,18,0)
+      CALL DAXPY(NBTR,ONE,FB,1,FA,1)
+      CALL DSCAL(NBTR,HALF,FA,1)
+C
+C TRANSFORM 'FOCK MATRIX' TO MO BASIS
+C
+      CALL TFTRI(FB,FA,CMO,SCR,NMOS,NBF,NBF)
+      CALL DCOPY(NBTR,FB,1,FA,1)
+C
+C MAKE P*EPSILON TERMS
+C
+      IF (ME.EQ.0) THEN
+      DO X = NOCD1,NOCC
+        XX = (X*X-X)/2
+        DO I = 1,NOCD
+          VAL = ZERO
+          IA = XX
+          DO J = 1,NOCD
+            IA = IA + 1
+            VAL = VAL + PMAT(J,I)*FA(IA)
+          END DO
+          WMAT(I,X) = WMAT(I,X) + VAL
+          VAL = ZERO
+          DO Y = NOCD1,NOCC
+            IA = (Y*Y-Y)/2 + I
+            VAL = VAL + PMAT(Y,X)*FA(IA)
+          END DO
+          WMAT(X,I) = WMAT(X,I) - VAL
+        END DO
+        DO A = NOP1,NMOS
+          AA = (A*A-A)/2
+          VAL = ZERO
+          DO Y = NOCD1,NOCC
+            IA = AA + Y
+            VAL = VAL + PMAT(Y,X)*FA(IA)
+          END DO
+          WMAT(X,A) = WMAT(X,A) + VAL
+          VAL = ZERO
+          DO B = NOP1,NMOS
+            IA = (B*B-B)/2 + X
+            VAL = VAL + PMAT(B,A)*FA(IA)
+          END DO
+          WMAT(A,X) = WMAT(A,X) - VAL
+        END DO
+      END DO
+      END IF
+C
+      RETURN
+      END
+C*MODULE ZAPDDI   *DECK BTINTSZ
+      SUBROUTINE BTINTSZ(EORB,CMO,XYEXC,BUF,DUM)
+C
+C -----------------------------------------------------------------
+C  BACK-TRANSFORM VIRTUAL INDICES OF THE ZAPT2 INTEGRALS
+C  TO THE AO BASIS OVERWRITING THE VOVO INTEGRALS
+C  (SIMILAR TO BTAMPS)
+C -----------------------------------------------------------------
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      PARAMETER (MXSH=5000, MXGTOT=20000)
+      PARAMETER (ONE=1.0D+00)
+      LOGICAL GOPARR,DSKWRK,MASWRK,OUTPUT,MP2ENG,UMP2GD,ZAPTGD
+      DOUBLE PRECISION EORB(*),CMO(NBF,*),XYEXC(*),BUF(*),DUM(*)
+C
+      COMMON /MP2XTR/ NBF,NACORE,NBSQ,NBTR,NSTR,MXSHL,NACT,NOCC
+     *,               NVIR,NOV,NOSQ,NVSQ,NOTR,NVTR,NCP1,NOP1
+     *,               NATR,ICHANL,OUTPUT,MP2ENG,IOST,NMOS,UMP2GD
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /ZAPTGR/ NOCD,NOCD1,NOCS,NOCSTR,IXYEXC,ICHIX,ITIA,IZVEC
+     *,               ZAPTGD
+C
+      INTEGER         D_OOOO,D_VOOO,D_VVOO,D_VOVO,D_VVVO,D_VVVV,
+     *                D_OOOOAB,D_OOOOBB,D_VOOOAB,D_VOOOBA,D_VOOOBB,
+     *                D_VVOOAB,D_VVOOBA,D_VVOOBB,D_VOVOAB,D_VOVOBB,
+     *                D_U,D_UB,D_E,D_EB
+      LOGICAL         NDOOOO,NDVOOO,NDVVOO,NDVOVO,NDVVVO,NDVVVV,NDCORE,
+     *                NDVVOOBA,NDVVOOAB,NDVVOOBB,NDVOVOAB,NDVOVOBB,
+     *                NDVOOOBA,NDVOOOAB,NDVOOOBB,NDOOOOAB,NDOOOOBB
+      COMMON /TRFDMS/ D_OOOO,D_VOOO,D_VVOO,D_VOVO,D_VVVO,D_VVVV,
+     *                D_OOOOAB,D_OOOOBB,D_VOOOAB,D_VOOOBA,D_VOOOBB,
+     *                D_VVOOAB,D_VVOOBA,D_VVOOBB,D_VOVOAB,D_VOVOBB,
+     *                D_U,D_UB,D_E,D_EB,
+     *                NDOOOO,NDVOOO,NDVVOO,NDVOVO,NDVVVO,NDVVVV,NDCORE,
+     *                NDVVOOBA,NDVVOOAB,NDVVOOBB,NDVOVOAB,NDVOVOBB,
+     *                NDVOOOBA,NDVOOOAB,NDVOOOBB,NDOOOOAB,NDOOOOBB
+C
+      IF (OUTPUT) THEN
+        WRITE(ICHANL,1)
+        CALL FLSHBF(ICHANL)
+      END IF
+C
+C  LOOP OVER LOCAL VOVO INTEGRALS
+C
+      CALL DDI_DISTRIB(D_VOVO,ME,IL_VOVO,IH_VOVO,JL_VOVO,JH_VOVO)
+      DO I = 1, NOCC
+        EI = EORB(I)
+        IF (I.GT.NOCD) EI = EI - XYEXC(I-NOCD)
+        DO J = 1, I
+          EJ = EORB(J)
+          IF (J.GT.NOCD) EJ = EJ - XYEXC(J-NOCD)
+          IJ = (I*I-I)/2 + J
+          IF (IJ.GE.JL_VOVO.AND.IJ.LE.JH_VOVO) THEN
+            CALL DDI_GET(D_VOVO,1,NVSQ,IJ,IJ,BUF)
+C
+C  FORM A BLOCK OF MP2 AMPLITUDES SPANNING ALL VIRTUAL
+C  MO INDICES
+C
+            KL = 0
+            DO K = 1, NVIR
+              DO L = 1, NVIR
+                KL = KL + 1
+                DENOM = ONE/
+     *          (EI+EJ-EORB(K+NOCC)-EORB(L+NOCC))
+                BUF(KL) = BUF(KL)*DENOM
+              END DO
+            END DO
+C
+C  BACK-TRANSFORM THE VIRTUAL INDICES
+C
+            CALL CACT(NBF,NVIR
+     *,               BUF,NVIR,CMO(1,NOP1),NBF
+     *,               BUF,NBF,DUM)
+C
+C  MAP AO-INDICES INTO SHELL-BLOCKS TO REDUCE NUMBER OF GETS
+C
+            ICOUNT = 0
+            DO ISHELL = 1, NSHELL
+              IBEG = KLOC(ISHELL)
+              IEND = IBEG + KMAX(ISHELL) - KMIN(ISHELL)
+              DO JSHELL = 1, NSHELL
+                JBEG = KLOC(JSHELL)
+                JEND = JBEG + KMAX(JSHELL) - KMIN(JSHELL)
+                DO IAO = IBEG, IEND
+                  DO JAO = JBEG, JEND
+                    IJAO = (IAO-1)*NBF + JAO
+                    ICOUNT = ICOUNT + 1
+                    DUM(ICOUNT) = BUF(IJAO)
+                  END DO
+                END DO
+              END DO
+            END DO
+            CALL DDI_PUT(D_VOVO,1,NBSQ,IJ,IJ,DUM)
+          END IF
+        END DO
+      END DO
+C
+C  SYNCHRONIZE NODES AFTER THIS OPERATION
+C
+      CALL DDI_SYNC(9004)
+      RETURN
+1     FORMAT(6X,'FORMING BACK-TRANSFORMED INTEGRALS')
+      END
+C*MODULE ZAPDDI   *DECK GETAMPSZ
+      SUBROUTINE GETAMPSZ(T2AO,BUFF,II,KK)
+C
+C -----------------------------------------------------------------
+C  GET A BLOCK OF HALF-TRANSFORMED ZAPT VOVO INTEGRALS
+C  WITH AT MOST TWO DDI_GETS; CREATE HALF-TRANSFORMED AMPLITUDES
+C  (BASED ON GETAMPS)
+C -----------------------------------------------------------------
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      PARAMETER (MXSH=5000, MXGTOT=20000, ONE=1.0D+00, TWO=2.0D+00)
+      LOGICAL OUTPUT,MP2ENG,UMP2GD,ZAPTGD
+      DOUBLE PRECISION T2AO(NOCC,NOCC,*),BUFF(*)
+C
+      COMMON /MP2XTR/ NBF,NACORE,NBSQ,NBTR,NSTR,MXSHL,NACT,NOCC
+     *,               NVIR,NOV,NOSQ,NVSQ,NOTR,NVTR,NCP1,NOP1
+     *,               NATR,ICHANL,OUTPUT,MP2ENG,IOST,NMOS,UMP2GD
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /ZAPTGR/ NOCD,NOCD1,NOCS,NOCSTR,IXYEXC,ICHIX,ITIA,IZVEC
+     *,               ZAPTGD
+C
+      INTEGER         D_OOOO,D_VOOO,D_VVOO,D_VOVO,D_VVVO,D_VVVV,
+     *                D_OOOOAB,D_OOOOBB,D_VOOOAB,D_VOOOBA,D_VOOOBB,
+     *                D_VVOOAB,D_VVOOBA,D_VVOOBB,D_VOVOAB,D_VOVOBB,
+     *                D_U,D_UB,D_E,D_EB
+      LOGICAL         NDOOOO,NDVOOO,NDVVOO,NDVOVO,NDVVVO,NDVVVV,NDCORE,
+     *                NDVVOOBA,NDVVOOAB,NDVVOOBB,NDVOVOAB,NDVOVOBB,
+     *                NDVOOOBA,NDVOOOAB,NDVOOOBB,NDOOOOAB,NDOOOOBB
+      COMMON /TRFDMS/ D_OOOO,D_VOOO,D_VVOO,D_VOVO,D_VVVO,D_VVVV,
+     *                D_OOOOAB,D_OOOOBB,D_VOOOAB,D_VOOOBA,D_VOOOBB,
+     *                D_VVOOAB,D_VVOOBA,D_VVOOBB,D_VOVOAB,D_VOVOBB,
+     *                D_U,D_UB,D_E,D_EB,
+     *                NDOOOO,NDVOOO,NDVVOO,NDVOVO,NDVVVO,NDVVVV,NDCORE,
+     *                NDVVOOBA,NDVVOOAB,NDVVOOBB,NDVOVOAB,NDVOVOBB,
+     *                NDVOOOBA,NDVOOOAB,NDVOOOBB,NDOOOOAB,NDOOOOBB
+C
+      LENI = KMAX(II) - KMIN(II) + 1
+      LENK = KMAX(KK) - KMIN(KK) + 1
+      LENIK = LENI*LENK
+C
+C  FIND BEGIN,END SHELL BLOCK-IK
+C
+      IKB = NBF*( KLOC(II) - 1 ) + LENI*( KLOC(KK) - 1 ) + 1
+      IKE = IKB + LENIK - 1
+      CALL DDI_GET(D_VOVO, IKB, IKE, 1, NOTR, BUFF)
+C
+C  FORM PART OF AMPLITUDES
+C
+      NL = 0
+      DO N = 1, LENI
+        DO L = 1, LENK
+          NL = NL + 1
+          NLIJ = NL
+          DO I = 1, NOCC
+            IF(I.LE.NOCD) THEN
+              C = TWO
+            ELSE
+              C = ONE
+            END IF
+            DO J = 1, I
+              IF(J.LE.NOCD) THEN
+                CPQ = TWO
+              ELSE
+                CPQ = ONE
+              END IF
+              T2AO(I,J,NL) =  C*CPQ*BUFF(NLIJ)
+              T2AO(J,I,NL) = -C*BUFF(NLIJ)
+              NLIJ = NLIJ + LENIK
+            END DO
+          END DO
+        END DO
+      END DO
+C
+C  FIND BEGIN,END SHELL BLOCK-KI
+C
+      KIB = NBF*( KLOC(KK) - 1 ) + LENK*( KLOC(II) - 1 ) + 1
+      KIE = KIB + LENIK - 1
+      CALL DDI_GET(D_VOVO, KIB, KIE, 1, NOTR, BUFF)
+C
+C  FINISH AMPLITUDES
+C
+      NL = 0
+      DO N = 1, LENI
+        DO L = 1, LENK
+          NL = NL + 1
+          NLIJ = (L-1)*LENI + N
+          DO I = 1, NOCC
+            IF(I.LE.NOCD) THEN
+              C = TWO
+            ELSE
+              C = ONE
+            END IF
+            DO J = 1, I
+              IF(J.LE.NOCD) THEN
+                CPQ = TWO
+              ELSE
+                CPQ = ONE
+              END IF
+              IF (I.NE.J) T2AO(I,J,NL) = T2AO(I,J,NL) - C*BUFF(NLIJ)
+              T2AO(J,I,NL) = T2AO(J,I,NL) + C*CPQ*BUFF(NLIJ)
+              NLIJ = NLIJ + LENIK
+            END DO
+          END DO
+        END DO
+      END DO
+      RETURN
+      END
+C
+C*MODULE MP2DDI   *DECK ZSUMAO
+      SUBROUTINE ZSUMAO(T2AO,TRAN,LAG,PAO,II,KK)
+C
+C -----------------------------------------------------------------
+C  CONTRACT QUARTER-TRANSFORMED INTEGRALS WITH
+C  HALF-TRANSFORMED AMPLITUDES AND BACK-TRANSFORMED P(2)
+C -----------------------------------------------------------------
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      PARAMETER (MXSH=5000, MXGTOT=20000)
+      PARAMETER (HALF=0.5D+00, PT25=0.25D+00, ONE=1.0D+00, TWO=2.0D+00)
+      LOGICAL OUTPUT,MP2ENG,UMP2GD,ZAPTGD
+      DOUBLE PRECISION T2AO(NOCC,NOCC,*),TRAN(NBF,NOCC,MXSHL,MXSHL,2)
+     *,      LAG(NBF,NOCC),PAO(NBF,NBF)
+C
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /MP2XTR/ NBF,NACORE,NBSQ,NBTR,NSTR,MXSHL,NACT,NOCC
+     *,               NVIR,NOV,NOSQ,NVSQ,NOTR,NVTR,NCP1,NOP1
+     *,               NATR,ICHANL,OUTPUT,MP2ENG,IOST,NMOS,UMP2GD
+      COMMON /ZAPTGR/ NOCD,NOCD1,NOCS,NOCSTR,IXYEXC,ICHIX,ITIA,IZVEC
+     *,               ZAPTGD
+C
+      IBEG = KLOC(II)
+      IEND = IBEG + KMAX(II) - KMIN(II)
+      KBEG = KLOC(KK)
+      KEND = KBEG + KMAX(KK) - KMIN(KK)
+      IX = 0
+      KL = 0
+      DO I = IBEG, IEND
+        IX = IX + 1
+        KX = 0
+        DO K = KBEG, KEND
+          KX = KX + 1
+          KL = KL + 1
+          IF (I.GE.K) THEN
+            CALL DGEMM('N','N',NBF,NACT,NACT
+     *,                ONE,TRAN(1,NCP1,IX,KX,1),NBF
+     *,                T2AO(NCP1,NCP1,KL),NOCC
+     *,                ONE,LAG(1,NCP1),NBF)
+            DO LO = 1, NOCD
+              DO J = 1, NBF
+                LAG(K,LO) =LAG(K,LO) +TRAN(J,LO,IX,KX,1)*PAO(I,J)*TWO
+                LAG(I,LO) =LAG(I,LO) -TRAN(J,LO,IX,KX,1)*PAO(K,J)*HALF
+                LAG(J,LO) =LAG(J,LO) -TRAN(J,LO,IX,KX,1)*PAO(I,K)*HALF
+              END DO
+            END DO
+            DO LO = NOCD1, NOCC
+              DO J = 1, NBF
+                LAG(K,LO) =LAG(K,LO) +TRAN(J,LO,IX,KX,1)*PAO(I,J)
+                LAG(I,LO) =LAG(I,LO) -TRAN(J,LO,IX,KX,1)*PAO(K,J)*PT25
+                LAG(J,LO) =LAG(J,LO) -TRAN(J,LO,IX,KX,1)*PAO(I,K)*PT25
+              END DO
+            END DO
+            IF (I.NE.K) THEN
+              CALL DGEMM('N','T',NBF,NACT,NACT
+     *,                  ONE,TRAN(1,NCP1,KX,IX,2),NBF
+     *,                  T2AO(NCP1,NCP1,KL),NOCC
+     *,                  ONE,LAG(1,NCP1),NBF)
+              DO LO = 1, NOCD
+                DO J = 1, NBF
+                  LAG(I,LO)=LAG(I,LO)+TRAN(J,LO,KX,IX,2)*PAO(K,J)*TWO
+                  LAG(K,LO)=LAG(K,LO)-TRAN(J,LO,KX,IX,2)*PAO(I,J)*HALF
+                  LAG(J,LO)=LAG(J,LO)-TRAN(J,LO,KX,IX,2)*PAO(K,I)*HALF
+                END DO
+              END DO
+              DO LO = NOCD1, NOCC
+                DO J = 1, NBF
+                  LAG(I,LO)=LAG(I,LO)+TRAN(J,LO,KX,IX,2)*PAO(K,J)
+                  LAG(K,LO)=LAG(K,LO)-TRAN(J,LO,KX,IX,2)*PAO(I,J)*PT25
+                  LAG(J,LO)=LAG(J,LO)-TRAN(J,LO,KX,IX,2)*PAO(K,I)*PT25
+                END DO
+              END DO
+            END IF
+          END IF
+        END DO
+      END DO
+      RETURN
+      END
+C*MODULE ZAPDDI   *DECK ZMKVOVO
+      SUBROUTINE ZMKVOVO(TMP1,TMP2,CM1,EORB,CMO,XYEXC)
+C
+C -----------------------------------------------------------------
+C  REVERSE THE PROCESS BY WHICH BACK-TRANSFORMED AMPLITUDES WERE
+C  CONSTRUCTED FROM VOVO INTEGRALS IN BTINTSZ (BASED ON MKVOVO)
+C -----------------------------------------------------------------
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      PARAMETER (MXSH=5000, MXGTOT=20000)
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00)
+      LOGICAL GOPARR,DSKWRK,MASWRK,OUTPUT,MP2ENG,UMP2GD,ZAPTGD
+      INTEGER A,B,AV,BV,AB
+      DOUBLE PRECISION TMP1(*),TMP2(*),CMO(NBF,*),CM1(NBF,*),EORB(*)
+     *,               XYEXC(*)
+C
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /MP2XTR/ NBF,NACORE,NBSQ,NBTR,NSTR,MXSHL,NACT,NOCC
+     *,               NVIR,NOV,NOSQ,NVSQ,NOTR,NVTR,NCP1,NOP1
+     *,               NATR,ICHANL,OUTPUT,MP2ENG,IOST,NMOS,UMP2GD
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /ZAPTGR/ NOCD,NOCD1,NOCS,NOCSTR,IXYEXC,ICHIX,ITIA,IZVEC
+     *,               ZAPTGD
+C
+      INTEGER         D_OOOO,D_VOOO,D_VVOO,D_VOVO,D_VVVO,D_VVVV,
+     *                D_OOOOAB,D_OOOOBB,D_VOOOAB,D_VOOOBA,D_VOOOBB,
+     *                D_VVOOAB,D_VVOOBA,D_VVOOBB,D_VOVOAB,D_VOVOBB,
+     *                D_U,D_UB,D_E,D_EB
+      LOGICAL         NDOOOO,NDVOOO,NDVVOO,NDVOVO,NDVVVO,NDVVVV,NDCORE,
+     *                NDVVOOBA,NDVVOOAB,NDVVOOBB,NDVOVOAB,NDVOVOBB,
+     *                NDVOOOBA,NDVOOOAB,NDVOOOBB,NDOOOOAB,NDOOOOBB
+      COMMON /TRFDMS/ D_OOOO,D_VOOO,D_VVOO,D_VOVO,D_VVVO,D_VVVV,
+     *                D_OOOOAB,D_OOOOBB,D_VOOOAB,D_VOOOBA,D_VOOOBB,
+     *                D_VVOOAB,D_VVOOBA,D_VVOOBB,D_VOVOAB,D_VOVOBB,
+     *                D_U,D_UB,D_E,D_EB,
+     *                NDOOOO,NDVOOO,NDVVOO,NDVOVO,NDVVVO,NDVVVV,NDCORE,
+     *                NDVVOOBA,NDVVOOAB,NDVVOOBB,NDVOVOAB,NDVOVOBB,
+     *                NDVOOOBA,NDVOOOAB,NDVOOOBB,NDOOOOAB,NDOOOOBB
+C
+      IF (OUTPUT) THEN
+        WRITE(ICHANL,1)
+        CALL FLSHBF(ICHANL)
+      END IF
+C
+C  FORM INVERSE MO COEFFICIENT MATRIX:
+C
+C  1) GET OVERLAP INTEGRALS
+C
+      CALL DAREAD(IDAF,IODA,TMP1,NBTR,12,0)
+      CALL CPYTSQ(TMP1,TMP2,NBF,1)
+C
+C  2) COMPUTE C(-1) = C(T)*S
+C
+      CALL DGEMM('T','N',NVIR,NBF,NBF
+     *,          ONE,CMO(1,NOP1),NBF
+     *,          TMP2,NBF
+     *,          ZERO,CM1,NVIR)
+C
+      CALL DDI_DISTRIB(D_VOVO,ME,IL_VOVO,IH_VOVO,JL_VOVO,JH_VOVO)
+      IJ = 0
+      DO I = 1, NOCC
+        EI = EORB(I)
+        IF (I.GT.NOCD) EI = EI - XYEXC(I-NOCD)
+        DO J = 1, I
+          EJ = EORB(J)
+          IF (J.GT.NOCD) EJ = EJ - XYEXC(J-NOCD)
+          IJ = IJ + 1
+          IF (IJ.GE.JL_VOVO.AND.IJ.LE.JH_VOVO) THEN
+            CALL DDI_GET(D_VOVO,1,NBSQ,IJ,IJ,TMP1)
+C
+C  MAP SHELL-BLOCKS BACK TO REGULAR AO-ORDER
+C
+            ICOUNT = 0
+            DO ISHELL = 1, NSHELL
+              IBEG = KLOC(ISHELL)
+              IEND = IBEG + KMAX(ISHELL) - KMIN(ISHELL)
+              DO JSHELL = 1, NSHELL
+                JBEG = KLOC(JSHELL)
+                JEND = JBEG + KMAX(JSHELL) - KMIN(JSHELL)
+                DO IAO = IBEG, IEND
+                  DO JAO = JBEG, JEND
+                    IJAO = (IAO-1)*NBF + JAO
+                    ICOUNT = ICOUNT + 1
+                    TMP2(IJAO) = TMP1(ICOUNT)
+                  END DO
+                END DO
+              END DO
+            END DO
+C
+C  TRANSFORM AMPLITUDES TO MO BASIS
+C
+            CALL CACT(NVIR,NBF
+     *,               TMP2,NBF,CM1,NVIR
+     *,               TMP2,NVIR,TMP1)
+C
+C  CONVERT AMPLITUDES BACK TO REGULAR VOVO-CLASS INTEGRALS
+C
+            AB = 0
+            DO A = 1, NVIR
+              AV = A + NOCC
+              DO B = 1, NVIR
+                BV = B + NOCC
+                AB = AB + 1
+                DENOM = EI+EJ-EORB(AV)-EORB(BV)
+                TMP2(AB) = TMP2(AB)*DENOM
+              END DO
+            END DO
+            CALL DDI_PUT(D_VOVO,1,NVSQ,IJ,IJ,TMP2)
+          END IF
+        END DO
+      END DO
+      RETURN
+1     FORMAT(6X,'RESTORING (VO|VO) INTEGRAL CLASS')
+      END
+C*MODULE ZAPDDI   *DECK ZSYMRL
+      SUBROUTINE ZSYMRL(MOLABS,LAG,REDLAG,LENRL,LOFF1,LOFF2,NOCD,NOCD1
+     *,                 NOCC,NOP1,NMOS)
+C
+C -----------------------------------------------------------------
+C  FORM REDUCED LAGRANGIAN
+C -----------------------------------------------------------------
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      DOUBLE PRECISION LAG(*),REDLAG(*)
+      INTEGER MOLABS(*),A
+C
+      IA = 0
+      LENRL = 0
+      DO A = NOCD1, NOCC
+        DO I = 1,NOCD
+          IA = IA + 1
+          IF (MOLABS(I).EQ.MOLABS(A)) THEN
+            LENRL = LENRL + 1
+            REDLAG(LENRL) = LAG(IA)
+          END IF
+        END DO
+      END DO
+      LOFF1 = LENRL
+      DO I = 1, NOCD
+        DO A = NOP1, NMOS
+          IA = IA + 1
+          IF (MOLABS(I).EQ.MOLABS(A)) THEN
+            LENRL = LENRL + 1
+            REDLAG(LENRL) = LAG(IA)
+          END IF
+        END DO
+      END DO
+      LOFF2 = LENRL
+      DO I = NOCD1, NOCC
+        DO A = NOP1, NMOS
+          IA = IA + 1
+          IF (MOLABS(I).EQ.MOLABS(A)) THEN
+            LENRL = LENRL + 1
+            REDLAG(LENRL) = LAG(IA)
+          END IF
+        END DO
+      END DO
+      RETURN
+      END
+C*MODULE ZAPDDI   *DECK ZETAEPS
+      SUBROUTINE ZETAEPS(BUF1,BUF2,BUF3,BUF4,BUF5,BUF6,EPS,H,CMO)
+C
+C -----------------------------------------------------------------
+C  MAKE ZETA AND EPSILON TERMS FOR ZAPT ORBITAL HESSIAN
+C -----------------------------------------------------------------
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      PARAMETER (ONE=1.0D+00, TWO=2.0D+00, HALF=0.5D+00, ZERO=0.0D+00)
+      LOGICAL GOPARR,DSKWRK,MASWRK,OUTPUT,MP2ENG,UMP2GD,ZAPTGD
+      INTEGER A,B,AB,BA,AA
+      DOUBLE PRECISION BUF1(NVIR,*),BUF2(*),CMO(NBF,*)
+     *,               BUF3(*),BUF4(*),BUF5(*),BUF6(*),EPS(*),H(*)
+C
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /MP2XTR/ NBF,NACORE,NBSQ,NBTR,NSTR,MXSHL,NACT,NOCC
+     *,               NVIR,NOV,NOSQ,NVSQ,NOTR,NVTR,NCP1,NOP1
+     *,               NATR,ICHANL,OUTPUT,MP2ENG,IOST,NMOS,UMP2GD
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /ZAPTGR/ NOCD,NOCD1,NOCS,NOCSTR,IXYEXC,ICHIX,ITIA,IZVEC
+     *,               ZAPTGD
+C
+      INTEGER         D_OOOO,D_VOOO,D_VVOO,D_VOVO,D_VVVO,D_VVVV,
+     *                D_OOOOAB,D_OOOOBB,D_VOOOAB,D_VOOOBA,D_VOOOBB,
+     *                D_VVOOAB,D_VVOOBA,D_VVOOBB,D_VOVOAB,D_VOVOBB,
+     *                D_U,D_UB,D_E,D_EB
+      LOGICAL         NDOOOO,NDVOOO,NDVVOO,NDVOVO,NDVVVO,NDVVVV,NDCORE,
+     *                NDVVOOBA,NDVVOOAB,NDVVOOBB,NDVOVOAB,NDVOVOBB,
+     *                NDVOOOBA,NDVOOOAB,NDVOOOBB,NDOOOOAB,NDOOOOBB
+      COMMON /TRFDMS/ D_OOOO,D_VOOO,D_VVOO,D_VOVO,D_VVVO,D_VVVV,
+     *                D_OOOOAB,D_OOOOBB,D_VOOOAB,D_VOOOBA,D_VOOOBB,
+     *                D_VVOOAB,D_VVOOBA,D_VVOOBB,D_VOVOAB,D_VOVOBB,
+     *                D_U,D_UB,D_E,D_EB,
+     *                NDOOOO,NDVOOO,NDVVOO,NDVOVO,NDVVVO,NDVVVV,NDCORE,
+     *                NDVVOOBA,NDVVOOAB,NDVVOOBB,NDVOVOAB,NDVOVOBB,
+     *                NDVOOOBA,NDVOOOAB,NDVOOOBB,NDOOOOAB,NDOOOOBB
+C
+C  CREATE CORE HAMILTONIAN TERMS IN MO BASIS ON PROCESSOR 0
+C
+      CALL DAREAD(IDAF,IODA,BUF2,NBTR,11,0)
+      CALL TFTRI(H,BUF2,CMO,BUF3,NBF,NBF,NBF)
+C
+      CALL DDI_DISTRIB(D_VOVO,ME,IL_VOVO,IH_VOVO,JL_VOVO,JH_VOVO)
+      CALL DDI_DISTRIB(D_VOOO,ME,IL_VOOO,IH_VOOO,JL_VOOO,JH_VOOO)
+C
+C  MAKE ZETA AND EPSILON TERMS; TWO AB PARTS FIRST
+C
+      IF (ME.EQ.0) THEN
+        AB = 0
+        DO B = 1, NVIR
+          BA = (B+NOCC-1)*(B+NOCC)/2 + NOCC
+          DO A = 1, B
+            AB = AB + 1
+            BA = BA + 1
+            BUF3(AB) = H(BA)
+            BUF4(AB) = HALF*H(BA)
+          END DO
+        END DO
+      ELSE
+        CALL DCOPY(NVTR,ZERO,0,BUF3,1)
+        CALL DCOPY(NVTR,ZERO,0,BUF4,1)
+      END IF
+      DO K = 1, NOCC
+        IK = (K*K+K)/2
+        IF (IK.GE.JL_VOVO.AND.IK.LE.JH_VOVO) THEN
+          IF (K.LE.NOCD) THEN
+            COEFF = ONE
+          ELSE
+            COEFF = HALF
+          END IF
+          CALL DDI_GET(D_VOVO,1,NVSQ,IK,IK,BUF1)
+          CALL DDI_GET(D_VVOO,1,NVTR,IK,IK,BUF2)
+          AB = 0
+          DO B = 1, NVIR
+            BA = (B+NOCC-1)*(B+NOCC)/2 + NOCC
+            DO A = 1, B
+              AB = AB + 1
+              BA = BA + 1
+              X  = BUF1(A,B)
+              Z  = BUF2(AB)
+              BUF3(AB) = BUF3(AB) + TWO*COEFF*Z - COEFF*X
+              BUF4(AB) = BUF4(AB) + COEFF*Z - HALF*X
+            END DO
+          END DO
+        END IF
+      END DO
+C
+C  CREATE DD,SD,SS TERMS THAT CONTRIBUTE TO EPS AND ZETA
+C
+      CALL DCOPY(NOTR,ZERO,0,BUF5,1)
+      IJ = 0
+      IF (ME.EQ.0) THEN
+        DO I = 1, NOCD
+          DO J = 1, I
+            IJ = IJ + 1
+            BUF5(IJ) = HALF*H(IJ)
+          END DO
+        END DO
+        DO I = NOCD1, NOCC
+          DO J = NOCD1, I
+            IJ = (I*I-I)/2 + J
+            BUF5(IJ) = HALF*H(IJ)
+          END DO
+        END DO
+      END IF
+C
+C  NOW INTEGRAL PARTS OF DELTA TERMS
+C
+      DO K = 1, NOCC
+        IK = (K*K+K)/2
+        IF (IK.GE.JL_VOVO.AND.IK.LE.JH_VOVO) THEN
+          CALL DDI_GET(D_OOOO,1,NOTR,IK,IK,BUF2)
+          IF (K.LE.NOCD) THEN
+            COEFF = ONE
+          ELSE
+            COEFF = HALF
+          END IF
+          IJ = 0
+          DO I = 1, NOCD
+            DO J = 1, I
+              IJ = IJ + 1
+              BUF5(IJ) = BUF5(IJ) + COEFF*BUF2(IJ)
+            END DO
+          END DO
+          DO I = NOCD1, NOCC
+            DO J = NOCD1, I
+              IJ = (I*I-I)/2 + J
+              BUF5(IJ) = BUF5(IJ) + COEFF*BUF2(IJ)
+            END DO
+          END DO
+        END IF
+        DO I = 1, NOCD
+          IF (K.GT.I) THEN
+            IK = (K*K-K)/2 + I
+          ELSE
+            IK = (I*I-I)/2 + K
+          END IF
+          IF (IK.GE.JL_VOVO.AND.IK.LE.JH_VOVO) THEN
+            CALL DDI_GET(D_OOOO,1,NOTR,IK,IK,BUF2)
+            IF (K.LE.NOCD) THEN
+              JK = (K*K-K)/2
+              DO J = 1, K
+                JK = JK + 1
+                IF (J.GT.I) THEN
+                  IJ = (J*J-J)/2 + I
+                ELSE
+                  IJ = (I*I-I)/2 + J
+                END IF
+                BUF5(JK) = BUF5(JK) - HALF*BUF2(IJ)
+              END DO
+            ELSE
+              DO J = NOCD1, K
+                JK = (K*K-K)/2 + J
+                IJ = (J*J-J)/2 + I
+                BUF5(JK) = BUF5(JK) - HALF*BUF2(IJ)
+              END DO
+            END IF
+          END IF
+        END DO
+      END DO
+      IJ = 0
+      DO I = 1, NOCC
+        DO J = 1, I
+          IJ = IJ + 1
+          IF (J.LE.NOCD) THEN
+            EPS(IJ)  = TWO*BUF5(IJ)
+          ELSE
+            EPS(IJ)  = BUF5(IJ)
+            BUF5(IJ) = TWO*BUF5(IJ)
+          END IF
+        END DO
+      END DO
+      DO K = NOCD1, NOCC
+        DO I = 1, NOCC
+          IF (K.GT.I) THEN
+            IK = (K*K-K)/2 + I
+          ELSE
+            IK = (I*I-I)/2 + K
+          END IF
+          IJ = (I*I-I)/2
+          IF (IK.GE.JL_VOVO.AND.IK.LE.JH_VOVO) THEN
+            CALL DDI_GET(D_OOOO,1,NOTR,IK,IK,BUF2)
+            DO J = 1, I
+              IJ = IJ + 1
+              IF (J.GT.K) THEN
+                JK = (J*J-J)/2 + K
+              ELSE
+                JK = (K*K-K)/2 + J
+              END IF
+              EPS(IJ) = EPS(IJ) - HALF*BUF2(JK)
+              BUF5(IJ) = BUF5(IJ) - HALF*BUF2(JK)
+            END DO
+          END IF
+        END DO
+      END DO
+C
+C  LAST TWO ZETA TERMS (VIRTUAL-DOCC/SOCC)
+C
+      IJ = 0
+      DO I = 1, NOCC
+        IJ = (I-1)*NVIR
+        DO A = 1, NVIR
+          AA = A + NOCC
+          IA = (AA*AA-AA)/2 + I
+          IF (ME.EQ.0) THEN
+            BUF6(IJ+A) = H(IA)
+          ELSE
+            BUF6(IJ+A) = ZERO
+          END IF
+        END DO
+C
+        DO K = 1, NOCC
+          IF (K.LE.NOCD) THEN
+            COEFF = TWO
+          ELSE
+            COEFF = ONE
+          END IF
+          IK = (K*K+K)/2
+          IKK = (IK-1)*NOCC + I
+          IF (IKK.GE.JL_VOOO.AND.IKK.LE.JH_VOOO) THEN
+            CALL DDI_GET(D_VOOO,1,NVIR,IKK,IKK,BUF2)
+            DO A = 1, NVIR
+              BUF6(IJ+A) = BUF6(IJ+A) + COEFF*BUF2(A)
+            END DO
+          END IF
+        END DO
+        DO K = 1, NOCD
+          IF (I.LT.K) THEN
+            IK = (K*K-K)/2 + I
+          ELSE
+            IK = (I*I-I)/2 + K
+          END IF
+          IKK = (IK-1)*NOCC + K
+          IF (IKK.GE.JL_VOOO.AND.IKK.LE.JH_VOOO) THEN
+            CALL DDI_GET(D_VOOO,1,NVIR,IKK,IKK,BUF2)
+            DO A = 1, NVIR
+              BUF6(IJ+A) = BUF6(IJ+A) - BUF2(A)
+            END DO
+          END IF
+        END DO
+        IF (I.LE.NOCD) THEN
+          DO A = 1, NVIR
+            BUF6(IJ+A) = HALF*BUF6(IJ+A)
+          END DO
+        END IF
+        DO K = NOCD1, NOCC
+          IF (I.LT.K) THEN
+            IK = (K*K-K)/2 + I
+          ELSE
+            IK = (I*I-I)/2 + K
+          END IF
+          IKK = (IK-1)*NOCC + K
+          IF (IKK.GE.JL_VOOO.AND.IKK.LE.JH_VOOO) THEN
+            CALL DDI_GET(D_VOOO,1,NVIR,IKK,IKK,BUF2)
+            DO A = 1, NVIR
+              X = HALF*BUF2(A)
+              BUF6(IJ+A) = BUF6(IJ+A) - X
+            END DO
+          END IF
+        END DO
+      END DO
+      CALL DDI_GSUMF(1005,BUF3,NVTR)
+      CALL DDI_GSUMF(1006,BUF4,NVTR)
+      CALL DDI_GSUMF(1007,BUF5,NOTR)
+      CALL DDI_GSUMF(1008,BUF6,NOCC*NVIR)
+      CALL DDI_GSUMF(1009,EPS,NOTR)
+      RETURN
+      END
+C*MODULE ZAPDDI   *DECK ZHTPROD
+      SUBROUTINE ZHTPROD(V1,V2,BUF,BUF1,BUF2,BUF3,BUF4,BUF5,BUF6,EPS
+     *,                  NOSYM,NVCLASS,LVCLASS,MXIRR,NDCLASS,LDCLASS
+     *,                  LOFF1,LOFF2,LDIM)
+C
+C -----------------------------------------------------------------
+C  PARALLEL ORBITAL-HESSIAN*TRIAL-VECTOR PRODUCT FOR ZAPT
+C -----------------------------------------------------------------
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      PARAMETER (ONE=1.0D+00, TWO=2.0D+00, FOUR=4.0D+00, HALF=0.5D+00)
+      PARAMETER (ZERO=0.0D+00)
+      LOGICAL GOPARR,DSKWRK,MASWRK,OUTPUT,MP2ENG,UMP2GD,ZAPTGD
+      INTEGER A,B,AB,NOSYM(*),NVCLASS(*),LVCLASS(MXIRR,*)
+      INTEGER NDCLASS(*),LDCLASS(MXIRR,*)
+      DOUBLE PRECISION V1(*),V2(*),BUF(LDIM,*),BUF1(NVIR,*),BUF2(*)
+     *,               BUF3(NVTR),BUF4(NVTR),BUF5(NOTR),BUF6(NVIR,NOCC)
+     *,               EPS(NOTR)
+C
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /MP2XTR/ NBF,NACORE,NBSQ,NBTR,NSTR,MXSHL,NACT,NOCC
+     *,               NVIR,NOV,NOSQ,NVSQ,NOTR,NVTR,NCP1,NOP1
+     *,               NATR,ICHANL,OUTPUT,MP2ENG,IOST,NMOS,UMP2GD
+      COMMON /ZAPTGR/ NOCD,NOCD1,NOCS,NOCSTR,IXYEXC,ICHIX,ITIA,IZVEC
+     *,               ZAPTGD
+C
+      INTEGER         D_OOOO,D_VOOO,D_VVOO,D_VOVO,D_VVVO,D_VVVV,
+     *                D_OOOOAB,D_OOOOBB,D_VOOOAB,D_VOOOBA,D_VOOOBB,
+     *                D_VVOOAB,D_VVOOBA,D_VVOOBB,D_VOVOAB,D_VOVOBB,
+     *                D_U,D_UB,D_E,D_EB
+      LOGICAL         NDOOOO,NDVOOO,NDVVOO,NDVOVO,NDVVVO,NDVVVV,NDCORE,
+     *                NDVVOOBA,NDVVOOAB,NDVVOOBB,NDVOVOAB,NDVOVOBB,
+     *                NDVOOOBA,NDVOOOAB,NDVOOOBB,NDOOOOAB,NDOOOOBB
+      COMMON /TRFDMS/ D_OOOO,D_VOOO,D_VVOO,D_VOVO,D_VVVO,D_VVVV,
+     *                D_OOOOAB,D_OOOOBB,D_VOOOAB,D_VOOOBA,D_VOOOBB,
+     *                D_VVOOAB,D_VVOOBA,D_VVOOBB,D_VOVOAB,D_VOVOBB,
+     *                D_U,D_UB,D_E,D_EB,
+     *                NDOOOO,NDVOOO,NDVVOO,NDVOVO,NDVVVO,NDVVVV,NDCORE,
+     *                NDVVOOBA,NDVVOOAB,NDVVOOBB,NDVOVOAB,NDVOVOBB,
+     *                NDVOOOBA,NDVOOOAB,NDVOOOBB,NDOOOOAB,NDOOOOBB
+C
+      CALL DDI_DISTRIB(D_VOVO,ME,IL_VOVO,IH_VOVO,JL_VOVO,JH_VOVO)
+      CALL DDI_DISTRIB(D_VOOO,ME,IL_VOOO,IH_VOOO,JL_VOOO,JH_VOOO)
+C
+C  ORBITAL HESSIAN - AIBJ BLOCK
+C
+      IJ  = 0
+      DO I = 1, NOCD
+        ISYM = NOSYM(I)                  !  IRREP IDENTIFIER
+        NVI = NVCLASS(ISYM)              !  NO. VIRT. IN CLASS
+        IOFF = 1
+        DO IOCC = 1, I-1                      !
+          IOCLASS = NOSYM(IOCC)               ! OFF-SET OF
+          IOFF = IOFF + NVCLASS(IOCLASS)      !  VIRT. BLOCK
+        END DO                                !
+        DO J = 1, I
+          JSYM = NOSYM(J)
+          NVJ = NVCLASS(JSYM)
+          JOFF = 1
+          DO JOCC = 1, J-1
+            JOCLASS = NOSYM(JOCC)
+            JOFF = JOFF + NVCLASS(JOCLASS)
+          END DO
+          IJ = IJ + 1
+C
+C  GET VOVO AND VVOO INTEGRALS
+C
+          IF (IJ.GE.JL_VOVO.AND.IJ.LE.JH_VOVO) THEN
+            CALL DDI_GET(D_VOVO,1,NVSQ,IJ,IJ,BUF1)
+            CALL DDI_GET(D_VVOO,1,NVTR,IJ,IJ,BUF2)
+C
+C  GENERATE BLOCK OF REDUCED ORBITAL-HESSIAN
+C
+            DELTAAB = EPS(IJ)
+            DO IVCLASS = 1, NVI              !  LOOP OVER
+              A = LVCLASS(ISYM,IVCLASS)       !  VIRTUAL
+              DO JVCLASS = 1, NVJ            !  INDICES OF
+                B = LVCLASS(JSYM,JVCLASS)     !  EACH IRREP
+                IF (A.GE.B) THEN
+                  AB = (A*A-A)/2 + B
+                ELSE
+                  AB = (B*B-B)/2 + A
+                END IF
+                X = BUF1(A,B)
+                Y = BUF1(B,A)
+                Z = BUF2(AB)
+                IF (A.EQ.B) Z = Z + DELTAAB         !  DELTA AB TERM
+                IF (I.EQ.J) THEN
+                  IF (A.EQ.B) THEN
+                    Z = Z - DELTAAB
+                  ELSE
+                    Z = Z - BUF3(AB)                !  DELTA IJ TERM
+                  END IF
+                END IF
+                BUF(JVCLASS,IVCLASS) = FOUR*X-Y-Z
+              END DO
+            END DO
+C
+C  THE HESSIAN-VECTOR PRODUCT
+C
+            CALL DGEMM('T','N', NVI,1,NVJ
+     *,                ONE,BUF,LDIM
+     *,                V1(JOFF+LOFF1),NVIR
+     *,                ONE,V2(IOFF+LOFF1),NVIR)
+            IF (I.NE.J)
+     *      CALL DGEMM('N','N', NVJ,1,NVI
+     *,                ONE,BUF,LDIM
+     *,                V1(IOFF+LOFF1),NVIR
+     *,                ONE,V2(JOFF+LOFF1),NVIR)
+          END IF
+        END DO
+      END DO
+C
+C  ORBITAL HESSIAN - AXBY BLOCK
+C
+      DO I = NOCD1, NOCC
+        ISYM = NOSYM(I)                  !  IRREP IDENTIFIER
+        NVI = NVCLASS(ISYM)              !  NO. VIRT. IN CLASS
+        IOFF = 1
+        DO IOCC = NOCD1, I-1                  !
+          IOCLASS = NOSYM(IOCC)               ! OFF-SET OF
+          IOFF = IOFF + NVCLASS(IOCLASS)      !  VIRT. BLOCK
+        END DO                                !
+        DO J = NOCD1, I
+          JSYM = NOSYM(J)
+          NVJ = NVCLASS(JSYM)
+          JOFF = 1
+          DO JOCC = NOCD1, J-1
+            JOCLASS = NOSYM(JOCC)
+            JOFF = JOFF + NVCLASS(JOCLASS)
+          END DO
+          IJ = (I*I-I)/2 + J
+C
+C  GET VOVO AND VVOO INTEGRALS
+C
+          IF (IJ.GE.JL_VOVO.AND.IJ.LE.JH_VOVO) THEN
+            CALL DDI_GET(D_VOVO,1,NVSQ,IJ,IJ,BUF1)
+            CALL DDI_GET(D_VVOO,1,NVTR,IJ,IJ,BUF2)
+C
+C  GENERATE BLOCK OF REDUCED ORBITAL-HESSIAN
+C
+            DELTAAB = EPS(IJ)
+            DO IVCLASS = 1, NVI              !  LOOP OVER
+              A = LVCLASS(ISYM,IVCLASS)       !  VIRTUAL
+              DO JVCLASS = 1, NVJ            !  INDICES OF
+                B = LVCLASS(JSYM,JVCLASS)     !  EACH IRREP
+                IF (A.GE.B) THEN
+                  AB = (A*A-A)/2 + B
+                ELSE
+                  AB = (B*B-B)/2 + A
+                END IF
+                X = BUF1(A,B)
+                Y = BUF1(B,A)
+                Z = BUF2(AB)
+                IF (A.EQ.B) X = X - DELTAAB         !  DELTA AB TERM
+                IF (I.EQ.J) THEN
+                  IF (A.EQ.B) THEN
+                    X = X + DELTAAB
+                  ELSE
+                    X = X + BUF4(AB)                  !  DELTA XY TERM
+                  END IF
+                END IF
+                BUF(JVCLASS,IVCLASS) = X - HALF*Y - HALF*Z
+              END DO
+            END DO
+C
+C  THE HESSIAN-VECTOR PRODUCT
+C
+            CALL DGEMM('T','N', NVI,1,NVJ
+     *,                ONE,BUF,LDIM
+     *,                V1(JOFF+LOFF2),NVIR
+     *,                ONE,V2(IOFF+LOFF2),NVIR)
+            IF (I.NE.J)
+     *      CALL DGEMM('N','N', NVJ,1,NVI
+     *,                ONE,BUF,LDIM
+     *,                V1(IOFF+LOFF2),NVIR
+     *,                ONE,V2(JOFF+LOFF2),NVIR)
+          END IF
+        END DO
+      END DO
+C
+C  ORBITAL HESSIAN - AXBJ AND AIBY BLOCKS
+C
+      DO I = NOCD1, NOCC
+        ISYM = NOSYM(I)                  !  IRREP IDENTIFIER
+        NVI = NVCLASS(ISYM)              !  NO. VIRT. IN CLASS
+        IOFF = 1
+        DO IOCC = NOCD1, I-1                  !
+          IOCLASS = NOSYM(IOCC)               ! OFF-SET OF
+          IOFF = IOFF + NVCLASS(IOCLASS)      !  VIRT. BLOCK
+        END DO                                !
+        DO J = 1, NOCD
+          JSYM = NOSYM(J)
+          NVJ = NVCLASS(JSYM)
+          JOFF = 1
+          DO JOCC = 1, J-1
+            JOCLASS = NOSYM(JOCC)
+            JOFF = JOFF + NVCLASS(JOCLASS)
+          END DO
+          IJ = (I*I-I)/2 + J
+C
+C  GET VOVO AND VVOO INTEGRALS
+C
+          IF (IJ.GE.JL_VOVO.AND.IJ.LE.JH_VOVO) THEN
+            CALL DDI_GET(D_VOVO,1,NVSQ,IJ,IJ,BUF1)
+            CALL DDI_GET(D_VVOO,1,NVTR,IJ,IJ,BUF2)
+C
+C  GENERATE BLOCK OF REDUCED ORBITAL-HESSIAN FOR AXBJ AND AIBY
+C
+            DELTAAB = EPS(IJ)
+            DO IVCLASS = 1, NVI              !  LOOP OVER
+              A = LVCLASS(ISYM,IVCLASS)       !  VIRTUAL
+              DO JVCLASS = 1, NVJ            !  INDICES OF
+                B = LVCLASS(JSYM,JVCLASS)     !  EACH IRREP
+                IF (A.GE.B) THEN
+                  AB = (A*A-A)/2 + B
+                ELSE
+                  AB = (B*B-B)/2 + A
+                END IF
+                X = BUF1(A,B)
+                Y = BUF1(B,A)
+                Z = BUF2(AB)
+                IF (A.EQ.B) THEN
+                  BUF(JVCLASS,IVCLASS) = TWO*X-HALF*Y-HALF*Z-DELTAAB
+                ELSE
+                  BUF(JVCLASS,IVCLASS) = TWO*X-HALF*Y-HALF*Z
+                END IF
+              END DO
+            END DO
+C
+C  THE HESSIAN-VECTOR PRODUCT
+C
+            CALL DGEMM('N','N', NVJ,1,NVI
+     *,                ONE,BUF,LDIM
+     *,                V1(IOFF+LOFF2),NVIR
+     *,                ONE,V2(JOFF+LOFF1),NVIR)
+            CALL DGEMM('T','N', NVI,1,NVJ
+     *,                ONE,BUF,LDIM
+     *,                V1(JOFF+LOFF1),NVIR
+     *,                ONE,V2(IOFF+LOFF2),NVIR)
+          END IF
+        END DO
+      END DO
+C
+C  ORBITAL HESSIAN - XIYJ BLOCK
+C
+      LDIMS = LDIM * NOCD
+      DO IX = NOCD1, NOCC
+        ISYM = NOSYM(IX)                  !  IRREP IDENTIFIER
+        NVI = NDCLASS(ISYM)              !  NO. DOCC IN CLASS
+        IOFF = 1
+        DO IOCC = NOCD1, IX-1                  !
+          IOCLASS = NOSYM(IOCC)               ! OFF-SET OF
+          IOFF = IOFF + NDCLASS(IOCLASS)      ! DOCC BLOCK
+        END DO                                !
+        DO JY = NOCD1, IX
+          JSYM = NOSYM(JY)
+          NVJ = NDCLASS(JSYM)
+          JOFF = 1
+          DO JOCC = NOCD1, JY-1
+            JOCLASS = NOSYM(JOCC)
+            JOFF = JOFF + NDCLASS(JOCLASS)
+          END DO
+          IXY = (IX*IX-IX)/2 + JY
+C
+C  GENERATE BLOCK OF REDUCED ORBITAL-HESSIAN FOR -.5*(XY|IJ) INTEGRALS
+C
+          IF (IXY.GE.JL_VOVO.AND.IXY.LE.JH_VOVO) THEN
+            CALL DDI_GET(D_OOOO,1,NOTR,IXY,IXY,BUF2)
+            DO IVCLASS = 1, NVI              !  LOOP OVER
+              I = LDCLASS(ISYM,IVCLASS)      !  DOUBLY OCC
+              DO JVCLASS = 1, NVJ            !  INDICES OF
+                J = LDCLASS(JSYM,JVCLASS)    !  EACH IRREP;
+                IF (I.GE.J) THEN
+                  IJ = (I*I-I)/2 + J
+                ELSE
+                  IJ = (J*J-J)/2 + I
+                END IF
+                BUF(JVCLASS,IVCLASS) = -HALF*BUF2(IJ)
+              END DO
+            END DO
+C
+C  THE HESSIAN-VECTOR PRODUCT
+C
+            CALL DGEMM('T','N', NVI,1,NVJ
+     *,                ONE,BUF,LDIM
+     *,                V1(JOFF),NOCD
+     *,                ONE,V2(IOFF),NOCD)
+            IF (IX.NE.JY)
+     *      CALL DGEMM('N','N', NVJ,1,NVI
+     *,                ONE,BUF,LDIM
+     *,                V1(IOFF),NOCD
+     *,                ONE,V2(JOFF),NOCD)
+          END IF
+C
+C  GENERATE BLOCK OF REDUCED ORBITAL-HESSIAN FOR XJYI INTEGRALS
+C
+          DELTAIJ = BUF5(IXY) - EPS(IXY)
+          CALL DCOPY(LDIMS,ZERO,0,BUF,1)
+          DO IVCLASS = 1, NVI
+            I = LDCLASS(ISYM,IVCLASS)
+            IK = (IX*IX-IX)/2 + I
+            IF (IK.GE.JL_VOVO.AND.IK.LE.JH_VOVO) THEN
+              CALL DDI_GET(D_OOOO,1,NOTR,IK,IK,BUF2)
+              DO JVCLASS = 1, NVJ            !  INDICES OF
+                J = LDCLASS(JSYM,JVCLASS)    !  EACH IRREP;
+                IF (I.GE.J) THEN
+                  IJ = (I*I-I)/2 + J
+                ELSE
+                  IJ = (J*J-J)/2 + I
+                END IF
+                JK = (JY*JY-JY)/2 + J
+                X  = BUF2(JK)
+                BUF(IVCLASS,JVCLASS) = BUF(IVCLASS,JVCLASS) -HALF*X
+                IF (I.EQ.J)   X = X + DELTAIJ       !  DELTA IJ TERM
+                IF (IX.EQ.JY) THEN
+                  IF (I.EQ.J) THEN
+                    X = X - DELTAIJ
+                  ELSE
+                    X = X + BUF5(IJ) - EPS(IJ)        !  DELTA XY TERM
+                  END IF
+                END IF
+                BUF(JVCLASS,IVCLASS) = BUF(JVCLASS,IVCLASS) + X
+              END DO
+            END IF
+          END DO
+C
+C  THE HESSIAN-VECTOR PRODUCT
+C
+            CALL DGEMM('T','N', NVI,1,NVJ
+     *,                ONE,BUF,LDIM
+     *,                V1(JOFF),NOCD
+     *,                ONE,V2(IOFF),NOCD)
+            IF (IX.NE.JY)
+     *      CALL DGEMM('N','N', NVJ,1,NVI
+     *,                ONE,BUF,LDIM
+     *,                V1(IOFF),NOCD
+     *,                ONE,V2(JOFF),NOCD)
+        END DO
+      END DO
+C
+C  ORBITAL HESSIAN - AIYJ AND XIBJ BLOCKS
+C
+      DO K = NOCD1, NOCC
+        ISYM = NOSYM(K)                  !  IRREP IDENTIFIER
+        NVI = NDCLASS(ISYM)              !  NO. DOCC IN CLASS
+        IOFF = 1
+        DO IOCC = NOCD1, K-1                  !
+          IOCLASS = NOSYM(IOCC)               ! OFF-SET OF
+          IOFF = IOFF + NDCLASS(IOCLASS)      ! DOCC BLOCK
+        END DO                                !
+        DO J = 1, NOCD
+          CALL DCOPY(LDIMS,ZERO,0,BUF,1)
+          JSYM = NOSYM(J)
+          NVJ = NVCLASS(JSYM)
+          JOFF = 1
+          DO JOCC = 1, J-1
+            JOCLASS = NOSYM(JOCC)
+            JOFF = JOFF + NVCLASS(JOCLASS)
+          END DO
+C
+C  GENERATE BLOCK OF REDUCED ORBITAL-HESSIAN
+C
+          JK = (K*K-K)/2 + J
+          DO IVCLASS = 1, NVI              !  LOOP OVER
+            I = LDCLASS(ISYM,IVCLASS)      !  DOUBLY OCC
+            IF (I.LT.J) THEN
+              IJ = (J*J-J)/2 + I
+            ELSE
+              IJ = (I*I-I)/2 + J
+            END IF
+            IK  = (K*K-K)/2 + I
+            IKJ = (IK-1)*NOCC + J
+            JKI = (JK-1)*NOCC + I
+            IJK = (IJ-1)*NOCC + K
+            IF (IKJ.GE.JL_VOOO.AND.IKJ.LE.JH_VOOO) THEN
+              CALL DDI_GET(D_VOOO,1,NVIR,IKJ,IKJ,BUF2)
+              DO JVCLASS = 1, NVJ            !  LOOP OVER
+                A = LVCLASS(JSYM,JVCLASS)    !  VIRTUAL
+                BUF(JVCLASS,IVCLASS) = TWO*BUF2(A)
+              END DO
+            END IF
+            IF (JKI.GE.JL_VOOO.AND.JKI.LE.JH_VOOO) THEN
+              CALL DDI_GET(D_VOOO,1,NVIR,JKI,JKI,BUF2)
+              DO JVCLASS = 1, NVJ            !  LOOP OVER
+                A = LVCLASS(JSYM,JVCLASS)    !  VIRTUAL
+                BUF(JVCLASS,IVCLASS) = BUF(JVCLASS,IVCLASS)-HALF*BUF2(A)
+              END DO
+            END IF
+            IF (IJK.GE.JL_VOOO.AND.IJK.LE.JH_VOOO) THEN
+              CALL DDI_GET(D_VOOO,1,NVIR,IJK,IJK,BUF2)
+              DO JVCLASS = 1, NVJ            !  LOOP OVER
+                A = LVCLASS(JSYM,JVCLASS)    !  VIRTUAL
+                BUF(JVCLASS,IVCLASS) = BUF(JVCLASS,IVCLASS)-HALF*BUF2(A)
+              END DO
+            END IF
+C
+C  ADD DELTA TERM FOR A(XIBJ)
+C
+            IF (I.EQ.J) THEN
+              IF (ME.EQ.0) THEN
+                DO JVCLASS = 1, NVJ            !  LOOP OVER
+                  A = LVCLASS(JSYM,JVCLASS)    !  VIRTUAL
+                  BUF(JVCLASS,IVCLASS) = BUF(JVCLASS,IVCLASS)+BUF6(A,K)
+                END DO
+              END IF
+            END IF
+            DO JVCLASS = 1, NVJ            !  LOOP OVER
+              A = LVCLASS(JSYM,JVCLASS)    !  VIRTUAL
+            END DO
+          END DO
+C
+C  THE HESSIAN-VECTOR PRODUCT
+C
+          CALL DGEMM('N','N', NVJ,1,NVI
+     *,              ONE,BUF,LDIM
+     *,              V1(IOFF),NOCD
+     *,              ONE,V2(JOFF+LOFF1),NVIR)
+C
+          CALL DGEMM('T','N', NVI,1,NVJ
+     *,              ONE,BUF,LDIM
+     *,              V1(JOFF+LOFF1),NVIR
+     *,              ONE,V2(IOFF),NOCD)
+        END DO
+      END DO
+C
+C  ORBITAL HESSIAN - AXYJ AND XIBY BLOCKS
+C
+      DO K = NOCD1, NOCC
+        ISYM = NOSYM(K)                  !  IRREP IDENTIFIER
+        NVI = NDCLASS(ISYM)              !  NO. DOCC IN CLASS
+        IOFF = 1
+        DO IOCC = NOCD1, K-1                  !
+          IOCLASS = NOSYM(IOCC)               ! OFF-SET OF
+          IOFF = IOFF + NDCLASS(IOCLASS)      ! DOCC BLOCK
+        END DO                                !
+        DO J = NOCD1, NOCC
+          CALL DCOPY(LDIMS,ZERO,0,BUF,1)
+          JSYM = NOSYM(J)
+          NVJ = NVCLASS(JSYM)
+          JOFF = 1
+          DO JOCC = NOCD1, J-1
+            JOCLASS = NOSYM(JOCC)
+            JOFF = JOFF + NVCLASS(JOCLASS)
+          END DO
+C
+C  GENERATE BLOCK OF REDUCED ORBITAL-HESSIAN
+C
+          DO IVCLASS = 1, NVI              !  LOOP OVER
+            I = LDCLASS(ISYM,IVCLASS)      !  DOUBLY OCC
+            IK  = (K*K-K)/2 + I
+            IKJ = (IK-1)*NOCC + J
+            IF (IKJ.GE.JL_VOOO.AND.IKJ.LE.JH_VOOO) THEN
+              CALL DDI_GET(D_VOOO,1,NVIR,IKJ,IKJ,BUF2)
+              DO JVCLASS = 1, NVJ            !  LOOP OVER
+                A = LVCLASS(JSYM,JVCLASS)    !  VIRTUAL
+                BUF(JVCLASS,IVCLASS) = BUF2(A)
+              END DO
+            END IF
+C
+C  ADD DELTA TERM FOR A(XIBY)
+C
+            IF (J.EQ.K) THEN
+              IF (ME.EQ.0) THEN
+                DO JVCLASS = 1, NVJ            !  LOOP OVER
+                  A = LVCLASS(JSYM,JVCLASS)    !  VIRTUAL
+                  BUF(JVCLASS,IVCLASS) = BUF(JVCLASS,IVCLASS)
+     *                                   -BUF6(A,I)
+                END DO
+              END IF
+            END IF
+            DO JVCLASS = 1, NVJ            !  LOOP OVER
+              A = LVCLASS(JSYM,JVCLASS)    !  VIRTUAL
+            END DO
+          END DO
+C
+C  THE HESSIAN-VECTOR PRODUCT FOR A(XIBY)
+C
+          CALL DGEMM('N','N', NVJ,1,NVI
+     *,              ONE,BUF,LDIM
+     *,              V1(IOFF),NOCD
+     *,              ONE,V2(JOFF+LOFF2),NVIR)
+C
+          CALL DGEMM('T','N', NVI,1,NVJ
+     *,              ONE,BUF,LDIM
+     *,              V1(JOFF+LOFF2),NVIR
+     *,              ONE,V2(IOFF),NOCD)
+        END DO
+      END DO
+      RETURN
+      END
+C*MODULE MP2DDI   *DECK ZSYMEIG
+      SUBROUTINE ZSYMEIG(MOLABS,EORB,EPS,BUF4,BUF5,A,B,NOCD,NOCD1,NOCC
+     *,                  NOP1,NMOS)
+C
+C -----------------------------------------------------------------
+C  EIGENVALUE-TERM OF THE (ORBITAL-HESSIAN)*(TRIAL-VECTOR) PRODUCT
+C -----------------------------------------------------------------
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      INTEGER C, CC, CV, MOLABS(*)
+      DOUBLE PRECISION EORB(*), EPS(*), BUF4(*), BUF5(*), A(*), B(*)
+C
+      IC = 0
+      DO C = NOCD1, NOCC
+        DO I = 1, NOCD
+          IF (MOLABS(I).EQ.MOLABS(C)) THEN
+            IC = IC + 1
+            CC = (C * C + C)/2
+            II = (I * I + I)/2
+            B(IC) = A(IC)/(BUF5(II) + BUF5(CC) - EPS(CC) - EORB(I))
+          END IF
+        END DO
+      END DO
+      DO I = 1, NOCD
+        DO C = NOP1, NMOS
+          IF (MOLABS(I).EQ.MOLABS(C)) THEN
+            IC = IC + 1
+            B(IC) = A(IC)/(EORB(C) - EORB(I))
+          END IF
+        END DO
+      END DO
+      DO I = NOCD1, NOCC
+        DO C = NOP1, NMOS
+          IF (MOLABS(I).EQ.MOLABS(C)) THEN
+            IC = IC + 1
+            CV = C - NOCC
+            CC = (CV * CV + CV)/2
+            II = (I * I + I)/2
+            B(IC) = A(IC)/(BUF4(CC) - EPS(II))
+          END IF
+        END DO
+      END DO
+      RETURN
+      END
+C*MODULE MP2DDI   *DECK ZSYMPOV
+      SUBROUTINE ZSYMPOV(MOLABS,SOL,REDSOL,LENRL,NOCD,NOCD1,NOCCX
+     *,                  NOP1X,NMOSX)
+C
+C -----------------------------------------------------------------
+C  COPY REDUCED SOLUTION VECTOR BACK TO FULL P(OV) BLOCK
+C -----------------------------------------------------------------
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      LOGICAL OUTPUT,MP2ENG,UMP2GD
+      INTEGER MOLABS(*), A
+      DOUBLE PRECISION SOL(*),REDSOL(*)
+      COMMON /MP2XTR/ NBF,NACORE,NBSQ,NBTR,NSTR,MXSHL,NACT,NOCC
+     *,               NVIR,NOV,NOSQ,NVSQ,NOTR,NVTR,NCP1,NOP1
+     *,               NATR,ICHANL,OUTPUT,MP2ENG,IOST,NMOS,UMP2GD
+C
+      IA = 0
+      IC = 0
+      DO A = NOCD1, NOCCX
+        DO I = 1, NOCD
+          IA = IA + 1
+          IF (MOLABS(I).EQ.MOLABS(A)) THEN
+            IC = IC + 1
+            SOL(IA) = REDSOL(IC)
+          ELSE
+            SOL(IA) = 0.0D+00
+          END IF
+        END DO
+      END DO
+      DO I = 1, NOCCX
+        DO A = NOP1X, NMOSX
+          IA = IA + 1
+          IF (MOLABS(I).EQ.MOLABS(A)) THEN
+            IC = IC + 1
+            SOL(IA) = REDSOL(IC)
+          ELSE
+            SOL(IA) = 0.0D+00
+          END IF
+        END DO
+      END DO
+      IF (IC.NE.LENRL) THEN
+        WRITE(ICHANL,1)
+        CALL ABRT
+      END IF
+      RETURN
+1     FORMAT(/,'ZSYMPOV: WRONG LENGTH FOR REDUCED LAGRANGIAN',/)
+      END
+C
+C*MODULE ZAPDDI   *DECK ZFNSHW
+      SUBROUTINE ZFNSHW(PMAT,Z,WMAT,T,BUF,BUF2,EPS,BUF5,BUF6,NOCD
+     *,                 NOCD1)
+C
+C -----------------------------------------------------------------
+C  COMPLETE REMAINING TERMS OF W(2) THAT DEPEND ON THE
+C  OFF-DIAGONAL BLOCKS OF P(2)
+C -----------------------------------------------------------------
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      PARAMETER (HALF=0.5D+00, ONE=1.0D+00, TWO=2.0D+00, FOUR=4.0D+00)
+C
+      LOGICAL GOPARR,DSKWRK,MASWRK,OUTPUT,MP2ENG,UMP2GD
+C
+      INTEGER A,B,AB,AV
+C
+      DOUBLE PRECISION PMAT(NBF,*),WMAT(NBF,*),Z(*),T(NOCC,*)
+     *,                BUF(*),BUF2(*),EPS(*),BUF5(*),BUF6(NVIR,*)
+C
+      COMMON /MP2XTR/ NBF,NACORE,NBSQ,NBTR,NSTR,MXSHL,NACT,NOCC
+     *,               NVIR,NOV,NOSQ,NVSQ,NOTR,NVTR,NCP1,NOP1
+     *,               NATR,ICHANL,OUTPUT,MP2ENG,IOST,NMOS,UMP2GD
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+      INTEGER         D_OOOO,D_VOOO,D_VVOO,D_VOVO,D_VVVO,D_VVVV,
+     *                D_OOOOAB,D_OOOOBB,D_VOOOAB,D_VOOOBA,D_VOOOBB,
+     *                D_VVOOAB,D_VVOOBA,D_VVOOBB,D_VOVOAB,D_VOVOBB,
+     *                D_U,D_UB,D_E,D_EB
+      LOGICAL         NDOOOO,NDVOOO,NDVVOO,NDVOVO,NDVVVO,NDVVVV,NDCORE,
+     *                NDVVOOBA,NDVVOOAB,NDVVOOBB,NDVOVOAB,NDVOVOBB,
+     *                NDVOOOBA,NDVOOOAB,NDVOOOBB,NDOOOOAB,NDOOOOBB
+      COMMON /TRFDMS/ D_OOOO,D_VOOO,D_VVOO,D_VOVO,D_VVVO,D_VVVV,
+     *                D_OOOOAB,D_OOOOBB,D_VOOOAB,D_VOOOBA,D_VOOOBB,
+     *                D_VVOOAB,D_VVOOBA,D_VVOOBB,D_VOVOAB,D_VOVOBB,
+     *                D_U,D_UB,D_E,D_EB,
+     *                NDOOOO,NDVOOO,NDVVOO,NDVOVO,NDVVVO,NDVVVV,NDCORE,
+     *                NDVVOOBA,NDVVOOAB,NDVVOOBB,NDVOVOAB,NDVOVOBB,
+     *                NDVOOOBA,NDVOOOAB,NDVOOOBB,NDOOOOAB,NDOOOOBB
+C
+      CALL DDI_DISTRIB(D_VOOO,ME,IL_VOOO,IH_VOOO,JL_VOOO,JH_VOOO)
+      CALL DDI_DISTRIB(D_VOVO,ME,IL_VOVO,IH_VOVO,JL_VOVO,JH_VOVO)
+C
+C  CREATE THE OFF-DIAGONAL BLOCKS OF PMAT
+C
+      IA = 0
+      DO A = NOCD1, NOCC
+        DO I = 1, NOCD
+          IA = IA + 1
+          X = -HALF*Z(IA)
+          PMAT(A,I) = X
+          PMAT(I,A) = X
+        END DO
+      END DO
+      LOFF1 = IA
+      DO I = 1, NOCD
+        DO A = NOP1, NMOS
+          IA = IA + 1
+          X = -Z(IA)
+          PMAT(A,I) = X
+          PMAT(I,A) = X
+        END DO
+      END DO
+C
+C  FINAL BLOCK SHOULD BE MULTIPLIED BY 1/2.  DO THIS LATER IN SUBROUTINE
+C
+      DO I = NOCD1, NOCC
+        DO A = NOP1, NMOS
+          IA = IA + 1
+          X = -Z(IA)
+          PMAT(A,I) = X
+          PMAT(I,A) = X
+        END DO
+      END DO
+C
+C  ADD ZETA/EPSILON VALUES INTO OFF-DIAGONAL BLOCKS OF WMAT
+C  AND OVERWRITE LAGRANGIAN STORAGE IN THE PROCESS
+C
+      DO K = NOCD1, NOCC
+        DO J = 1, NOCD
+          DO I = 1, NOCD
+            IA = (K-NOCD1)*NOCD + I
+            IF (I.GT.J) THEN
+              IJ = (I*I-I)/2 + J
+            ELSE
+              IJ = (J*J-J)/2 + I
+            END IF
+            X = BUF5(IJ) - EPS(IJ)
+            WMAT(K,J) = WMAT(K,J) - Z(IA)*X
+          END DO
+          DO A = 1, NVIR
+            IA = LOFF1 + (K-1)*NVIR + A
+            X = Z(IA)*BUF6(A,J)
+            WMAT(K,J) = WMAT(K,J) + X
+          END DO
+          WMAT(J,K) = WMAT(K,J)
+        END DO
+      END DO
+      DO J = 1, NOCC
+        DO A = 1, NVIR
+          AV = A + NOCC
+          DO I = 1, NOCC
+            IF (I.GT.J) THEN
+              IJ = (I*I-I)/2 + J
+            ELSE
+              IJ = (J*J-J)/2 + I
+            END IF
+            IA = LOFF1 + (I-1)*NVIR + A
+            X = Z(IA)*EPS(IJ)
+            WMAT(AV,J) = WMAT(AV,J) + X
+          END DO
+          WMAT(J,AV) = WMAT(AV,J)
+        END DO
+      END DO
+C
+C  DEPENDENT PAIR P*G CONTRIBUTION
+C  TERMS INVOLVING VVOO-/VOVO- & OOOO-TYPE INTEGRALS:
+C  OCCUPIED BLOCK OF W(2).
+C
+      CALL DCOPY(NOSQ,0.0D+00,0,T,1)
+C
+C  FIRST, DO + OOOO TERMS AND ALL VVOO/VOVO TERMS
+C
+      IJ = 0
+      DO I = 1, NOCC
+       DO J = 1, I
+        IJ = IJ + 1
+        IF (IJ.GE.JL_VOVO.AND.IJ.LE.JH_VOVO) THEN
+         CALL DDI_GET(D_OOOO,1,NOTR,IJ,IJ,BUF)
+         DO K = 1, NOCD
+          DO L = 1, NOCD
+           KL = (K*K-K)/2 + L
+           IF (K.LT.L) KL = (L*L-L)/2 + K
+           XIAJB = BUF(KL)
+           T(I,J) = T(I,J) + XIAJB*PMAT(K,L)*TWO
+          END DO
+         END DO
+         DO K = NOCD1, NOCC
+          DO L = NOCD1, NOCC
+           KL = (K*K-K)/2 + L
+           IF (K.LT.L) KL = (L*L-L)/2 + K
+           XIAJB = BUF(KL)
+           T(I,J) = T(I,J) + XIAJB*PMAT(K,L)*TWO
+          END DO
+         END DO
+         IF (I.NE.J) THEN
+          DO K = 1, NOCD
+           DO L = 1, NOCD
+            KL = (K*K-K)/2 + L
+            IF (K.LT.L) KL = (L*L-L)/2 + K
+            XIAJB = BUF(KL)
+            T(J,I) = T(J,I) + XIAJB*PMAT(K,L)*TWO
+           END DO
+          END DO
+          DO K = NOCD1, NOCC
+           DO L = NOCD1, NOCC
+            KL = (K*K-K)/2 + L
+            IF (K.LT.L) KL = (L*L-L)/2 + K
+            XIAJB = BUF(KL)
+            T(J,I) = T(J,I) + XIAJB*PMAT(K,L)*TWO
+           END DO
+          END DO
+         END IF
+         CALL DDI_GET(D_VVOO,1,NVTR,IJ,IJ,BUF)
+         CALL DDI_GET(D_VOVO,1,NVSQ,IJ,IJ,BUF2)
+         DO A = 1, NVIR
+          DO B = 1, NVIR
+           AB = (A*A-A)/2 + B
+           IF (A.LT.B) AB = (B*B-B)/2 + A
+           XIAJB = BUF(AB)
+           T(I,J) = T(I,J) + XIAJB*PMAT(A+NOCC,B+NOCC)*TWO
+           AB = (B-1)*NVIR + A
+           XIAJB = BUF2(AB)
+           T(I,J) = T(I,J) - XIAJB*PMAT(A+NOCC,B+NOCC)*HALF
+           T(J,I) = T(J,I) - XIAJB*PMAT(A+NOCC,B+NOCC)*HALF
+          END DO
+         END DO
+         IF (I.NE.J) THEN
+          DO A = 1, NVIR
+           DO B = 1, NVIR
+            AB = (A*A-A)/2 + B
+            IF (A.LT.B) AB = (B*B-B)/2 + A
+            XIAJB = BUF(AB)
+            T(J,I) = T(J,I) + XIAJB*PMAT(A+NOCC,B+NOCC)*TWO
+            AB = (A-1)*NVIR + B
+            XIAJB = BUF2(AB)
+            T(J,I) = T(J,I) - XIAJB*PMAT(A+NOCC,B+NOCC)*HALF
+            T(I,J) = T(I,J) - XIAJB*PMAT(A+NOCC,B+NOCC)*HALF
+           END DO
+          END DO
+         END IF
+        END IF
+       END DO
+      END DO
+C
+C  THEN, DO -OOOO TERMS (PIJ FIRST)
+C
+      DO K = 1, NOCC
+       DO I = 1, NOCD
+        IF (K.GE.I) THEN
+          IK = (K*K-K)/2 + I
+        ELSE
+          IK = (I*I-I)/2 + K
+        END IF
+        IF (IK.GE.JL_VOVO.AND.IK.LE.JH_VOVO) THEN
+         CALL DDI_GET(D_OOOO,1,NOTR,IK,IK,BUF)
+         DO L = 1, NOCC
+          DO J = 1, NOCD
+           IF (L.GE.J) THEN
+            JL = (L*L-L)/2 + J
+           ELSE
+            JL = (J*J-J)/2 + L
+           END IF
+           XIAJB = BUF(JL)
+           T(L,K) = T(L,K) - XIAJB*PMAT(J,I)
+          END DO
+         END DO
+        END IF
+       END DO
+      END DO
+C
+C  NOW PXY
+C
+      DO K = 1, NOCC
+       DO I = NOCD1, NOCC
+        IF (K.GE.I) THEN
+          IK = (K*K-K)/2 + I
+        ELSE
+          IK = (I*I-I)/2 + K
+        END IF
+        IF (IK.GE.JL_VOVO.AND.IK.LE.JH_VOVO) THEN
+         CALL DDI_GET(D_OOOO,1,NOTR,IK,IK,BUF)
+         DO L = 1, NOCC
+          DO J = NOCD1, NOCC
+           IF (L.GE.J) THEN
+            JL = (L*L-L)/2 + J
+           ELSE
+            JL = (J*J-J)/2 + L
+           END IF
+           XIAJB = BUF(JL)
+           T(L,K) = T(L,K) - XIAJB*PMAT(J,I)
+          END DO
+         END DO
+        END IF
+       END DO
+      END DO
+C
+C  SCALE SOCC-SOCC AND SOCC-DOCC BLOCKS OF T BY ANOTHER FACTOR OF 1/2
+C
+      DO I = NOCD1, NOCC
+        DO J = 1, I
+          T(J,I) = T(J,I)*HALF
+          IF (J.NE.I) T(I,J) = T(I,J)*HALF
+        END DO
+      END DO
+C
+C  INDEPENDENT PAIR Z*TAU CONTRIBUTION #1
+C  CONTRIBUTION TO THE OCCUPIED BLOCK OF W(2) FROM THE
+C  OOOO-CLASS INTEGRALS
+C
+      IA = 0
+      DO L = NOCD1, NOCC
+        LL = (L-NOCD1)*NOCD
+        DO I = 1, NOCD
+          IA = IA + 1
+          IL = (L*L-L)/2 + I
+          IF (IL.GE.JL_VOVO.AND.IL.LE.JH_VOVO) THEN
+            CALL DDI_GET(D_OOOO,1,NOTR,IL,IL,BUF)
+            ZED = TWO*Z(IA)
+            JK = 0
+            DO J = 1, NOCC
+              IF (J.LE.NOCD) THEN
+                COEFF = ZED
+              ELSE
+                COEFF = HALF*ZED
+              END IF
+              DO K = 1, J
+                JK = JK + 1
+                X  = COEFF*BUF(JK)
+                T(K,J) = T(K,J) - X
+                IF (K.NE.J) T(J,K) = T(J,K) - X
+              END DO
+            END DO
+            DO J = 1, NOCD
+              LJ = LL + J
+              COEFF = -HALF*Z(LJ)
+              DO K = 1, NOCD
+                IF (J.GE.K) THEN
+                  JK = (J*J-J)/2 + K
+                ELSE
+                  JK = (K*K-K)/2 + J
+                END IF
+                X = COEFF*BUF(JK)
+                T(K,I) = T(K,I) - X
+                T(I,K) = T(I,K) - X
+              END DO
+            END DO
+          END IF
+        END DO
+      END DO
+C
+C  INDEPENDENT PAIR Z*TAU CONTRIBUTION #2
+C  CONTRIBUTION TO THE OCCUPIED BLOCK OF W(2) FROM THE
+C  VOOO-CLASS INTEGRALS
+C
+      CALL DDI_DISTRIB(D_VOOO,ME,IL_VOOO,IH_VOOO,JL_VOOO,JH_VOOO)
+      IJK = 0
+      DO I = 1, NOCC
+        DO J = 1, I
+          DO K = 1, NOCC
+            IJK = IJK + 1
+            IF (IJK.GE.JL_VOOO.AND.IJK.LE.JH_VOOO) THEN
+              CALL DDI_GET(D_VOOO,1,NVIR,IJK,IJK,BUF)
+              IF(I.LE.NOCD) THEN
+                IF (K.LE.NOCD) THEN
+                  COEFF = FOUR
+                ELSE
+                  COEFF = TWO
+                END IF
+              ELSE
+                IF (K.LE.NOCD) THEN
+                  COEFF = TWO
+                ELSE
+                  COEFF = ONE
+                END IF
+              END IF
+              IF (I.GT.NOCD .OR. K.GT.NOCD) THEN
+                COEFF2 = HALF
+              ELSE
+                COEFF2 = ONE
+              END IF
+              DO A = 1, NVIR
+                AV = A + NOCC
+                T(I,J) = T(I,J) + BUF(A)*PMAT(AV,K)*COEFF
+                T(I,K) = T(I,K) - BUF(A)*PMAT(AV,J)*COEFF2
+                T(J,K) = T(J,K) - BUF(A)*PMAT(AV,I)*COEFF2
+              END DO
+              IF (I.NE.J) THEN
+                DO A = 1, NVIR
+                  AV = A + NOCC
+                  T(J,I) = T(J,I) + BUF(A)*PMAT(AV,K)*COEFF
+                  T(K,I) = T(K,I) - BUF(A)*PMAT(AV,J)*COEFF2
+                  T(K,J) = T(K,J) - BUF(A)*PMAT(AV,I)*COEFF2
+                END DO
+              END IF
+            END IF
+          END DO
+        END DO
+      END DO
+C
+C  FINAL FACTOR OF 1/2 FOR VIRT-SOCC PMAT
+C
+      DO I = NOCD1, NOCC
+        DO A = NOP1, NMOS
+          PMAT(A,I) = PMAT(A,I)/TWO
+        END DO
+      END DO
+      DO A = NOP1, NMOS
+        DO I = NOCD1, NOCC
+          PMAT(I,A) = PMAT(I,A)/TWO
+        END DO
+      END DO
+C
+C  COLLECT T FROM ALL PROCESSORS
+C AND SYMMETRIZE
+C
+      CALL DDI_GSUMF(1004,T,NOSQ)
+      DO J = 1, NOCC
+        DO I = 1, J-1
+          X = (T(I,J) + T(J,I))/2
+          T(I,J) = X
+          T(J,I) = X
+        END DO
+      END DO
+C
+C  ADD THE -T CONTRIBUTION INTO WMAT
+C
+      DO J = 1, NOCC
+        DO I = 1, NOCC
+          WMAT(I,J) = WMAT(I,J) - T(I,J)
+        END DO
+      END DO
+      RETURN
+      END
+C*MODULE ZAPDDI   *DECK BTAMPSZ
+      SUBROUTINE BTAMPSZ(EORB,CMO,XYEXC,BUF,DUM,BUF3,BUF4,BUF5)
+C
+C -----------------------------------------------------------------
+C  BACK-TRANSFORM VIRTUAL INDICES OF THE ZAPT2 AMPLITUDES
+C  TO THE AO BASIS OVERWRITING THE VOVO INTEGRALS (BASED ON BTAMPS)
+C -----------------------------------------------------------------
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      PARAMETER (MXSH=5000, MXGTOT=20000)
+C
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00, TWO=2.0D+00)
+C
+      LOGICAL GOPARR,DSKWRK,MASWRK,OUTPUT,MP2ENG,UMP2GD,ZAPTGD
+C
+      DOUBLE PRECISION EORB(*),CMO(NBF,*),XYEXC(*),BUF(*),DUM(*)
+     *,               BUF3(*),BUF4(*),BUF5(*)
+C
+      COMMON /MP2XTR/ NBF,NACORE,NBSQ,NBTR,NSTR,MXSHL,NACT,NOCC
+     *,               NVIR,NOV,NOSQ,NVSQ,NOTR,NVTR,NCP1,NOP1
+     *,               NATR,ICHANL,OUTPUT,MP2ENG,IOST,NMOS,UMP2GD
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /ZAPTGR/ NOCD,NOCD1,NOCS,NOCSTR,IXYEXC,ICHIX,ITIA,IZVEC
+     *,               ZAPTGD
+C
+      INTEGER         D_OOOO,D_VOOO,D_VVOO,D_VOVO,D_VVVO,D_VVVV,
+     *                D_OOOOAB,D_OOOOBB,D_VOOOAB,D_VOOOBA,D_VOOOBB,
+     *                D_VVOOAB,D_VVOOBA,D_VVOOBB,D_VOVOAB,D_VOVOBB,
+     *                D_U,D_UB,D_E,D_EB
+      LOGICAL         NDOOOO,NDVOOO,NDVVOO,NDVOVO,NDVVVO,NDVVVV,NDCORE,
+     *                NDVVOOBA,NDVVOOAB,NDVVOOBB,NDVOVOAB,NDVOVOBB,
+     *                NDVOOOBA,NDVOOOAB,NDVOOOBB,NDOOOOAB,NDOOOOBB
+      COMMON /TRFDMS/ D_OOOO,D_VOOO,D_VVOO,D_VOVO,D_VVVO,D_VVVV,
+     *                D_OOOOAB,D_OOOOBB,D_VOOOAB,D_VOOOBA,D_VOOOBB,
+     *                D_VVOOAB,D_VVOOBA,D_VVOOBB,D_VOVOAB,D_VOVOBB,
+     *                D_U,D_UB,D_E,D_EB,
+     *                NDOOOO,NDVOOO,NDVVOO,NDVOVO,NDVVVO,NDVVVV,NDCORE,
+     *                NDVVOOBA,NDVVOOAB,NDVVOOBB,NDVOVOAB,NDVOVOBB,
+     *                NDVOOOBA,NDVOOOAB,NDVOOOBB,NDOOOOAB,NDOOOOBB
+C
+      IF (OUTPUT) THEN
+        WRITE(ICHANL,1)
+        CALL FLSHBF(ICHANL)
+      END IF
+      NOFF = NCP1
+      IOCC = (NOCD*NOCD+NOCD)/2 + 1
+      IF (NOCS.NE.0) THEN
+        NOCSLD = NOCS
+      ELSE
+        NOCSLD = 1
+      END IF
+C
+C  LOOP OVER LOCAL VOVO INTEGRALS
+C
+      CALL DDI_DISTRIB(D_VOVO,ME,IL_VOVO,IH_VOVO,JL_VOVO,JH_VOVO)
+      DO I = NOFF, NOCC
+        IF(I.LE.NOCD) THEN
+          C = TWO
+        ELSE
+          C = ONE
+        END IF
+        EI = EORB(I)
+        IF (I.GT.NOCD) EI = EI - XYEXC(I-NOCD)
+        DO J = NOFF, I
+          IF(J.LE.NOCD) THEN
+            CPQ = TWO
+          ELSE
+            CPQ = ONE
+          END IF
+          EJ = EORB(J)
+          IF (J.GT.NOCD) EJ = EJ - XYEXC(J-NOCD)
+          IJ = (I*I-I)/2 + J
+          IF (IJ.GE.JL_VOVO.AND.IJ.LE.JH_VOVO) THEN
+            CALL DDI_GET(D_VOVO,1,NVSQ,IJ,IJ,BUF)
+C
+C  FORM A BLOCK OF ZAPT2 AMPLITUDES SPANNING ALL VIRTUAL
+C  MO INDICES
+C
+            DO K = 1, NVIR
+              DO L = 1, K
+                KL = (L-1)*NVIR + K
+                LK = (K-1)*NVIR + L
+                X = BUF(KL)
+                Y = BUF(LK)
+                DENOM = ONE/
+     *          (EI+EJ-EORB(K+NOCC)-EORB(L+NOCC))
+                BUF(KL) = C*(CPQ*X - Y)*DENOM
+                BUF(LK) = C*(CPQ*Y - X)*DENOM
+              END DO
+            END DO
+C
+C  BACK-TRANSFORM THE VIRTUAL INDICES
+C
+            CALL CACT(NBF,NVIR
+     *,               BUF,NVIR,CMO(1,NOP1),NBF
+     *,               BUF,NBF,DUM)
+C
+C  NEED TO DO THE OTHER AMPLITUDE CONTRIBUTIONS FOR ZAPT2
+C  (LOOPS WILL NOT BE EXECUTED FOR MP2)
+C
+            IF (I.LE.NOCD) THEN
+C
+C  (DS|DV) TERMS
+C
+              IOFF = 1
+              DO K = NOCD1, NOCC
+                EK = EORB(K) + XYEXC(K-NOCD)
+                IK = (K*K-K)/2 + I
+                JK = (K*K-K)/2 + J
+                IKJ = (IK-1)*NOCC + J
+                JKI = (JK-1)*NOCC + I
+                CALL DDI_GET(D_VOOO,1,NVIR,JKI,JKI,BUF3(IOFF))
+                CALL DDI_GET(D_VOOO,1,NVIR,IKJ,IKJ,BUF4(IOFF))
+                DO L = 1, NVIR
+                  LC = IOFF + L - 1
+                  DENOM = ONE/(EI+EJ-EK-EORB(L+NOCC))
+                  X = BUF3(LC)
+                  Y = BUF4(LC)
+                  BUF4(LC) = (TWO*X - Y)*DENOM
+                  BUF3(LC) = (TWO*Y - X)*DENOM
+                END DO
+                IOFF = IOFF + NVIR
+              END DO
+C
+C  TRANSFORM BUF3 (NOTE: HAVE TO USE TRANSPOSE OF BUF3)
+C
+              CALL DGEMM('N','T',NBF,NVIR,NOCS
+     *,                  ONE,CMO(1,NOCD1),NBF
+     *,                  BUF3,NVIR
+     *,                  ZERO,DUM,NBF)
+              CALL DGEMM('N','T',NBF,NBF,NVIR
+     *,                  ONE,DUM,NBF
+     *,                  CMO(1,NOP1),NBF
+     *,                  ONE,BUF,NBF)
+C
+C  TRANSFORM BUF4
+C
+              CALL DGEMM('N','N',NBF,NOCS,NVIR
+     *,                  ONE,CMO(1,NOP1),NBF
+     *,                  BUF4,NVIR
+     *,                  ZERO,DUM,NBF)
+              CALL DGEMM('N','T',NBF,NBF,NOCS
+     *,                  ONE,DUM,NBF
+     *,                  CMO(1,NOCD1),NBF
+     *,                  ONE,BUF,NBF)
+C
+C  (DS|DS) TERMS
+C
+              IF(I.NE.J) THEN
+                CALL DCOPY(NOCS*NOCS,ZERO,0,BUF5,1)
+                DO K = NOCD1+1, NOCC
+                  IK = (K*K-K)/2 + I
+                  JK = (K*K-K)/2 + J
+                  EK = EORB(K) + XYEXC(K-NOCD)
+                  CALL DDI_GET(D_OOOO,IOCC,NOTR,IK,IK,BUF3)
+                  CALL DDI_GET(D_OOOO,IOCC,NOTR,JK,JK,BUF4)
+                  DO L = NOCD1, K-1
+                    LC   = L - NOCD
+                    LC2  = (LC-1)*NOCD + (LC*LC-LC)/2
+                    IL   = I + LC2
+                    JL   = J + LC2
+                    X    = BUF3(JL)
+                    Y    = BUF4(IL)
+                    EL   = EORB(L) + XYEXC(LC)
+                    DENOM = ONE/(EI+EJ-EK-EL)
+                    Z    = (X-Y)*DENOM
+                    KL   = (K-NOCD1)*NOCS + LC
+                    LK   = (LC-1)*NOCS + K - NOCD
+                    BUF5(KL) = -Z
+                    BUF5(LK) = Z
+                  END DO
+                END DO
+                CALL DGEMM('N','N',NBF,NOCS,NOCS
+     *,                    ONE,CMO(1,NOCD1),NBF
+     *,                    BUF5,NOCSLD
+     *,                    ZERO,DUM,NBF)
+                CALL DGEMM('N','T',NBF,NBF,NOCS
+     *,                    ONE,DUM,NBF
+     *,                    CMO(1,NOCD1),NBF
+     *,                    ONE,BUF,NBF)
+              END IF
+C
+            ELSE IF (J.LE.NOCD) THEN
+C
+C  (DS|SV) TERMS
+C
+              IOFF = 1
+              CALL DCOPY(NVIR,ZERO,0,BUF4,1)
+              DO K = NOCD1, NOCC
+                EK = EORB(K) + XYEXC(K-NOCD)
+                JK = (K*K-K)/2 + J
+                IJK = (JK-1)*NOCC + I
+                CALL DDI_GET(D_VOOO,1,NVIR,IJK,IJK,BUF3(IOFF))
+C
+C  NONSEPARABLE TIYXA
+C
+                DO L = 1, NVIR
+                  LC = IOFF + L - 1
+                  DENOM = ONE/(EI+EJ-EK-EORB(L+NOCC))
+                  X = BUF3(LC)
+                  BUF3(LC) = X*DENOM
+                END DO
+                IOFF = IOFF + NVIR
+              END DO
+C
+C  TRANSFORM BUF3
+C
+              CALL DGEMM('N','N',NBF,NOCS,NVIR
+     *,                  ONE,CMO(1,NOP1),NBF
+     *,                  BUF3,NVIR
+     *,                  ZERO,DUM,NBF)
+              CALL DGEMM('N','T',NBF,NBF,NOCS
+     *,                  ONE,DUM,NBF
+     *,                  CMO(1,NOCD1),NBF
+     *,                  ONE,BUF,NBF)
+            END IF
+C
+C  MAP AO-INDICES INTO SHELL-BLOCKS TO REDUCE NUMBER OF GETS
+C
+            ICOUNT = 0
+            DO ISHELL = 1, NSHELL
+              IBEG = KLOC(ISHELL)
+              IEND = IBEG + KMAX(ISHELL) - KMIN(ISHELL)
+              DO JSHELL = 1, NSHELL
+                JBEG = KLOC(JSHELL)
+                JEND = JBEG + KMAX(JSHELL) - KMIN(JSHELL)
+                DO IAO = IBEG, IEND
+                  DO JAO = JBEG, JEND
+                    IJAO = (IAO-1)*NBF + JAO
+                    ICOUNT = ICOUNT + 1
+                    DUM(ICOUNT) = BUF(IJAO)
+                  END DO
+                END DO
+              END DO
+            END DO
+            CALL DDI_PUT(D_VOVO,1,NBSQ,IJ,IJ,DUM)
+          END IF
+        END DO
+      END DO
+C
+C  SYNCHRONIZE NODES AFTER THIS OPERATION
+C
+      CALL DDI_SYNC(9005)
+      RETURN
+1     FORMAT(6X,'FORMING BACK-TRANSFORMED AMPLITUDES')
+      END
+C*MODULE ZAPDDI   *DECK ZPRIM
+      SUBROUTINE ZPRIM(CMO,PMUNUS,CHIX,CHIMUNU,ZMN,TMUNU4,TIA
+     *,                ZVEC,DUM1,DUM2)
+C
+C -----------------------------------------------------------------
+C  BACK-TRANSFORM CHI, Z-VECTOR, AND OTHER MATRICES TO AO BASIS
+C -----------------------------------------------------------------
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00, TWO=2.0D+00)
+      LOGICAL OUTPUT,MP2ENG,UMP2GD,ZAPTGD
+      DOUBLE PRECISION CMO(NBF,*),PMUNUS(NBTR),CHIX(NOCS)
+     *,      CHIMUNU(NBTR),ZMN(NBTR),TMUNU4(NBTR),TIA(*),ZVEC(*)
+     *,      DUM1(NBSQ),DUM2(NBSQ)
+      COMMON /MP2XTR/ NBF,NACORE,NBSQ,NBTR,NSTR,MXSHL,NACT,NOCC
+     *,               NVIR,NOV,NOSQ,NVSQ,NOTR,NVTR,NCP1,NOP1
+     *,               NATR,ICHANL,OUTPUT,MP2ENG,IOST,NMOS,UMP2GD
+      COMMON /ZAPTGR/ NOCD,NOCD1,NOCS,NOCSTR,IXYEXC,ICHIX,ITIA,IZVEC
+     *,               ZAPTGD
+C
+      IF (OUTPUT) THEN
+        WRITE(ICHANL,1)
+        CALL FLSHBF(ICHANL)
+      END IF
+C
+      CALL VCLR(ZMN,1,NBTR)
+C
+C  BACK-TRANSFORM CHIX TO AO-BASIS
+C
+      CALL VCLR(DUM1,1,NOCS*NBF)
+      IOFF1 = 1
+      DO K = 1, NOCS
+        IK = K + NOCD
+        CHI = CHIX(K)
+        CALL DAXPY(NBF,CHI,CMO(1,IK),1,DUM1(IOFF1),1)
+        IOFF1 = IOFF1 + NBF
+      END DO
+      CALL DGEMM('N','T',NBF,NBF,NOCS
+     *,           ONE,DUM1,NBF
+     *,           CMO(1,NOCD1),NBF
+     *,           ZERO,DUM2,NBF)
+C
+C  SYMMETRIZE TO FORM CHIMUNU
+C
+      CALL SQTR(DUM2,CHIMUNU,NBF)
+C
+C  BACK-TRANSFORM Z-VECTOR BLOCKS TO FORM Z(MU,NU)
+C  FIRST: SD BLOCK
+C
+      IA = 0
+      DO K = 1, NOCS
+        DO I = 1, NOCD
+          IA = IA + 1
+          DUM2(IA) = ZVEC(IA)
+        END DO
+      END DO
+      CALL DGEMM('N','N',NBF,NOCS,NOCD
+     *,           ONE,CMO,NBF
+     *,           DUM2,NOCD
+     *,           ZERO,DUM1,NBF)
+      CALL DGEMM('N','T',NBF,NBF,NOCS
+     *,           -ONE,DUM1,NBF
+     *,           CMO(1,NOCD1),NBF
+     *,           ZERO,DUM2,NBF)
+      CALL SQTR(DUM2,ZMN,NBF)
+C
+C  SECOND: VS BLOCK
+C
+      IC = 0
+      IA = IA + NOCD*NVIR
+      DO K = 1, NOCS
+        DO I = 1, NVIR
+          IA = IA + 1
+          IC = IC + 1
+          DUM2(IC) = ZVEC(IA)
+        END DO
+      END DO
+      CALL DGEMM('N','N',NBF,NOCS,NVIR
+     *,           ONE,CMO(1,NOP1),NBF
+     *,           DUM2,NVIR
+     *,           ZERO,DUM1,NBF)
+      CALL DGEMM('N','T',NBF,NBF,NOCS
+     *,           ONE,DUM1,NBF
+     *,           CMO(1,NOCD1),NBF
+     *,           ZERO,DUM2,NBF)
+      CALL SQTR(DUM2,DUM1,NBF)
+C
+C  ZMN HOLDS .5*Z(VS) -.5*Z(SD)
+C
+      CALL DAXPY(NBTR,ONE,DUM1,1,ZMN,1)
+C
+C  NOW TRANSFORM TIA TO AO BASIS AND TRIANGULAR-IZE
+C  ONE FACTOR OF TWO NEEDED TO ELIMINATE ORIGINAL HALF FROM ZAPTWP
+C  SECOND FACTOR OF TWO NEEDED IN THE SEPARABLE EQUATION
+C
+      NACD = NACT - NOCS
+      CALL DGEMM('N','N',NBF,NACD,NVIR
+     *,           TWO,CMO(1,NOP1),NBF
+     *,           TIA,NVIR
+     *,           ZERO,DUM1,NBF)
+      CALL DGEMM('N','T',NBF,NBF,NACD
+     *,           TWO,DUM1,NBF
+     *,           CMO(1,NCP1),NBF
+     *,           ZERO,DUM2,NBF)
+      CALL SQTR(DUM2,TMUNU4,NBF)
+C
+C  FINALLY, FORM THE P(SCF) SOCC-ONLY CONTRIBUTION
+C
+      CALL DGEMM('N','T',NBF,NBF,NOCS
+     *,           ONE,CMO(1,NOCD1),NBF
+     *,           CMO(1,NOCD1),NBF
+     *,           ZERO,DUM2,NBF)
+      CALL SQTR(DUM2,PMUNUS,NBF)
+      RETURN
+1     FORMAT(/,6X,'BACK-TRANSFORMING CHI, Z-VECTOR, AND OTHER',
+     *            ' MATRICES TO AO BASIS')
+      END
+C*MODULE ZAPDDI   *DECK ZPAR2PDM
+      SUBROUTINE ZPAR2PDM(INEW,JNEW,KNEW,LNEW,INVPERM,Q4,SFAC,
+     2                   PHF,PMP2,GNS,DAB,PHFS,CHI,ZMN,T4,
+     3                   ISHL,JSHL,KSHL,DABMAX,POPLE)
+C
+C -----------------------------------------------------------------
+C  COMBINE TERMS OF 2-PARTICLE DENSITY MATRIX FOR A SHELL OF
+C  DERIVATIVE INTEGRALS - COMPUTING SCF AND SEPARABLE TERMS
+C  (BASED ON PAR2PDM)
+C -----------------------------------------------------------------
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      DIMENSION INVPERM(4),PHF(*),PMP2(*),DAB(*)
+      DIMENSION PHFS(*),CHI(*),ZMN(*),T4(*)
+      LOGICAL POPLE
+C
+      PARAMETER (MXSH=5000, MXGTOT=20000, MXAO=8192)
+C
+      COMMON /IJPAIR/ IA(MXAO)
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /SHLLMN/ IGXYZ(4,35),JGXYZ(4,35),KGXYZ(4,35),LGXYZ(4,35)
+      COMMON /SHLNRM/ PNRM(84)
+      LOGICAL OUTPUT,MP2ENG,UMP2GD
+      COMMON /MP2XTR/ NBF,NACORE,NBSQ,NBTR,NSTR,MXSHL,NACT,NOCC,
+     *                NVIR,NOV,NOSQ,NVSQ,NOTR,NVTR,NCP1,NOP1,
+     *                NATR,ICHANL,OUTPUT,MP2ENG,IOST,NMOS,UMP2GD
+C
+CJMS  LABELLED COMMON GSPG80 DEFINED FOR COMPUTATIONAL EFFICIENCY.
+CJMS  FOR SP BASES ONLY, IT CONTAINS THE E ARRAY WHICH IS THE DAB
+CJMS  ARRAY WITH INDICES IN REVERSE ORDER: E(I,J,K,L)= DAB(L,K,J,I)
+CJMS  AND IS USED IN SUB JKDG80 (MODULE GRD2B). IT ORIGINATES IN:
+CJMS
+CJMS     1. SUBS DABCLU, DABDFT, DABGVB, DABMC AND DABMP2 (MODULE
+CJMS        GRD2A) AND SUB DABPAU (MODULE EFPAUL) WHICH ARE ALL
+CJMS        CALLED BY SUB JKDER (MODULE GRD2A)
+CJMS
+CJMS     2. SUB DABCLU (MODULE GRD2A) WHICH IS CALLED BY SUB EFDEN OF
+CJMS        MODULE EFGRD2
+CJMS
+CJMS     3. SUB PAR2PDM (MODULE MP2DDI) WHICH IS CALLED BY SUB PJKDMP2
+CJMS        OF MODULE MP2DDI
+C
+      COMMON /GSPG80/ E(4,4,4,4)
+C
+C  NON-SEPARABLE TERMS ARE IN GNS
+C  GNS HAS 4 DIMENSIONS TO SIMPLIFY INDEXING LATER
+C  LEADING DIMENSION MUST BE SET TO NBF
+C
+      DIMENSION GNS(NBF,JSHL,KSHL,ISHL)
+C
+      DIMENSION IINDX(4)
+C
+      PARAMETER (ZER=0.0D+00, PT5=0.5D+00, F02=2.0D+00, F04=4.0D+00)
+C
+      DABMAX= ZER
+      MINI= KMIN(INEW)
+      MINJ= KMIN(JNEW)
+      MINK= KMIN(KNEW)
+      MINL= KMIN(LNEW)
+      MAXI= KMAX(INEW)
+      MAXJ= KMAX(JNEW)
+      MAXK= KMAX(KNEW)
+      MAXL= KMAX(LNEW)
+      LOCI= KLOC(INEW)-MINI
+      LOCJ= KLOC(JNEW)-MINJ
+      LOCK= KLOC(KNEW)-MINK
+      LOCL= KLOC(LNEW)-MINL
+C
+      IF(POPLE) THEN
+         DO I=1,4
+            IGXYZ(1,I)=64*(I-1)+1
+            JGXYZ(1,I)=16*(I-1)
+            KGXYZ(1,I)= 4*(I-1)
+            LGXYZ(1,I)=   (I-1)
+         END DO
+C
+         DO L=MINL,MAXL
+            IINDX(4) = L-(MINL-1)
+            NNU = LOCL+L
+            DO K=MINK,MAXK
+               IINDX(3) = K-(MINK-1)
+               NMU = LOCK+K
+               MUNU= IA(MAX0(NMU,NNU))+MIN0(NMU,NNU)
+               DO J=MINJ,MAXJ
+                  IINDX(2) = J-(MINJ-1)
+                  NSI = LOCJ+J
+                  DO I=MINI,MAXI
+                     IINDX(1) = I-(MINI-1)
+                     NLA = LOCI+I
+                     LASI= IA(MAX0(NLA,NSI))+MIN0(NLA,NSI)
+                     MUSI= IA(MAX0(NMU,NSI))+MIN0(NMU,NSI)
+                     LANU= IA(MAX0(NLA,NNU))+MIN0(NLA,NNU)
+                     MULA= IA(MAX0(NMU,NLA))+MIN0(NMU,NLA)
+                     NUSI= IA(MAX0(NNU,NSI))+MIN0(NNU,NSI)
+C
+CJMS  LET'S SAVE A FEW MULTIPLICATIONS
+C
+C  SCF DENSITY
+C
+CC                   DSCF=PHF (MUNU)*PHF(LASI)*F04-
+CC     *                  PHF (MUSI)*PHF(LANU)-
+CC     *                  PHF (MULA)*PHF(NUSI)-
+CC     *                  PHFS(MUSI)*PHFS(LANU)-
+CC     *                  PHFS(MULA)*PHFS(NUSI)
+C
+C  MP2 SEPARABLE TERM
+C
+CC                   DSEP=PMP2(MUNU)*PHF(LASI)*F04+
+CC   *                    PMP2(LASI)*PHF(MUNU)*F04-
+CC   *                    PMP2(MUSI)*PHF(LANU)-
+CC   *                    PMP2(MULA)*PHF(NUSI)-
+CC   *                    PMP2(NUSI)*PHF(MULA)-
+CC   *                    PMP2(LANU)*PHF(MUSI)
+C
+                     DF1=(PHF (MUNU)+PMP2(MUNU))*PHF (LASI)+
+     2                    PHF (MUNU)*PMP2(LASI)
+                     DQ1=(PHF (MUSI)+PMP2(MUSI))*PHF (LANU)+
+     2                    PHF (MUSI)*PMP2(LANU)+
+     3                   (PHF (MULA)+PMP2(MULA))*PHF (NUSI)+
+     4                    PHF (MULA)*PMP2(NUSI)
+     5                    +PHFS(MUSI)*PHFS(LANU)
+     6                    +PHFS(MULA)*PHFS(NUSI)
+C
+C  THE ABOVE FOUR LINES ARE THE CLOSED-SHELL-LIKE PART
+C  NEXT FOUR LINES ARE PURE ZAPT
+C
+                     DZ1=((T4(MUSI)+CHI(MUSI)+ZMN(MUSI))*PHFS(LANU)
+     2                   +(T4(MULA)+CHI(MULA)+ZMN(MULA))*PHFS(NUSI)
+     3                   +(T4(LANU)+CHI(LANU)+ZMN(LANU))*PHFS(MUSI)
+     4                   +(T4(NUSI)+CHI(NUSI)+ZMN(NUSI))*PHFS(MULA))
+C
+C  MP2 NON-SEPARABLE TERM
+C
+                     IP = IINDX(INVPERM(1))
+                     JP = IINDX(INVPERM(2))
+                     KP = IINDX(INVPERM(3))
+                     LP = IINDX(INVPERM(4))
+CC                   DNON = 16.0D+00*GNS(LP,JP,KP,IP)
+C
+C  TOTAL MP2 DENSITY
+C
+C                   DF1= DSCF + DSEP + DNON
+                     DF1=DZ1-DQ1+F04*(DF1+F02*GNS(LP,JP,KP,IP))
+C
+C  NON-CANONICAL SHELL 4-LABEL WEIGHT
+C
+                     DF1= DF1*Q4*SFAC
+C
+                     IF(DABMAX.LT. ABS(DF1)) DABMAX = ABS(DF1)
+                     E(I,J,K,L)= DF1
+                  END DO
+               END DO
+            END DO
+         END DO
+      ELSE
+C
+C D AND HIGHER FUNCTIONS OR HONDO ONLY RUNS
+C
+         DO I=MINI,MAXI
+            P1I= PNRM(I)
+            IINDX(1) = I-(MINI-1)
+            NLA = LOCI+I
+            DO J=MINJ,MAXJ
+               P2J= P1I*PNRM(J)
+               IINDX(2) = J-(MINJ-1)
+               NSI = LOCJ+J
+               LASI= IA(MAX0(NLA,NSI))+MIN0(NLA,NSI)
+               DO K=MINK,MAXK
+                  P3K= P2J*PNRM(K)
+                  IINDX(3) = K-(MINK-1)
+                  NMU = LOCK+K
+                  DO L=MINL,MAXL
+                     P4L= P3K*PNRM(L)
+                     IINDX(4) = L-(MINL-1)
+                     NNU = LOCL+L
+                     MUNU= IA(MAX0(NMU,NNU))+MIN0(NMU,NNU)
+                     MUSI= IA(MAX0(NMU,NSI))+MIN0(NMU,NSI)
+                     LANU= IA(MAX0(NLA,NNU))+MIN0(NLA,NNU)
+                     MULA= IA(MAX0(NMU,NLA))+MIN0(NMU,NLA)
+                     NUSI= IA(MAX0(NNU,NSI))+MIN0(NNU,NSI)
+C
+CJMS  LET'S SAVE A FEW MULTIPLICATIONS
+C
+C  SCF DENSITY
+C
+CC                   DSCF=PHF (MUNU)*PHF(LASI)*F04-
+CC     *                  PHF (MUSI)*PHF(LANU)-
+CC     *                  PHF (MULA)*PHF(NUSI)-
+CC     *                  PHFS(MUSI)*PHFS(LANU)-
+CC     *                  PHFS(MULA)*PHFS(NUSI)
+C
+C  MP2 SEPARABLE TERM
+C
+CC                   DSEP=PMP2(MUNU)*PHF(LASI)*F04+
+CC   *                    PMP2(LASI)*PHF(MUNU)*F04-
+CC   *                    PMP2(MUSI)*PHF(LANU)-
+CC   *                    PMP2(MULA)*PHF(NUSI)-
+CC   *                    PMP2(NUSI)*PHF(MULA)-
+CC   *                    PMP2(LANU)*PHF(MUSI)
+C
+                     DF1=(PHF (MUNU)+PMP2(MUNU))*PHF (LASI)+
+     2                    PHF (MUNU)*PMP2(LASI)
+                     DQ1=(PHF (MUSI)+PMP2(MUSI))*PHF (LANU)+
+     2                    PHF (MUSI)*PMP2(LANU)+
+     3                   (PHF (MULA)+PMP2(MULA))*PHF (NUSI)+
+     4                    PHF (MULA)*PMP2(NUSI)
+     5                    +PHFS(MUSI)*PHFS(LANU)
+     6                    +PHFS(MULA)*PHFS(NUSI)
+                     DZ1=((T4(MUSI)+CHI(MUSI)+ZMN(MUSI))*PHFS(LANU)
+     2                   +(T4(MULA)+CHI(MULA)+ZMN(MULA))*PHFS(NUSI)
+     3                   +(T4(LANU)+CHI(LANU)+ZMN(LANU))*PHFS(MUSI)
+     4                   +(T4(NUSI)+CHI(NUSI)+ZMN(NUSI))*PHFS(MULA))
+C
+C  MP2 NON-SEPARABLE TERM
+C
+                     IP = IINDX(INVPERM(1))
+                     JP = IINDX(INVPERM(2))
+                     KP = IINDX(INVPERM(3))
+                     LP = IINDX(INVPERM(4))
+CC                   DNON = 16.0D+00*GNS(LP,JP,KP,IP)
+C
+C  TOTAL MP2 DENSITY
+C
+C                   DF1= DSCF + DSEP + DNON
+                     DF1=DZ1-DQ1+F04*(DF1+F02*GNS(LP,JP,KP,IP))
+C
+C  NON-CANONICAL AO 4-LABEL WEIGHT
+C
+                     DF1= DF1*P4L*SFAC
+                     IF(NMU .EQ.NNU ) DF1= DF1*PT5
+                     IF(NLA .EQ.NSI ) DF1= DF1*PT5
+                     IF(MUNU.EQ.LASI) DF1= DF1*PT5
+C
+                     IF(DABMAX.LT. ABS(DF1)) DABMAX = ABS(DF1)
+                     IJKL=IGXYZ(1,I)+JGXYZ(1,J)+KGXYZ(1,K)+LGXYZ(1,L)
+                     DAB(IJKL) = DF1
+                  END DO
+               END DO
+            END DO
+         END DO
+      END IF
+C
+C  SYMMETRISE DENSITY MATRIX
+C
+      IF(INEW.EQ.JNEW) THEN
+         DO L=MINL,MAXL
+            DO K=MINK,MAXK
+               DO J=MINJ,MAXJ
+                  DO I=MINI,MAXI
+                     IF(POPLE) THEN
+                        DF1=(E(I,J,K,L)+E(J,I,K,L))*PT5
+                        E(I,J,K,L)= DF1
+                        E(J,I,K,L)= DF1
+                     ELSE
+                        IJKL=IGXYZ(1,I)+JGXYZ(1,J)+KGXYZ(1,K)+LGXYZ(1,L)
+                        JIKL=IGXYZ(1,J)+JGXYZ(1,I)+KGXYZ(1,K)+LGXYZ(1,L)
+                        DF1=(DAB(IJKL) + DAB(JIKL))*PT5
+                        DAB(IJKL) = DF1
+                        DAB(JIKL) = DF1
+                     END IF
+                  END DO
+               END DO
+            END DO
+         END DO
+      END IF
+      IF(KNEW.EQ.LNEW) THEN
+         DO L=MINL,MAXL
+            DO K=MINK,MAXK
+               DO J=MINJ,MAXJ
+                  DO I=MINI,MAXI
+                     IF(POPLE) THEN
+                        DF1=(E(I,J,K,L)+E(I,J,L,K))*PT5
+                        E(I,J,K,L)= DF1
+                        E(I,J,L,K)= DF1
+                     ELSE
+                        IJKL=IGXYZ(1,I)+JGXYZ(1,J)+KGXYZ(1,K)+LGXYZ(1,L)
+                        IJLK=IGXYZ(1,I)+JGXYZ(1,J)+KGXYZ(1,L)+LGXYZ(1,K)
+                        DF1=(DAB(IJKL) + DAB(IJLK))*PT5
+                        DAB(IJKL) = DF1
+                        DAB(IJLK) = DF1
+                     END IF
+                  END DO
+               END DO
+            END DO
+         END DO
+      END IF
+      IJ = IA(MAX0(INEW,JNEW))+MIN0(INEW,JNEW)
+      KL = IA(MAX0(KNEW,LNEW))+MIN0(KNEW,LNEW)
+      IF(IJ.EQ.KL) THEN
+         DO L=MINL,MAXL
+            DO K=MINK,MAXK
+               DO J=MINJ,MAXJ
+                  DO I=MINI,MAXI
+                     IF(POPLE) THEN
+                        DF1=(E(I,J,K,L)+E(K,L,I,J))*PT5
+                        E(I,J,K,L)= DF1
+                        E(K,L,I,J)= DF1
+                     ELSE
+                        IJKL=IGXYZ(1,I)+JGXYZ(1,J)+KGXYZ(1,K)+LGXYZ(1,L)
+                        KLIJ=IGXYZ(1,K)+JGXYZ(1,L)+KGXYZ(1,I)+LGXYZ(1,J)
+                        DF1=(DAB(IJKL) + DAB(KLIJ))*PT5
+                        DAB(IJKL) = DF1
+                        DAB(KLIJ) = DF1
+                     END IF
+                  END DO
+               END DO
+            END DO
+         END DO
+      END IF
+      RETURN
+      END

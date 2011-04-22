@@ -1,0 +1,2325 @@
+C 25 MAR 10 - MK    - DIVIDE-AND-CONQUER UHF
+C 12 JAN 09 - TA,MK - IMPLEMENTATION OF DIVIDE-AND-CONQUER SCF
+C
+C*MODULE DCGUES  *DECK COQMDC
+C        MODIFIED FROM COQMAT
+      SUBROUTINE COQMDC(Q,TSH,WRK,H,S,SCR,EIG,IWRK,L1M,L0,L1,L2,L3,
+     *                  KTYPE,KLOC,KMIN,KMAX,NSHELL,IDCTYP,QSUB,SSUB)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL NOTSP
+C
+      DIMENSION Q(L1,L1),TSH(L1,L1),WRK(L1,L1),H(L2),S(L2),
+     *          SCR(L1,8),EIG(L1),IWRK(L1)
+      DIMENSION QSUB(L1,L1),SSUB(L2)
+      DIMENSION KTYPE(NSHELL),KLOC(NSHELL),KMIN(NSHELL),KMAX(NSHELL)
+C
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+C
+      PARAMETER (ZERO=0.0D+00)
+C
+C     ----- GET ORTHONORMAL ORBITAL SPACE -----
+C     ON EXIT, THE FIRST -L1M- FUNCTIONS IN -Q- WILL CONTAIN
+C     NO CONTAMINANT FUNCTIONS, THE REMAINING ORBITALS IN -Q-
+C     WILL BE THE XX+YY+ZZ... FUNCTION SPACE.
+C     FOR A SP BASIS, THIS IS A CONVENTIONAL Q-MATRIX CALCULATION.
+C
+C        GET TRANSFORMATION TO SPHERICAL HARMONICS.
+C
+      CALL TSPHAR(TSH,L1,L1M,NOTSP,KTYPE,KLOC,NSHELL)
+C
+C        MOVE CONTAMINANT AOS TO HIGH END OF -TSH-
+C
+      IF(NOTSP) THEN
+         IAO =1
+         ILOW=1
+         ITOP=L1
+         DO 130 N=1,NSHELL
+            IMIN=KMIN(N)
+            IMAX=KMAX(N)
+C                       MOVE S CONTAMINANT IN D SHELL
+            IF(KTYPE(N).EQ.3) THEN
+               IMIN=IMIN+1
+               IWRK(ITOP)=IAO
+               IAO = IAO+1
+               ITOP=ITOP-1
+            END IF
+C                       MOVE P CONTAMINANT IN F SHELL
+            IF(KTYPE(N).EQ.4) THEN
+               IMIN=IMIN+3
+               IWRK(ITOP  )=IAO+2
+               IWRK(ITOP-1)=IAO+1
+               IWRK(ITOP-2)=IAO
+               IAO = IAO+3
+               ITOP=ITOP-3
+            END IF
+C                       MOVE ALL OF A G SHELL
+            IF(KTYPE(N).EQ.5) THEN
+               IMIN=IMIN+15
+               DO 110 KK=1,15
+                  IWRK(ITOP+1-KK) = IAO+15-KK
+  110          CONTINUE
+               IAO = IAO+15
+               ITOP=ITOP-15
+            END IF
+            DO 120 II=IMIN,IMAX
+               IWRK(ILOW)=IAO
+               IAO=IAO+1
+               ILOW=ILOW+1
+  120       CONTINUE
+  130    CONTINUE
+         CALL REORDR(TSH,IWRK,L1,L1)
+      END IF
+C
+C        ----- GENERATE SYMMETRY ADAPTED CANONICAL ORBITALS -----
+C        THIS IS DONE IN -WRK, AS HERE -Q- IS USED AS SCRATCH STORAGE
+C
+      IF(IDCTYP.EQ.0) THEN
+         CALL DAREAD(IDAF,IODA,S,L2,12,0)
+      ELSE
+         CALL DCOPY(L2,SSUB,1,S,1)
+      END IF
+      CALL QMTSYM(S,Q,WRK,EIG,SCR,IWRK,L0,L1,L2,L3,.FALSE.)
+      IF(IDCTYP.EQ.0) THEN
+C        HUCKEL IN TOTAL SYSTEM
+         CALL DAWRIT(IDAF,IODA,WRK,L3,45,0)
+      ELSE
+C        HUCKEL IN SUBSYSTEM
+         CALL DCOPY(L3,WRK,1,QSUB,1)
+      END IF
+C
+      IF(NOTSP) THEN
+         IF(IDCTYP.EQ.0) THEN
+            CALL DAREAD(IDAF,IODA,S,L2,12,0)
+         ELSE
+            CALL DCOPY(L2,SSUB,1,S,1)
+         END IF
+         CALL TFTRI(H,S,TSH,SCR,L1,L1,L1)
+         L1MP=L1M+1
+         DO 230 I=L1MP,L1
+            II = (I*I+I)/2
+            H(II) = 100.0D+00
+            DO 220 J=1,L1M
+               IJ = (I*I-I)/2 + J
+               H(IJ) = ZERO
+  220       CONTINUE
+  230    CONTINUE
+         CALL TRPOSQ(TSH,L1)
+         CALL TFTRI(S,H,TSH,SCR,L1,L1,L1)
+         CALL GLDIAG(L1,L1,L1,S,SCR,EIG,Q,IERR,IWRK)
+         IF(IDCTYP.EQ.0) THEN
+            CALL DAREAD(IDAF,IODA,S,L2,12,0)
+         ELSE
+            CALL DCOPY(L2,SSUB,1,S,1)
+         END IF
+         CALL ORTHO(WRK,S,Q,SCR,L0,L0,L1,L2,L1)
+         CALL TFSQB(Q,WRK,SCR,L0,L1,L1)
+      ELSE
+         CALL DCOPY(L3,WRK,1,Q,1)
+      END IF
+      RETURN
+      END
+C
+C*MODULE DCGUES  *DECK GUESDC
+C        MODIFIED FROM GESMEM
+      SUBROUTINE GUESDC(NORB,GUESS,NORDER,
+     *                  TOLZ,TOLE,MIX,PRTMO,PUNMO,SYMDEN,PURIFY,INSORB)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL DBG,MIX,PRTMO,PUNMO,SYMDEN,PURIFY,QUICK,
+     *        GOPARR,DSKWRK,MASWRK
+C
+      PARAMETER (MXATM=2000, MXLATM=200, MXLSHL=700)
+      PARAMETER (MXGTOT=20000, MXSH=5000)
+      PARAMETER (ZERO=0.0D+00)
+C
+      COMMON /FMCOM / X(1)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+      COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
+     *                MPLEVL,MPCTYP
+C
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+C
+      LOGICAL DCFLG
+      COMMON /DCOPT / SUBTYP,BUFTYP,SUBLNG,BUFRAD,NDCPRT,NSUBS,DCFLG
+      COMMON /DCQMT / NLQMT(MXATM)
+      COMMON /INFOLC/ LOC2TA(MXLATM),LOC2TS(MXLSHL),LCKLOC(MXLSHL),
+     *                NLAT,NLATC,NLSH,NLSHC,LNUM,LNUMC
+      COMMON /SUBSP / ILCST1(MXATM),NLC1,LNUMMX
+      COMMON /IODC  / IDCSUB,IDCVEC,IDCDM,IDCQ,IDCDMO,IDCEIG,IDCW,IDCEDM
+      COMMON /DCFRM / FRMLVA,FRMLVB,FRBETA,FTOL,MXITDC
+C
+      DATA UHF   /8HUHF     /
+      DATA CORE  /8HHCORE   /, GHCK  /8HHUCKEL  /
+      DATA HUCSUB/8HHUCSUB  /, RDDM  /8HDMREAD  /
+      DATA DEBUG /8HDEBUG   /, DBUGME/8HGUESS   /
+      DATA CHECK /8HCHECK   /
+      DATA NONE  /4HNONE/
+      DATA RDMO/8HMOREAD  /
+C
+C  GENERATE GUESS ORBITALS FOR THE DIVIDE-AND-CONQUER METHOD
+C
+C     ORBITAL MIXING IS NOT IMPLEMENTED YET
+C
+      DBG=(EXETYP.EQ.DEBUG .OR. EXETYP.EQ.DBUGME .OR. NPRINT.EQ.2)
+     *    .AND. MASWRK
+C
+      FRMLVA=ZERO
+      FRMLVB=ZERO
+      FRMLV=ZERO
+C
+      IF (MASWRK) WRITE(IW,9100) GUESS
+C
+      IF (MASWRK) THEN
+        IF (NORDER.NE.0) WRITE(IW,9900)
+        IF (SYMDEN) WRITE(IW,9910)
+        IF (PURIFY) WRITE(IW,9920)
+        IF (INSORB.NE.0) WRITE(IW,9930)
+      END IF
+      IF (GUESS.NE.CORE   .AND. GUESS.NE.GHCK .AND.
+     *    GUESS.NE.HUCSUB .AND. GUESS.NE.RDDM .AND. GUESS.NE.RDMO) THEN
+         IF(MASWRK) WRITE(IW,9950) GUESS
+         CALL ABRT
+      ENDIF
+C
+      QUICK = EXETYP.EQ.CHECK .AND. GUESS.EQ.GHCK
+     *        .AND. .NOT.PRTMO  .AND.  .NOT.PUNMO
+      QUICK = QUICK .AND. MPCTYP.NE.NONE
+C
+C     ***** INITIAL GUESS IS HCORE (OF EACH LOCALIZATION REGION)
+C
+      IF(GUESS.EQ.CORE  .OR.  QUICK) THEN
+C        ----- ALLOCATE MEMORY FOR THE INITIAL ORBITAL ROUTINES -----
+C
+         LT1=NUM
+         LT3=LT1*LT1
+         LT2=(LT1+LT3)/2
+C
+         CALL VALFM(LOADFM)
+         LH0T  = LOADFM+ 1
+         LST   = LH0T  + LT2
+         LQQT  = LST   + LT2
+         LWRKT3= LQQT  + LT3
+         LWRKT1= LWRKT3+ LT3
+         LSCRT = LWRKT1+ LT1
+         LIWRKT= LSCRT + 8*LT1
+         LEIGT = LIWRKT+ LT1
+         LWT   = LEIGT + NLC1
+         LKTP  = LWT   + NLC1
+         LKEGTS= LKTP  + NLC1
+         LAST  = LKEGTS+ NLC1
+C
+         NEED0 = LAST - LOADFM - 1
+         CALL GETFM(NEED0)
+C
+         CALL DAREAD(IDAF,IODA,X(LH0T),LT2,11,0)
+         CALL DAREAD(IDAF,IODA,X(LST),LT2,12,0)
+C
+         CALL SEQREW(IDCVEC)
+         CALL SEQREW(IDCQ)
+         DO 100 ISUB=1,NSUBS
+            IF(DBG) WRITE(IW,9000) ISUB
+            CALL LOCREG(ISUB)
+C
+            L1=LNUM
+            L3=L1*L1
+            L2=(L3+L1)/2
+C
+            CALL VALFM(LOADFM)
+            LEIG  = LOADFM+1
+            LH    = LEIG  + L1
+            LS    = LH    + L2
+            LW    = LS    + L2
+            LVEC  = LW    + L1
+            LQ    = LVEC  + L3
+            LSCR  = LQ    + L3
+            LIWRK = LSCR  + 8*L1
+            LAST  = LIWRK + L1
+C
+            NEED1 = LAST - LOADFM - 1
+            CALL GETFM(NEED1)
+C
+C           ----- GENERATE THE INITIAL GUESS ORBITALS -----
+C
+            CALL HCORDC(X(LIWRK),X(LEIG),X(LH),X(LS),X(LVEC),X(LQ),
+     *                  X(LSCR),X(LH0T),X(LST),L0,L1,L2,L3,LT1,LT2,DBG)
+C
+            CALL SQWRIT(IDCQ,X(LQ),L3)
+            NLQMT(ISUB)=L0
+            CALL DCOPY(L1,X(LEIG),1,X(LEIGT+ILCST1(ISUB)-1),1)
+C
+C           ----- GENERATE "CLEAN" MOLECULAR ORBITALS -----
+C
+            CALL CLENMO(X(LVEC),L1,L1,TOLZ,TOLE,IW,DBG)
+            CALL SQWRIT(IDCVEC,X(LVEC),L3)
+C
+            IF(DBG) THEN
+               WRITE(IW,*) ' TRANSFORMATION (Q) MATRIX'
+               CALL PRSQ(X(LQ),L1,L1,L1)
+               WRITE(IW,*) ' LOCAL INITIAL GUESS ORBITALS'
+               CALL PREVNL(X(LVEC),X(LEIG),L1,L1,L1)
+            END IF
+C
+C           *** CALCULATE ORBITAL WEIGHT ***
+C               W = SUM (P_(MU,NU)*C_(MU,I)*C_(NU,I)
+C                                     *S_(MU,NU)) OVER MU, NU
+C
+            CALL TRT2LC(X(LST),X(LS),LT1,LT2,L1,L2,'OVERLAP ')
+            CALL DCWCAL(X(LVEC),X(LS),X(LW),L1,L2,LNUMC)
+            CALL DCOPY(L1,X(LW),1,X(LWT+ILCST1(ISUB)-1),1)
+C
+            CALL RETFM(NEED1)
+C
+  100    CONTINUE
+C
+         CALL SEQREW(IDCEIG)
+         CALL SEQREW(IDCW)
+         CALL SQWRIT(IDCEIG,X(LEIGT),NLC1)
+         CALL SQWRIT(IDCW  ,X(LWT)  ,NLC1)
+         IF (SCFTYP.EQ.UHF) THEN
+            CALL SQWRIT(IDCEIG,X(LEIGT),NLC1)
+            CALL SQWRIT(IDCW  ,X(LWT)  ,NLC1)
+         END IF
+C
+C        *** DETERMINATION OF FERMI LEVEL ***
+C
+         CALL FRMLEV(X(LEIGT),X(LWT),X(LKEGTS),X(LKTP),NLC1,ELENDC,
+     *               NA,FRMLV,DBG)
+         FRMLVA=FRMLV
+C
+         IF(SCFTYP.EQ.UHF) THEN
+            CALL FRMLEV(X(LEIGT),X(LWT),X(LKEGTS),X(LKTP),NLC1,ELENDC,
+     *                  NB,FRMLV,DBG)
+            FRMLVB=FRMLV
+         END IF
+C
+C        ----- GENERATE INITIAL DENSITY MATRIX -----
+C
+         CALL SEQREW(IDCVEC)
+         CALL SEQREW(IDCQ)
+         CALL SEQREW(IDCDM)
+         DO 200 ISUB=1,NSUBS
+            IF(DBG) WRITE(IW,9000) ISUB
+            CALL LOCREG(ISUB)
+C
+            L1=LNUM
+            L3=L1*L1
+            L2=(L3+L1)/2
+C
+            CALL VALFM(LOADFM)
+            LEIG  = LOADFM+1
+            LOCC  = LEIG  + L1
+            LLABMO= LOCC  + L1
+            LS    = LLABMO+ L1
+            LDA   = LS    + L2
+            LDB   = LDA   + L2
+            LVEC  = LDB   + L2
+            LQ    = LVEC  + L3
+            LSCR  = LQ    + L3
+            LAST  = LSCR  + 8*L1
+C
+            LVECB = LAST
+            IF(SCFTYP.EQ.UHF) THEN
+               LVECB = LAST
+               LAST  = LVECB + L3
+            ENDIF
+C
+            NEED1 = LAST - LOADFM - 1
+            CALL GETFM(NEED1)
+C
+            CALL SQREAD(IDCQ,X(LQ),L3)
+            CALL SQREAD(IDCVEC,X(LVEC),L3)
+            IF(SCFTYP.EQ.UHF) CALL SQREAD(IDCVEC,X(LVECB),L3)
+            CALL DCOPY(L1,X(LEIGT+ILCST1(ISUB)-1),1,X(LEIG),1)
+            CALL TRT2LC(X(LST),X(LS),LT1,LT2,L1,L2,'OVERLAP ')
+C
+            CALL IDENDC(GUESS,X(LVEC),X(LVECB),X(LDA),X(LDB),X(LEIG),
+     *                  X(LOCC),X(LLABMO),X(LQ),X(LSCR),X(LS),
+     *                  NLQMT(ISUB),L1,L2,L3,DBG,PRTMO)
+C
+            CALL SQWRIT(IDCDM,X(LDA),L2)
+            IF(SCFTYP.EQ.UHF) CALL SQREAD(IDCDM,X(LDB),L2)
+C
+            CALL RETFM(NEED1)
+C
+  200    CONTINUE
+C
+C        ***** FORM Q MATRIX IN TOTAL REGION *****
+C
+         CALL QMTSYM(X(LST),X(LWRKT3),X(LQQT),X(LWRKT1),X(LSCRT),
+     *               X(LIWRKT),L0,LT1,LT2,LT3,DBG)
+         CALL DAWRIT(IDAF,IODA,X(LQQT),LT3,45,0)
+C
+         CALL RETFM(NEED0)
+      END IF
+C
+C     ***** INITIAL GUESS IS HUCKEL (OF TOTAL REGION)
+C
+      IF(GUESS.EQ.GHCK) THEN
+C
+C     ----- ALLOCATE MEMORY FOR THE INITIAL ORBITAL ROUTINES -----
+C
+         L1=NUM
+         L3=NUM*NUM
+         L2=(L3+NUM)/2
+C
+         CALL VALFM(LOADFM)
+         LLLIM = LOADFM+1
+         LIULM = LLLIM + NAT
+         LEIG  = LIULM + NAT
+         LLABMO= LEIG  + L1
+         LH    = LLABMO+ L1
+         LS    = LH    + L2
+         LVEC  = LS    + L2
+         LQ    = LVEC  + L3
+         LSCR  = LQ    + L3
+         LOCC  = LSCR  + 8*L1
+         LAST  = LOCC  + L1
+C
+         NEED = LAST - LOADFM - 1
+         CALL GETFM(NEED)
+C
+C        ----- GENERATE THE INITIAL GUESS ORBITALS -----
+C
+         CALL HUKLDC(X(LLLIM),X(LIULM),
+     *               X(LEIG),X(LH),X(LS),X(LVEC),X(LQ),X(LSCR),
+     *               X(LOCC),NAT,L0,L1,L2,L3,DBG,QUICK,NEED)
+C
+C           ----- GENERATE "CLEAN" MOLECULAR ORBITALS -----
+C
+         CALL CLENMO(X(LVEC),L1,L1,TOLZ,TOLE,IW,DBG)
+         IF(SCFTYP.EQ.UHF) THEN
+C            CALL CLENMO(X(LVEC),L1,L1,TOLZ,TOLE,IW,DBG)
+         END IF
+C
+C           ----- GENERATE INITIAL DENSITY MATRIX -----
+C
+         LDA = LH
+         LDB = LS
+         CALL IDNTDC(GUESS,X(LVEC),X(LDA),X(LDB),X(LEIG),
+     *               X(LOCC),X(LLABMO),X(LQ),X(LSCR),X(LS),
+     *               L0,L1,L2,L3,DBG,PRTMO,PUNMO,MIX,1)
+C
+         CALL DENT2L(X(LDA),X(LDB),L1,L2,IDCDM,SCFTYP.EQ.UHF,DBG)
+C
+         CALL RETFM(NEED)
+C
+C           ----- GENERATE LOCAL Q-MATRIX -----
+C          LOCAL Q-MATRIX (FOR EACH LOCALIZATION REGION)
+C                   IS NEEDED FOR DIVIDE-AND-CONQUER METHOD
+C
+         CALL QMATDC(NUM,DBG)
+C
+      END IF
+C
+C     ***** INITIAL GUESS IS MOREAD
+C
+      IF(GUESS.EQ.RDMO) THEN
+C
+C     ----- ALLOCATE MEMORY FOR THE INITIAL ORBITAL ROUTINES -----
+C
+         L1=NUM
+         L3=NUM*NUM
+         L2=(L3+NUM)/2
+C
+         CALL VALFM(LOADFM)
+         LEIG  = LOADFM+1
+         LLABMO= LEIG  + L1
+         LH    = LLABMO+ L1
+         LS    = LH    + L2
+         LVEC  = LS    + L2
+         LQ    = LVEC  + L3
+         LSCR  = LQ    + L3
+         LOCC  = LSCR  + 8*L1
+         LIWRK = LOCC  + L1
+         LAST  = LIWRK + L1
+C
+         NEED = LAST - LOADFM - 1
+         CALL GETFM(NEED)
+C
+C        ----- GENERATE THE INITIAL GUESS ORBITALS -----
+C
+         CALL READMO(NORB,X(LIWRK),X(LEIG),X(LSCR),
+     *               X(LH),X(LQ),X(LVEC),L1,L2,L3,L2,L3,.FALSE.,
+     *               DBG,TOLZ,TOLE)
+C
+C        ***** FORM Q MATRIX IN TOTAL REGION *****
+C
+         CALL DAREAD(IDAF,IODA,X(LS),L2,12,0)
+         CALL QMTSYM(X(LS),X(LVEC),X(LQ),X(LOCC),X(LSCR),
+     *               X(LIWRK),L0,L1,L2,L3,DBG)
+         CALL DAWRIT(IDAF,IODA,X(LQ),L3,45,0)
+C
+C           ----- GENERATE INITIAL DENSITY MATRIX -----
+C
+         LDA = LH
+         LDB = LS
+         CALL IDNTDC(GUESS,X(LVEC),X(LDA),X(LDB),X(LEIG),
+     *               X(LOCC),X(LLABMO),X(LQ),X(LSCR),X(LS),
+     *               L0,L1,L2,L3,DBG,PRTMO,PUNMO,MIX,1)
+C
+         CALL DENT2L(X(LDA),X(LDB),L1,L2,IDCDM,SCFTYP.EQ.UHF,DBG)
+C
+         CALL RETFM(NEED)
+C
+C           ----- GENERATE LOCAL Q-MATRIX -----
+C          LOCAL Q-MATRIX (FOR EACH LOCALIZATION REGION)
+C                   IS NEEDED FOR DIVIDE-AND-CONQUER METHOD
+C
+         CALL QMATDC(NUM,DBG)
+C
+      END IF
+C
+C     ***** INITIAL GUESS IS HUCKEL IN SUBSYSTEMS
+C
+      IF(GUESS.EQ.HUCSUB) THEN
+C
+C        ----- ALLOCATE MEMORY FOR THE INITIAL ORBITAL ROUTINES -----
+C
+         LT1=NUM
+         LT3=LT1*LT1
+         LT2=(LT1+LT3)/2
+C
+         CALL VALFM(LOADFM)
+         LH0T  = LOADFM+ 1
+         LST   = LH0T  + LT2
+         LQQT  = LST   + LT2
+         LWRKT3= LQQT  + LT3
+         LWRKT1= LWRKT3+ LT3
+         LSCRT = LWRKT1+ LT1
+         LIWRKT= LSCRT + 8*LT1
+         LEIGT = LIWRKT+ LT1
+         LWT   = LEIGT + NLC1
+         LKTP  = LWT   + NLC1
+         LKEGTS= LKTP  + NLC1
+         LAST  = LKEGTS+ NLC1
+C
+         NEED0 = LAST - LOADFM - 1
+         CALL GETFM(NEED0)
+C
+         CALL DAREAD(IDAF,IODA,X(LH0T),LT2,11,0)
+         CALL DAREAD(IDAF,IODA,X(LST),LT2,12,0)
+         IF(MPCTYP.NE.NONE) CALL DAREAD(IDAF,IODA,X(LH0T),LT2,52,0)
+C
+         CALL SEQREW(IDCVEC)
+         CALL SEQREW(IDCQ)
+         DO 500 ISUB=1,NSUBS
+            IF(DBG) WRITE(IW,9000) ISUB
+            CALL LOCREG(ISUB)
+C
+            L1=LNUM
+            L3=L1*L1
+            L2=(L3+L1)/2
+C
+            NGTOT=0
+            DO ISHL=1, NLSH
+               NGTOT=NGTOT+KNG(LOC2TS(ISHL))
+            END DO
+C
+            CALL VALFM(LOADFM)
+            LLLIM = LOADFM+1
+            LIULM = LLLIM + NLAT
+            LIWRK = LIULM + NLAT
+            LEIG  = LIWRK + L1
+            LLABMO= LEIG  + L1
+            LH    = LLABMO+ L1
+            LS    = LH    + L2
+            LSSUB = LS    + L2
+            LVEC  = LSSUB + L2
+            LQ    = LVEC  + L3
+            LQSUB = LQ    + L3
+            LSCR  = LQSUB + L3
+            LOCC  = LSCR  + 8*L1
+            LW    = LOCC  + L1
+            LAST  = LW    + L1
+C
+            LCSUB = LAST
+            LEXSUB= LCSUB + NLAT*3
+            LCSSUB= LEXSUB+ NGTOT
+            LCPSUB= LCSSUB+ NGTOT
+            LCDSUB= LCPSUB+ NGTOT
+            LCFSUB= LCDSUB+ NGTOT
+            LCGSUB= LCFSUB+ NGTOT
+            LCHSUB= LCGSUB+ NGTOT
+            LCISUB= LCHSUB+ NGTOT
+            LKSTSB= LCISUB+ NGTOT
+            LKATSB= LKSTSB+ NLSH
+            LKTPSB= LKATSB+ NLSH
+            LKNGSB= LKTPSB+ NLSH
+            LKLCSB= LKNGSB+ NLSH
+            LKMNSB= LKLCSB+ NLSH
+            LKMXSB= LKMNSB+ NLSH
+            LAST  = LKMXSB+ NLSH
+C
+            NEED1 = LAST - LOADFM - 1
+            CALL GETFM(NEED1)
+C
+            CALL TRT2LC(X(LST),X(LS),LT1,LT2,L1,L2,'OVERLAP ')
+            IF(MPCTYP.NE.NONE)
+     *          CALL TRT2LC(X(LH0T),X(LH),LT1,LT2,L1,L2,'MOPAC   ')
+            CALL DCOPY(L2,X(LS),1,X(LSSUB),1)
+C
+C        ----- GENERATE THE INITIAL GUESS ORBITALS -----
+C
+            CALL HUKDCS(X(LLLIM),X(LIULM),X(LEIG),X(LH),X(LS),
+     *                  X(LSSUB),X(LVEC),X(LQ),X(LQSUB),X(LSCR),
+     *                  X(LIWRK),NLAT,L0,L1,L2,L3,DBG,NEED0+NEED1,
+     *                  X(LCSUB),X(LEXSUB),X(LCSSUB),X(LCPSUB),
+     *                  X(LCDSUB),X(LCFSUB),X(LCGSUB),X(LCHSUB),
+     *                  X(LCISUB),X(LKSTSB),X(LKATSB),X(LKTPSB),
+     *                  X(LKNGSB),X(LKLCSB),X(LKMNSB),X(LKMXSB),
+     *                  NGTOT,NLSH)
+C
+            CALL SQWRIT(IDCQ,X(LQSUB),L3)
+            NLQMT(ISUB)=L0
+            CALL DCOPY(L1,X(LEIG),1,X(LEIGT+ILCST1(ISUB)-1),1)
+C
+C           ----- GENERATE "CLEAN" MOLECULAR ORBITALS -----
+C
+            CALL CLENMO(X(LVEC),L1,L1,TOLZ,TOLE,IW,DBG)
+            CALL SQWRIT(IDCVEC,X(LVEC),L3)
+            IF(SCFTYP.EQ.UHF) THEN
+               CALL SQWRIT(IDCVEC,X(LVEC),L3)
+            ENDIF
+C
+            IF(DBG) THEN
+               WRITE(IW,*) ' TRANSFORMATION (Q) MATRIX'
+               CALL PRSQ(X(LQ),L1,L1,L1)
+               WRITE(IW,*) ' LOCAL INITIAL GUESS ORBITALS'
+               CALL PREVNL(X(LVEC),X(LEIG),L1,L1,L1)
+            END IF
+C
+C           *** CALCULATE ORBITAL WEIGHT ***
+C               W = SUM (P_(MU,NU)*C_(MU,I)*C_(NU,I)
+C                                     *S_(MU,NU)) OVER MU, NU
+C
+            CALL TRT2LC(X(LST),X(LS),LT1,LT2,L1,L2,'OVERLAP ')
+            CALL DCWCAL(X(LVEC),X(LS),X(LW),L1,L2,LNUMC)
+            CALL DCOPY(L1,X(LW),1,X(LWT+ILCST1(ISUB)-1),1)
+C
+            CALL RETFM(NEED1)
+  500    CONTINUE
+C
+         CALL SEQREW(IDCEIG)
+         CALL SEQREW(IDCW)
+         CALL SQWRIT(IDCEIG,X(LEIGT),NLC1)
+         CALL SQWRIT(IDCW  ,X(LWT)  ,NLC1)
+         IF (SCFTYP.EQ.UHF) THEN
+            CALL SQWRIT(IDCEIG,X(LEIGT),NLC1)
+            CALL SQWRIT(IDCW  ,X(LWT)  ,NLC1)
+         END IF
+C
+C        *** DETERMINATION OF FERMI LEVEL ***
+C
+         CALL FRMLEV(X(LEIGT),X(LWT),X(LKEGTS),X(LKTP),NLC1,ELENDC,
+     *               NA,FRMLV,DBG)
+         FRMLVA=FRMLV
+C
+         IF(SCFTYP.EQ.UHF) THEN
+            CALL FRMLEV(X(LEIGT),X(LWT),X(LKEGTS),X(LKTP),NLC1,ELENDC,
+     *                  NB,FRMLV,DBG)
+            FRMLVB=FRMLV
+         END IF
+C
+C        ----- GENERATE INITIAL DENSITY MATRIX -----
+C
+         CALL SEQREW(IDCVEC)
+         CALL SEQREW(IDCQ)
+         CALL SEQREW(IDCDM)
+         DO 600 ISUB=1,NSUBS
+            IF(DBG) WRITE(IW,9000) ISUB
+            CALL LOCREG(ISUB)
+C
+            L1=LNUM
+            L3=L1*L1
+            L2=(L3+L1)/2
+C
+            CALL VALFM(LOADFM)
+            LEIG  = LOADFM+1
+            LOCC  = LEIG  + L1
+            LLABMO= LOCC  + L1
+            LS    = LLABMO+ L1
+            LDA   = LS    + L2
+            LDB   = LDA   + L2
+            LVEC  = LDB   + L2
+            LQ    = LVEC  + L3
+            LSCR  = LQ    + L3
+            LAST  = LSCR  + 8*L1
+C
+            LVECB = LAST
+            IF(SCFTYP.EQ.UHF) THEN
+               LVECB = LAST
+               LAST  = LVECB + L3
+            ENDIF
+            NEED1 = LAST - LOADFM - 1
+            CALL GETFM(NEED1)
+C
+            CALL SQREAD(IDCQ,X(LQ),L3)
+            CALL SQREAD(IDCVEC,X(LVEC),L3)
+            IF(SCFTYP.EQ.UHF) CALL SQREAD(IDCVEC,X(LVECB),L3)
+            CALL DCOPY(L1,X(LEIGT+ILCST1(ISUB)-1),1,X(LEIG),1)
+            CALL TRT2LC(X(LST),X(LS),LT1,LT2,L1,L2,'OVERLAP ')
+C
+            CALL IDENDC(GUESS,X(LVEC),X(LVECB),X(LDA),X(LDB),X(LEIG),
+     *                  X(LOCC),X(LLABMO),X(LQ),X(LSCR),X(LS),
+     *                  NLQMT(ISUB),L1,L2,L3,DBG,PRTMO)
+C
+            CALL SQWRIT(IDCDM,X(LDA),L2)
+            IF(SCFTYP.EQ.UHF) CALL SQWRIT(IDCDM,X(LDB),L2)
+C
+            CALL RETFM(NEED1)
+C
+  600    CONTINUE
+C
+C        ***** FORM Q MATRIX IN TOTAL REGION *****
+C
+         CALL QMTSYM(X(LST),X(LWRKT3),X(LQQT),X(LWRKT1),X(LSCRT),
+     *               X(LIWRKT),L0,LT1,LT2,LT3,DBG)
+         CALL DAWRIT(IDAF,IODA,X(LQQT),LT3,45,0)
+C
+         CALL RETFM(NEED0)
+C
+      END IF
+C
+C     ***** INSTEAD OF INITIAL GUESS AT ORBITALS,
+C     A DENSITY MATRIX IS READ FROM INPUT FILE
+C
+      IF(GUESS.EQ.RDDM) THEN
+C
+C     ----- ALLOCATE MEMORY FOR INITIAL DENSITY MATRIX ROUTINES -----
+C
+         L1=NUM
+         L3=NUM*NUM
+         L2=(L3+NUM)/2
+C
+         CALL VALFM(LOADFM)
+         LIWRK = LOADFM+1
+         LEIG  = LIWRK + L1
+         LH    = LEIG  + L1
+         LS    = LH    + L2
+         LVEC  = LS    + L2
+         LQ    = LVEC  + L3
+         LSCR  = LQ    + L3
+         LAST  = LSCR  + 8*L1
+C
+         NEED = LAST - LOADFM - 1
+         CALL GETFM(NEED)
+C
+C        ----- READ INITIAL DENSITY MATRIX FROM INPUT FILE -----
+C
+         LDA = LH
+         LDB = LS
+         IF (NEVALS.NE.0) THEN
+            CALL DAREAD(IDAF,IODA,X(LDA),L2,16,0)
+         ELSE
+            CALL READDM(X(LDA),L1,L2,DBG)
+         ENDIF
+C
+C                GENERATE AND SAVE PSEUDO LOCAL DENSITY MATRICES
+         CALL DENT2L(X(LDA),X(LDB),L1,L2,IDCDM,SCFTYP.EQ.UHF,DBG)
+C
+C        ----- GENERATE Q MATRIX IN TOTAL REGION -----
+C
+         CALL DAREAD(IDAF,IODA,X(LS),L2,12,0)
+C
+         CALL QMTSYM(X(LS),X(LVEC),X(LQ),X(LEIG),X(LSCR),
+     *               X(LIWRK),L0,L1,L2,L3,DBG)
+         CALL DAWRIT(IDAF,IODA,X(LQ),L3,45,0)
+C
+C        ----- GENERATE LOCAL Q-MATRIX -----
+C          LOCAL Q-MATRIX (FOR EACH LOCALIZATION REGION)
+C                   IS NEEDED FOR DIVIDE-AND-CONQUER METHOD
+C
+         CALL QMATDC(NUM,DBG)
+C
+         CALL RETFM(NEED)
+      END IF
+C
+      RETURN
+C
+ 9000 FORMAT(/5X,'*** IN THE ',I3,' TH LOCALIZATION REGION  ***')
+ 9100 FORMAT(/1X,'INITIAL GUESS ORBITALS GENERATED BY ',A8,' ROUTINE.')
+C 9101 FORMAT(' HOMO AND LUMO MIXED TO BREAK ALPHA-BETA SYMMETRY')
+ 9900 FORMAT(/1X,'***WARNING***'/
+     *        1X,'NORDER=1 (REORDERING) IS NOT SUPPORTED IN DC GUESS')
+ 9910 FORMAT(/1X,'***WARNING***'/
+     *        1X,'SYMDEN=.T. IS NOT SUPPORTED IN DC GUESS')
+ 9920 FORMAT(/1X,'***WARNING***'/
+     *        1X,'PURIFY=.T. IS NOT SUPPORTED IN DC GUESS')
+ 9930 FORMAT(/1X,'***WARNING***'/
+     *        1X,'INSORB KEYWORD IS NOT SUPPORTED IN DC GUESS')
+ 9950 FORMAT(/1X,'***ERROR***'/
+     *        1X,A8,' IS NOT SUPPORTED AS GUESS ROUTINE IN DC CALC.')
+      END
+C
+C*MODULE DCGUES  *DECK HCKLDC
+C        MODIFIED FROM HUCKEL
+      SUBROUTINE HCKLDC(LLIM,IULIM,IA,EIG,H,S,WRK,VEC,TSH,Q,SCR,
+     *                  IWRK,DBG,MXGAU,MXSHL,EX,CS,CP,CD,CF,
+     *                  KSTART,KATOM,KTYPE,KNG,KLOC,KMIN,KMAX,
+     *                  L1CO,L2CO,L3CO,NGAUCO,NSHLCO,L1MCO,NATM,
+     *                  NCELHW,CSUB)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL DBG,NOTSP,NOTECP,GOPARR,DSKWRK,MASWRK
+C
+      DIMENSION IA(L1CO),EIG(L1CO),TSH(L3CO),H(L2CO),S(L2CO),
+     *          WRK(L2CO),VEC(L3CO),Q(L3CO),SCR(L1CO,8),IWRK(L1CO),
+     *          EX(MXGAU),CS(MXGAU),CP(MXGAU),CD(MXGAU),CF(MXGAU),
+     *          KSTART(MXSHL),KATOM(MXSHL),KTYPE(MXSHL),KNG(MXSHL),
+     *          KLOC(MXSHL),KMIN(MXSHL),KMAX(MXSHL),
+     *          LLIM(NATM),IULIM(NATM),NCELHW(104)
+      DIMENSION ENEG(18),LNEG(66,6),NDVAL(4)
+      DIMENSION CSUB(3,NATM)
+C
+      PARAMETER (MXATM=2000,MXLATM=200,MXLSHL=700)
+C
+C     COSMO CHANGES
+C
+      COMMON /ECP2  / CLP(400),ZLP(400),NLP(400),KFIRST(MXATM,6),
+     *                KLAST(MXATM,6),LMAX(MXATM),LPSKIP(MXATM),
+     *                IZCORE(MXATM)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+      COMMON /INFOLC/ LOC2TA(MXLATM),LOC2TS(MXLSHL),LCKLOC(MXLSHL),
+     *                NLAT,NLATC,NLSH,NLSHC,LNUM,LNUMC
+C
+C     COSMO CHANGES
+C
+      LOGICAL ISEPS, USEPS
+      COMMON /ISEPS/ ISEPS, USEPS
+C
+      PARAMETER (ZERO=0.0D+00, TWO=2.0D+00, ONEPT5=1.5D+00,
+     *           BITSY=0.05D+00)
+C
+C               ORDER OF BASIS FUNCTIONS MUST BE EXACTLY
+C        1S,2S,2P,3S,3P,3D,4S,4P,4D, 5S,5P,5D,6S,6P    FOR  H-LA
+C        1S,2S,2P,3S,3P,3D,4S,4P,4D, 5S,5P,4F,5D,6S    FOR CE-YB
+C        1S,2S,2P,3S,3P,3D,4S,4P,4D, 4F,5S,5P,5D,6S,6P FOR LU-RN
+C        .........................4F,5S,5P,5D,6S,6P,7S FOR FR-RA
+C        ......................4F,5S,5P,5D,6S,6P,6D,7S FOR AC-TH
+C        ...................4F,5S,5P,5D,6S,6P,5F,6D,7S FOR PA-LR
+C
+      DATA LNEG/1,  2,3*3,  4,3*5,6*6,  7,3*8,6*9,  10,3*11,6*12,
+     *              13,3*14,  27*0,
+     *          1,  2,3*3,  4,3*5,6*6,  7,3*8,6*9,
+     *              10,3*11,10*12,6*13,  14, 20*0,
+     *          1,  2,3*3,  4,3*5,6*6,  7,3*8,6*9,
+     *              10*10,11,3*12,6*13,  14,3*15, 17*0,
+     *          1,  2,3*3,  4,3*5,6*6,  7,3*8,6*9,10*10,
+     *             11,3*12,6*13, 14,3*15, 16, 16*0,
+     *          1,  2,3*3,  4,3*5,6*6,  7,3*8,6*9,10*10,
+     *             11,3*12,6*13, 14,3*15, 6*16, 17, 10*0,
+     *          1,  2,3*3,  4,3*5,6*6,  7,3*8,6*9,10*10,
+     *             11,3*12,6*13, 14,3*15, 10*16,  6*17, 18 /
+C
+C     ----- CARRY OUT AN EXTENDED HUCKEL CALCULATION -----
+C     ROUTINE WRITTEN BY MIKE SCHMIDT AT NDSU, AUG. 2, 1985.
+C     MODIFIED IN JULY 1991 TO COMPUTE THE GUESS IN A MINIMAL
+C     HUZINAGA BASIS SET, WHICH SHOULD BE PROJECTED ONTO THE
+C     CURRENT BASIS SET.
+C
+      NCORE = 0
+      NVAL = 0
+C
+C           COMPUTE THE MINIMAL BASIS SET'S OVERLAP MATRIX
+C
+      DUMMY = 0.0D+00
+      IDUMMY= 0
+      CALL COOVLP(0,S,DUMMY,L1CO,L1CO,L2CO,NATM,
+     *            NGAUCO,NSHLCO,EX,CS,CP,CD,CF,DUMMY,DUMMY,DUMMY,
+     *            KSTART,KATOM,KTYPE,KNG,KLOC,KMIN,KMAX,
+     *            1,1,DUMMY,DUMMY,DUMMY,DUMMY,DUMMY,DUMMY,DUMMY,DUMMY,
+     *            IDUMMY,IDUMMY,IDUMMY,IDUMMY,IDUMMY,IDUMMY,IDUMMY,
+     *            CSUB,CSUB)
+C
+C           OBTAIN CANONICAL ORTHONORMAL MO-S
+C
+      CALL DCOPY(L2CO,S,1,H,1)
+      CALL QMATRX(H,Q,EIG,SCR,IA,L0,L1CO,L1CO,DBG)
+C
+      DO 180 I=1,L1CO
+         IA(I)=(I*I-I)/2
+  180 CONTINUE
+C
+C           SET LOWER AND UPPER BASIS FUNCTIONS ON EACH ATOM
+C
+      IAT=0
+      DO 210 I=1,NSHLCO
+         KAT = KATOM(I)
+         IF(KAT.GT.IAT) THEN
+            IAT=IAT+1
+            DO 200 J=IAT,KAT
+               LLIM(J) = KLOC(I)
+               IF(J.GT.1) IULIM(J-1) = LLIM(J) - 1
+  200       CONTINUE
+            IAT=KAT
+         END IF
+  210 CONTINUE
+      IULIM(IAT) = L1CO
+C              HANDLE ANY BASISLESS DUMMY ATOMS AT THE END
+      IAT=IAT+1
+      DO 220 I=IAT,NATM
+C
+C     COSMO CHANGES - KIM, PUT IN BY VOLKER OCT.1998
+C
+         IF(ISEPS) GOTO 220
+C
+         IF(ZAN(LOC2TA(I)).NE.ZERO) THEN
+            IF (MASWRK) WRITE(IW,*)
+     *                  'DUMMY ATOM',I,' HAS NONZERO CHARGE!'
+            IF (MASWRK) WRITE(IW,9010)
+     *                  (II,LLIM(II),IULIM(II),II=1,NATM)
+            CALL ABRT
+            STOP
+         END IF
+         LLIM(I) = IULIM(I-1)+1
+         IULIM(I) = L1CO
+  220 CONTINUE
+      IF(DBG) WRITE(IW,9010) (I,LLIM(I),IULIM(I),I=1,NATM)
+C
+C        TRANSFORM THE OVERLAP MATRIX TO SPHERICAL HARMONICS.
+C
+      CALL TSPHAR(TSH,L1CO,L1MCO,NOTSP,KTYPE,KLOC,NSHLCO)
+      IF(NOTSP) THEN
+         CALL TFTRI(H,S,TSH,SCR,L1CO,L1CO,L1CO)
+      ELSE
+         CALL DCOPY(L2CO,S,1,H,1)
+      END IF
+C
+C        CONSTRUCT HUCKEL MATRIX -H-, ON TOP OF THE OVERLAP MATRIX
+C
+      DO 390 N=1,NATM
+         NUCZ = INT(ZAN(LOC2TA(N))) + IZCORE(LOC2TA(N))
+         IF(NUCZ.EQ.0) GO TO 390
+         NOTECP = IZCORE(LOC2TA(N)).NE.NCELHW(NUCZ)
+         CALL HUCKLP(IW,NUCZ,ENEG,NCORE,NVAL,NDVAL,NOTECP,NCECP)
+C
+         KIND = 1
+         IF(NUCZ.GE.58  .AND.  NUCZ.LE.71)  KIND=2
+         IF(NUCZ.GE.72  .AND.  NUCZ.LE.86)  KIND=3
+         IF(NUCZ.GE.87  .AND.  NUCZ.LE.88)  KIND=4
+         IF(NUCZ.GE.89  .AND.  NUCZ.LE.90)  KIND=5
+         IF(NUCZ.GE.91  .AND.  NUCZ.LE.103) KIND=6
+C
+C                 SET CORE ORBITAL ENERGIES.
+C
+         I0=LLIM(N) - 1
+         IF(NCORE.EQ.0) GO TO 340
+C
+C        COUNT ANY CORE ORBITALS REMOVED BY ECP, ADDING APPROPRIATE
+C        NUMBER OF EXTRA FUNCTIONS DUE TO USE OF 6D AND 10F FUNCTIONS
+C
+         IC = IZCORE(LOC2TA(N))/2 - NCECP
+         IF(NOTECP) THEN
+            NEXTRA = 0
+            IF(IC.GT.50) NEXTRA = NEXTRA + 3
+            IF(IC.GT.34) NEXTRA = NEXTRA + 1
+            IF(IC.GT.23) NEXTRA = NEXTRA + 3
+            IF(IC.GT.18) NEXTRA = NEXTRA + 1
+            IF(IC.GT. 9) NEXTRA = NEXTRA + 1
+         ELSE
+            NEXTRA = 0
+         END IF
+         IC = IC+NEXTRA
+C
+C        IF A CORE ORBITAL IS BEING REMOVED BY USE OF A ECP,
+C        THAT ORBITAL IS ASSIGNED A POSITIVE ENERGY INSTEAD
+C
+         DO 320 I=1,NCORE
+            IROW=I0+I
+            II=IA(IROW)+IROW
+            ECORE=ENEG(LNEG(I+NCECP,KIND))
+            IF(I.LE.IC) THEN
+               H(II) = -ECORE
+            ELSE
+               H(II) =  ECORE
+            END IF
+            IWRK(IROW)=1
+  320    CONTINUE
+C
+C                 SET VALENCE ORBITAL ENERGIES.
+C
+  340    CONTINUE
+         I0 = LLIM(N)+NCORE-1
+         J0 = 0
+         DO 360 J=1,NVAL
+            IVAL = NDVAL(J)
+            DO 350 I=1,IVAL
+               IROW=I0+I
+               II=IA(IROW)+IROW
+               EVAL =ENEG(LNEG(NCORE+NCECP+J0+I,KIND))
+               H(II)=EVAL
+               IWRK(IROW) = 2
+  350       CONTINUE
+            I0 = I0+IVAL
+            J0 = J0+IVAL
+  360    CONTINUE
+C
+         NEXTRA=IULIM(N)-I0
+C
+C     COSMO CHANGES - KIM, PUT IN BY VOLKER OCT.1998
+C
+         IF(ISEPS) GOTO 390
+C
+         IF(NEXTRA.NE.0) THEN
+            IF(MASWRK) THEN
+               WRITE(IW,9030) N,NUCZ,KIND,NCORE,NVAL,(NDVAL(M),M=1,NVAL)
+               WRITE(IW,9040) NCECP,NOTECP,LLIM(N),IULIM(N),NEXTRA
+            END IF
+            CALL ABRT
+            STOP
+         END IF
+  390 CONTINUE
+C
+C        LEVEL SHIFT ANY S CONTAMINANT IN D SHELLS AWAY
+C        LEVEL SHIFT ANY P CONTAMINANT IN F SHELLS AWAY
+C
+      DO 430 N=1,NSHLCO
+         IAT  = KATOM(N)
+         NUCZ = INT(ZAN(LOC2TA(IAT))) + IZCORE(LOC2TA(IAT))
+         IF(KTYPE(N).EQ.3) THEN
+            I3S = KLOC(N)
+            II3S = IA(I3S) + I3S
+            H(II3S) = 50.0D+00 + NUCZ
+            IWRK(I3S) = 3
+         END IF
+         IF(KTYPE(N).EQ.4) THEN
+            DO 410 I=1,3
+               I4P = KLOC(N) + I - 1
+               II4P = IA(I4P) + I4P
+               H(II4P) = 50.0D+00 + NUCZ
+               IWRK(I4P) = 3
+  410       CONTINUE
+         END IF
+  430 CONTINUE
+C
+C        IF WE HAVE TWO SETS OF D'S ON THE SAME ATOM, WE NEED
+C        TO INCREASE THE XX-YY/XX-YY AND XX+YY-2ZZ/XX+YY-2ZZ
+C        OVERLAP BY 3/2 TO MAKE THEM EQUAL TO THE XY/XY TYPE
+C        OVERLAP, AND THEREFORE PRESERVE 5-FOLD DEGENERACY.
+C
+      DO 530 M=1,NSHLCO
+         IF(KTYPE(M).EQ.3) THEN
+            IAT = KATOM(M)
+            ILOC = KLOC(M)
+            NMAX = M-1
+            DO 510 N=1,NMAX
+               IF(KATOM(N).NE.IAT) GO TO 510
+               IF(KTYPE(N).NE.3  ) GO TO 510
+               JLOC = KLOC(N)
+               ID1 = IA(ILOC+1)+JLOC+1
+               ID2 = IA(ILOC+2)+JLOC+2
+               H(ID1) = ONEPT5*H(ID1)
+               H(ID2) = ONEPT5*H(ID2)
+  510       CONTINUE
+         END IF
+C
+C                 THE FACTORS IN HERE ARE PROBABLY NOT CORRECT.
+C                 THIS MATTERS FOR ACTINIDES ONLY (2 OCC F'S).
+C
+C--         IF(KTYPE(M).EQ.4) THEN
+C--            IAT = KATOM(M)
+C--            ILOC = KLOC(M)
+C--            NMAX = M-1
+C--            DO 520 N=1,NMAX
+C--               IF(KATOM(N).NE.IAT) GO TO 520
+C--               IF(KTYPE(N).EQ.4) THEN
+C--                  JLOC = KLOC(N)
+C--                  ID1 = IA(ILOC+3)+JLOC+3
+C--                  ID2 = IA(ILOC+4)+JLOC+4
+C--                  ID3 = IA(ILOC+5)+JLOC+5
+C--                  H(ID1) = 1.2741D+00*H(ID1)
+C--                  H(ID2) = 1.2741D+00*H(ID2)
+C--                  H(ID3) = 1.2741D+00*H(ID3)
+C--                  ID1 = IA(ILOC+6)+JLOC+6
+C--                  ID2 = IA(ILOC+7)+JLOC+7
+C--                  ID3 = IA(ILOC+8)+JLOC+8
+C--                  H(ID1) = ONEPT5*H(ID1)
+C--                  H(ID2) = ONEPT5*H(ID2)
+C--                  H(ID3) = ONEPT5*H(ID3)
+C--               END IF
+C--  520       CONTINUE
+C--         END IF
+  530 CONTINUE
+C
+C        SCALE DOWN ALL OFF-DIAGONAL AND CORE-CORE OVERLAPS TO
+C        REDUCE THE AMOUNT OF MIXING OF THESE FUNCTIONS.
+C        IWRK=1,2,3 MEANS CORE,VALENCE,CONTAMINANT FUNCTIONS.
+C
+      LOC=0
+      DO 630 I=1,L1CO
+         II = IWRK(I)
+         DO 620 J=1,I
+            LOC=LOC+1
+            IF(I.EQ.J) GO TO 620
+            JJ = IWRK(J)
+            IF(II.NE.JJ .OR. (II.EQ.1.AND.JJ.EQ.1)) H(LOC)=BITSY*H(LOC)
+            IF(II.EQ.3 .OR. JJ.EQ.3) THEN
+               IF(II.NE.JJ) H(LOC)=ZERO
+               IF(II.EQ.JJ) H(LOC)=BITSY*BITSY*H(LOC)
+            END IF
+  620    CONTINUE
+  630 CONTINUE
+C
+C           FINISH UP THE OFF-DIAGONAL OF THE HUCKEL OPERATOR
+C
+      FUDGE = 1.75D+00/TWO
+      II = 1
+      IJ = 1
+      DO 720 I=2,L1CO
+         II = II + I
+         HII=H(II)
+         JJ = 0
+         DO 710 J=1,I-1
+            JJ = JJ + J
+            IJ = IJ + 1
+            SIJ = H(IJ)
+            H(IJ)=FUDGE*SIJ*(HII+H(JJ))
+  710    CONTINUE
+         IJ = IJ + 1
+  720 CONTINUE
+C
+      IF(DBG) THEN
+         WRITE(IW,9020)
+         CALL PRTRI(H,L1CO)
+      END IF
+C
+C           BACKTRANSFORM HUCKEL MATRIX TO CARTESIAN GAUSSIANS
+C
+      IF(NOTSP) THEN
+         CALL TRPOSQ(TSH,L1CO)
+         CALL TFTRI(WRK,H,TSH,SCR,L1CO,L1CO,L1CO)
+         CALL DCOPY(L2CO,WRK,1,H,1)
+         IF(DBG) THEN
+            WRITE(IW,*) 'HUCKEL OPERATOR IN CARTESIAN SPACE'
+            CALL PRTRI(H,L1CO)
+         END IF
+      END IF
+C
+C           DIAGONALIZE THE HUCKEL OPERATOR
+C
+      IERR = 0
+      CALL GLDIAG(L1CO,L1CO,L1CO,H,SCR,EIG,VEC,IERR,IA)
+      IF(IERR.NE.0) THEN
+         IF (MASWRK) WRITE(IW,*)
+     *               'UNABLE TO DIAGONALIZE HUCKEL MATRIX'
+         CALL ABRT
+         STOP
+      END IF
+C
+C         ORTHONORMALIZE, AND BACKTRANSFORM TO THE AO BASIS
+C
+      CALL ORTHO(Q,S,VEC,SCR,L1CO,L1CO,L1CO,L2CO,L1CO)
+      CALL TFSQB(VEC,Q,SCR,L1CO,L1CO,L1CO)
+      CALL CLENMO(VEC,L1CO,L1CO,1.0D-06,1.0D-05,IW,.FALSE.)
+      IF(DBG) THEN
+         WRITE(IW,*) 'EXTENDED HUCKEL ORBITALS (IN MINI BASIS) ARE'
+         CALL PREVNL(VEC,EIG,L1CO,L1CO,L1CO)
+      END IF
+      RETURN
+C
+ 9010 FORMAT(1X,'ATOM',I5,'  HAS LLIM=',I5,'  IULIM=',I5)
+ 9020 FORMAT(/1X,'EXTENDED HUCKEL MATRIX')
+ 9030 FORMAT(//1X,'CONFUSION IN -HUCKEL- WITH ATOM=',I4,
+     *       1X,'NUCZ=',I4,' KIND=',I2/
+     *       1X,'NCORE,NVAL=',2I4,' NDVAL=',4I4)
+ 9040 FORMAT(1X,'NCECP=',I4,' NOTECP=',L2/
+     *       1X,'LLIM,IULIM=',2I4,' NEXTRA=',I4,' NEXTRA SHOULD BE 0'//)
+      END
+C
+C*MODULE DCGUES  *DECK HCORDC
+C        MODIFIED FROM HCORE
+      SUBROUTINE HCORDC(IWRK,EIG,H,H0,VEC,Q,SCR,H0T,ST,L0,L1,L2,L3,
+     *                  LT1,LT2,DBG)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      LOGICAL DBG
+C
+      DIMENSION IWRK(L1),EIG(L1),H(L2),H0(L2),VEC(L3),Q(L3),SCR(L1,8)
+      DIMENSION H0T(LT2),ST(LT2)
+C
+C     (IN THE ISUB-TH LOCALIZATION REGION)
+C
+C     ----- OBTAIN INITIAL ORBITALS BY DIAGONALIZATION OF THE
+C           ONE ELECTRON HAMILTONIAN MATRIX -----
+C
+C           OBTAIN TRANSFORMATION -Q- TO ORTHONORMAL, SYMMETRY
+C           ADAPTED ORBITALS BY DIAGONALIZING THE OVERLAP MATRIX.
+C
+      CALL TRT2LC(ST,H0,LT1,LT2,L1,L2,'OVERLAP ')
+      CALL QMTSYM(H0,VEC,Q,EIG,SCR,IWRK,L0,L1,L2,L3,DBG)
+C
+C           READ IN BARE NUCLEUS HAMILTONIAN MATRIX H0
+C           FOCK TRANSFORMATION H=Q*H0*Q
+C           DIAGONALIZE THE BLOCK DIAGONAL H MATRIX
+C           BACK TRANSFORM THE EIGENVECTORS
+C
+      CALL TRT2LC(H0T,H0,LT1,LT2,L1,L2,'H0      ')
+      CALL TFTRI(H,H0,Q,SCR,L0,L1,L1)
+      CALL SYMDIA(H,VEC,EIG,SCR,IWRK,L0,L2,L1)
+      CALL TFSQB(VEC,Q,SCR,L0,L1,L1)
+C
+      RETURN
+C
+      END
+C
+C*MODULE DCGUES  *DECK HUCBDC
+C        MODIFIED FROM HUCKLB
+      SUBROUTINE HUCBDC(KSTART,KATOM,KTYPE,KNG,KLOC,KMIN,KMAX,
+     *                  EX,CS,CP,CD,CF,CSINP,CPINP,CDINP,CFINP,
+     *                  NS,INTYP,MXGAU,MXSHL,NATM,
+     *                  L1CO,L2CO,L3CO,NGAUCO,NSHLCO,NCELHW)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL GOPARR,DSKWRK,MASWRK,ISEPS,USEPS
+C
+      DIMENSION INTYP(NATM),NS(NATM),EX(MXGAU),
+     *          CS(MXGAU),CP(MXGAU),CD(MXGAU),CF(MXGAU),
+     *          CSINP(MXGAU),CPINP(MXGAU),CDINP(MXGAU),CFINP(MXGAU),
+     *          KSTART(MXSHL),KATOM(MXSHL),KTYPE(MXSHL),KNG(MXSHL),
+     *          KLOC(MXSHL),KMIN(MXSHL),KMAX(MXSHL),NCELHW(104)
+      DIMENSION NBFS(4),MINF(4),MAXF(4),NANGM(4),SCFAC(4)
+C
+      PARAMETER (MXATM=2000)
+      PARAMETER (MXLATM=200, MXLSHL=700)
+C
+      COMMON /ECP2  / CLP(400),ZLP(400),NLP(400),KFIRST(MXATM,6),
+     *                KLAST(MXATM,6),LMAX(MXATM),LPSKIP(MXATM),
+     *                IZCORE(MXATM)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /ISEPS/ ISEPS, USEPS
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+      COMMON /INFOLC/ LOC2TA(MXLATM),LOC2TS(MXLSHL),LCKLOC(MXLSHL),
+     *                NLAT,NLATC,NLSH,NLSHC,LNUM,LNUMC
+C
+C     COSMO INFORMATION
+C
+      PARAMETER (NPPA=1082)
+      COMMON /COSMO1/ SE2,SECORR,ETOTS,CDUM,QVCOSMO,
+     *                CSPOT(NPPA),ICORR,ITRIPO,ITRIP2,ITRIP3,ITRIP4,
+     *                NATCOS,NQS,ITERC
+C
+      DATA NBFS/ 1, 3, 6,10/
+      DATA MINF/ 1, 2, 5,11/
+      DATA MAXF/ 1, 4,10,20/
+      DATA NANGM/1, 2, 3, 4/
+      DATA SCFAC/4*0.0D+00/
+C
+C     ----- SET UP A HUZINAGA MINI BASIS SET ON THE FLY -----
+C     IF POSSIBLE, USE A MBS ECP BASIS FOR EVERY ECP ATOM.
+C     BESIDES SETTING UP THE DETAILS IN EX, CS, AND SO ON, AND THE
+C     DIMENSIONALITY IS RETURNED IN L1CO,L2CO,L3CO,NGAUCO,NSHLCO
+C
+      IERR1  = 0
+      IERR2  = 0
+      L1CO   = 0
+      NSHLCO = 0
+      NGAUCO = 0
+C
+C     COSMO SUBTRACTS -NQS- FOR UNKNOWN REASONS (TO MWS, ANYWAY)
+C
+      NATSV = NAT
+      IF(ISEPS  .AND.  NQS.GT.0) NATSV = NAT - NQS
+C
+      DO 120 N=1,NATM
+         NAT = N
+         NUCZ = INT(ZAN(LOC2TA(N))) + IZCORE(LOC2TA(N))
+         IF(NUCZ.LE.0) GO TO 120
+         IF(IZCORE(LOC2TA(N)).NE.NCELHW(NUCZ)) THEN
+            CALL BASHUZ(NUCZ,.FALSE.,CSINP,CPINP,CDINP,CFINP,
+     *                  SCFAC,IERR1,IERR2,INTYP,NANGM,NBFS,MINF,MAXF,
+     *                  L1CO,NGAUCO,NS,EX,CS,CP,CD,CF,KSTART,KATOM,
+     *                  KTYPE,KNG,KLOC,KMIN,KMAX,NSHLCO,MXGAU,MXSHL)
+         ELSE
+            CALL HWBAS(1,NUCZ,CSINP,CPINP,CDINP,IERR1,IERR2,
+     *                 INTYP,NANGM,NBFS,MINF,MAXF,L1CO,NGAUCO,NS,
+     *                 EX,CS,CP,CD,KSTART,KATOM,KTYPE,KNG,KLOC,
+     *                 KMIN,KMAX,NSHLCO,MXGAU,MXSHL)
+         END IF
+         IF(IERR1.NE.0) THEN
+            IF (MASWRK) WRITE(IW,*)
+     *                  'TOO MANY SHELLS IN HUCKEL BASIS'
+            CALL ABRT
+            STOP
+         END IF
+         IF(IERR2.NE.0) THEN
+            IF (MASWRK) WRITE(IW,*)
+     *                  'TOO MANY GAUSSIANS IN HUCKEL BASIS'
+            CALL ABRT
+            STOP
+         END IF
+  120 CONTINUE
+C
+      NAT = NATSV
+      L2CO = (L1CO*L1CO+L1CO)/2
+      L3CO = L1CO*L1CO
+      RETURN
+      END
+C
+C*MODULE DCGUES  *DECK HUKDCS
+      SUBROUTINE HUKDCS(LLIM,IULIM,EIG,H,S,SSUB,VEC,Q,QSUB,SCR,
+     *                  IWRK,NATM,L0,L1,L2,L3,DBG,NEED1,
+     *                  CSUB,EXSUB,CSSUB,CPSUB,CDSUB,CFSUB,CGSUB,CHSUB,
+     *                  CISUB,KSTSUB,KATSUB,KTPSUB,KNGSUB,KLCSUB,KMNSUB,
+     *                  KMXSUB,NGTOT,NSHL)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL DBG,GOPARR,DSKWRK,MASWRK
+C
+      PARAMETER (MXGTOT=20000, MXSH=5000, MXATM=2000)
+C
+      DIMENSION LLIM(NATM),IULIM(NATM),IWRK(L1),EIG(L1),H(L2),S(L2),
+     *          VEC(L3),Q(L3),SCR(L1,8)
+      DIMENSION QSUB(L3),SSUB(L2)
+      DIMENSION CSUB(3,NATM)
+      DIMENSION NCELHW(104)
+      DIMENSION EXSUB(NGTOT),CSSUB(NGTOT),CPSUB(NGTOT),CDSUB(NGTOT),
+     *          CFSUB(NGTOT),CGSUB(NGTOT),CHSUB(NGTOT),CISUB(NGTOT),
+     *          KSTSUB(NSHL),KATSUB(NSHL),KTPSUB(NSHL),KNGSUB(NSHL),
+     *          KLCSUB(NSHL),KMNSUB(NSHL),KMXSUB(NSHL)
+C
+      COMMON /ECP2  / CLP(400),ZLP(400),NLP(400),KFIRST(MXATM,6),
+     *                KLAST(MXATM,6),LMAX(MXATM),LPSKIP(MXATM),
+     *                IZCORE(MXATM)
+      COMMON /FMCOM / X(1)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /MACHSW/ KDIAG,ICORFL,IXDR
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /SYMTRY/ MAPSHL(MXSH,48),MAPCTR(MXATM,48),
+     *                T(432),INVT(48),NT
+      COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
+     *                MPLEVL,MPCTYP
+C
+      PARAMETER (MXLATM=200, MXLSHL=700)
+C
+      COMMON /INFOLC/ LOC2TA(MXLATM),LOC2TS(MXLSHL),LCKLOC(MXLSHL),
+     *                NLAT,NLATC,NLSH,NLSHC,LNUM,LNUMC
+C
+C     ----- GENERATE HUCKEL GUESS ORBITAL OF DC SUBSYSTEM -----
+C       IF(GUESS.EQ.HUCSUB)
+C         INITIAL GUESS IS GENERATED IN SUBSYSTEM REGIONS.
+C
+C         THE NUMBER OF CORE ELECTRONS REMOVED BY HW BASIS
+C         FIRST NINE TM'S ARE SEMI-CORE, THESE DON'T EXIST ZN,CD,HG
+C         ALL OTHER ELEMENTS ARE FULL CORE
+C
+      DATA NCELHW/  -1,                   -1,
+     *            2*-1,                 6*-1,
+     *            2*10,                 6*10,
+     *            2*18,         9*10,-1,6*28,
+     *            2*36,         9*28,-1,6*46,
+     *            2*54,46,14*-1,8*60,-1,3*78,21*-1/
+C
+      DATA NONE  /4HNONE/
+C
+C     --- SET SUBSYSTEM INFORMATIONS ---
+C
+      NELA=0
+      DO IATM=1,NATM
+         CSUB(1,IATM)=C(1,LOC2TA(IATM))
+         CSUB(2,IATM)=C(2,LOC2TA(IATM))
+         CSUB(3,IATM)=C(3,LOC2TA(IATM))
+         NELA=NELA+INT(ZAN(LOC2TA(IATM)))
+      END DO
+      NELA=NELA/2
+C
+      IGTOT=1
+      IATB=0
+      IATSUB=0
+      DO ISHL=1,NSHL
+         ISHLT=LOC2TS(ISHL)
+         IF(IATB.NE.KATOM(ISHLT))THEN
+            IATSUB=IATSUB+1
+            IATB=KATOM(ISHLT)
+         END IF
+         KSTSUB(ISHL)=IGTOT
+         KATSUB(ISHL)=IATSUB
+         KTPSUB(ISHL)=KTYPE(ISHLT)
+         KNGSUB(ISHL)=KNG(ISHLT)
+         KLCSUB(ISHL)=LCKLOC(ISHL)
+         KMNSUB(ISHL)=KMIN(ISHLT)
+         KMXSUB(ISHL)=KMAX(ISHLT)
+         IGTOTT=KSTART(ISHLT)
+         DO IG=1,KNG(ISHLT)
+            EXSUB(IGTOT)=EX(IGTOTT)
+            CSSUB(IGTOT)=CS(IGTOTT)
+            CPSUB(IGTOT)=CP(IGTOTT)
+            CDSUB(IGTOT)=CD(IGTOTT)
+            CFSUB(IGTOT)=CF(IGTOTT)
+            CGSUB(IGTOT)=CG(IGTOTT)
+            CHSUB(IGTOT)=CH(IGTOTT)
+            CISUB(IGTOT)=CI(IGTOTT)
+            IGTOTT=IGTOTT+1
+            IGTOT =IGTOT +1
+         END DO
+      END DO
+C
+C     ----- MEMORY DRIVER FOR HUCKEL INITIAL GUESS -----
+C
+      IF(MPCTYP.NE.NONE) THEN
+         CALL DAREAD(IDAF,IODA,S,L2,12,0)
+         CALL QMTSYM(S,VEC,Q,EIG,SCR,IWRK,L0,L1,L2,L3,DBG)
+         CALL MPHCDC(H,EIG,SCR,VEC,DBG,IWRK,L1,L2)
+         RETURN
+      END IF
+C
+C     USE JACOBI DIAGONALIZATION, IT AVOIDS SCRAMBLING
+C     ORBITAL SYMMETRIES DURING MINI AND 3-21G RUNS.
+C
+      KDSAVE = KDIAG
+      IF(NT.GT.1) KDIAG = 3
+C
+      NCORE = 0
+      DO 100 N=1,NLAT
+         NUCZ = INT(ZAN(LOC2TA(N))) + IZCORE(LOC2TA(N))
+         IF(NCELHW(NUCZ).NE.IZCORE(LOC2TA(N)))
+     *      NCORE = NCORE + IZCORE(LOC2TA(N))
+  100 CONTINUE
+      NCORE = NCORE/2
+C
+C     ----- SET UP THE HUZINAGA MINIMAL BASIS SET -----
+C     LR (Z=103) HAS 18 OCCUPIED SHELLS, AND MOST OF THE TIME
+C     A MINI BASIS HAS 3 GAUSSIANS PER SHELL.
+C
+      NATM  = NLAT
+      MXSHL = NLAT*18
+      MXGAU = MXSHL*3
+C
+      CALL VALFM(LOADFM)
+      LEX    = LOADFM + 1
+      LCS    = LEX    + MXGAU
+      LCP    = LCS    + MXGAU
+      LCD    = LCP    + MXGAU
+      LCF    = LCD    + MXGAU
+      LCSINP = LCF    + MXGAU
+      LCPINP = LCSINP + MXGAU
+      LCDINP = LCPINP + MXGAU
+      LCFINP = LCDINP + MXGAU
+      LKSTAR = LCFINP + MXGAU
+      LKATOM = LKSTAR + MXSHL
+      LKTYPE = LKATOM + MXSHL
+      LKNG   = LKTYPE + MXSHL
+      LKLOC  = LKNG   + MXSHL
+      LKMIN  = LKLOC  + MXSHL
+      LKMAX  = LKMIN  + MXSHL
+      LNS    = LKMAX  + MXSHL
+      LINTYP = LNS    + NATM
+      LAST   = LINTYP + NATM
+      NEED2  = LAST - LOADFM - 1
+      CALL GETFM(NEED2)
+C
+      CALL HUCBDC(X(LKSTAR),X(LKATOM),X(LKTYPE),X(LKNG),X(LKLOC),
+     *            X(LKMIN),X(LKMAX),X(LEX),X(LCS),X(LCP),X(LCD),X(LCF),
+     *            X(LCSINP),X(LCPINP),X(LCDINP),X(LCFINP),
+     *            X(LNS),X(LINTYP),MXGAU,MXSHL,NATM,
+     *            L1CO,L2CO,L3CO,NGAUCO,NSHLCO,NCELHW)
+C
+      CALL VALFM(LOADFM)
+      LIA    = LOADFM + 1
+      LEIG   = LIA    + L1CO
+      LIWRK  = LEIG   + L1CO
+      LSCR   = LIWRK  + L1CO
+      LH     = LSCR   + L1CO*8
+      LS     = LH     + L2CO
+      LVEC   = LS     + L2CO
+      LWRK1  = LVEC   + L3CO
+      LWRK2  = LWRK1  + MAX(L3CO,L3)
+      LWRK3  = LWRK2  + MAX(L3CO,L3)
+      LSCO   = LWRK3  + L3CO
+      LAST   = LSCO   + L1CO*L1
+C
+      NEED3 = LAST-LOADFM-1
+C
+      NEEDT = NEED1 + NEED2 + NEED3
+      IF (MASWRK) WRITE(IW,9020) NEEDT
+C
+      CALL GETFM(NEED3)
+C
+C        EXTENDED HUCKEL CALCULATION IN MINI BASIS SET
+C
+      CALL HCKLDC(LLIM,IULIM,X(LIA),X(LEIG),X(LH),X(LS),X(LWRK1),
+     *            X(LVEC),X(LWRK2),X(LWRK3),X(LSCR),X(LIWRK),
+     *            DBG,MXGAU,MXSHL,X(LEX),X(LCS),X(LCP),
+     *            X(LCD),X(LCF),X(LKSTAR),X(LKATOM),
+     *            X(LKTYPE),X(LKNG),X(LKLOC),X(LKMIN),X(LKMAX),
+     *            L1CO,L2CO,L3CO,NGAUCO,NSHLCO,L1MCO,NATM,NCELHW,
+     *            CSUB)
+C
+C        GET OVERLAP BETWEEN THE MINI AND INPUT BASIS SETS
+C
+      CALL COOVLP(1,DUMMY,X(LSCO),L1,L1CO,L2,NATM,NGTOT,NSHL,
+     *            EXSUB,CSSUB,CPSUB,CDSUB,CFSUB,CGSUB,CHSUB,CISUB,
+     *            KSTSUB,KATSUB,KTPSUB,KNGSUB,KLCSUB,KMNSUB,KMXSUB,
+     *            NGAUCO,NSHLCO,X(LEX),X(LCS),X(LCP),X(LCD),X(LCF),
+     *            DUMMY,DUMMY,DUMMY,X(LKSTAR),X(LKATOM),X(LKTYPE),
+     *            X(LKNG),X(LKLOC),X(LKMIN),X(LKMAX),CSUB,CSUB)
+C
+C        GET "PURE" CANONICAL ORBITALS IN INPUT BASIS SPACE
+C
+      CALL COQMDC(Q,X(LWRK2),X(LWRK1),H,S,SCR,EIG,IWRK,L1M,L0,L1,L2,L3,
+     *            KTPSUB,KLCSUB,KMNSUB,KMXSUB,NLSH,1,QSUB,SSUB)
+C
+C        DETERMINE WHICH ORBITALS SHOULD BE PROJECTED
+C
+      NDOC=NELA
+      NACT=0
+C                  DO AT MOST 5 VIRTUALS FROM THE HUCKEL
+      NPROJ=MIN(L1MCO-NCORE,NDOC+NACT+5)
+C
+C        PROJECT MINI GUESS ONTO THE INPUT CANONICAL ORBITALS
+C        THIS RETURNS THE PROJECTED ORBITALS IN -Q- ARRAY
+C
+      CALL COPROJ(X(LVEC),X(LSCO),Q,X(LWRK1),X(LWRK2),
+     *            X(LWRK3),S,SCR,EIG,IWRK,NDOC,NACT,NPROJ,
+     *            L1,L1CO,L1M,L2,IW,DBG)
+C
+C        GENERATE THE REMAINING VIRTUALS BY ORTHOGONALIZATION
+C
+      CALL DCOPY(L1*NPROJ,Q,1,VEC,1)
+      CALL DCOPY(L3,QSUB,1,Q,1)
+      CALL ORTHO(Q,SSUB,VEC,SCR,NPROJ,L1,L1,L2,L1)
+      CALL TFSQB(VEC,Q,SCR,L1,L1,L1)
+C
+C     COPY EIGENVALUES OF HUCKEL GUESS
+      CALL DCOPY(NPROJ,X(LEIG),1,EIG,1)
+      DO I=NPROJ+1,L1
+         EIG(I)=1000.0D+00
+      END DO
+C
+      CALL RETFM(NEED3)
+      CALL RETFM(NEED2)
+      KDIAG = KDSAVE
+      RETURN
+C
+ 9020 FORMAT(1X,'DC-HUCKEL GUESS REQUIRES',I10,' WORDS.')
+      END
+C
+C*MODULE DCGUES  *DECK HUKLDC
+      SUBROUTINE HUKLDC(LLIM,IULIM,EIG,H,S,VEC,Q,SCR,
+     *                  IWRK,NATM,L0,L1,L2,L3,DBG,QUICK,NEED1)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL DBG,QUICK,USEIAN,GOPARR,DSKWRK,MASWRK
+C
+      PARAMETER (MXGTOT=20000, MXSH=5000, MXATM=2000)
+C
+      DIMENSION LLIM(NATM),IULIM(NATM),IWRK(L1),EIG(L1),H(L2),S(L2),
+     *          VEC(L3),Q(L3),SCR(L1,8)
+      DIMENSION NCELHW(104)
+C
+      COMMON /ECP2  / CLP(400),ZLP(400),NLP(400),KFIRST(MXATM,6),
+     *                KLAST(MXATM,6),LMAX(MXATM),LPSKIP(MXATM),
+     *                IZCORE(MXATM)
+      COMMON /FMCOM / X(1)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /MACHSW/ KDIAG,ICORFL,IXDR
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /SYMTRY/ MAPSHL(MXSH,48),MAPCTR(MXATM,48),
+     *                T(432),INVT(48),NT
+      COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
+     *                MPLEVL,MPCTYP
+C
+C     ----- GENERATE HUCKEL GUESS ORBITAL (OF TOTAL REGION) FOR DC -----
+C       IF(GUESS.EQ.(HUCKEL .OR. MOREAD .OR. RDMINI .OR. MOSAVED)
+C         INITIAL GUESS IS GENERATED IN TOTAL REGION.
+C
+C         THE NUMBER OF CORE ELECTRONS REMOVED BY HW BASIS
+C         FIRST NINE TM'S ARE SEMI-CORE, THESE DON'T EXIST ZN,CD,HG
+C         ALL OTHER ELEMENTS ARE FULL CORE
+C
+      DATA NCELHW/  -1,                   -1,
+     *            2*-1,                 6*-1,
+     *            2*10,                 6*10,
+     *            2*18,         9*10,-1,6*28,
+     *            2*36,         9*28,-1,6*46,
+     *            2*54,46,14*-1,8*60,-1,3*78,21*-1/
+C
+      DATA RHF,UHF/8HRHF     ,8HUHF     /
+      DATA NONE/4HNONE/
+C
+C     ----- MEMORY DRIVER FOR HUCKEL INITIAL GUESS -----
+C
+      USEIAN=.FALSE.
+C
+C     ----- WE USE A SPECIAL ROUTINE FOR MOPAC WFN -----
+C
+      IF(MPCTYP.NE.NONE) THEN
+         CALL DAREAD(IDAF,IODA,S,L2,12,0)
+         CALL QMTSYM(S,VEC,Q,EIG,SCR,IWRK,L0,L1,L2,L3,DBG)
+         CALL DAWRIT(IDAF,IODA,Q,L3,45,0)
+         CALL MPCHCK(H,EIG,SCR,VEC,SCFTYP,DBG,IWRK,L1,L2)
+         RETURN
+      END IF
+C
+C     USE JACOBI DIAGONALIZATION, IT AVOIDS SCRAMBLING
+C     ORBITAL SYMMETRIES DURING MINI AND 3-21G RUNS.
+C
+      KDSAVE = KDIAG
+      IF(NT.GT.1) KDIAG = 3
+C
+      NCORE = 0
+      DO 100 N=1,NAT
+         NUCZ = INT(ZAN(N)) + IZCORE(N)
+         IF(NCELHW(NUCZ).NE.IZCORE(N)) NCORE = NCORE + IZCORE(N)
+  100 CONTINUE
+      NCORE = NCORE/2
+C
+C     ----- SET UP THE HUZINAGA MINIMAL BASIS SET -----
+C     LR (Z=103) HAS 18 OCCUPIED SHELLS, AND MOST OF THE TIME
+C     A MINI BASIS HAS 3 GAUSSIANS PER SHELL.
+C
+      NATM  = NAT
+      MXSHL = NAT*18
+      MXGAU = MXSHL*3
+C
+      CALL VALFM(LOADFM)
+      LEX    = LOADFM + 1
+      LCS    = LEX    + MXGAU
+      LCP    = LCS    + MXGAU
+      LCD    = LCP    + MXGAU
+      LCF    = LCD    + MXGAU
+      LCSINP = LCF    + MXGAU
+      LCPINP = LCSINP + MXGAU
+      LCDINP = LCPINP + MXGAU
+      LCFINP = LCDINP + MXGAU
+      LKSTAR = LCFINP + MXGAU
+      LKATOM = LKSTAR + MXSHL
+      LKTYPE = LKATOM + MXSHL
+      LKNG   = LKTYPE + MXSHL
+      LKLOC  = LKNG   + MXSHL
+      LKMIN  = LKLOC  + MXSHL
+      LKMAX  = LKMIN  + MXSHL
+      LNS    = LKMAX  + MXSHL
+      LINTYP = LNS    + NATM
+      LAST   = LINTYP + NATM
+      NEED2  = LAST - LOADFM - 1
+      CALL GETFM(NEED2)
+C
+      CALL HUCKLB(X(LKSTAR),X(LKATOM),X(LKTYPE),X(LKNG),X(LKLOC),
+     *            X(LKMIN),X(LKMAX),X(LEX),X(LCS),X(LCP),X(LCD),X(LCF),
+     *            X(LCSINP),X(LCPINP),X(LCDINP),X(LCFINP),
+     *            X(LNS),X(LINTYP),MXGAU,MXSHL,NATM,
+     *            L1CO,L2CO,L3CO,NGAUCO,NSHLCO,NCELHW,USEIAN)
+C
+      CALL VALFM(LOADFM)
+      LIA    = LOADFM + 1
+      LEIG   = LIA    + L1CO
+      LIWRK  = LEIG   + L1CO
+      LSCR   = LIWRK  + L1CO
+      LH     = LSCR   + L1CO*8
+      LS     = LH     + L2CO
+      LVEC   = LS     + L2CO
+      LWRK1  = LVEC   + L3CO
+      LWRK2  = LWRK1  + MAX(L3CO,L3)
+      LWRK3  = LWRK2  + MAX(L3CO,L3)
+      LSCO   = LWRK3  + L3CO
+      LAST   = LSCO   + L1CO*L1
+C
+      NEED3 = LAST-LOADFM-1
+C
+      NEEDT = NEED1 + NEED2 + NEED3
+      IF (MASWRK) WRITE(IW,9020) NEEDT
+C
+      CALL GETFM(NEED3)
+      IF(QUICK) THEN
+         IF (MASWRK) WRITE(IW,9010)
+         GO TO 800
+      END IF
+C
+C        EXTENDED HUCKEL CALCULATION IN MINI BASIS SET
+C
+      CALL HUCKEL(LLIM,IULIM,X(LIA),X(LEIG),X(LH),X(LS),X(LWRK1),
+     *            X(LVEC),X(LWRK2),X(LWRK3),X(LSCR),X(LIWRK),
+     *            DBG,MXGAU,MXSHL,X(LEX),X(LCS),X(LCP),
+     *            X(LCD),X(LCF),X(LKSTAR),X(LKATOM),
+     *            X(LKTYPE),X(LKNG),X(LKLOC),X(LKMIN),X(LKMAX),
+     *            L1CO,L2CO,L3CO,NGAUCO,NSHLCO,L1MCO,NATM,NCELHW,
+     *            USEIAN)
+C
+C        GET OVERLAP BETWEEN THE MINI AND INPUT BASIS SETS
+C
+      CALL COOVLP(1,DUMMY,X(LSCO),L1,L1CO,L2,NATM,MXGTOT,NSHELL,
+     *            EX,CS,CP,CD,CF,CG,CH,CI,KSTART,KATOM,KTYPE,KNG,
+     *            KLOC,KMIN,KMAX,NGAUCO,NSHLCO,X(LEX),X(LCS),X(LCP),
+     *            X(LCD),X(LCF),DUMMY,DUMMY,DUMMY,X(LKSTAR),X(LKATOM),
+     *            X(LKTYPE),X(LKNG),X(LKLOC),X(LKMIN),X(LKMAX),C,C)
+C
+C        GET "PURE" CANONICAL ORBITALS IN INPUT BASIS SPACE
+C
+      CALL COQMDC(Q,X(LWRK2),X(LWRK1),H,S,SCR,EIG,IWRK,L1M,L0,L1,L2,L3,
+     *            KTYPE,KLOC,KMIN,KMAX,NSHELL,0,DUMMY,DUMMY)
+C
+C        DETERMINE WHICH ORBITALS SHOULD BE PROJECTED
+C
+      NDOC=0
+      NACT=0
+      IF(SCFTYP.EQ.RHF) THEN
+         NDOC=NA
+         NACT=0
+      END IF
+      IF(SCFTYP.EQ.UHF) THEN
+         NDOC=NB
+         NACT=NA-NB
+      END IF
+C
+C                  DO AT MOST 5 VIRTUALS FROM THE HUCKEL
+      NPROJ=MIN(L1MCO-NCORE,NDOC+NACT+5)
+C
+C        PROJECT MINI GUESS ONTO THE INPUT CANONICAL ORBITALS
+C        THIS RETURNS THE PROJECTED ORBITALS IN -Q- ARRAY
+C
+      CALL COPROJ(X(LVEC),X(LSCO),Q,X(LWRK1),X(LWRK2),
+     *            X(LWRK3),S,SCR,EIG,IWRK,NDOC,NACT,NPROJ,
+     *            L1,L1CO,L1M,L2,IW,DBG)
+C
+C        GENERATE THE REMAINING VIRTUALS BY ORTHOGONALIZATION
+C
+      CALL DCOPY(L1*NPROJ,Q,1,VEC,1)
+      CALL DAREAD(IDAF,IODA,S,L2,12,0)
+      CALL DAREAD(IDAF,IODA,Q,L3,45,0)
+      CALL ORTHO(Q,S,VEC,SCR,NPROJ,L1,L1,L2,L1)
+      CALL TFSQB(VEC,Q,SCR,L1,L1,L1)
+C
+      IF(SCFTYP.EQ.UHF) THEN
+C        ...
+      ENDIF
+C
+  800 CONTINUE
+      CALL RETFM(NEED3)
+      CALL RETFM(NEED2)
+      KDIAG = KDSAVE
+      RETURN
+C
+ 9010 FORMAT(/1X,'THIS CHECK RUN SHOWS THERE IS SUFFICIENT MEMORY FOR ',
+     *           'GUESS=HUCKEL.'//
+     *        1X,'SINCE THIS IS A CHECK RUN WITH BOTH GUESS=HUCKEL ',
+     *           'AND PRTMO=.FALSE.,'/
+     *        1X,'THE ORBITALS WILL BE MADE BY GUESS=HCORE, ',
+     *           'IN THE INTEREST OF SPEED.'/
+     *        1X,'IF YOU REALLY NEED TO SEE THE HUCKEL ORBITAL ',
+     *           'SYMMETRIES,'/
+     *        1X,'YOU MUST SET PRTMO=.TRUE. DURING A CHECK RUN.')
+ 9020 FORMAT(1X,'HUCKEL GUESS REQUIRES',I10,' WORDS.')
+      END
+C
+C*MODULE DCGUES  *DECK IDENDC
+C        MODIFIED FROM INIDEN
+      SUBROUTINE IDENDC(GUESS,V,VB,DA,DB,E,OCCNO,LABMO,Q,SCR,S,
+     *                  L0,L1,L2,L3,DBG,PRTMO)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      LOGICAL DBG,PRTMO,
+     *        GOPARR,DSKWRK,MASWRK
+      PARAMETER (MXATM=2000)
+      PARAMETER (ONE=1.0D+00, TWO=2.0D+00)
+      PARAMETER (VLN10=2.30258509299405D+00)
+C
+      CHARACTER*5 ORBSET
+C
+      DIMENSION V(L1,*),VB(L1,*),DA(L2),DB(L2),E(L1),OCCNO(L1),
+     *          LABMO(L1),Q(L3),SCR(L1),S(L2)
+C
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
+     *                MPLEVL,MPCTYP
+C
+      COMMON /DCFRM / FRMLVA,FRMLVB,FRBETA,FTOL,MXITDC
+C
+      DATA UHF/8HUHF     /
+      DATA HCORE/8HHCORE   /
+      DATA NONE/4HNONE/
+C
+C     ON ENTRANCE- E MUST CONTAIN EIGENVALUES, IF THE GUESS TYPE
+C                  WAS HCORE OR HUCKEL. THE VECTORS MUST EXIST ON
+C                  THE DICTIONARY FILE.
+C     ON EXIT- V,DA,E WILL BE ON THE DICTIONARY FILE.
+C              FOR ROHF OR UHF, THE BETA V,DB,E WILL BE THERE.
+C
+C     ----- SET UP OCCUPATION NUMBERS -----
+C     ----- CALCULATE DENSITY MATRICES -----
+C     ----- SAVE DENSITY + ORBITAL ENERGIES (OR OCCNO-S) -----
+C
+C     COUNT CHEMICAL CORE ORBITALS, MOPAC SHOULD HAVE NONE
+C
+      NCORE = NUMCORDC()
+      IF(MPCTYP.NE.NONE) NCORE=0
+C
+      CALL VCLR(OCCNO,1,L1)
+      IF(SCFTYP.EQ.UHF)    GO TO 600
+C
+C                                     DC-RHF OCCUPANCIES
+      I=1
+      VAL=FRMLVA-E(I)
+      XFTOL= VLN10*FTOL/FRBETA
+C
+C     IN THE CASE VALUE OF FERMI FUNCTION NEAR ONE
+      DO WHILE (I.LE.L1 .AND. VAL.GT.XFTOL)
+         OCCNO(I) = TWO
+         I=I+1
+         VAL=FRMLVA-E(I)
+      END DO
+      NOC=I-1
+C
+C     IN THE CASE VALUE OF FERMI FUNCTION NOT NEAR EITHER ZERO OR ONE
+      DO WHILE (I.LE.L1 .AND. VAL.GE.-XFTOL)
+         OCCNO(I) = TWO * FERMIF(VAL,FRBETA)
+         I=I+1
+         IF(I.LE.FRMLVA) NOC=NOC+1
+         VAL=FRMLVA-E(I)
+      END DO
+C
+      NOCDC=I-1
+C
+C        ----- RHF CASE ----
+C        SELECT THE MO-S, AND PRINT THEM
+C
+C     ASSIGN THE ORBITALS A SYMMETRY LABEL
+C
+      CALL SYMMOS(LABMO,Q,S,V,SCR,L0,L1,L0,L1)
+C
+      ORBSET=' BOTH'
+      IF(MASWRK  .AND.  (DBG  .OR.  PRTMO)) THEN
+         WRITE(IW,9020) ORBSET,NOC,NCORE
+         MINI=NCORE+1
+         MAXI=MIN(NOC+10,L1,L0)
+         WRITE(IW,9022) (I,LABMO(I),I=MINI,MAXI)
+C
+         WRITE(IW,9026)
+         WRITE(IW,9046)
+         WRITE(IW,9048) (OCCNO(I),I = 1,L0)
+         CALL PREVSDC(0,V,E,LABMO,L0,L1,L1,1)
+      END IF
+CC      IF(MASWRK  .AND.  PUNMO) THEN
+CC         WRITE(IP,8000) GUESS
+CC         CALL PUSQL(V,L0,L1,L1)
+CC         WRITE(IP,*) ' $END'
+CC      END IF
+C
+C                                          DC-RHF DENSITY
+      CALL DMTX(DA,V,OCCNO,NOCDC,L1,L1)
+C
+      IF(MASWRK .AND. DBG) THEN
+         WRITE(IW,*) 'LOCAL DENSITY MATRIX'
+         CALL PRTRILDC(0,DA,L1)
+      END IF
+      RETURN
+C
+C     ----- UHF CASE -----
+C     FIRST DO THE ALPHA SET OF ORBITALS
+C
+  600 CONTINUE
+      NOC = NA
+      FRMLEV=FRMLVA
+      ORBSET='ALPHA'
+      IF(SCFTYP.EQ.UHF) CALL DCOPY(L1,E,1,DB,1)
+C
+      NPASS=0
+  610 CONTINUE
+      NPASS=NPASS+1
+      CALL VCLR(OCCNO,1,L1)
+C
+C                                     DC-UHF OCCUPANCIES
+      I=1
+      VAL=FRMLEV-E(I)
+      XFTOL= VLN10*FTOL/FRBETA
+C
+C     IN THE CASE VALUE OF FERMI FUNCTION NEAR ONE
+      DO WHILE (I.LE.L1 .AND. VAL.GT.XFTOL)
+         OCCNO(I) = ONE
+         I=I+1
+         VAL=FRMLEV-E(I)
+      END DO
+      NOC=I-1
+C
+C     IN THE CASE VALUE OF FERMI FUNCTION NOT NEAR EITHER ZERO OR ONE
+      DO WHILE (I.LE.L1 .AND. VAL.GE.-XFTOL)
+         OCCNO(I) = FERMIF(VAL,FRBETA)
+         I=I+1
+         IF(I.LE.FRMLEV) NOC=NOC+1
+         VAL=FRMLEV-E(I)
+      END DO
+C
+      NOCDC=I-1
+C
+      IF((DBG .OR. PRTMO)  .AND.  GUESS.NE.HCORE) THEN
+         CALL TFDIAG(S,V,E,Q,L1,L2,L1,L1)
+         IF(MASWRK) WRITE(IW,*)
+     *        'EIGENVALUES ARE DIAGONAL OF 1E- H IN MO BASIS'
+      ELSE
+         CALL VCLR(E,1,L1)
+      END IF
+C
+C     ATTEMPT TO ASSIGN THE ORBITALS A SYMMETRY LABEL
+C
+      IF(NPASS.EQ.1) THEN
+         CALL SYMMOS(LABMO,Q,S,V,SCR,L0,L1,L0,L1)
+      ELSE
+         CALL SYMMOS(LABMO,Q,S,VB,SCR,L0,L1,L0,L1)
+      ENDIF
+C
+      IF(MASWRK  .AND.  (DBG  .OR.  PRTMO)) THEN
+         WRITE(IW,9020) ORBSET,NOC,NCORE
+         MINI=NCORE+1
+         MAXI=MIN(NOC+10,L0)
+         WRITE(IW,9022) (I,LABMO(I),I=MINI,MAXI)
+C
+         WRITE(IW,9026)
+         WRITE(IW,9046)
+         WRITE(IW,9048) (OCCNO(I),I = 1,L1)
+         IF(NPASS.EQ.1) THEN
+            CALL PREVSDC(0,V,E,LABMO,L0,L1,L1,1)
+         ELSE
+            CALL PREVSDC(0,VB,E,LABMO,L0,L1,L1,1)
+         ENDIF
+      END IF
+C
+      IF(NPASS.EQ.1) THEN
+         CALL DMTX(DA,V,OCCNO,NOC,L1,L1)
+      ELSE
+         CALL DMTX(DB,VB,OCCNO,NOC,L1,L1)
+      END IF
+C
+      IF(MASWRK .AND. DBG) THEN
+         WRITE(IW,*) 'LOCAL DENSITY MATRIX'
+         IF(NPASS.EQ.1) THEN
+            CALL PRTRILDC(0,DA,L1)
+         ELSE
+            CALL PRTRILDC(0,DB,L1)
+         ENDIF
+      END IF
+C
+C                 GET READY TO DO THE BETA ORBITALS.
+      NOC = NB
+      FRMLEV=FRMLVB
+      ORBSET=' BETA'
+      IF(SCFTYP.EQ.UHF) CALL DCOPY(L1,DB,1,E,1)
+C
+C         THE UNLIKELY CASE OF NO BETA ELECTRONS HAPPENS SOMETIMES!
+C
+      IF (NB .EQ. 0) THEN
+         CALL ZEROD(VB,DB,E,L1,L2,L3)
+         RETURN
+      END IF
+      IF(NPASS.EQ.1) GO TO 610
+      RETURN
+C
+ 9020 FORMAT(/1X,'SYMMETRIES FOR INITIAL GUESS ORBITALS FOLLOW. ',
+     *        1X,A5,' SET(S).'/
+     *        1X,I5,' ORBITALS ARE OCCUPIED (',I5,' CORE ORBITALS).')
+ 9022 FORMAT(7(1X,I5,'=',A4))
+ 9026 FORMAT(/30X,22(1H-)/30X,'INITIAL GUESS ORBITALS'/
+     *        30X,22(1H-))
+ 9046 FORMAT(/30X,'ASSIGNED OCCUPANCIES'/)
+ 9048 FORMAT(15X,5F11.6)
+      END
+C
+C*MODULE DCGUES  *DECK IDNTDC
+C        MODIFIED FROM INIDEN
+      SUBROUTINE IDNTDC(GUESS,V,DA,DB,E,OCCNO,LABMO,
+     *                  Q,SCR,S,L0,L1,L2,L3,DBG,PRTMO,PUNMO,MIX,NST)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      LOGICAL DBG,PRTMO,PUNMO,
+     *        GOPARR,DSKWRK,MASWRK
+      LOGICAL MIX
+C
+      PARAMETER (MXATM=2000)
+C
+      CHARACTER*5 ORBSET
+C
+      DIMENSION V(L1,*),DA(L2),DB(L2),E(L1),LABMO(L1),
+     *          Q(L1,L1),SCR(L1),S(L2),OCCNO(L1)
+C
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
+     *                MPLEVL,MPCTYP
+C
+      PARAMETER (ONE=1.0D+00, TWO=2.0D+00)
+C
+      DATA UHF/8HUHF     /
+      DATA NONE/4HNONE/
+      DATA RDMO/8HMOREAD  /
+C
+C     ----- GENERATE TOTAL INITIAL DENSITY MATRIX FOR DC -----
+C       IF(GUESS.EQ.(HUCKEL .OR. MOREAD .OR. RDMINI .OR. MOSAVED)
+C         INITIAL GUESS IS GENERATED IN TOTAL REGION.
+C
+C     ON ENTRANCE- E MUST CONTAIN EIGENVALUES, IF THE GUESS TYPE
+C                  WAS HCORE OR HUCKEL. THE VECTORS MUST EXIST ON
+C                  THE DICTIONARY FILE.
+C     ON EXIT- V,DA,E WILL BE ON THE DICTIONARY FILE.
+C              FOR ROHF OR UHF, THE BETA V,DB,E WILL BE THERE.
+C
+C     ----- SET UP OCCUPATION NUMBERS -----
+C     ----- SELECT (REORDER) MO-S     -----
+C     ----- CALCULATE DENSITY MATRICES -----
+C     ----- SAVE DENSITY + ORBITAL ENERGIES (OR OCCNO-S) -----
+C
+      IF(NA.GT.L1) THEN
+         IF(MASWRK) WRITE(IW,9060) NA,L1
+         CALL ABRT
+         STOP
+      END IF
+      IF(GUESS.EQ.RDMO) CALL DAREAD(IDAF,IODA,V,L3,15,0)
+C
+C     COUNT CHEMICAL CORE ORBITALS, MOPAC SHOULD HAVE NONE
+C
+      NCORE = NUMCOR()
+      IF(MPCTYP.NE.NONE) NCORE=0
+C
+      NOC=NA
+      CALL VCLR(OCCNO,1,L1)
+      IF(SCFTYP.EQ.UHF)    GO TO 600
+C                                      RHF OCCUPANCIES
+      DO 420 I=NST,NOC+NST-1
+         OCCNO(I) = TWO
+  420 CONTINUE
+C
+C        --- IF PRINTING, GENERATE A "ENERGY" FROM CORE HAMILTONIAN ---
+C              ONLY HCORE HAS "SENSIBLE" ENERGIES AT THIS POINT
+C              HUCKEL GUESS HAS ALREADY PERMUTED ORBITALS
+C        LOAD -H- INTO -S-, USE -Q- AS SCRATCH STORAGE
+C
+      IF(DBG .OR. PRTMO) THEN
+         CALL DAREAD(IDAF,IODA,S,L2,11,0)
+         CALL TFDIAG(S,V,E,Q,L1,L2,L1,L1)
+         IF(MASWRK) WRITE(IW,*)
+     *         'EIGENVALUES ARE DIAGONAL OF 1E- H IN MO BASIS'
+      ELSE
+         CALL VCLR(E,1,L1)
+      END IF
+C
+C     ASSIGN THE ORBITALS A SYMMETRY LABEL
+C
+      CALL DAREAD(IDAF,IODA,S,L2,12,0)
+      CALL DAREAD(IDAF,IODA,Q,L3,45,0)
+      CALL SYMMOS(LABMO,Q,S,V,SCR,L0,L1,L0,L1)
+C
+      ORBSET=' BOTH'
+      IF (MASWRK) WRITE(IW,9020) ORBSET,NOC,NCORE
+      MINI=NCORE+1
+      MAXI=MIN(NOC+10,L1,L0)
+      IF (MASWRK) WRITE(IW,9022) (I,LABMO(I),I=MINI,MAXI)
+C
+      IF(MASWRK  .AND.  (DBG  .OR.  PRTMO)) THEN
+         WRITE (IW,9026)
+         WRITE(IW,9046)
+         WRITE(IW,9048) (OCCNO(I),I = 1,L0)
+         CALL PREVS(V,E,LABMO,L0,L1,L1,1)
+      END IF
+      IF(MASWRK  .AND.  PUNMO) THEN
+         WRITE(IP,8000) GUESS
+         CALL PUSQL(V,L0,L1,L1)
+         WRITE(IP,*) ' $END'
+      END IF
+C
+C                                              RHF DENSITY
+      CALL DMTX(DA,V,OCCNO,NOC,L1,L1)
+      RETURN
+C
+C     ----- UHF CASE -----
+C     FIRST DO THE ALPHA SET OF ORBITALS
+C
+  600 CONTINUE
+      NOC = NA
+      ORBSET='ALPHA'
+      IF(SCFTYP.EQ.UHF) CALL DCOPY(L1,E,1,DB,1)
+C
+      NPASS=0
+  610 CONTINUE
+      NPASS=NPASS+1
+      CALL VCLR(OCCNO,1,L1)
+      DO 620 I=1,NOC
+         OCCNO(I) = ONE
+  620 CONTINUE
+C
+      IF(DBG .OR. PRTMO) THEN
+         CALL TFDIAG(S,V,E,Q,L1,L2,L1,L1)
+         IF(MASWRK) WRITE(IW,*)
+     *        'EIGENVALUES ARE DIAGONAL OF 1E- H IN MO BASIS'
+      ELSE
+         CALL VCLR(E,1,L1)
+      END IF
+C
+C     ATTEMPT TO ASSIGN THE ORBITALS A SYMMETRY LABEL
+C
+      CALL SYMMOS(LABMO,Q,S,V,SCR,L0,L1,L0,L1)
+C
+      IF (MASWRK) WRITE(IW,9020) ORBSET,NOC,NCORE
+      MINI=NCORE+1
+      MAXI=MIN(NOC+10,L0)
+      IF (MASWRK) WRITE(IW,9022) (I,LABMO(I),I=MINI,MAXI)
+C
+      IF(MASWRK  .AND.  (DBG  .OR.  PRTMO)) THEN
+         WRITE (IW,9026)
+         WRITE(IW,9046)
+         WRITE(IW,9048) (OCCNO(I),I = 1,L0)
+         CALL PREVS(V,E,LABMO,L0,L1,L1,1)
+      END IF
+      IF(MASWRK  .AND.  PUNMO) THEN
+         WRITE(IP,8000) GUESS
+         CALL PUSQL(V,L0,L1,L1)
+         IF(NPASS.EQ.2) WRITE(IP,*) ' $END'
+      END IF
+C
+      IF(MIX .AND. NA.EQ.NB) THEN
+         IF(NPASS.EQ.1) THEN
+            CALL DCOPY(L1,V(1,NOC  ),1,Q(1,1),1)
+            CALL DCOPY(L1,V(1,NOC+1),1,Q(1,2),1)
+            CS = ONE/SQRT(TWO)
+            SN = ONE/SQRT(TWO)
+            CALL ROT2X2(V(1,NOC),V(1,NOC+1),CS,SN,L1)
+         ELSE
+            CALL DCOPY(L1,Q(1,1),1,V(1,NOC  ),1)
+            CALL DCOPY(L1,Q(1,2),1,V(1,NOC+1),1)
+            CS = ONE/SQRT(TWO)
+            SN = -ONE/SQRT(TWO)
+            CALL ROT2X2(V(1,NOC),V(1,NOC+1),CS,SN,L1)
+         END IF
+      END IF
+      IF(NPASS.EQ.1) THEN
+         CALL DMTX(DA,V,OCCNO,NOC,L1,L1)
+      ELSE
+         CALL DMTX(DB,V,OCCNO,NOC,L1,L1)
+      END IF
+C                 GET READY TO DO THE BETA ORBITALS.
+      NOC = NB
+      ORBSET=' BETA'
+      IF(GUESS.EQ.RDMO) CALL DAREAD(IDAF,IODA,V,L3,19,0)
+      IF(SCFTYP.EQ.UHF) CALL DCOPY(L1,DB,1,E,1)
+C
+C         THE UNLIKELY CASE OF NO BETA ELECTRONS HAPPENS SOMETIMES!
+C
+      IF (NB .EQ. 0) THEN
+         CALL ZEROD(V,DB,E,L1,L2,L3)
+         RETURN
+      END IF
+      IF(NPASS.EQ.1) GO TO 610
+      RETURN
+C
+ 8000 FORMAT('STARTING ORBITALS FROM GUESS=',A8/' $VEC')
+ 9020 FORMAT(/1X,'SYMMETRIES FOR INITIAL GUESS ORBITALS FOLLOW. ',
+     *        1X,A5,' SET(S).'/
+     *        1X,I5,' ORBITALS ARE OCCUPIED (',I5,' CORE ORBITALS).')
+ 9022 FORMAT(7(1X,I5,'=',A4))
+ 9026 FORMAT(/30X,22(1H-)/30X,'INITIAL GUESS ORBITALS'/
+     *        30X,22(1H-))
+ 9046 FORMAT(/30X,'ASSIGNED OCCUPANCIES'/)
+ 9048 FORMAT(15X,5F11.6)
+ 9060 FORMAT(1X,'*** FATAL ERROR ***'/
+     *       1X,'YOUR JOB HAS ENOUGH ELECTRONS TO OCCUPY',I5,' MO-S,'/
+     *       1X,'BUT THE ATOMIC BASIS SET INCLUDES ONLY',I5,' AO-S.')
+      END
+C
+C*MODULE DCGUES  *DECK READDM
+      SUBROUTINE READDM(D,L1,L2,DBG)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL DBG,GOPARR,DSKWRK,MASWRK
+C
+      CHARACTER*8 STVEC
+C
+      DIMENSION D(L2)
+C
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+C
+C     ----- READ THE INITIAL DENSITY MATRIX FROM THE INPUT FILE -----
+C
+C     POSITION THE INPUT FILE TO $VEC
+C
+      STVEC = ' $DM    '
+      CALL SEQREW(IR)
+      CALL FNDGRP(IR,STVEC,IEOF)
+C
+      IF (IEOF.NE.0) THEN
+C
+C        $DM CARD NOT FOUND, KILL JOB
+C
+         IF (MASWRK) WRITE(IW,9020)
+         CALL ABRT
+         STOP
+C
+      ELSE
+C
+C        $DM CARD FOUND, READ THE CANONICAL DENSITY MATRIX
+C
+         IF (MASWRK) THEN
+            J0=1
+            DO I0=1,L1
+               MDIC=MOD(I0,100)
+               JCTC=0
+               DO J=1,I0,5
+                  JCTC=JCTC+1
+                  JL=J0+MIN(I0-J,4)
+                  READ(IR,9040) MDI,JCT,(D(K),K=J0,JL)
+                  IF(MDI.NE.MDIC .OR. JCT.NE.JCTC) WRITE(IW,9100)
+                  J0=JL+1
+               END DO
+            END DO
+         END IF
+         IF (GOPARR) CALL DDI_BCAST(351,'F',D,L2,MASTER)
+      END IF
+C
+      IF(DBG) CALL PRTRI(D,L1)
+C
+      RETURN
+C
+ 9020 FORMAT(28H NO $DM  INPUT FOUND - STOP )
+ 9040 FORMAT(I2,I3,1P,5E15.8)
+ 9100 FORMAT(1X,'=== WARNING! DENSITY MATRIX IS CORRECT?')
+      END
+C
+C*MODULE DCGUES  *DECK MPHCDC
+C        MODIFIED FROM MPCHCK
+      SUBROUTINE MPHCDC(H,EIG,SCR,VEC,DBG,IWRK,L1,L2)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL DBG,GOPARR,DSKWRK,MASWRK
+C
+      PARAMETER (MXATM=2000, TWO=2.0D+00)
+C
+      DIMENSION H(L2),EIG(L1),SCR(L1,8),VEC(L1,L1),IWRK(L1)
+      DIMENSION ENEG(2,86)
+C
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+      DATA ((ENEG(I,NUC),I=1,2),NUC=1,36) /
+     *           0.500D+00,0.0D+00,   0.918D+00,0.0D+00,
+     *           0.196D+00,0.05D+00,  0.309D+00,0.05D+00,
+     *           0.495D+00,0.310D+00, 0.706D+00,0.433D+00,
+     *           0.945D+00,0.568D+00, 1.244D+00,0.632D+00,
+     *           1.573D+00,0.730D+00, 1.93D+00,0.850D+00,
+     *           0.182D+00,0.05D+00,  0.253D+00,0.05D+00,
+     *           0.393D+00,0.210D+00, 0.540D+00,0.297D+00,
+     *           0.696D+00,0.392D+00, 0.880D+00,0.437D+00,
+     *           1.073D+00,0.506D+00, 1.278D+00,0.591D+00,
+     *           0.147D+00,0.050D+00, 0.196D+00,0.050D+00,
+     *           18*0.0D+00,          0.293D+00,0.10D+00,
+     *           0.424D+00,0.208D+00, 0.553D+00,0.287D+00,
+     *           0.686D+00,0.369D+00, 0.838D+00,0.403D+00,
+     *           0.993D+00,0.457D+00, 1.153D+00,0.524D+00/
+      DATA ((ENEG(I,NUC),I=1,2),NUC=37,86) /
+     *           0.138D+00,0.050D+00, 0.178D+00,0.050D+00,
+     *           18*0.0D+00,          0.265D+00,0.10D+00,
+     *           0.372D+00,0.197D+00, 0.476D+00,0.265D+00,
+     *           0.582D+00,0.335D+00, 0.701D+00,0.360D+00,
+     *           0.821D+00,0.403D+00, 0.944D+00,0.457D+00,
+     *           0.124D+00,0.05D+00, 0.1575D+00,0.05D+00,
+     *           46*0.0D+00,          0.2610D+00,0.10D+00,
+     *           0.261D+00,0.192D+00, 0.459D+00,0.2398D+00,
+     *           0.558D+00,0.286D+00, 0.660D+00,0.332D+00,
+     *           0.765D+00,0.380D+00, 0.874D+00,0.428D+00/
+C
+C     ----- SET UP HUCKEL GUESS FOR MOPAC WAVEFUNCTIONS,
+C           WRITTEN BY MIKE SCHMIDT, FEBRUARY 11, 1992 -----
+C
+C        (OVERLAP MATRIX IS SET IN -H- BEFORE CALLING THIS ROUTINE)
+C
+C        CONSTRUCT HUCKEL MATRIX -H-, ON TOP OF THE OVERLAP MATRIX
+C                 SET VALENCE ORBITAL ENERGIES ONLY.
+C
+      I0=0
+      DO 390 N=1,NAT
+         NUCZ = INT(ZAN(N))
+         NVAL=1
+         IF(NUCZ.GT.2) NVAL=2
+         DO 360 J=1,NVAL
+            IVAL = 1
+            IF(J.EQ.2) IVAL=3
+            DO 350 I=1,IVAL
+               I0= I0+1
+               II= (I0*I0+I0)/2
+               H(II)=-ENEG(J,NUCZ)
+  350       CONTINUE
+  360    CONTINUE
+  390 CONTINUE
+C
+C           FINISH UP THE OFF-DIAGONAL OF THE HUCKEL OPERATOR
+C
+      FUDGE = 1.75D+00/TWO
+      II = 1
+      IJ = 1
+      DO 720 I=2,L1
+         II = II + I
+         HII=H(II)
+         JJ = 0
+         DO 710 J=1,I-1
+            JJ = JJ + J
+            IJ = IJ + 1
+            SIJ = H(IJ)
+            H(IJ)=FUDGE*SIJ*(HII+H(JJ))
+  710    CONTINUE
+         IJ = IJ + 1
+  720 CONTINUE
+C
+      IF(DBG) THEN
+         WRITE(IW,*) 'HUCKEL OPERATOR BEFORE DIAGONALIZATION'
+         CALL PRTRI(H,L1)
+      END IF
+C
+C           DIAGONALIZE THE HUCKEL OPERATOR
+C
+      IERR = 0
+      CALL GLDIAG(L1,L1,L1,H,SCR,EIG,VEC,IERR,IWRK)
+      IF(IERR.NE.0) THEN
+         IF (MASWRK) WRITE(IW,*)
+     *               'UNABLE TO DIAGONALIZE HUCKEL MATRIX'
+         CALL ABRT
+      END IF
+C
+      IF(DBG) THEN
+         WRITE(IW,*) 'EXTENDED HUCKEL ORBITALS (IN MINI BASIS) ARE'
+         CALL PREVNL(VEC,EIG,L1,L1,L1)
+      END IF
+C
+      RETURN
+      END

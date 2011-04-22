@@ -1,0 +1,1191 @@
+C 25 MAR 10 -  MK - DIRECT SUBSYSTEM FOCK CONSTRUCTION ROUTINES
+C 12 JAN 09 -  MK - IMPLEMENTATION OF DIVIDE-AND-CONQUER
+C
+C*MODULE DCINT2  *DECK DIRJKDC
+C        MODIFIED FROM DIRJK
+      SUBROUTINE DIRJKDC(GHONDO,XINTS,DDIJ,BUFP,IBUF,MAXG,NSH2)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL PACK2E,DIRTRF
+C
+      DIMENSION GHONDO(MAXG),XINTS(NSH2),DDIJ(*),BUFP(*),IBUF(*)
+C
+      COMMON /INTFIL/ NINTMX,NHEX,NTUPL,PACK2E,INTTYP,IGRDTYP
+      COMMON /TRFOPT/ CUTTRF,NWDTRF,MPTRAN,ITRFAO,NOSYMT,IPURTF,DIRTRF
+C
+      DATA ANYSCF/8HDUMMY   /
+C
+C     ----- DRIVER FOR DIRECT 2E- INTEGRALS TRANSFORMATION -----
+C
+      CALL DEBUT(.FALSE.,DUMMY,DUMMY,DUMMY,NINTMX,0,DIRTRF)
+C
+      CALL TWOEIDC(ANYSCF,.FALSE.,.FALSE.,.TRUE.,.FALSE.,
+     *             INTTYP,.TRUE.,NINT,NSCHWZ,1,1,
+     *             BUFP,DUMMY,IBUF,NINTMX,
+     *             XINTS,NSH2,GHONDO,MAXG,DDIJ,
+     *             IDUMMY,DUMMY,DUMMY,DUMMY,DUMMY,DUMMY,DUMMY,DUMMY,1,1)
+      RETURN
+      END
+C
+C*MODULE DCINT2  *DECK TWOEIDC
+C        MODIFIED FROM TWOEI
+      SUBROUTINE TWOEIDC(TYPSCF,DIRSCF,DIRNLO,DIRTRF,DIRCIS,
+     *                   INTTYP,SCHWRZ,NINT,NSCHWZ,L1,L2,
+     *                   BUFP,BUFK,IX,NINTMX,
+     *                   XINTS,NSH2,GHONDO,MAXG,DDIJ,
+     *                   IA,DA,FA,DB,FB,DSH,DNLO,FNLO,NFLMAT,
+     *                   NLCT)
+C
+C       MANY ARGUMENTS ARE OPTIONAL, YOU MUST ALLOCATE STORAGE FOR
+C              ALL CALLS: GHONDO, DDIJ, XINTS
+C           CONVENTIONAL: BUFP, IX, AND POSSIBLY BUFK
+C             DIRECT SCF: IA, DSH, DA, FA, AND POSSIBLY DB, FB
+C             DIRECT CIS: IA, DSH, DA, FA, AND POSSIBLY DB, FB
+C             DIRECT NLO: DNLO, FNLO, NFLMAT
+C  DIRECT TRANSFORMATION: BUFP, IX
+C     RESPONSE EQUATIONS: MUST DEFINE NFLMAT.NE.1
+C  NOTE THAT THE TYPE OF FOCK MATRIX BUILT (TYPSCF) DOES NOT
+C  NECESSARILY HAVE TO MATCH THIS RUNS SCFTYP VALUE.
+C
+C     NFLMAT=-1 CONSTRUCTS LOCAL FOCK MATRIX
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      LOGICAL DIRSCF,DIRNLO,DIRTRF,DIRCIS,CMBDIR
+      LOGICAL OUT,SCHWRZ,SCHSKP,GOPARR,DSKWRK,MASWRK,DLB,SLB,C1GRP
+      LOGICAL SKIPA,SKIPB,SKIPC,NPSYM
+      LOGICAL PK,PANDK,NOTPK,BLOCK,GPSAVE,SCREEN
+C
+      DIMENSION BUFP(NINTMX),BUFK(NINTMX),IX(*),XINTS(NSH2),
+     *          GHONDO(MAXG),IA(L1),DA(L2),FA(L2),DB(L2),FB(L2),
+     *          DSH(NSH2),DDIJ(*),DNLO(L1,L1),FNLO(L1,L1)
+      DIMENSION MI(48),MJ(48),MK(48),M0(48)
+      DIMENSION NLCT(L2)
+C
+      PARAMETER (MXSH=5000, MXGTOT=20000, MXATM=2000)
+C
+      COMMON /INT2IC/ NINTIC,ININTIC,NXXIC,LBUFPIC,LIXIC,LABSIX,NINTIX
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PKFIL / PK,PANDK,BLOCK
+      COMMON /RESTAR/ TIMLIM,IREST,NREC,INTLOC,IST,JST,KST,LST
+      COMMON /SCINP / VLAMB,SCREEN
+      COMMON /SHLEXC/ NORGSH(3),NORGSP(3),IEXCH,NANGM,NGTH(4)
+      COMMON /SHLG70/ ISH,JSH,KSH,LSH,IJKLXX(4)
+      COMMON /SHLNOS/ QQ4,LIT,LJT,LKT,LLT,LOCI,LOCJ,LOCK,LOCL,
+     *                MINI,MINJ,MINK,MINL,MAXI,MAXJ,MAXK,MAXL,
+     *                NIJ,IJ,KL,IJKL
+      COMMON /SHLT  / TOL,CUTOFF,ICOUNT,OUT
+      COMMON /SYMTRY/ MAPSHL(MXSH,48),MAPCTR(MXATM,48),
+     *                T(432),INVT(48),NT
+C
+      PARAMETER (MXAO=8192)
+      COMMON /TO2LC / IT2LOC(MXAO)
+C
+      PARAMETER (ZERO=0.0D+00)
+C
+C          ----- TWO-ELECTRON INTEGRALS -----
+C     THIS VERSION CAN HANDLE S,P,D,F,G AND L SHELLS
+C
+      TIM = ZERO
+      CALL TSECND(TIM)
+C
+C           PERHAPS CALL XABI LOPEZ/JOSE UGALDE'S SCREENED INTEGRAL CODE
+C
+      IF (SCREEN) THEN
+         WRITE(IW,36)
+  36     FORMAT (/,'#########',/,'SCREEN TWO-ELECTRON INTEGRAL',/)
+         CALL STWOEI(TYPSCF,DIRSCF,DIRNLO,DIRTRF,
+     *               INTTYP,SCHWRZ,NINT,NSCHWZ,L1,L2,
+     *               BUFP,BUFK,IX,NINTMX,
+     *               XINTS,NSH2,GHONDO,MAXG,DDIJ,
+     *               IA,DA,FA,DB,FB,DSH,DNLO,FNLO)
+         RETURN
+      END IF
+C
+      CMBDIR= DIRSCF .OR. DIRNLO .OR. DIRTRF .OR. DIRCIS
+C
+C        THE OLD FASHIONED PARALLEL INTEGRAL TRANSFORMATIONS DO NOT
+C        ALLOW THE AO INTEGRAL WORK TO BE RUN IN PARALLEL.  THE MODERN
+C        DISTRIBUTED MEMORY TRANSFORMATIONS DO NOT PASS THROUGH HERE.
+C
+      ICONT=  0
+      GPSAVE = GOPARR
+      IF(DIRTRF) GOPARR=.FALSE.
+C
+C     ----- INITIALIZATION FOR PARALLEL WORK -----
+C     BOTH STATIC AND DYNAMIC LOAD BALANCING ARE IMPLEMENTED BELOW
+C
+      SLB = GOPARR  .AND.  IBTYP.EQ.0
+      DLB = GOPARR  .AND.  IBTYP.EQ.1
+      NEXT = -1
+      MINE = -1
+      IPCOUNT = ME - 1
+C
+      C1GRP = NT.EQ.1
+C
+      CALL BASCHK(LMAX)
+                    NANGM =  4
+      IF(LMAX.EQ.2) NANGM =  6
+      IF(LMAX.EQ.3) NANGM = 10
+      IF(LMAX.EQ.4) NANGM = 15
+      IF(LMAX.EQ.5) NANGM = 21
+      IF(LMAX.EQ.6) NANGM = 28
+      NGTH(4) = 1
+      NGTH(3) = NGTH(4) * NANGM
+      NGTH(2) = NGTH(3) * NANGM
+      NGTH(1) = NGTH(2) * NANGM
+      IF(NOPK.EQ.0) THEN
+         NORGSH(1) = 0
+         NORGSH(2) = NORGSH(1) + NANGM**4
+         NORGSH(3) = NORGSH(2) + NANGM**4
+         NORGSP(1) = 0
+         NORGSP(2) = 256
+         NORGSP(3) = 512
+      ELSE
+         DO I=1,3
+            NORGSH(I) = 0
+            NORGSP(I) = 0
+         ENDDO
+      END IF
+C
+      NOTPK = .NOT.PK
+      NINT  = 0
+      NSCHWZ= 0
+      SCHSKP=.FALSE.
+      DENMAX = ZERO
+C
+C        NOW WE ARE READY TO LOOP OVER ALL NSHELL**4 SHELL QUARTETS
+C
+C     ----- I SHELL -----
+C
+      DO 920 II = IST,NSHELL
+      KLII=KLOC(II)
+C-SUBST
+C      IF(DIRTRF) THEN
+      IF(DIRTRF .OR. NFLMAT.NE.1) THEN
+C-END
+         IISUB=IT2LOC(KLII)
+         IF(IISUB.EQ.0) GOTO 920
+      END IF
+C
+C     ----- CHECK CPU TIME -----
+C
+      CALL TSECND(TIM)
+      IF(TIM.GE.TIMLIM) THEN
+C        NOTHING CAN BE DONE FOR IN-CORE INTEGRALS: JUST FORGET THEM
+         IF(.NOT.CMBDIR)
+     *      CALL FINAL(0,II,1,1,1,PANDK,BUFP,BUFK,IX,NINTMX)
+         IF(MASWRK) WRITE(IW,9030)
+         CALL ABRT
+      END IF
+C
+C     ----- PRINT INTERMEDIATE RESTART DATA -----
+C
+      IF(NPRINT.NE.-5  .AND.  .NOT.CMBDIR .AND. MASWRK) THEN
+         IF(ICOUNT.LE.NINTIC) THEN
+            WRITE(IW,9015) II,JST,KST,LST,ICOUNT
+         ELSE
+            WRITE(IW,9010) II,JST,KST,LST,NREC,ICOUNT-NINTIC
+         ENDIF
+      ENDIF
+C
+C     ----- SKIP I SHELL IF NOT SYMMETRY UNIQUE -----
+C     THIS, AND THE SIMILAR BRANCHINGS FOR THE J, K, AND L LOOPS IS
+C     WHAT GENERATES THE "PETITE" RATHER THAN "GRANDE" INTEGRAL LIST.
+C
+      IF(C1GRP) THEN
+         MI(1)=II
+      ELSE
+         DO 120 IT = 1,NT
+            ID = MAPSHL(II,IT)
+            IF (ID .GT. II) GO TO 920
+            MI(IT) = ID
+  120    CONTINUE
+      END IF
+C
+C     ----- J SHELL -----
+C
+      J0 = JST
+      DO 900 JJ = J0,II
+      KLJJ=KLOC(JJ)
+C-SUBST
+C      IF(DIRTRF) THEN
+      IF(DIRTRF .OR. NFLMAT.NE.1) THEN
+C-END
+         JJSUB=IT2LOC(KLJJ)
+         IF(JJSUB.EQ.0) GOTO 900
+      END IF
+C-SUBST
+C      IF(DIRSCF) THEN
+      IF(DIRSCF .AND. NFLMAT.EQ.1) THEN
+C-END
+         IJCHK=NLCT(KLII*(KLII-1)/2+KLJJ)
+      END IF
+C
+      JST = 1
+C
+      IF(C1GRP) THEN
+         MJ(1)=JJ
+      ELSE
+         DO 200 IT = 1,NT
+            ID = MI(IT)
+            JD = MAPSHL(JJ,IT)
+            MJ(IT) = JD
+            IF (ID .GE. JD) GO TO 160
+            ND = ID
+            ID = JD
+            JD = ND
+  160       IF (ID-II) 200,180,900
+  180       IF (JD-JJ) 200,200,900
+  200    CONTINUE
+      END IF
+C
+C     ----- GO PARALLEL! -----
+C
+      IF (DLB) THEN
+         MINE = MINE + 1
+         IF (MINE.GT.NEXT) CALL DDI_DLBNEXT(NEXT)
+         IF (NEXT.NE.MINE) GO TO 900
+      END IF
+C
+C     ----- K SHELL -----
+C
+      K0 = KST
+      DO 880 KK = K0,JJ
+      KLKK=KLOC(KK)
+C-SUBST
+C      IF(DIRTRF) THEN
+      IF(DIRTRF .OR. NFLMAT.NE.1) THEN
+C-END
+         KKSUB=IT2LOC(KLKK)
+         IF(KKSUB.EQ.0) GOTO 880
+      END IF
+C-SUBST
+C      IF(DIRSCF) THEN
+      IF(DIRSCF .AND. NFLMAT.EQ.1) THEN
+C-END
+         IKCHK=NLCT(KLII*(KLII-1)/2+KLKK)
+         JKCHK=NLCT(KLJJ*(KLJJ-1)/2+KLKK)
+         IJKCHK=IJCHK+IKCHK+JKCHK
+         IF(IJKCHK.EQ.0) GOTO 880
+      END IF
+C
+      KST = 1
+C
+      IF(C1GRP) THEN
+         MK(1)=KK
+      ELSE
+         DO 340 IT = 1,NT
+            ID = MI(IT)
+            JD = MJ(IT)
+            KD = MAPSHL(KK,IT)
+            MK(IT) = KD
+  240       IF (ID .GE. JD) GO TO 260
+            ND = ID
+            ID = JD
+            JD = ND
+  260       IF (JD .GE. KD) GO TO 280
+            ND = JD
+            JD = KD
+            KD = ND
+            GO TO 240
+  280       IF (ID-II) 340,300,880
+  300       IF (JD-JJ) 340,320,880
+  320       IF (KD-KK) 340,340,880
+  340    CONTINUE
+      END IF
+C
+C     ----- GO PARALLEL! -----
+C
+      IF(SLB) THEN
+         IPCOUNT = IPCOUNT + 1
+         IF (MOD(IPCOUNT,NPROC).NE.0) GO TO 880
+      END IF
+C
+C     ----- L SHELL ----
+C
+      L0 = LST
+      DO 860 LL = L0,KK
+      KLLL=KLOC(LL)
+C-SUBST
+C      IF(DIRTRF) THEN
+      IF(DIRTRF .OR. NFLMAT.NE.1) THEN
+C-END
+         LLSUB=IT2LOC(KLLL)
+         IF(LLSUB.EQ.0) GOTO 860
+      END IF
+C-SUBST
+C      IF(DIRSCF) THEN
+      IF(DIRSCF .AND. NFLMAT.EQ.1) THEN
+C-END
+         ILCHK=NLCT(KLII*(KLII-1)/2+KLLL)
+         JLCHK=NLCT(KLJJ*(KLJJ-1)/2+KLLL)
+         KLCHK=NLCT(KLKK*(KLKK-1)/2+KLLL)
+C
+         IJCHK2=IJCHK+KLCHK
+         IKCHK2=IKCHK+JLCHK
+         ILCHK2=ILCHK+JKCHK
+C
+         IF(IJCHK2.NE.2 .AND. IKCHK2.NE.2 .AND. ILCHK2.NE.2) GOTO 860
+C
+C         IJKLCK=IJCHK+IKCHK+ILCHK+JKCHK+JLCHK+KLCHK
+C         IF(IJKLCK.EQ.0) GOTO 860
+      END IF
+C
+      LST = 1
+C
+      IF(C1GRP) THEN
+         M0(1)=1
+         N4=1
+      ELSE
+         N4 = 0
+         DO 540 IT = 1,NT
+            ID = MI(IT)
+            JD = MJ(IT)
+            KD = MK(IT)
+            LD = MAPSHL(LL,IT)
+  380       IF (ID .GE. JD) GO TO 400
+            ND = ID
+            ID = JD
+            JD = ND
+  400       IF (JD .GE. KD) GO TO 420
+            ND = JD
+            JD = KD
+            KD = ND
+            GO TO 380
+  420       IF (KD .GE. LD) GO TO 440
+            ND = KD
+            KD = LD
+            LD = ND
+            GO TO 400
+  440       IF (ID-II) 540,460,860
+  460       IF (JD-JJ) 540,480,860
+  480       IF (KD-KK) 540,500,860
+  500       IF (LD-LL) 540,520,860
+  520       N4 = N4+1
+            M0(N4) = IT
+  540    CONTINUE
+      END IF
+C
+C         THE LOOP STRUCTURE IN THIS ROUTINE IS DESIGNED TO FACILITATE
+C         SUPERMATRIX CONSTRUCTION BY HAVING UP TO THREE "EXCHANGED"
+C         QUARTETS AVAILABLE AT ONCE.  THE LOOP STRUCTURE TO GENERATE
+C         A MORE NORMAL CANONICAL ORDERING OF THE QUARTETS HITS THE
+C         SAME QUARTETS IN A SLIGHTLY DIFFERENT ORDER, BUT BOTH LOOPS
+C         WILL DO EXACTLY THE SAME QUARTETS.
+C
+C             CANONICAL                      SUPERMATRIX
+C         DO ISH=1,NSHELL                 DO II=1,NSHELL
+C           DO JSH=1,ISH                    DO JJ=1,II
+C             IJSH = IA(ISH)+JSH
+C             DO KSH=1,ISH                    DO KK=1,JJ
+C               DO LSH=1,KSH                    DO LL=1,KK
+C                 KLSH=IA(KSH)+LSH
+C                 IF(IJSH.LT.KLSH),               [II JJ|KK LL],
+C                    CYCLE KSH LOOP               [II KK|JJ LL],
+C                 [ISH JSH|KSH LSH]               [II LL|JJ KK]
+C               ENDDO                           ENDDO
+C             ENDDO                           ENDDO
+C           ENDDO                           ENDDO
+C         ENDDO                           ENDDO
+C
+C     ----- CHECK FOR REDUNDANIES BETWEEN THE 3 COMBINATIONS -----
+C            (II,JJ//KK,LL), (II,KK//JJ,LL), (II,LL//JJ,KK)
+C
+      SKIPA =  JJ.EQ.KK
+      SKIPB = (II.EQ.KK) .OR. (JJ.EQ.LL)
+      SKIPC = (II.EQ.JJ) .OR. (KK.EQ.LL)
+      NPSYM = .FALSE.
+      IF (SKIPA .OR. SKIPB .OR. SKIPC) GO TO 720
+      NPSYM = .TRUE.
+      DO 640 M = 1,N4
+         IT = M0(M)
+         IH = MI(IT)
+         JH = MJ(IT)
+         IF(JH.LE.IH) THEN
+            ID = IH
+            JD = JH
+         ELSE
+            ID = JH
+            JD = IH
+         END IF
+         IF(.NOT.SKIPA) SKIPA = (ID.EQ.II .AND. JD.EQ.KK) .OR.
+     *                          (ID.EQ.JJ .AND. JD.EQ.LL)
+         IF(.NOT.SKIPB) SKIPB = (ID.EQ.II .AND. JD.EQ.LL) .OR.
+     *                          (ID.EQ.JJ .AND. JD.EQ.KK)
+         IF (SKIPA .AND. SKIPB) GO TO 660
+         KH = MK(IT)
+         IF(KH.LE.IH) THEN
+            ID = IH
+            KD = KH
+         ELSE
+            ID = KH
+            KD = IH
+         END IF
+         IF(.NOT.SKIPC) SKIPC = (ID.EQ.II .AND. KD.EQ.LL) .OR.
+     *                          (ID.EQ.JJ .AND. KD.EQ.KK)
+         IF(SKIPA .AND. SKIPC) GO TO 680
+         IF(SKIPB .AND. SKIPC) GO TO 700
+  640 CONTINUE
+      GO TO 720
+C
+  660 SKIPC = .TRUE.
+      GO TO 720
+  680 SKIPB = .TRUE.
+      GO TO 720
+  700 SKIPA = .TRUE.
+C
+C        GENERATE SYMMETRY FACTOR -Q4- FOR THIS QUARTET IN PETITE LIST
+C
+  720 CONTINUE
+      Q4 = NT
+      Q4 = Q4 / N4
+C
+C     ----- (II,JJ//KK,LL) -----
+C
+      IEXCH = 1
+      ISH = II
+      JSH = JJ
+      KSH = KK
+      LSH = LL
+      QQ4 = Q4
+      IF(SKIPA .AND. NPSYM) QQ4 = QQ4+Q4
+      IF(SKIPB .AND. NPSYM) QQ4 = QQ4+Q4
+      GO TO 780
+C
+C     ----- (II,KK//JJ,LL) -----
+C
+  740 IF (SKIPA) GO TO 760
+      IEXCH = 2
+      ISH = II
+      JSH = KK
+      KSH = JJ
+      LSH = LL
+      QQ4 = Q4
+      IF (SKIPC .AND. NPSYM) QQ4 = QQ4+Q4
+      GO TO 780
+C
+C     ----- (II,LL//JJ,KK) -----
+C
+  760 IF (SKIPB .OR. SKIPC) GO TO 840
+      IEXCH = 3
+      ISH = II
+      JSH = LL
+      KSH = JJ
+      LSH = KK
+      QQ4 = Q4
+C
+C        ----- COMPUTE TWO-ELECTRON INTEGRALS ----
+C
+  780 CONTINUE
+      IF(PK .AND. IEXCH.EQ.1) CALL ZPKOUT(ISH,JSH,KSH,LSH,GHONDO,
+     *                                    SKIPA,SKIPB,SKIPC,NPSYM)
+C
+C     APPLY THE SCHWARZ INEQUALITY TO SCREEN OUT SMALL INTEGRALS,
+C      (II,JJ//KK,LL) .LE.  SQRT( (II,JJ//II,JJ)*(KK,LL//KK,LL) )
+C     SEE, FOR EXAMPLE, J.L.WHITTEN, J.CHEM.PHYS. 58,4496-4501(1973)
+C
+      IF(SCHWRZ) THEN
+         IJIJ = (ISH*ISH-ISH)/2 + JSH
+         KLKL = (KSH*KSH-KSH)/2 + LSH
+         TEST = QQ4*XINTS(IJIJ)*XINTS(KLKL)
+         IF(DIRSCF) THEN
+            DENMAX = SCHWDN(DSH,ISH,JSH,KSH,LSH,IA)
+            TEST = TEST*DENMAX
+         END IF
+         SCHSKP = TEST.LT.CUTOFF
+         IF(SCHSKP) NSCHWZ = NSCHWZ + 1
+      END IF
+      IF(SCHSKP) GO TO 820
+C
+C        ----- ELECTRON REPULSION INTEGRAL CALCULATION -----
+C     THIS MAY USE ROTATED AXIS, ERIC, OR RYS QUADRATURE METHODS
+C
+      CALL SHELLQUART(ISH,JSH,KSH,LSH,GHONDO)
+C
+C        USE THE INTEGRALS JUST FORMED.  AT MOST, 1 OF THESE IS CALLED
+C
+      IF(DIRSCF) THEN
+         IF(NFLMAT.EQ.1) THEN
+            CALL DIRFCK(TYPSCF,IA,DA,FA,DB,FB,GHONDO,L2,NINT,NFLMAT)
+         ELSE
+            CALL DIRFCKDC(TYPSCF,IA,DA,FA,DB,FB,GHONDO,NINT,
+     *                    IABS(NFLMAT))
+         END IF
+      ELSE IF(DIRCIS) THEN
+         CALL DRFCIS(DA,FA,DB,FB,GHONDO,L1,NINT,NFLMAT)
+      ELSE IF(DIRNLO) THEN
+         IF(NFLMAT.GE.1) THEN
+            CALL DFCKNS(DNLO,FNLO,GHONDO,L1,NINT,NFLMAT)
+         ELSE
+            CALL DFCKNSDC(DNLO,FNLO,GHONDO,L1,NINT,IABS(NFLMAT))
+         END IF
+      ELSE IF(DIRTRF) THEN
+         CALL DIRTRNDC(BUFP,IX,NINTMX,GHONDO,ICONT,NINT)
+      ELSE
+         IF(NOTPK) CALL QOUT(BUFP,IX,NINTMX,GHONDO)
+      END IF
+C
+  820 CONTINUE
+      GO TO (740,760,840),IEXCH
+C
+C     ----- WRITE THE P (OR PK) SUPERMATRIX TO DISK FILE -----
+C
+  840 CONTINUE
+      IF(PK) CALL PKFILE(II,JJ,KK,LL,SKIPA,SKIPB,SKIPC,NPSYM,
+     *                   BUFP,BUFK,IX,NINTMX,GHONDO)
+C
+C     ----- END OF SHELL LOOPS -----
+C
+  860 CONTINUE
+  880 CONTINUE
+  900 CONTINUE
+  920 CONTINUE
+C
+      IF(DLB) CALL DDI_DLBRESET
+C
+C     ----- OUTPUT THE LAST BITS OF INTEGRALS -----
+C
+      IF(DIRTRF) CALL ONEIDXDC(BUFP,IX,ICONT)
+      IF(.NOT.CMBDIR) THEN
+         IF(SCHWRZ) THEN
+            IF(GOPARR) CALL DDI_GSUMI(1055,NSCHWZ,1)
+            IF(NPRINT.NE.-5 .AND. MASWRK) WRITE(IW,9020) NSCHWZ
+         END IF
+         CALL FINAL(1,II,II,II,II,PANDK,BUFP,BUFK,IX,NINTMX)
+      END IF
+C
+      GOPARR = GPSAVE
+      RETURN
+C
+ 9010 FORMAT(1X,'II,JST,KST,LST =',4I3,' NREC =',I10,' INTLOC =',I5)
+ 9015 FORMAT(1X,'II,JST,KST,LST =',4I3,' IN CORE, INTLOC =',I12)
+ 9020 FORMAT(1X,'SCHWARZ INEQUALITY TEST SKIPPED',I10,
+     *        ' INTEGRAL BLOCKS.')
+ 9030 FORMAT(//1X,'*** THIS JOB HAS EXHAUSTED ITS CPU TIME ***'/
+     *         1X,'     (WHILE COMPUTING 2E- INTEGRALS)'///)
+      END
+C
+C*MODULE DCINT2  *DECK DIRTRNDC
+C        MODIFIED FROM DIRTRN
+      SUBROUTINE DIRTRNDC(BUFP,IX,NINTMX,GHONDO,ICONT,NINT)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL IANDJ,KANDL,SAME,OUT
+C
+      DIMENSION BUFP(*),IX(*),GHONDO(*)
+C
+      PARAMETER (MXSH=5000, MXGTOT=20000)
+C
+      COMMON /ERIOUT/ ISH,JSH,KSH,LSH,LSTRI,LSTRJ,LSTRK,LSTRL
+      COMMON /MISC  / IANDJ,KANDL,SAME
+      COMMON /NSHEL / EXX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /PCKLAB/ LABSIZ
+      COMMON /SHLNOS/ QQ4,LIT,LJT,LKT,LLT,LOCI,LOCJ,LOCK,LOCL,
+     *                MINI,MINJ,MINK,MINL,MAXI,MAXJ,MAXK,MAXL,
+     *                NIJ,IJ,KL,IJKL
+      COMMON /SHLT  / TOL,CUTOFF,ICOUNT,OUT
+C
+      DATA HALF /0.5D+00/
+C
+C-NEXT STATEMENT IS FOR VARIOUS IBM XLF 3.X AND 5.X COMPILERS-
+C
+      SAVE IJN,KLN
+C
+C     ----- PACK THE 4 INDICES OF INTEGRAL INTO ONE WORD
+C           WRITE LABEL + INTEGRAL ON BUFP AND IX
+C           BEFORE SENDING INTEGRALS TO ROUTINE ONEIDX
+C
+      SAME  = ISH .EQ. KSH .AND. JSH .EQ. LSH
+      IANDJ = ISH .EQ. JSH
+      KANDL = KSH .EQ. LSH
+C
+      MINI = KMIN(ISH)
+      MINJ = KMIN(JSH)
+      MINK = KMIN(KSH)
+      MINL = KMIN(LSH)
+      MAXI = KMAX(ISH)
+      MAXJ = KMAX(JSH)
+      MAXK = KMAX(KSH)
+      MAXL = KMAX(LSH)
+      LOCI = KLOC(ISH)-MINI
+      LOCJ = KLOC(JSH)-MINJ
+      LOCK = KLOC(KSH)-MINK
+      LOCL = KLOC(LSH)-MINL
+C
+      IJN = 0
+      JMAX = MAXJ
+      DO 260 I = MINI,MAXI
+         I_ERIC = (I-MINI)*LSTRI + 1
+         IF (IANDJ) JMAX = I
+         DO 240 J = MINJ,JMAX
+            IJ_ERIC = (J-MINJ)*LSTRJ + I_ERIC
+            IJN = IJN+1
+            LMAX = MAXL
+            KLN = 0
+            DO 220 K =  MINK,MAXK
+               IJK_ERIC = (K-MINK)*LSTRK + IJ_ERIC
+               IF (KANDL) LMAX = K
+               DO 200 L = MINL,LMAX
+                  KLN = KLN+1
+                  IF (SAME .AND. KLN .GT. IJN) GO TO 240
+C
+                  IJKL_ERIC = (L-MINL)*LSTRL + IJK_ERIC
+                  VAL = GHONDO( IJKL_ERIC )
+                  IF (ABS(VAL) .LT. CUTOFF) GO TO 200
+                  NINT = NINT+1
+C
+                  I1 = LOCI+I
+                  I2 = LOCJ+J
+                  I3 = LOCK+K
+                  I4 = LOCL+L
+                  IF (I1 .GE. I2) GO TO 100
+                  N = I1
+                  I1 = I2
+                  I2 = N
+  100             IF (I3 .GE. I4) GO TO 120
+                  N = I3
+                  I3 = I4
+                  I4 = N
+  120             IF (I1-I3) 140,160,180
+  140             N = I1
+                  I1 = I3
+                  I3 = N
+                  N = I2
+                  I2 = I4
+                  I4 = N
+                  GO TO 180
+  160             IF (I2 .LT. I4) GO TO 140
+  180             CONTINUE
+C
+                  IF (OUT) CALL INTOUT(I1,I2,I3,I4,QQ4,IJKL_ERIC,VAL)
+                  IF (I1 .EQ. I2) VAL = VAL*HALF
+                  IF (I3 .EQ. I4) VAL = VAL*HALF
+                  IF (I1 .EQ. I3 .AND. I2 .EQ. I4) VAL = VAL*HALF
+                  ICONT = ICONT + 1
+                  BUFP(ICONT) = VAL
+C
+                  NPACK = ICONT
+                  IPACK = I1
+                  JPACK = I2
+                  KPACK = I3
+                  LPACK = I4
+                  IF (LABSIZ .EQ. 2) THEN
+*I32                IX( 2*NPACK-1 ) = ISHFT( IPACK, 16 ) + JPACK
+*I32                IX( 2*NPACK   ) = ISHFT( KPACK, 16 ) + LPACK
+*I64                LABEL = ISHFT( IPACK, 48 ) + ISHFT( JPACK, 32 ) +
+*I64 *                      ISHFT( KPACK, 16 ) + LPACK
+*I64                IX(NPACK) = LABEL
+                  ELSE IF (LABSIZ .EQ. 1) THEN
+*I32                LABEL = ISHFT( IPACK, 24 ) + ISHFT( JPACK, 16 ) +
+*I32 *                      ISHFT( KPACK,  8 ) + LPACK
+*I32                IX(NPACK) = LABEL
+*I64                IF ( MOD(NPACK,2) .EQ. 0 ) THEN
+*I64                  LABEL = ISHFT( IPACK, 24 ) + ISHFT( JPACK, 16 ) +
+*I64 *                        ISHFT( KPACK,  8 ) + LPACK
+*I64                  IX( NPACK/2 ) = IX( NPACK/2 ) + LABEL
+*I64                ELSE
+*I64                  LABEL = ISHFT( IPACK, 56 ) + ISHFT( JPACK, 48 ) +
+*I64 *                        ISHFT( KPACK, 40 ) + ISHFT( LPACK, 32 )
+*I64                  IX( (NPACK/2)+1 ) = LABEL
+*I64                END IF
+                  END IF
+C
+                  IF(ICONT.GE.NINTMX) THEN
+                     CALL ONEIDXDC(BUFP,IX,NINTMX)
+                     ICONT = 0
+                  END IF
+  200          CONTINUE
+  220       CONTINUE
+  240    CONTINUE
+  260 CONTINUE
+      RETURN
+      END
+C
+C*MODULE DCINT2  *DECK ONEIDXDC
+C        MODIFIED FROM ONEIDX
+      SUBROUTINE ONEIDXDC(XX,IX,NXX)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /DIRCAS/ I2CASE
+      COMMON /DIRMEM/ IPQRJ,IVEC,IDEN,IFCK,NUM,NOC,NDIM,MINPQ,MAXPQ
+      COMMON /DCMEM2/ IPQRJI,IDCMOD
+      COMMON /DIRZPT/ LPASS,NJUMP
+      COMMON /FMCOM / X(1)
+C
+      DIMENSION XX(*),IX(*)
+C
+C     ----- DIRECT TRANSFORMATION FOR MCSCF, CPHF, AND MP2 -----
+C     THE VALUES IN COMMON /DIRMEM/ ARE POINTERS TO THE MEMORY
+C
+C               IPQRJ - (PQ|KL) OR (PQ|RJ) INTEGRALS
+C                IVEC - ORBITALS
+C                IDEN - DENSITY MATRIX
+C                IFCK - FOCK MATRIX
+C
+C     ----- SELECT WHAT TO DO -----
+C                 I2CASE IN COMMON /DIRCAS/ DEFINES TYPES OF
+C                 TRANSFORMATION:  1--> WITH FOCK OPERATOR
+C                                  2--> TWO INDEX TRANSFORMATION
+C                                  3--> FOR MP2
+C                                  6--> FOR DIRECT MP2 ZAPT
+C
+      GO TO (100,200,300,400,500,600) I2CASE
+      WRITE(IW,9999) I2CASE
+      CALL ABRT
+      RETURN
+C
+C     ----- 1-INDEX TRANSFORMATION WITH FOCK OPERATOR -----
+C
+  100 CONTINUE
+      CALL ONETFF(X(IPQRJ),X(IVEC),X(IFCK),X(IDEN),
+     *            NDIM,NUM,NOC,XX,IX,NXX,0)
+      RETURN
+C
+C     ----- 2-INDEX TRANSFORMATION -----
+C
+  200 CONTINUE
+      NUM2 = (NUM*(NUM+1))/2
+      CALL TWOTFF(X(IPQRJ),X(IVEC),X(IFCK),X(IDEN),
+     *            NUM2,NUM,NOC,XX,IX,NXX,0)
+      RETURN
+C
+C     ----- 1-INDEX TRANSFORMATION FOR MP2 -----
+C
+  300 CONTINUE
+      CALL ONETFD(X(IPQRJ),X(IPQRJI),X(IVEC),NDIM,NUM,NOC,XX,IX,NXX,0,
+     *            IDCMOD)
+      RETURN
+C
+C     ----- 1-INDEX PARTIAL TRANSFORMATION WITH FOCK OPERATOR -----
+C
+  400 CONTINUE
+      CALL ONEPFF(X(IPQRJ),X(IVEC),X(IFCK),X(IDEN),
+     *            NDIM,MINPQ,MAXPQ,NUM,NOC,XX,IX,NXX,0)
+      RETURN
+C
+C     ----- 1-INDEX PARTIAL TRANSFORMATION -----
+C
+  500 CONTINUE
+      CALL ONEPRF(X(IPQRJ),X(IVEC),NDIM,MINPQ,MAXPQ,
+     *            NUM,NOC,XX,IX,NXX,0)
+      RETURN
+C
+  600 CONTINUE
+      CALL FRSTTR(X(IPQRJ),X(IVEC + NJUMP * NUM),NDIM,NUM,NOC,
+     *            XX,IX,NXX,LPASS)
+      RETURN
+C
+ 9999 FORMAT('WRONG I2CASE PARAMETER (',I3,') IN ONEIDX')
+      END
+C*MODULE DCINT2  *DECK DIRFCKDC
+C        MODIFIED FROM DIRFCK
+      SUBROUTINE DIRFCKDC(SCFTYP,IA,DA,FA,DB,FB,GHONDO,NINT,NXYZ)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL IANDJ,KANDL,SAME,OUT,UROHF,LCFLAG,LRINT,CAMFLAG
+C
+      DIMENSION IA(*),DA(*),FA(*),DB(*),FB(*),GHONDO(*)
+C
+      PARAMETER (MXSH=5000, MXGTOT=20000, MXAO=8192)
+C
+      COMMON /DFTCAM/ ALPHAC,BETAC,CAMMU,CAMVWN,CAMLYP,CAMFLAG
+      COMMON /DFTPAR/ DFTTYP(20),EXENA,EXENB,EXENC,IDFT34,NAUXFUN,
+     *                                                    NAUXSHL
+      COMMON /ERIOUT/ ISH,JSH,KSH,LSH,LSTRI,LSTRJ,LSTRK,LSTRL
+      COMMON /MISC  / IANDJ,KANDL,SAME
+      COMMON /NLRC  / LCFLAG,LRINT,EMU,EMU2,LRFILE
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /SHLNOS/ QQ4,LIT,LJT,LKT,LLT,LOCI,LOCJ,LOCK,LOCL,
+     *                MINI,MINJ,MINK,MINL,MAXI,MAXJ,MAXK,MAXL,
+     *                NIJX,IJ,KL,IJKL
+      COMMON /SHLT  / TOL,CUTOFF,ICOUNT,OUT
+C
+      COMMON /TO2LC / IT2LOC(MXAO)
+C
+      DATA HALF /0.5D+00/
+      DATA RHF,UHF,ROHF/8HRHF     ,8HUHF     ,8HROHF     /
+C
+C-NEXT STATEMENT IS FOR VARIOUS IBM XLF 3.X AND 5.X COMPILERS-
+C
+      SAVE IJN,KLN
+C
+C     ----- FORM FOCK OPERATOR DIRECTLY FROM INTEGRALS -----
+C     THIS ROUTINE WAS PIECED TOGETHER FROM QOUT AND HSTAR
+C     BY FRANK JENSEN AT ODENSE UNIVERSITY IN MARCH 1990.
+C     SCF FUNCTIONS BESIDES RHF ADDED BY MWS IN AUGUST 1991.
+C
+C     NOTE THAT OFF-DIAGONAL ELEMENTS WILL NEED TO BE HALVED LATER.
+C
+      HFSCAL=DFTTYP(3)
+      CSCALT=1.0D+00
+      IF(LCFLAG) THEN
+       IF(LRINT) THEN
+       HFSCAL=1.0D+00
+       CSCALT=0.0D+00
+       ELSE
+       HFSCAL=0.0D+00
+       CSCALT=1.0D+00
+       ENDIF
+      ENDIF
+      IF(CAMFLAG.AND.LRINT) CSCALT=0.0D+00
+C
+      UROHF = SCFTYP.EQ.UHF  .OR.  SCFTYP.EQ.ROHF
+      CUTINT = CUTOFF
+C
+      SAME  = ISH .EQ. KSH .AND. JSH .EQ. LSH
+      IANDJ = ISH .EQ. JSH
+      KANDL = KSH .EQ. LSH
+C
+      MINI = KMIN(ISH)
+      MINJ = KMIN(JSH)
+      MINK = KMIN(KSH)
+      MINL = KMIN(LSH)
+      MAXI = KMAX(ISH)
+      MAXJ = KMAX(JSH)
+      MAXK = KMAX(KSH)
+      MAXL = KMAX(LSH)
+      LOCI = KLOC(ISH)-MINI
+      LOCJ = KLOC(JSH)-MINJ
+      LOCK = KLOC(KSH)-MINK
+      LOCL = KLOC(LSH)-MINL
+C
+      IJN = 0
+      JMAX = MAXJ
+      DO 360 I = MINI,MAXI
+         I_INDEX = (I-MINI)*LSTRI + 1
+         IF (IANDJ) JMAX = I
+         DO 340 J = MINJ,JMAX
+            IJ_INDEX = (J-MINJ)*LSTRJ + I_INDEX
+            IJN = IJN+1
+            LMAX = MAXL
+            KLN = 0
+            DO 320 K =  MINK,MAXK
+               IJK_INDEX = (K-MINK)*LSTRK + IJ_INDEX
+               IF (KANDL) LMAX = K
+               DO 300 L = MINL,LMAX
+                  KLN = KLN+1
+                  IF(SAME .AND. KLN.GT.IJN) GO TO 340
+                  IJKL_INDEX = (L-MINL)*LSTRL + IJK_INDEX
+C
+                  VAL = GHONDO( IJKL_INDEX )
+                  IF(ABS(VAL).LT.CUTINT) GO TO 300
+                  NINT = NINT + 1
+C
+                  IIT = LOCI+I
+                  JJT = LOCJ+J
+                  KKT = LOCK+K
+                  LLT = LOCL+L
+C
+                  II=IT2LOC(IIT)
+                  JJ=IT2LOC(JJT)
+                  KK=IT2LOC(KKT)
+                  LL=IT2LOC(LLT)
+                  ITEST=II*JJ*KK*LL
+                  IF(ITEST.EQ.0) GO TO 300
+C
+                  IF (II .GE. JJ) GO TO 100
+                  N = II
+                  II = JJ
+                  JJ = N
+  100             IF (KK .GE. LL) GO TO 120
+                  N = KK
+                  KK = LL
+                  LL = N
+  120             IF (II-KK) 140,160,180
+  140             N = II
+                  II = KK
+                  KK = N
+                  N = JJ
+                  JJ = LL
+                  LL = N
+                  GO TO 180
+  160             IF (JJ .LT. LL) GO TO 140
+  180             CONTINUE
+C
+                  IF(II.EQ.JJ) VAL = VAL*HALF
+                  IF(KK.EQ.LL) VAL = VAL*HALF
+                  IF(II.EQ.KK  .AND.  JJ.EQ.LL) VAL = VAL*HALF
+C
+C      WE NOW HAVE EVERYTHING READY, PUT INTEGRALS INTO FOCK MATRIX
+C
+                  NIJ = IA(II)+JJ
+                  NKL = IA(KK)+LL
+                  NIK = IA(II)+KK
+                  NIL = IA(II)+LL
+                  NJK = IA(JJ)+KK
+                  NJL = IA(JJ)+LL
+                  IF(JJ.LT.KK) NJK = IA(KK)+JJ
+                  IF(JJ.LT.LL) NJL = IA(LL)+JJ
+C
+                  VAL2 = VAL+VAL
+                  VAL4 = VAL2+VAL2
+C
+C       NXYZ DISTINGUISHES CODE FOR RHF OR RHF RESPONSE EQUATIONS
+C
+C       HFSCAL DISTINGUISHES CODE FOR HF OR DFT
+C
+                  IF(HFSCAL .EQ. 1.0D+00 .AND. .NOT.LCFLAG
+     *                                   .AND. .NOT.CAMFLAG) THEN
+                  IF(SCFTYP.EQ.RHF) THEN
+                     IF(NXYZ.EQ.1) THEN
+                        FA(NIJ) = FA(NIJ)+VAL4*DA(NKL)
+                        FA(NKL) = FA(NKL)+VAL4*DA(NIJ)
+                        FA(NIK) = FA(NIK)- VAL*DA(NJL)
+                        FA(NIL) = FA(NIL)- VAL*DA(NJK)
+                        FA(NJK) = FA(NJK)- VAL*DA(NIL)
+                        FA(NJL) = FA(NJL)- VAL*DA(NIK)
+                     ELSE
+                        NIJ = (NIJ-1)*NXYZ+1
+                        NKL = (NKL-1)*NXYZ+1
+                        NIK = (NIK-1)*NXYZ+1
+                        NIL = (NIL-1)*NXYZ+1
+                        NJK = (NJK-1)*NXYZ+1
+                        NJL = (NJL-1)*NXYZ+1
+                        DO 210 IXYZ=0,NXYZ-1
+                          FA(NIJ+IXYZ) = FA(NIJ+IXYZ)+VAL4*DA(NKL+IXYZ)
+                          FA(NKL+IXYZ) = FA(NKL+IXYZ)+VAL4*DA(NIJ+IXYZ)
+                          FA(NIK+IXYZ) = FA(NIK+IXYZ)- VAL*DA(NJL+IXYZ)
+                          FA(NIL+IXYZ) = FA(NIL+IXYZ)- VAL*DA(NJK+IXYZ)
+                          FA(NJK+IXYZ) = FA(NJK+IXYZ)- VAL*DA(NIL+IXYZ)
+                          FA(NJL+IXYZ) = FA(NJL+IXYZ)- VAL*DA(NIK+IXYZ)
+  210                   CONTINUE
+                     END IF
+                  END IF
+C
+                  IF(UROHF) THEN
+                     DUM = VAL4*(DA(NKL)+DB(NKL))
+                     FA(NIJ) = FA(NIJ)+DUM
+                     FB(NIJ) = FB(NIJ)+DUM
+                     DUM = VAL4*(DA(NIJ)+DB(NIJ))
+                     FA(NKL) = FA(NKL)+DUM
+                     FB(NKL) = FB(NKL)+DUM
+                     FA(NIK) = FA(NIK)-VAL2*DA(NJL)
+                     FB(NIK) = FB(NIK)-VAL2*DB(NJL)
+                     FA(NIL) = FA(NIL)-VAL2*DA(NJK)
+                     FB(NIL) = FB(NIL)-VAL2*DB(NJK)
+                     FA(NJK) = FA(NJK)-VAL2*DA(NIL)
+                     FB(NJK) = FB(NJK)-VAL2*DB(NIL)
+                     FA(NJL) = FA(NJL)-VAL2*DA(NIK)
+                     FB(NJL) = FB(NJL)-VAL2*DB(NIK)
+                  END IF
+                  ELSE
+C
+C                 DFT/LC-DFT CASE
+C
+                  IF(SCFTYP.EQ.RHF) THEN
+                     IF(NXYZ.EQ.1) THEN
+                        FA(NIJ) = FA(NIJ)+VAL4*DA(NKL)*CSCALT
+                        FA(NKL) = FA(NKL)+VAL4*DA(NIJ)*CSCALT
+                        FA(NIK) = FA(NIK)- VAL*DA(NJL)*HFSCAL
+                        FA(NIL) = FA(NIL)- VAL*DA(NJK)*HFSCAL
+                        FA(NJK) = FA(NJK)- VAL*DA(NIL)*HFSCAL
+                        FA(NJL) = FA(NJL)- VAL*DA(NIK)*HFSCAL
+                     ELSE
+                        NIJ = (NIJ-1)*NXYZ+1
+                        NKL = (NKL-1)*NXYZ+1
+                        NIK = (NIK-1)*NXYZ+1
+                        NIL = (NIL-1)*NXYZ+1
+                        NJK = (NJK-1)*NXYZ+1
+                        NJL = (NJL-1)*NXYZ+1
+                        DO 310 IXYZ=0,NXYZ-1
+                          FA(NIJ+IXYZ) = FA(NIJ+IXYZ)+VAL4*DA(NKL+IXYZ)
+     *                                                          *CSCALT
+                          FA(NKL+IXYZ) = FA(NKL+IXYZ)+VAL4*DA(NIJ+IXYZ)
+     *                                                          *CSCALT
+                          FA(NIK+IXYZ) = FA(NIK+IXYZ)- VAL*DA(NJL+IXYZ)
+     *                                                          *HFSCAL
+                          FA(NIL+IXYZ) = FA(NIL+IXYZ)- VAL*DA(NJK+IXYZ)
+     *                                                          *HFSCAL
+                          FA(NJK+IXYZ) = FA(NJK+IXYZ)- VAL*DA(NIL+IXYZ)
+     *                                                          *HFSCAL
+                          FA(NJL+IXYZ) = FA(NJL+IXYZ)- VAL*DA(NIK+IXYZ)
+     *                                                          *HFSCAL
+  310                   CONTINUE
+                     END IF
+                  END IF
+C
+                  IF(UROHF) THEN
+                     DUM = VAL4*(DA(NKL)+DB(NKL))*CSCALT
+                     FA(NIJ) = FA(NIJ)+DUM
+                     FB(NIJ) = FB(NIJ)+DUM
+                     DUM = VAL4*(DA(NIJ)+DB(NIJ))*CSCALT
+                     FA(NKL) = FA(NKL)+DUM
+                     FB(NKL) = FB(NKL)+DUM
+                     FA(NIK) = FA(NIK)-VAL2*DA(NJL)*HFSCAL
+                     FB(NIK) = FB(NIK)-VAL2*DB(NJL)*HFSCAL
+                     FA(NIL) = FA(NIL)-VAL2*DA(NJK)*HFSCAL
+                     FB(NIL) = FB(NIL)-VAL2*DB(NJK)*HFSCAL
+                     FA(NJK) = FA(NJK)-VAL2*DA(NIL)*HFSCAL
+                     FB(NJK) = FB(NJK)-VAL2*DB(NIL)*HFSCAL
+                     FA(NJL) = FA(NJL)-VAL2*DA(NIK)*HFSCAL
+                     FB(NJL) = FB(NJL)-VAL2*DB(NIK)*HFSCAL
+                  END IF
+                  END IF
+C
+  300          CONTINUE
+  320       CONTINUE
+  340    CONTINUE
+  360 CONTINUE
+      RETURN
+      END
+C*MODULE DCINT2  *DECK DFCKNSDC
+C        MODIFIED FROM DFCKNS
+      SUBROUTINE DFCKNSDC(DA,FA,GHONDO,NORB,NINT,NPARAM)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL IANDJ,KANDL,SAME,OUT
+C
+      DIMENSION DA(NORB,NORB,NPARAM),FA(NORB,NORB,NPARAM),GHONDO(*)
+C
+      PARAMETER (MXSH=5000, MXGTOT=20000, MXAO=8192)
+C
+      COMMON /ERIOUT/ ISH,JSH,KSH,LSH,LSTRI,LSTRJ,LSTRK,LSTRL
+      COMMON /MISC  / IANDJ,KANDL,SAME
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /SHLNOS/ QQ4,LIT,LJT,LKT,LLT,LOCI,LOCJ,LOCK,LOCL,
+     *                MINI,MINJ,MINK,MINL,MAXI,MAXJ,MAXK,MAXL,
+     *                NIJX,IJ,KL,IJKL
+      COMMON /SHLT  / TOL,CUTOFF,ICOUNT,OUT
+C
+      COMMON /TO2LC / IT2LOC(MXAO)
+C
+      PARAMETER (HALF=0.5D+00)
+C
+C-NEXT STATEMENT IS FOR VARIOUS IBM XLF 3.X AND 5.X COMPILERS-
+C
+      SAVE IJN,KLN
+C
+C     ----- FORM NLO FOCK OPERATOR DIRECTLY FROM INTEGRALS -----
+C     NOTE THAT THE DENSITY AND FOCK OPERATOR ARE SQUARE MATRICES
+C     THIS ROUTINE KNOWS ONLY HOW TO DO RHF FOCK OPERATORS
+C
+      SAME  = ISH .EQ. KSH .AND. JSH .EQ. LSH
+      IANDJ = ISH .EQ. JSH
+      KANDL = KSH .EQ. LSH
+C
+      MINI = KMIN(ISH)
+      MINJ = KMIN(JSH)
+      MINK = KMIN(KSH)
+      MINL = KMIN(LSH)
+      MAXI = KMAX(ISH)
+      MAXJ = KMAX(JSH)
+      MAXK = KMAX(KSH)
+      MAXL = KMAX(LSH)
+      LOCI = KLOC(ISH)-MINI
+      LOCJ = KLOC(JSH)-MINJ
+      LOCK = KLOC(KSH)-MINK
+      LOCL = KLOC(LSH)-MINL
+C
+      IJN = 0
+      JMAX = MAXJ
+      DO 360 I = MINI,MAXI
+         I_ERIC = (I-MINI)*LSTRI + 1
+         IF (IANDJ) JMAX = I
+         DO 340 J = MINJ,JMAX
+            IJ_ERIC = (J-MINJ)*LSTRJ + I_ERIC
+            IJN = IJN+1
+            LMAX = MAXL
+            KLN = 0
+            DO 320 K =  MINK,MAXK
+               IJK_ERIC = (K-MINK)*LSTRK + IJ_ERIC
+               IF (KANDL) LMAX = K
+               DO 300 L = MINL,LMAX
+                  KLN = KLN+1
+                  IF(SAME .AND. KLN.GT.IJN) GO TO 340
+C
+                  IJKL_ERIC = (L-MINL)*LSTRL + IJK_ERIC
+                  VAL = GHONDO( IJKL_ERIC )
+                  IF(ABS(VAL).LT.CUTOFF) GO TO 300
+                  NINT = NINT + 1
+C
+                  IIT = LOCI+I
+                  JJT = LOCJ+J
+                  KKT = LOCK+K
+                  LLT = LOCL+L
+C
+                  II=IT2LOC(IIT)
+                  JJ=IT2LOC(JJT)
+                  KK=IT2LOC(KKT)
+                  LL=IT2LOC(LLT)
+                  ITEST=II*JJ*KK*LL
+                  IF(ITEST.EQ.0) GO TO 300
+C
+                  IF (II .GE. JJ) GO TO 100
+                  N = II
+                  II = JJ
+                  JJ = N
+  100             IF (KK .GE. LL) GO TO 120
+                  N = KK
+                  KK = LL
+                  LL = N
+  120             IF (II-KK) 140,160,180
+  140             N = II
+                  II = KK
+                  KK = N
+                  N = JJ
+                  JJ = LL
+                  LL = N
+                  GO TO 180
+  160             IF (JJ .LT. LL) GO TO 140
+  180             CONTINUE
+C
+                  IF(II.EQ.JJ) VAL = VAL*HALF
+                  IF(KK.EQ.LL) VAL = VAL*HALF
+                  IF(II.EQ.KK  .AND.  JJ.EQ.LL) VAL = VAL*HALF
+C
+C      WE NOW HAVE EVERYTHING READY, PUT INTEGRALS INTO FOCK MATRIX
+C
+                   VAL_2 = VAL*HALF
+                   DO IPARAM=1,NPARAM
+                     FA(II,JJ,IPARAM)=FA(II,JJ,IPARAM)
+     *                 +VAL*(DA(KK,LL,IPARAM)+DA(LL,KK,IPARAM))
+                     FA(JJ,II,IPARAM)=FA(JJ,II,IPARAM)
+     *                 +VAL*(DA(KK,LL,IPARAM)+DA(LL,KK,IPARAM))
+                     FA(KK,LL,IPARAM)=FA(KK,LL,IPARAM)
+     *                 +VAL*(DA(II,JJ,IPARAM)+DA(JJ,II,IPARAM))
+                     FA(LL,KK,IPARAM)=FA(LL,KK,IPARAM)
+     *                 +VAL*(DA(II,JJ,IPARAM)+DA(JJ,II,IPARAM))
+                     FA(II,KK,IPARAM)=FA(II,KK,IPARAM)
+     *                 -VAL_2*DA(JJ,LL,IPARAM)
+                     FA(KK,II,IPARAM)=FA(KK,II,IPARAM)
+     *                 -VAL_2*DA(LL,JJ,IPARAM)
+                     FA(II,LL,IPARAM)=FA(II,LL,IPARAM)
+     *                 -VAL_2*DA(JJ,KK,IPARAM)
+                     FA(LL,II,IPARAM)=FA(LL,II,IPARAM)
+     *                 -VAL_2*DA(KK,JJ,IPARAM)
+                     FA(JJ,KK,IPARAM)=FA(JJ,KK,IPARAM)
+     *                 -VAL_2*DA(II,LL,IPARAM)
+                     FA(KK,JJ,IPARAM)=FA(KK,JJ,IPARAM)
+     *                 -VAL_2*DA(LL,II,IPARAM)
+                     FA(JJ,LL,IPARAM)=FA(JJ,LL,IPARAM)
+     *                 -VAL_2*DA(II,KK,IPARAM)
+                     FA(LL,JJ,IPARAM)=FA(LL,JJ,IPARAM)
+     *                 -VAL_2*DA(KK,II,IPARAM)
+                   ENDDO
+  300          CONTINUE
+  320       CONTINUE
+  340    CONTINUE
+  360 CONTINUE
+      RETURN
+      END

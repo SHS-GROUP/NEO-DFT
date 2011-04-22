@@ -1,0 +1,578 @@
+C 14 AUG 09 - RP  - CHAI-HEAD-GORDON DAMPING FUNCTION
+C 23 OCT 08 - RP  - NEW MODULE FOR GRIMME'S DISPERSION CORRECTION
+C
+C***********************************************************************
+C
+C     LONG RANGE DISPERSION CORRECTION MODULE: 07/18/2007
+C     BY ROBERTO PEVERATI, O.C.I, UNIVERSITY OF ZURICH
+C
+C     EMPIRICAL CORRECTIONS FOR LONG RANGE (VDW) DISPERSION ACCORDING TO
+C     THE ORIGINAL GRIMME'S PAPERS:
+C
+C     DFT-D FIRST VERSION  : S.GRIMME, J.COMPUT.CHEM.
+C                            25, (2004), 1463-1476.
+C
+C     DFT-D SECOND VERSION : S.GRIMME, J.COMPUT.CHEM.
+C                            27, (2006), 1787-1799.
+C
+C     THE KEYWORDS THAT GOVERN DISPERSION ADDITION ARE IN $DFT GROUP:
+C     DC=.TRUE. (DEFAULT IS .FALSE) TO USE SECOND IMPLEMENTATION
+C     DCOLD=.TRUE. TO USE 2004 IMPLEMENTATION (DEFAULT IS .FALSE)
+C     DCPAR IS THE VALUE OF THE S6 PREFACTOR FOR C6 COEFFICIENTS, IT IS
+C     FUNCTIONAL (AND BASIS-SET) DEPENDENT. OPTIMIZED VALUES FOR
+C     DIFFERENT DFT FUNCTIONALS (TZV2P BASIS SET) FROM GRIMME'S
+C     WORK ARE USED IF THIS KEYWORD IS NOT SPECIFIED
+C
+C     SEMIEMPIRICAL LONG RANGE DISPERSIONS ARE ADDED TO THE CALCULATION
+C     AT THE END OF THE SCF LOOP FOR RHF AND UHF.
+C     ANALYTIC HESSIAN IS NOT IMPLEMENTED, HESS.SRC HAS BEEN MODIFIED
+C     ACCORDINGLY TO USE THE FULL NUMERIC CODE WHEN DISPERSION IS ON.
+C
+C***********************************************************************
+C
+C*MODULE DFTDIS  *DECK DISPCORINI
+      SUBROUTINE DISPCORINI(ALP,MODE)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      LOGICAL GOPARR,MASWRK,DSKWRK,DC,DCOLD,DCCHG
+      INTEGER WARN
+      PARAMETER (MXATM=2000)
+      DIMENSION ICHARGE(MXATM)
+C
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+C     COMMON BLOCK FOR DFT-TYPE
+      COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
+     *                MPLEVL,MPCTYP
+C     COMMON BLOCK FOR IO FILES AND PARALLELIZATION
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C     COMMON BLOCK FOR DISPERSION CODE
+      COMMON /VDWPAR/ DCPAR,DCEXP,C6(100),VDWD(100),DC,DCOLD,DCCHG
+C
+C     DATA BLOCK FOR DFTYPE
+C     YOU HAVE TO ADD THE FUNCTIONAL KEYWORD HERE (IF NOT PRESENT YET)
+C
+C     IF YOU WANT TO SET A SCALING FACTOR FOR THE FUNCTIONAL - BE
+C     CAREFUL WITH VARIABLES NAME CONVENTIONS (A-H,O-Z)
+C
+      DOUBLE PRECISION LCBLYP
+C
+      DATA HNONE    /8HNONE    /
+      DATA B3LYP    /8HB3LYP   /
+      DATA LCBLYP   /8HLCBLYP  /
+      DATA B3LYP1   /8HB3LYP1  /
+      DATA PBE,PBES /8HPBE     ,8HPBESOL  /
+      DATA BP86     /8HBP86    /
+      DATA BLYP     /8HBLYP    /
+      DATA B97D     /8HB97-D   /
+      DATA WB97XD   /8HWB97X-D /
+      DATA B2PLYP   /8HB2PLYP  /
+      DATA TPSS,TPSSM/8HTPSS    ,8HTPSSM   /
+C
+C     INITIALIZE DATA FOR GRIMME'S DISPERSION ENERGY CORRECTION
+C     MODE=0: JUST PRINT
+C     MODE=1: ABOUT TO DO ENERGY TERM
+C     MODE=2: ABOUT TO DO GRADIENT TERM
+C
+C     VDW RADII ARE IN ANG. DETERMINED BY
+C     ATOMIC ROHF/TZV CALCULATIONS AND THEN TAKEN AS THE RADIUS OF THE
+C     0.01 DENSITY CONTOUR (SCALING DONE BELOW)
+C     DATA OBATAINED USING THE 0.005 CONTOUR AND SCALE=1.0 GAVE TOO
+C     LARGE DIFFERENCES BETWEEN THE ATOMS I.E.,
+C     1.1 1.5 1.42 1.36 1.3 FOR H,C,N,O,F
+C
+C     H, HE
+      VDWD(1) =    0.91D+00
+      VDWD(2) =    0.92D+00
+C     LI-NE
+      VDWD(3) =    0.75D+00
+      VDWD(4) =    1.28D+00
+      VDWD(5) =    1.35D+00
+      VDWD(6) =    1.32D+00
+      VDWD(7) =    1.27D+00
+      VDWD(8) =    1.22D+00
+      VDWD(9) =    1.17D+00
+      VDWD(10)=    1.13D+00
+C     NA-AR
+      VDWD(11)=    1.04D+00
+      VDWD(12)=    1.24D+00
+      VDWD(13)=    1.49D+00
+      VDWD(14)=    1.56D+00
+      VDWD(15)=    1.55D+00
+      VDWD(16)=    1.53D+00
+      VDWD(17)=    1.49D+00
+      VDWD(18)=    1.45D+00
+C     K, CA
+      VDWD(19)=    1.35D+00
+      VDWD(20)=    1.34D+00
+C     SC-ZN
+      DO II=21,30
+         VDWD(II)=  1.42D+00
+      ENDDO
+C     GA-KR
+      VDWD(31)=    1.50D+00
+      VDWD(32)=    1.57D+00
+      VDWD(33)=    1.60D+00
+      VDWD(34)=    1.61D+00
+      VDWD(35)=    1.59D+00
+      VDWD(36)=    1.57D+00
+C     RB, SR
+      VDWD(37)=    1.48D+00
+      VDWD(38)=    1.46D+00
+C     Y-CD
+      DO II=39,48
+         VDWD(II)=  1.49D+00
+      ENDDO
+C     IN, SN, SB, TE, I, XE
+      VDWD(49)=    1.52D+00
+      VDWD(50)=    1.64D+00
+      VDWD(51)=    1.71D+00
+      VDWD(52)=    1.72D+00
+      VDWD(53)=    1.72D+00
+      VDWD(54)=    1.71D+00
+C
+      DO II=55,100
+         VDWD(II)=  1.0D+99
+      ENDDO
+C
+C***********************************************************************
+C
+C       FIRST IMPLEMENTATION (2004)
+C
+C***********************************************************************
+C
+      IF(DCOLD) THEN
+C
+        WARN=0
+        SCALERAD = 1.22D+00
+        ALP = 23.0D+00
+C
+C     IN J MOL^-1 NM^6
+        C6(1) =0.16D+00
+        C6(5) =1.65D+00
+        C6(6) =1.65D+00
+        C6(7) =1.11D+00
+        C6(8) =0.70D+00
+        C6(9) =0.57D+00
+        C6(10)=0.45D+00
+C     NOT TESTED
+        C6(14)=25.00D+00
+C     QUICK AND DIRTY FIT FOR PH3 DIMER (MP2/AUG-CC-PVTZ)
+        C6(15)=20.00D+00
+C     QUICK AND DIRTY FIT FOR H2S DIMER
+        C6(16)=12.00D+00
+C     QUICK AND DIRTY FIT FOR HCL DIMER
+        C6(17)=9.00D+00
+C     QUICK AND DIRTY FIT FOR AR2 (EXP. VALUE IS 3.7)
+        C6(18)=6.50D+00
+C     NOT REALLY TESTED
+        C6(2) =0.15D+00
+        C6(24)=10.0D+00
+        C6(25)=10.0D+00
+        C6(26)=10.0D+00
+C     ESTIMATE FOR BROMINE
+        C6(35)=18.0D+00
+C     BLYP
+        IF(DFTYPE.EQ.BLYP) THEN
+          SCALEC6 = 1.40D+00
+C     PBE
+        ELSEIF(DFTYPE.EQ.PBE) THEN
+          SCALEC6 = 0.70D+00
+C     BP86
+        ELSEIF(DFTYPE.EQ.BP86) THEN
+          SCALEC6 = 1.30D+00
+C     DEFAULT
+        ELSE
+          SCALEC6 = 1.00D+00
+          WARN=1
+        END IF
+C
+C***********************************************************************
+C
+C       SECOND IMPLEMENTATION (2006)
+C
+C***********************************************************************
+C
+      ELSE
+C
+C     TO AVOID DIVIDE BY ZERO FOR DUMMY ATOMS (CP CORRECTION)
+        DO II=1,100
+          C6(II)= 1.0D-14
+        ENDDO
+C
+C     C METALS AS AVERAGE OF PRECEEDING RARE GAS AND GROUP 3 ELEMENT
+C     DEF2-QZVP PBE0 IP AND ALPHA
+        C6( 1)=    0.14D+00
+        C6( 2)=    0.08D+00
+        C6( 3)=    1.61D+00
+        C6( 4)=    1.61D+00
+        C6( 5)=    3.13D+00
+        C6( 6)=    1.75D+00
+        C6( 7)=    1.23D+00
+        C6( 8)=    0.70D+00
+        C6( 9)=    0.75D+00
+        C6(10)=    0.63D+00
+        C6(11)=    5.71D+00
+        C6(12)=    5.71D+00
+        C6(13)=   10.79D+00
+        C6(14)=    9.23D+00
+        C6(15)=    7.84D+00
+        C6(16)=    5.57D+00
+        C6(17)=    5.07D+00
+        C6(18)=    4.61D+00
+C
+        DO II=19,30
+           C6(II)=  10.8D+00
+        ENDDO
+C
+        C6(31)=   16.99D+00
+        C6(32)=   17.10D+00
+        C6(33)=   16.37D+00
+        C6(34)=   12.64D+00
+        C6(35)=   12.47D+00
+        C6(36)=   12.01D+00
+C
+        DO II=37,48
+           C6(II)= 24.67D+00
+        ENDDO
+C
+        C6(49)=   37.32D+00
+        C6(50)=   38.71D+00
+        C6(51)=   38.44D+00
+        C6(52)=   31.74D+00
+        C6(53)=   31.50D+00
+        C6(54)=   29.99D+00
+C
+           WARN=0
+           ALP = 20.0D+00
+C     SR FACTORS FOR VDW RADII
+C     MANUAL INPUT
+       IF(DCEXP.NE.0.0D+00) THEN
+          SCALERAD = DCEXP
+       ELSE
+          SCALERAD = 1.10D+00
+       END IF
+C
+C     SCALING FACTOR FOR DFT-FUNCTIONALS
+C     BLYP
+        IF(DCPAR.EQ.0.0D+00 .AND.
+     *         (DFTYPE.EQ.BLYP.OR.DFTYPE.EQ.LCBLYP)) THEN
+          SCALEC6 = 1.20D+00
+C     PBE
+        ELSEIF(DCPAR.EQ.0.0D+00 .AND.
+     *        (DFTYPE.EQ.PBE .OR. DFTYPE.EQ.PBES)) THEN
+          SCALEC6 = 0.75D+00
+C     BP86
+        ELSEIF(DCPAR.EQ.0.0D+00 .AND.DFTYPE.EQ.BP86) THEN
+          SCALEC6 = 1.05D+00
+C     TPSS
+        ELSE IF (DCPAR.EQ.0.0D+00  .AND.
+     *         (DFTYPE.EQ.TPSS  .OR.  DFTYPE.EQ.TPSSM)) THEN
+          SCALEC6 = 1.00D+00
+C     B3LYP
+        ELSEIF(DCPAR.EQ.0.0D+00 .AND.
+     *       (DFTYPE.EQ.B3LYP  .OR.  DFTYPE.EQ.B3LYP1))  THEN
+          SCALEC6 = 1.05D+00
+C    B2PLYP
+      ELSEIF (DCPAR.EQ.0.0D+00 .AND. DFTYPE.EQ.B2PLYP) THEN
+          SCALEC6  = 0.55D+00
+          SCALERAD = 1.30D+00
+C     B97-D
+        ELSE IF (DCPAR.EQ.0.0D+00 .AND. DFTYPE.EQ.B97D) THEN
+          SCALEC6 = 1.25D+00
+C     WB97X-D
+        ELSE IF (DCPAR.EQ.0.0D+00 .AND. DFTYPE.EQ.WB97XD) THEN
+          DCCHG=.TRUE.
+          SCALEC6  = 1.00D+00
+          ALP = 6.0D+00
+C     MANUAL INPUT
+        ELSE IF (DCPAR.NE.0) THEN
+          SCALEC6 = DCPAR
+          WARN=2
+C     DEFAULT
+        ELSE
+           SCALEC6 =1.00D+00
+           WARN=1
+        ENDIF
+C
+      END IF
+C
+C       APPLY THE SCALING PARAMETERS
+C
+      DO II=1,100
+         VDWD(II) = VDWD(II) * SCALERAD
+         IF(MODE.GT.0) C6(II) = C6(II) * SCALEC6
+      ENDDO
+C
+      IF(MASWRK  .AND.  MODE.EQ.0) THEN
+        IF(DCOLD) THEN
+          WRITE(IW,*) 'USING GRIMME''S OLD 2004 PARAMETERIZATION'
+        ELSE IF(DCCHG) THEN
+          WRITE(IW,*)'USING CHAI-HEAD-GORDON DAMPING FUNCTION'
+          WRITE(IW,*)'FOR WB97X-D FUNCTIONAL, A=6'
+        ELSE
+          WRITE(IW,*) 'USING GRIMME''S 2006 PARAMETERIZATION'
+        END IF
+        IF(WARN.EQ.1) THEN
+          WRITE(IW,*)
+          WRITE(IW,*)'WARNING:'
+          WRITE(IW,*)'YOU ARE USING DISPERSION CORRECTION'
+          IF(DFTYPE.EQ.HNONE) THEN
+            WRITE(IW,*)'WITH SIMPLE HARTREE-FOCK'
+            WRITE(IW,*)
+          ELSE
+            WRITE(IW,'('' WITH THE UNTESTED DFT FUNCTIONAL: '',A8)')
+     >            DFTYPE
+            WRITE(IW,*)
+          END IF
+        ELSE IF(WARN.EQ.2) THEN
+          WRITE(IW,*)
+          WRITE(IW,*)'WARNING:'
+          WRITE(IW,*)'YOU SPECIFIED AN UNTESTED C6 SCALE-FACTOR'
+          WRITE(IW,*)'FOR DISPERSION CORRECTION, DCPAR = ',DCPAR
+          WRITE(IW,*)
+        ELSE
+          WRITE(IW,'('' DFT FUNCTIONAL = '',A8)') DFTYPE
+        END IF
+C
+        WRITE(IW,*)'C6 COEFFICIENTS SCALE-FACTOR ',SCALEC6
+        WRITE(IW,*)'VDW RADII       SCALE-FACTOR ',SCALERAD
+        WRITE(IW,*)'ALPHA (DAMPING)              ',ALP
+C
+        DO I=1,NAT
+          NUCZ = IAN(I)
+          IF(NUCZ.EQ.0) THEN
+            ICHARGE(I)=100
+          ELSE
+            ICHARGE(I) = NUCZ
+            WRITE(IW,9090) I,ICHARGE(I),VDWD(ICHARGE(I)),C6(ICHARGE(I))
+          END IF
+C
+          IF(VDWD(ICHARGE(I)).GT.99.0D+00) THEN
+            WRITE(IW,*) 'WARNING:'
+            WRITE(IW,*) 'VDW RADIUS FOR ATOM ', I, ' MISSING'
+            WRITE(IW,*) 'THIS CONTRIBUTION COMPLETELY DAMPED!'
+          END IF
+          IF(C6(ICHARGE(I)).LT.1.0D-6) THEN
+            WRITE(IW,*) 'WARNING:'
+            WRITE(IW,*) 'C6 COEFFICIENT FOR ATOM ', I, ' MISSING'
+          END IF
+        ENDDO
+      END IF
+C
+      IF(MASWRK  .AND.  MODE.GT.0) THEN
+        IF(DCOLD) THEN
+          IF(MODE.EQ.1) WRITE(IW,9010)
+          IF(MODE.EQ.2) WRITE(IW,9011)
+         ELSE IF(DCCHG) THEN
+          IF(MODE.EQ.1) WRITE(IW,9020)
+          IF(MODE.EQ.2) WRITE(IW,9021)
+        ELSE
+          IF(MODE.EQ.1) WRITE(IW,9000)
+          IF(MODE.EQ.2) WRITE(IW,9001)
+C
+        END IF
+      END IF
+C
+      DO I=1,NAT
+         IF(IAN(I).GT.54) THEN
+            IF(MASWRK) WRITE(IW,*) 'NO DISPERSION PARAMETERS FOR ATOM',I
+            CALL ABRT
+         END IF
+      ENDDO
+      RETURN
+C
+ 9000 FORMAT(/1X,'SCF HAS CONVERGED, ADDING GRIMME''S 2006',
+     *           ' DISPERSION CORRECTION TO ENERGY...')
+ 9001 FORMAT( 1X,'ADDING GRIMME''S 2006 DISPERSION CORRECTION',
+     *           ' TO THE NUCLEAR GRADIENT...')
+ 9010 FORMAT(/1X,'SCF HAS CONVERGED, ADDING GRIMME''S 2004',
+     *           ' DISPERSION CORRECTION TO ENERGY...')
+ 9011 FORMAT( 1X,'ADDING GRIMME''S 2004 DISPERSION CORRECTION',
+     *           ' TO THE NUCLEAR GRADIENT...')
+ 9020 FORMAT(/1X,'SCF HAS CONVERGED, ADDING CHAI-HEAD-GORDON',
+     *           ' DISPERSION CORRECTION TO ENERGY...')
+ 9021 FORMAT( 1X,'ADDING CHAI-HEAD-GORDON DISPERSION CORRECTION',
+     *           ' TO THE NUCLEAR GRADIENT...')
+ 9090 FORMAT(1X,'ATOM',I4,' Z=',I3,' SCALED VDW RADIUS=',F12.4,
+     *       ' UNSCALED C6=',F8.4)
+      END
+C
+C*MODULE DFTDIS  *DECK DISPCORENGY
+      SUBROUTINE DISPCORENGY(E)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      PARAMETER (MXATM=2000)
+C
+      DIMENSION ICHARGE(MXATM)
+C
+      LOGICAL DC,DCOLD,DCCHG
+C
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /VDWPAR/ DCPAR,DCEXP,C6(100),VDWD(100),DC,DCOLD,DCCHG
+C
+C         CALCULATE DISPERSION CORRECTION TO THE ENERGY
+C         NOTE THAT THIS IS DONE AFTER THE SCF PROCESS HAS CONVERGED!
+C
+      CALL DISPCORINI(ALP,1)
+C
+      DO I=1,NAT
+         NUCZ = IAN(I)
+         IF(NUCZ.EQ.0) THEN
+            ICHARGE(I)=100
+         ELSE
+            ICHARGE(I) = NUCZ
+         END IF
+      ENDDO
+C
+      E = 0
+C
+      DO IAT=1,NAT-1
+         C6I=C6(ICHARGE(IAT))
+         DO JAT=IAT+1,NAT
+            C6J=C6(ICHARGE(JAT))
+            DX=C(1,IAT)-C(1,JAT)
+            DY=C(2,IAT)-C(2,JAT)
+            DZ=C(3,IAT)-C(3,JAT)
+            R=SQRT(DX*DX+DY*DY+DZ*DZ)
+C     AU->NM
+            RR=R*0.052917726D+00
+            R0=(VDWD(ICHARGE(IAT))+
+     *          VDWD(ICHARGE(JAT)))/0.52917726D+00
+C     TO ADD A DIFFERENT DAMPING FUNCTION INSERT ITS EXPRESSION HERE
+            IF(DCCHG) THEN
+              DAMP=1.0D+00/(1.0D+00+ALP*(R/R0)**(-12D+00))
+            ELSE
+              DAMP=1.0D+00/(1.0D+00+EXP(-ALP*(R/R0-1.0D+00)))
+            END IF
+C     VERSION 1 (OLD)
+            IF(DCOLD)THEN
+               C66 =2.0D+00*C6I*C6J/(C6I+C6J)
+C     VERSION 2
+            ELSE
+               C66 =SQRT(C6I*C6J)
+            ENDIF
+            E=E+DAMP*C66/RR**6
+         ENDDO
+      ENDDO
+C     NM->AU
+      E=-E*0.001D+00/2625.4999D+00
+C
+      RETURN
+      END
+C
+C*MODULE DFTDIS  *DECK DISPCORGRAD
+      SUBROUTINE DISPCORGRAD(EGDISPC)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      PARAMETER (MXATM=2000)
+      LOGICAL DC,DCOLD,DCCHG
+C
+C     GAMESS INFOA
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+C     COMMON BLOCK FOR DISPERSION CODE
+      COMMON /VDWPAR/ DCPAR,DCEXP,C6(100),VDWD(100),DC,DCOLD,DCCHG
+C
+      DIMENSION ICHARGE(MXATM)
+      DIMENSION G(3,MXATM)
+      DIMENSION EGDISPC(3,*)
+C
+C        CALCULATE DISPERSION CORRECTION'S CONTRIBUTION TO NUCLEAR GRAD
+C
+      CALL DISPCORINI(ALP,2)
+C
+      DO I=1,NAT
+         NUCZ = IAN(I)
+         IF(NUCZ.EQ.0) THEN
+            ICHARGE(I)=100
+         ELSE
+            ICHARGE(I) = NUCZ
+         END IF
+      ENDDO
+C
+      DO J=1,NAT
+         DO I=1,3
+            G(I,J) = 0.00D+00
+         ENDDO
+      ENDDO
+C
+      DO IAT=1,NAT-1
+         C6I=C6(ICHARGE(IAT))
+         DO JAT=IAT+1,NAT
+            C6J=C6(ICHARGE(JAT))
+C     DISTANCES IN NM
+            R0=0.1D+00*(VDWD(ICHARGE(IAT))+
+     >         VDWD(ICHARGE(JAT)))
+            DX=(C(1,IAT)-C(1,JAT))*0.052917726D+00
+            DY=(C(2,IAT)-C(2,JAT))*0.052917726D+00
+            DZ=(C(3,IAT)-C(3,JAT))*0.052917726D+00
+            R2  =DX*DX+DY*DY+DZ*DZ
+            R235=R2**3.5D+00
+            R   =SQRT(R2)
+C     TO ADD A DIFFERENT DAMPING FUNCTION BE CAREFUL TO INSERT
+C     HERE ITS DERIVATIVE (SOMETIMES IT'S DIVIDED INTO TMP1,2):
+C                    DDAMP/DR * 1/R
+C     THE 1/R FACTOR IS IMPORTANT BECAUSE AT THIS STAGE WE STILL HAVE
+C     TO MULTIPLY BY R (=DX) IN THE NEXT STEP (SEE GX1 AS EXAMPLE)
+            IF(DCCHG) THEN
+              DAMP=ALP*(R/R0)**(-12.0D+00)
+            ELSE
+              DAMP=EXP(-ALP*(R/R0-1.0D+00))
+            END IF
+C
+            DAMP1=1.0D+00+DAMP
+C     VERSION 1 (OLD)
+            IF(DCOLD)THEN
+               C66 =2.0D+00*C6I*C6J/(C6I+C6J)
+C     VERSION 2
+            ELSE
+               C66 =SQRT(C6I*C6J)
+            ENDIF
+            IF(DCCHG) THEN
+               R012=R0**12.0D+00
+               R13=R**13.0D+00
+               TMP1=12.0D+00*R012/(DAMP1*DAMP1*R13*R235)
+            ELSE
+               TMP1=DAMP/(DAMP1*DAMP1*R235*R0)
+            END IF
+               TMP2=6.0D+00/(DAMP1*R*R235)
+               GX1=ALP* DX*TMP1-TMP2*DX
+               GX2=ALP*(-DX)*TMP1+TMP2*DX
+               GY1=ALP* DY*TMP1-TMP2*DY
+               GY2=ALP*(-DY)*TMP1+TMP2*DY
+               GZ1=ALP* DZ*TMP1-TMP2*DZ
+               GZ2=ALP*(-DZ)*TMP1+TMP2*DZ
+               G(1,IAT)=G(1,IAT)-GX1*C66
+               G(2,IAT)=G(2,IAT)-GY1*C66
+               G(3,IAT)=G(3,IAT)-GZ1*C66
+               G(1,JAT)=G(1,JAT)-GX2*C66
+               G(2,JAT)=G(2,JAT)-GY2*C66
+               G(3,JAT)=G(3,JAT)-GZ2*C66
+         ENDDO
+      ENDDO
+C
+C     G IS IN J/NM AND NOW CONVERTED TO AU
+C
+      DO J=1,NAT
+         DO I=1,3
+            G(I,J) = 0.001D+00 * G(I,J)/2625.4999D+00 * 0.052917726D+00
+         ENDDO
+      ENDDO
+C
+      DO J=1,NAT
+         DO I=1,3
+            IF(ABS(G(I,J)).LT.1.0D-14) G(I,J)=0.0D+00
+         ENDDO
+      ENDDO
+C
+      DO J=1,NAT
+         DO I=1,3
+            EGDISPC(I,J) = EGDISPC(I,J) + G(I,J)
+         ENDDO
+      ENDDO
+C
+      RETURN
+      END

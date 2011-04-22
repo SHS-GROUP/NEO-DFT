@@ -1,0 +1,4100 @@
+C 25 MAR 10 - GDF - DIMENSION WITH STANDARD PARAMETER -MXGSH-
+C 20 AUG 07 - MWS - ALLOW H,I INDEXING RANGE
+C 22 DEC 06 - ST,NK,MC - ADD LC EXCHANGE ARGUMENTS
+C 19 SEP 05 - GDF - ERIPRE: WEE CHANGE FOR H+I IN RYS CODES
+C  5 JUL 05 - MWS - SELECT NEW ATOM,BASIS,EFP,PCM,DAF DIMENSIONS
+C 13 FEB 05 - MWS - PAD COMMON BLOCK NSHEL
+C  5 FEB 05 - MWS - CHANGE COMMON NAME GAMMAF TO BE FMTTBL INSTEAD
+C 10 NOV 04 - MWS - ENSURE FM(T) BROADCAST ALWAYS DONE, ADJUST CC TOL
+C  7 SEP 04 - GDF - NEW MODULE FOR ERIC, AND SPECIAL S,P ROUTINES
+C
+C*MODULE INT2C   *DECK ERIC
+      SUBROUTINE ERIC (ISH,JSH,KSH,LSH,ERI)
+C
+C ----------------------------------------------------------------------
+C
+C              ELECTRON REPULSION INTEGRAL CALCULATOR
+C
+C ----------------------------------------------------------------------
+C
+C  METHOD:
+C     A) FORM SCALED, CONTRACTED 1-CENTER PRECURSOR INTEGRALS.
+C        CONVERT THESE TO 4-CENTER INTEGRALS OVER CARTESIAN
+C        GAUSSIANS USING,
+C     B) PRECURSOR-HERMITE TRANSFER EQUATION (PTE)
+C     C) CONTRACTED TRANSFER  EQUATION (CTE)
+C     D) HORIZONTAL RECURSION RELATION (HRR)
+C
+C
+C  REFERENCES
+C
+C     PTE:
+C     G. D. FLETCHER, (UNPUBLISHED WORK).
+C
+C     HRR:
+C     M. HEAD-GORDON & J. A. POPLE,
+C     J. CHEM. PHYS., 89, 5777-5786 (1988).
+C
+C     CTE:
+C     P. M. W. GILL, M. HEAD-GORDON, & J. A. POPLE,
+C     INT. J. Q. CHEM., SYMP. 23, 269-280 (1989).
+C
+C     INTERPOLATION METHOD:
+C     P. M. W. GILL, B. G. JOHNSON, & J. A. POPLE,
+C     INT. J. Q. CHEM., 40, 745-752 (1991).
+C
+C
+C  THIS IS THE DRIVER ROUTINE THAT INTERFACES TO GAMESS COMMON NSHEL
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      PARAMETER (MXSH=5000, MXGTOT=20000, MXATM=2000)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+C
+C  /ERIPRM/ SYMBOLS:
+C     EXI,J,K,L   = PRIMITIVE EXPONENTS OF I,J,K,L SHELLS
+C     CCI,J,K,L   = CONTRACTION COEFFICIENTS OF ISH,JSH,KSH,LSH
+C     XAB,YAB,ZAB = EXPONENT-WEIGHTED DISTANCE FOR BRA
+C     XCD,YCD,ZCD = EXPONENT-WEIGHTED DISTANCE FOR KET
+C     CCBRA,CCKET = PRIMITIVE CHARGE-CLOUD FACTOR FOR BRA,KET
+C     SLBRA,SLKET = FACTOR CONVERTING SMALL-T EXPRESSION TO LARGE-T
+C
+      PARAMETER (MXGSH=30, MXPS=MXGSH*MXGSH)
+      COMMON /ERIPRM/ EXI(MXGSH),EXJ(MXGSH),EXK(MXGSH),EXL(MXGSH)
+     *,               CCI(MXGSH),CCJ(MXGSH),CCK(MXGSH),CCL(MXGSH)
+     *,               XAB(MXPS),YAB(MXPS),ZAB(MXPS)
+     *,               XCD(MXPS),YCD(MXPS),ZCD(MXPS)
+     *,               CCBRA(MXPS),CCKET(MXPS),RXB(MXPS)
+     *,               SLBRA(MXPS),SLKET(MXPS),RXK(MXPS)
+C
+      COMMON /FMCOM /XX(1)
+C
+      PARAMETER (HALF=0.5D+00, ONE=1.0D+00, TWO=2.0D+00)
+      PARAMETER (PI254=5.914967172795613D+00)
+      PARAMETER (PI214=0.9413962637767148D+00)
+      LOGICAL IEQJ,KEQL
+      DOUBLE PRECISION ERI(*)
+      INTEGER IORD(35)
+      DATA IORD/ 1,2,3,4,5,7,10,6,8,9,11,14,20,12,15,13,17,18,19,16
+     *,          21,25,35,22,26,24,29,33,34,23,30,32,27,28,31/
+C
+      DOUBLE PRECISION ANGL(35)
+      DATA ANGL/1.0D+00,  1.0D+00, 1.0D+00, 1.0D+00,
+     * 1.0D+00, 1.7320508075688772D+00, 1.0D+00, 1.7320508075688772D+00,
+     * 1.7320508075688772D+00, 1.0D+00,
+     * 1.0D+00, 2.2360679774997902D+00, 2.2360679774997902D+00, 1.0D+00,
+     * 2.2360679774997902D+00, 3.8729833462074170D+00,
+     * 2.2360679774997902D+00,
+     * 2.2360679774997902D+00, 2.2360679774997902D+00, 1.0D+00,
+     * 1.0D+00, 2.6457513110645903D+00, 3.4156502553198673D+00,
+     * 2.6457513110645903D+00, 1.0D+00, 2.6457513110645903D+00,
+     * 5.9160797830996170D+00, 5.9160797830996170D+00,
+     * 2.6457513110645903D+00,
+     * 3.4156502553198673D+00, 5.9160797830996170D+00,
+     * 3.4156502553198673D+00,
+     * 2.6457513110645903D+00, 2.6457513110645903D+00, 1.0D+00/
+C
+      COMMON /ERIDAT/ LEN1,LEN2,LEN3,LEN4
+      COMMON /ERIOUT/ INW,JNW,KNW,LNW,LSTRI,LSTRJ,LSTRK,LSTRL
+C
+C  FAST CODES
+C
+C  RE-ORDER CHARGE-CLOUD SHELLS
+C  (HRR DATA ONLY STORED FOR LI>=LJ)
+C
+      INW = ISH
+      JNW = JSH
+      KNW = KSH
+      LNW = LSH
+      LSTRI = LEN4
+      LSTRJ = LEN3
+      LSTRK = LEN2
+      LSTRL = LEN1
+      LANGI = KTYPE(INW) - 1
+      LANGJ = KTYPE(JNW) - 1
+      LANGK = KTYPE(KNW) - 1
+      LANGL = KTYPE(LNW) - 1
+      IF (LANGI.LT.LANGJ) THEN
+        INW   = JSH
+        JNW   = ISH
+        ITMP  = LSTRI
+        LSTRI = LSTRJ
+        LSTRJ = ITMP
+      END IF
+      IF (LANGK.LT.LANGL) THEN
+        KNW   = LSH
+        LNW   = KSH
+        ITMP  = LSTRK
+        LSTRK = LSTRL
+        LSTRL = ITMP
+      END IF
+C
+C  SWAP CHARGE CLOUDS FOR EFFICIENCY...
+C
+      LBRA  = LANGI + LANGJ
+      LKET  = LANGK + LANGL
+      IF (LBRA.GT.LKET) THEN
+        ITMP  = INW
+        INW   = KNW
+        KNW   = ITMP
+        ITMP  = LSTRI
+        LSTRI = LSTRK
+        LSTRK = ITMP
+        ITMP  = JNW
+        JNW   = LNW
+        LNW   = ITMP
+        ITMP  = LSTRJ
+        LSTRJ = LSTRL
+        LSTRL = ITMP
+C
+C  ...OR TO SELECT THE FAST CODE
+C
+      ELSE IF (LBRA.EQ.LKET) THEN
+        LANGI = KTYPE(INW)
+        LANGJ = KTYPE(JNW)
+        LANGK = KTYPE(KNW)
+        LANGL = KTYPE(LNW)
+        LNGIJ = (LANGI*LANGI-LANGI)/2 + LANGJ
+        LNGKL = (LANGK*LANGK-LANGK)/2 + LANGL
+        IF (LNGKL.GT.LNGIJ) THEN
+          ITMP  = INW
+          INW   = KNW
+          KNW   = ITMP
+          ITMP  = LSTRI
+          LSTRI = LSTRK
+          LSTRK = ITMP
+          ITMP  = JNW
+          JNW   = LNW
+          LNW   = ITMP
+          ITMP  = LSTRJ
+          LSTRJ = LSTRL
+          LSTRL = ITMP
+        END IF
+      END IF
+C
+C  MAIN PARAMETERS
+C
+      LANGI = KTYPE(INW) - 1
+      LANGJ = KTYPE(JNW) - 1
+      LANGK = KTYPE(KNW) - 1
+      LANGL = KTYPE(LNW) - 1
+      LBRA  = LANGI + LANGJ
+      LKET  = LANGK + LANGL
+      IPRIM = KNG(INW)
+      JPRIM = KNG(JNW)
+      KPRIM = KNG(KNW)
+      LPRIM = KNG(LNW)
+C
+      IEQJ  = INW.EQ.JNW
+      KEQL  = KNW.EQ.LNW
+C
+C  SET UP 1-INDEX PARAMETERS
+C
+      K1 = KSTART(INW)
+      K2 = K1 + IPRIM - 1
+      II = 0
+      DO I = K1, K2
+        II = II + 1
+        EXI(II) = EX(I)
+      END DO
+      ITYP = KTYPE(INW)
+      IF (ITYP.EQ.1) THEN
+        II = 0
+        DO I = K1, K2
+          II = II + 1
+          CCI(II) = CS(I)
+        END DO
+      ELSE IF (ITYP.EQ.2) THEN
+        II = 0
+        DO I = K1, K2
+          II = II + 1
+          CCI(II) = CP(I)
+        END DO
+      ELSE IF (ITYP.EQ.3) THEN
+        II = 0
+        DO I = K1, K2
+          II = II + 1
+          CCI(II) = CD(I)
+        END DO
+      ELSE IF (ITYP.EQ.4) THEN
+        II = 0
+        DO I = K1, K2
+          II = II + 1
+          CCI(II) = CF(I)
+        END DO
+      ELSE IF (ITYP.EQ.5) THEN
+        II = 0
+        DO I = K1, K2
+          II = II + 1
+          CCI(II) = CG(I)
+        END DO
+      END IF
+C
+      K1 = KSTART(JNW)
+      K2 = K1 + JPRIM - 1
+      JJ = 0
+      DO J = K1, K2
+        JJ = JJ + 1
+        EXJ(JJ) = EX(J)
+      END DO
+      JTYP = KTYPE(JNW)
+      IF (JTYP.EQ.1) THEN
+        JJ = 0
+        DO J = K1, K2
+          JJ = JJ + 1
+          CCJ(JJ) = CS(J)
+        END DO
+      ELSE IF (JTYP.EQ.2) THEN
+        JJ = 0
+        DO J = K1, K2
+          JJ = JJ + 1
+          CCJ(JJ) = CP(J)
+        END DO
+      ELSE IF (JTYP.EQ.3) THEN
+        JJ = 0
+        DO J = K1, K2
+          JJ = JJ + 1
+          CCJ(JJ) = CD(J)
+        END DO
+      ELSE IF (JTYP.EQ.4) THEN
+        JJ = 0
+        DO J = K1, K2
+          JJ = JJ + 1
+          CCJ(JJ) = CF(J)
+        END DO
+      ELSE IF (JTYP.EQ.5) THEN
+        JJ = 0
+        DO J = K1, K2
+          JJ = JJ + 1
+          CCJ(JJ) = CG(J)
+        END DO
+      END IF
+C
+      K1 = KSTART(KNW)
+      K2 = K1 + KPRIM - 1
+      KK = 0
+      DO K = K1, K2
+        KK = KK + 1
+        EXK(KK) = EX(K)
+      END DO
+      KTYP = KTYPE(KNW)
+      IF (KTYP.EQ.1) THEN
+        KK = 0
+        DO K = K1, K2
+          KK = KK + 1
+          CCK(KK) = CS(K)
+        END DO
+      ELSE IF (KTYP.EQ.2) THEN
+        KK = 0
+        DO K = K1, K2
+          KK = KK + 1
+          CCK(KK) = CP(K)
+        END DO
+      ELSE IF (KTYP.EQ.3) THEN
+        KK = 0
+        DO K = K1, K2
+          KK = KK + 1
+          CCK(KK) = CD(K)
+        END DO
+      ELSE IF (KTYP.EQ.4) THEN
+        KK = 0
+        DO K = K1, K2
+          KK = KK + 1
+          CCK(KK) = CF(K)
+        END DO
+      ELSE IF (KTYP.EQ.5) THEN
+        KK = 0
+        DO K = K1, K2
+          KK = KK + 1
+          CCK(KK) = CG(K)
+        END DO
+      END IF
+C
+      K1 = KSTART(LNW)
+      K2 = K1 + LPRIM - 1
+      LL = 0
+      DO L = K1, K2
+        LL = LL + 1
+        EXL(LL) = EX(L)
+      END DO
+      LTYP = KTYPE(LNW)
+      IF (LTYP.EQ.1) THEN
+        LL = 0
+        DO L = K1, K2
+          LL = LL + 1
+          CCL(LL) = CS(L)
+        END DO
+      ELSE IF (LTYP.EQ.2) THEN
+        LL = 0
+        DO L = K1, K2
+          LL = LL + 1
+          CCL(LL) = CP(L)
+        END DO
+      ELSE IF (LTYP.EQ.3) THEN
+        LL = 0
+        DO L = K1, K2
+          LL = LL + 1
+          CCL(LL) = CD(L)
+        END DO
+      ELSE IF (LTYP.EQ.4) THEN
+        LL = 0
+        DO L = K1, K2
+          LL = LL + 1
+          CCL(LL) = CF(L)
+        END DO
+      ELSE IF (LTYP.EQ.5) THEN
+        LL = 0
+        DO L = K1, K2
+          LL = LL + 1
+          CCL(LL) = CG(L)
+        END DO
+      END IF
+C
+C  2-INDEX PARAMETERS
+C
+      IATM = KATOM(INW)
+      XA   = C(1,IATM)
+      YA   = C(2,IATM)
+      ZA   = C(3,IATM)
+      JATM = KATOM(JNW)
+      XB   = C(1,JATM)
+      YB   = C(2,JATM)
+      ZB   = C(3,JATM)
+      RAB = (XA-XB)**2 + (YA-YB)**2 + (ZA-ZB)**2
+      IJ = 0
+      DO JJ = 1, JPRIM
+        EJ = EXJ(JJ)
+        CJ = CCJ(JJ)
+        ITOP = IPRIM
+        IF (IEQJ) ITOP = JJ
+        DO II = 1, ITOP
+          EI = EXI(II)
+          CIX = CCI(II)
+          EIJ = ONE/(EI+EJ)
+          IJ = IJ + 1
+          CCFAC = PI254*CIX*CJ*EIJ*EXP( -EI*EJ*RAB*EIJ )
+          IF (IEQJ.AND.II.NE.JJ) CCFAC = CCFAC*TWO
+          CCBRA(IJ) = CCFAC
+          SLBRA(IJ) = PI214*SQRT(EIJ)
+            XAB(IJ) = (EI*XA + EJ*XB)*EIJ
+            YAB(IJ) = (EI*YA + EJ*YB)*EIJ
+            ZAB(IJ) = (EI*ZA + EJ*ZB)*EIJ
+            RXB(IJ) = HALF*EIJ
+        END DO
+      END DO
+C
+      KATM = KATOM(KNW)
+      XC   = C(1,KATM)
+      YC   = C(2,KATM)
+      ZC   = C(3,KATM)
+      LATM = KATOM(LNW)
+      XD   = C(1,LATM)
+      YD   = C(2,LATM)
+      ZD   = C(3,LATM)
+      RCD = (XC-XD)**2 + (YC-YD)**2 + (ZC-ZD)**2
+      KL = 0
+      DO LL = 1, LPRIM
+        EL = EXL(LL)
+        CL = CCL(LL)
+        KTOP = KPRIM
+        IF (KEQL) KTOP = LL
+        DO KK = 1, KTOP
+          EK = EXK(KK)
+          CK = CCK(KK)
+          EKL = ONE/(EK+EL)
+          KL = KL + 1
+          CCFAC = PI254*CK*CL*EKL*EXP( -EK*EL*RCD*EKL )
+          IF (KEQL.AND.KK.NE.LL) CCFAC = CCFAC*TWO
+          CCKET(KL) = CCFAC
+          SLKET(KL) = PI214*SQRT(EKL)
+            XCD(KL) = (EK*XC + EL*XD)*EKL
+            YCD(KL) = (EK*YC + EL*YD)*EKL
+            ZCD(KL) = (EK*ZC + EL*ZD)*EKL
+            RXK(KL) = HALF*EKL
+        END DO
+      END DO
+C
+        CALL VALFM(LOADFM)
+        IPHI = LOADFM + 1
+C
+C  ANGULAR MOMENTUM 4-INDEX
+C
+        LBGT  = MAX(LANGI,LANGJ)
+        LBLT  = MIN(LANGI,LANGJ)
+        LNGIJ = (LBGT*LBGT+LBGT)/2 + LBLT
+        LKGT  = MAX(LANGK,LANGL)
+        LKLT  = MIN(LANGK,LANGL)
+        LNGKL = (LKGT*LKGT+LKGT)/2 + LKLT
+        LQGT  = MAX(LNGKL,LNGIJ)
+        LQLT  = MIN(LNGKL,LNGIJ)
+        LIJKL = (LQGT*LQGT+LQGT)/2 + LQLT
+C
+C  SP CASES
+C
+        IF (LIJKL.LE.5) THEN
+C  SSSS
+          IF (LIJKL.EQ.0) THEN
+            IWK1 = IPHI +    1     ! LPHI
+            IWK2 = IWK1 +    1     ! LWK1
+            LAST = IWK2 +    1     ! LWK1
+            NEED = LAST - LOADFM
+            CALL GETFM(NEED)
+            IDIM =           1
+            CALL SSSS (IPRIM,JPRIM,KPRIM,LPRIM,IEQJ,KEQL,
+     *                 XX(IPHI),XX(IWK2),IDIM)
+            IOFF = IWK2 +    0
+C  PSSS
+          ELSE IF (LIJKL.EQ.1) THEN
+            IWK1 = IPHI +   21
+            IWK2 = IWK1 +    1
+            LAST = IWK2 +    4
+            NEED = LAST - LOADFM
+            CALL GETFM(NEED)
+            IDIM =           4
+            CALL PSSS (IPRIM,JPRIM,KPRIM,LPRIM,IEQJ,KEQL,
+     *                 XC,YC,ZC,XD,YD,ZD,
+     *                 XX(IPHI),XX(IWK2),IDIM)
+            IOFF = IWK2 +    1
+C  PSPS
+          ELSE IF (LIJKL.EQ.2) THEN
+            IWK1 = IPHI +   65
+            IWK2 = IWK1 +    4
+            LAST = IWK2 +   12
+            NEED = LAST - LOADFM
+            CALL GETFM(NEED)
+            IDIM =           4
+            CALL PSPS (IPRIM,JPRIM,KPRIM,LPRIM,IEQJ,KEQL
+     *,                XA,YA,ZA,XB,YB,ZB,XC,YC,ZC,XD,YD,ZD
+     *,                XX(IPHI),XX(IWK1),XX(IWK2),IDIM)
+            IOFF = IWK2 +    1
+C  PPSS
+          ELSE IF (LIJKL.EQ.3) THEN
+            IWK1 = IPHI +   65
+            IWK2 = IWK1 +    1
+            LAST = IWK2 +   24
+            NEED = LAST - LOADFM
+            CALL GETFM(NEED)
+            IDIM =          24
+            CALL PPSS (IPRIM,JPRIM,KPRIM,LPRIM,IEQJ,KEQL,
+     *                 XC,YC,ZC,XD,YD,ZD,
+     *                 XX(IPHI),XX(IWK2),IDIM)
+            IOFF = IWK2 +   15
+C  PPPS
+          ELSE IF (LIJKL.EQ.4) THEN
+            IWK1 = IPHI +  183
+            IWK2 = IWK1 +    4
+            LAST = IWK2 +   72
+            NEED = LAST - LOADFM
+            CALL GETFM(NEED)
+            IDIM =          24
+            CALL PPPS (IPRIM,JPRIM,KPRIM,LPRIM,IEQJ,KEQL
+     *,                XA,YA,ZA,XB,YB,ZB,XC,YC,ZC,XD,YD,ZD
+     *,                XX(IPHI),XX(IWK1),XX(IWK2),IDIM)
+            IOFF = IWK2 +   15
+C  PPPP
+          ELSE IF (LIJKL.EQ.5) THEN
+            IWK1 = IPHI +  574
+            IWK2 = IWK1 +   24
+            LAST = IWK2 +  216
+            NEED = LAST - LOADFM
+            CALL GETFM(NEED)
+            IDIM =          24
+            CALL PPPP (IPRIM,JPRIM,KPRIM,LPRIM,IEQJ,KEQL
+     *,                XA,YA,ZA,XB,YB,ZB,XC,YC,ZC,XD,YD,ZD
+     *,                XX(IPHI),XX(IWK1),XX(IWK2),IDIM)
+            IOFF = IWK2 +   15
+          END IF
+C
+C  END OF SP CASES
+C
+C  D CASES
+C
+        ELSE IF (LIJKL.GE.6.AND.LIJKL.LE.20) THEN
+C  DSSS
+          IF (LIJKL.EQ.6) THEN
+            IWK1 = IPHI +   58
+            IWK2 = IWK1 +    1
+            LAST = IWK2 +   11
+            NEED = LAST - LOADFM
+            CALL GETFM(NEED)
+            IDIM =          11
+            CALL DSSS (IPRIM,JPRIM,KPRIM,LPRIM,IEQJ,KEQL,
+     *                 XC,YC,ZC,XD,YD,ZD,
+     *                 XX(IPHI),XX(IWK2),IDIM)
+            IOFF = IWK2 +    5
+C  DSPS
+          ELSE IF (LIJKL.EQ.7) THEN
+            IWK1 = IPHI +  159
+            IWK2 = IWK1 +    4
+            LAST = IWK2 +   33
+            NEED = LAST - LOADFM
+            CALL GETFM(NEED)
+            IDIM =          11
+            CALL DSPS (IPRIM,JPRIM,KPRIM,LPRIM,IEQJ,KEQL
+     *,                XA,YA,ZA,XB,YB,ZB,XC,YC,ZC,XD,YD,ZD
+     *,                XX(IPHI),XX(IWK1),XX(IWK2),IDIM)
+            IOFF = IWK2 +    5
+C  DSPP
+          ELSE IF (LIJKL.EQ.8) THEN
+            IWK1 = IPHI +  453
+            IWK2 = IWK1 +   11
+            LAST = IWK2 +  144
+            NEED = LAST - LOADFM
+            CALL GETFM(NEED)
+            IDIM =          24
+            CALL DSPP (IPRIM,JPRIM,KPRIM,LPRIM,IEQJ,KEQL
+     *,                XA,YA,ZA,XB,YB,ZB,XC,YC,ZC,XD,YD,ZD
+     *,                XX(IPHI),XX(IWK1),XX(IWK2),IDIM)
+            IOFF = IWK2 +   15
+C  DSDS
+          ELSE IF (LIJKL.EQ.9) THEN
+            IWK1 = IPHI +  389
+            IWK2 = IWK1 +   11
+            LAST = IWK2 +   66
+            NEED = LAST - LOADFM
+            CALL GETFM(NEED)
+            IDIM =          11
+            CALL DSDS (IPRIM,JPRIM,KPRIM,LPRIM,IEQJ,KEQL
+     *,                XA,YA,ZA,XB,YB,ZB,XC,YC,ZC,XD,YD,ZD
+     *,                XX(IPHI),XX(IWK1),XX(IWK2),IDIM)
+            IOFF = IWK2 +    5
+C  DPSS
+          ELSE IF (LIJKL.EQ.10) THEN
+            IWK1 = IPHI +  149
+            IWK2 = IWK1 +    1
+            LAST = IWK2 +   53
+            NEED = LAST - LOADFM
+            CALL GETFM(NEED)
+            IDIM =          53
+            CALL DPSS (IPRIM,JPRIM,KPRIM,LPRIM,IEQJ,KEQL,
+     *                 XC,YC,ZC,XD,YD,ZD,
+     *                 XX(IPHI),XX(IWK2),IDIM)
+            IOFF = IWK2 +   35
+C  DPPS
+          ELSE IF (LIJKL.EQ.11) THEN
+            IWK1 = IPHI +  390
+            IWK2 = IWK1 +    4
+            LAST = IWK2 +  159
+            NEED = LAST - LOADFM
+            CALL GETFM(NEED)
+            IDIM =          53
+            CALL DPPS (IPRIM,JPRIM,KPRIM,LPRIM,IEQJ,KEQL
+     *,                XA,YA,ZA,XB,YB,ZB,XC,YC,ZC,XD,YD,ZD
+     *,                XX(IPHI),XX(IWK1),XX(IWK2),IDIM)
+            IOFF = IWK2 +   35
+C  DPPP
+          ELSE IF (LIJKL.EQ.12) THEN
+            IWK1 = IPHI + 1181
+            IWK2 = IWK1 +   24
+            LAST = IWK2 +  477
+            NEED = LAST - LOADFM
+            CALL GETFM(NEED)
+            IDIM =          53
+            CALL DPPP (IPRIM,JPRIM,KPRIM,LPRIM,IEQJ,KEQL
+     *,                XA,YA,ZA,XB,YB,ZB,XC,YC,ZC,XD,YD,ZD
+     *,                XX(IPHI),XX(IWK1),XX(IWK2),IDIM)
+            IOFF = IWK2 +   35
+C  DPDS
+          ELSE IF (LIJKL.EQ.13) THEN
+            IWK1 = IPHI +  928
+            IWK2 = IWK1 +   11
+            LAST = IWK2 +  318
+            NEED = LAST - LOADFM
+            CALL GETFM(NEED)
+            IDIM =          53
+            CALL DPDS (IPRIM,JPRIM,KPRIM,LPRIM,IEQJ,KEQL
+     *,                XA,YA,ZA,XB,YB,ZB,XC,YC,ZC,XD,YD,ZD
+     *,                XX(IPHI),XX(IWK1),XX(IWK2),IDIM)
+            IOFF = IWK2 +   35
+C  DDSS
+          ELSE IF (LIJKL.EQ.15) THEN
+            IWK1 = IPHI +  319
+            IWK2 = IWK1 +    1
+            LAST = IWK2 +  165
+            NEED = LAST - LOADFM
+            CALL GETFM(NEED)
+            IDIM =         165
+            CALL DDSS (IPRIM,JPRIM,KPRIM,LPRIM,IEQJ,KEQL,
+     *                 XC,YC,ZC,XD,YD,ZD,
+     *                 XX(IPHI),XX(IWK2),IDIM)
+            IOFF = IWK2 +  129
+C  DDPS
+          ELSE IF (LIJKL.EQ.16) THEN
+            IWK1 = IPHI +  802
+            IWK2 = IWK1 +    4
+            LAST = IWK2 +  495
+            NEED = LAST - LOADFM
+            CALL GETFM(NEED)
+            IDIM =         165
+            CALL DDPS (IPRIM,JPRIM,KPRIM,LPRIM,IEQJ,KEQL
+     *,                XA,YA,ZA,XB,YB,ZB,XC,YC,ZC,XD,YD,ZD
+     *,                XX(IPHI),XX(IWK1),XX(IWK2),IDIM)
+            IOFF = IWK2 +  129
+          END IF
+C
+C  END OF D CASES
+C
+C  F CASES
+C
+        ELSE IF (LIJKL.GE.21.AND.LIJKL.LE.54) THEN
+C  FSSS
+          IF (LIJKL.EQ.21) THEN
+            IWK1 = IPHI +  129
+            IWK2 = IWK1 +    1
+            LAST = IWK2 +   24
+            NEED = LAST - LOADFM
+            CALL GETFM(NEED)
+            IDIM =          24
+            CALL FSSS (IPRIM,JPRIM,KPRIM,LPRIM,IEQJ,KEQL,
+     *                 XC,YC,ZC,XD,YD,ZD,
+     *                 XX(IPHI),XX(IWK2),IDIM)
+            IOFF = IWK2 +   14
+C  FSPS
+          ELSE IF (LIJKL.EQ.22) THEN
+            IWK1 = IPHI +  328
+            IWK2 = IWK1 +    4
+            LAST = IWK2 +   72
+            NEED = LAST - LOADFM
+            CALL GETFM(NEED)
+            IDIM =          24
+            CALL FSPS (IPRIM,JPRIM,KPRIM,LPRIM,IEQJ,KEQL
+     *,                XA,YA,ZA,XB,YB,ZB,XC,YC,ZC,XD,YD,ZD
+     *,                XX(IPHI),XX(IWK1),XX(IWK2),IDIM)
+            IOFF = IWK2 +   14
+C  FSPP
+          ELSE IF (LIJKL.EQ.23) THEN
+            IWK1 = IPHI +  976
+            IWK2 = IWK1 +   24
+            LAST = IWK2 +  216
+            NEED = LAST - LOADFM
+            CALL GETFM(NEED)
+            IDIM =          24
+            CALL FSPP (IPRIM,JPRIM,KPRIM,LPRIM,IEQJ,KEQL
+     *,                XA,YA,ZA,XB,YB,ZB,XC,YC,ZC,XD,YD,ZD
+     *,                XX(IPHI),XX(IWK1),XX(IWK2),IDIM)
+            IOFF = IWK2 +   14
+C  FSDS
+          ELSE IF (LIJKL.EQ.24) THEN
+            IWK1 = IPHI +  768
+            IWK2 = IWK1 +   11
+            LAST = IWK2 +  144
+            NEED = LAST - LOADFM
+            CALL GETFM(NEED)
+            IDIM =          24
+            CALL FSDS (IPRIM,JPRIM,KPRIM,LPRIM,IEQJ,KEQL
+     *,                XA,YA,ZA,XB,YB,ZB,XC,YC,ZC,XD,YD,ZD
+     *,                XX(IPHI),XX(IWK1),XX(IWK2),IDIM)
+            IOFF = IWK2 +   14
+C  FPSS
+          ELSE IF (LIJKL.EQ.28) THEN
+            IWK1 = IPHI +  299
+            IWK2 = IWK1 +    1
+            LAST = IWK2 +  100
+            NEED = LAST - LOADFM
+            CALL GETFM(NEED)
+            IDIM =         100
+            CALL FPSS (IPRIM,JPRIM,KPRIM,LPRIM,IEQJ,KEQL,
+     *                 XC,YC,ZC,XD,YD,ZD,
+     *                 XX(IPHI),XX(IWK2),IDIM)
+            IOFF = IWK2 +   70
+C  FPPS
+          ELSE IF (LIJKL.EQ.29) THEN
+            IWK1 = IPHI +  740
+            IWK2 = IWK1 +    4
+            LAST = IWK2 +  300
+            NEED = LAST - LOADFM
+            CALL GETFM(NEED)
+            IDIM =         100
+            CALL FPPS (IPRIM,JPRIM,KPRIM,LPRIM,IEQJ,KEQL
+     *,                XA,YA,ZA,XB,YB,ZB,XC,YC,ZC,XD,YD,ZD
+     *,                XX(IPHI),XX(IWK1),XX(IWK2),IDIM)
+            IOFF = IWK2 +   70
+C  FDSS
+          ELSE IF (LIJKL.EQ.36) THEN
+            IWK1 = IPHI +  589
+            IWK2 = IWK1 +    1
+            LAST = IWK2 +  285
+            NEED = LAST - LOADFM
+            CALL GETFM(NEED)
+            IDIM =         285
+            CALL FDSS (IPRIM,JPRIM,KPRIM,LPRIM,IEQJ,KEQL,
+     *                 XC,YC,ZC,XD,YD,ZD,
+     *                 XX(IPHI),XX(IWK2),IDIM)
+            IOFF = IWK2 +  225
+          END IF
+C
+C  END OF F CASES
+C
+C  G CASES
+C
+        ELSE IF (LIJKL.GE.55.AND.LIJKL.LE.119) THEN
+C  GSSS
+          IF (LIJKL.EQ.55) THEN
+            IWK1 = IPHI +  255
+            IWK2 = IWK1 +    1
+            LAST = IWK2 +   46
+            NEED = LAST - LOADFM
+            CALL GETFM(NEED)
+            IDIM =          46
+            CALL GSSS (IPRIM,JPRIM,KPRIM,LPRIM,IEQJ,KEQL,
+     *                 XC,YC,ZC,XD,YD,ZD,
+     *                 XX(IPHI),XX(IWK2),IDIM)
+            IOFF = IWK2 +   31
+C  GSPS
+          ELSE IF (LIJKL.EQ.56) THEN
+            IWK1 = IPHI +  612
+            IWK2 = IWK1 +    4
+            LAST = IWK2 +  138
+            NEED = LAST - LOADFM
+            CALL GETFM(NEED)
+            IDIM =          46
+            CALL GSPS (IPRIM,JPRIM,KPRIM,LPRIM,IEQJ,KEQL
+     *,                XA,YA,ZA,XB,YB,ZB,XC,YC,ZC,XD,YD,ZD
+     *,                XX(IPHI),XX(IWK1),XX(IWK2),IDIM)
+            IOFF = IWK2 +   31
+C  GPSS
+          ELSE IF (LIJKL.EQ.66) THEN
+            IWK1 = IPHI +  545
+            IWK2 = IWK1 +    1
+            LAST = IWK2 +  171
+            NEED = LAST - LOADFM
+            CALL GETFM(NEED)
+            IDIM =         171
+            CALL GPSS (IPRIM,JPRIM,KPRIM,LPRIM,IEQJ,KEQL,
+     *                 XC,YC,ZC,XD,YD,ZD,
+     *                 XX(IPHI),XX(IWK2),IDIM)
+            IOFF = IWK2 +  126
+          END IF
+C
+C  END OF G CASES
+C
+        END IF    ! LIJKL
+C
+C  ANGULAR NORMALIZATION AND SAVE TO OUTPUT ARRAY
+C  WITH HONDO INDEXING AND REORDERING FOR GAMESS
+C
+      MINI = KMIN(INW)
+      MAXI = KMAX(INW)
+      MINJ = KMIN(JNW)
+      MAXJ = KMAX(JNW)
+      MINK = KMIN(KNW)
+      MAXK = KMAX(KNW)
+      MINL = KMIN(LNW)
+      MAXL = KMAX(LNW)
+      LENI = MAXI - MINI + 1
+      LENK = MAXK - MINK + 1
+      II = 1
+      DO I = MINI, MAXI
+        IO = IORD(I)
+        AI = ANGL(IO)
+        IJ = II
+        DO J = MINJ, MAXJ
+          JO = IORD(J)
+          AIJ = ANGL(JO)*AI
+          JC = ((JO-MINJ)*LENI + IO-MINI)*IDIM + IOFF
+          IJK = IJ
+          DO K = MINK, MAXK
+            KO = IORD(K)
+            AIJK = ANGL(KO)*AIJ
+            IJKL = IJK
+            DO L = MINL, MAXL
+              LO = IORD(L)
+              AIJKL = ANGL(LO)*AIJK
+              IR = (LO-MINL)*LENK + KO-MINK
+              ERI(IJKL) = XX(JC+IR)*AIJKL
+              IJKL = IJKL + LSTRL
+            END DO
+            IJK = IJK + LSTRK
+          END DO
+          IJ = IJ + LSTRJ
+        END DO
+        II = II + LSTRI
+      END DO
+      CALL RETFM(NEED)
+      RETURN
+      END
+C*MODULE INT2C   *DECK ERIPRE
+      SUBROUTINE ERIPRE
+C
+C  SET UP INTEGRAL COMPUTATION DATA FOR LARGEST CASE.
+C  THIS ROUTINE CAN ONLY BE CALLED WHEN THE HIGHEST
+C  ANGULAR MOMENTUM (L) OF THE BASIS HAS BEEN ESTABLISHED.
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /IOFILE/ IR,IW,IP,IJKO,IJKT,IDAF,NAV,IODA(950)
+C
+C  /FMTTBL/ SYMBOLS:
+C  LENGTHS
+C     NTX   = MAX ORDER OF INTERPOLATION
+C     NPF   = NUMBER OF GRID POINTS FOR GAMMA
+C     NGRD  = NUMBER OF GRIDS FOR GAMMA
+C     NPX   = NUMBER OF GRID POINTS FOR EXP(-X)
+C     MXQT  = MAX L OF QUARTET
+C  GRID DATA
+C     FGRID = INTERPOLATION TABLES FOR GAMMA
+C     RFINC = RECIPROCAL INTERVAL WIDTHS FOR GAMMA
+C     XGRID = INTERPOLATION TABLE FOR EXP(-X)
+C     RXINC = RECIPROCAL INTERVAL WIDTH FOR EXP(-X)
+C     TMAX  = MAXIMUM VALUE TO INTERPOLATE FOR
+C     NORD  = ORDER OF INTERPOLATION
+C  FACTORS
+C     RMR   = 1/(2M-1) FOR FM(T) RECURSION
+C     TLGM  = (2M-1)!! FACTORS FOR LARGE-T FORMULA
+C
+      PARAMETER (NTX=4, NPF=450, NGRD=7, NPX=1000, MXQT=16)
+      COMMON /FMTTBL/ FGRID(0:NTX,0:NPF,0:NGRD),XGRID(0:NTX,0:NPX)
+     *,               TMAX,RFINC(0:NGRD),RXINC
+     *,               RMR(MXQT),TLGM(0:MXQT),NORD
+C
+      PARAMETER (MXGSH=30, MXG2=MXGSH*MXGSH)
+      PARAMETER (MXSH=5000, MXGTOT=20000)
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+C
+C  VARIOUS TOLERENCES FOR ROTATED AXIS CODE
+C
+      COMMON /MAXC  / CMAX(MXGTOT),CMAXA(MXGSH),CMAXB(MXGSH),
+     *                CMAXC(MXGSH),CMAXD(MXGSH),ISMLP(MXG2),ISMLQ
+      LOGICAL OUT
+      COMMON /SHLT  / TOL,CUTOFF,ICOUNT,OUT
+      COMMON /INTAC2/ EI1,EI2,CUX
+C
+      PARAMETER (EC1= 1.0D-02, EC2= 1.0D-04)
+      PARAMETER (RLN10=2.30258D+00, CX1=25.0D+00)
+C
+      COMMON /ERIDAT/ LEN1,LEN2,LEN3,LEN4
+C
+      PARAMETER (ONE=1.0D+00)
+C
+      LOGICAL RDGRID,FIRST
+      DATA FIRST/.TRUE./
+      SAVE FIRST
+C
+      IF(FIRST  .AND.  MASWRK) WRITE(IW,9900)
+C
+C  THE ERIC PACKAGE ONLY GOES UP TO G SHELLS (LMAX=4), AT MOST.
+C
+      CALL BASCHK(LMAX)
+      LMAX = MIN(LMAX,4)
+      MMAX = MAX(4,LMAX*4)
+C
+C  LENGTH OF HIGHEST-L SHELL
+C  INDEX DIMENSIONS FOR HONDO-STYLE ADDRESSING
+C  OTHER INTEGRAL CODES (I.E. HONDO) WILL PERHAPS GO TO HIGHER LMAX.
+C
+      CALL BASCHK(LMAX)
+      MXLEN = MAX(4, (LMAX*LMAX+3*LMAX+2)/2 )
+      LEN1 = 1
+      LEN2 = MXLEN
+      LEN3 = MXLEN**2
+      LEN4 = MXLEN**3
+C
+C  GET INTERPOLATION GRIDS
+C  NOTE THAT ERICMP IS HARDWIRED FOR 4TH ORDER
+C
+      IF(FIRST) THEN
+         FIRST  = .FALSE.
+         RDGRID = .TRUE.
+C
+C  USE PREVIOUSLY GENERATED GRIDS: 4TH ORDER, 10**-12 ACCURACY, TMAX=25
+C
+         IF (RDGRID) THEN
+           CALL GRIDIN
+           NORD = 4
+C
+C  GENERATE INTERPOLATION GRIDS
+C  THIS ADDS A COUPLE OF SECONDS TO THE TOTAL EXECUTION TIME,
+C  AND REQUIRES THE PRESENCE OF QUADRUPLE PRECISION.
+C
+         ELSE
+           NTMS = 4                 ! 4TH ORDER POLYNOMIAL
+           NTOL = 12                ! 10**-12 ACCURACY
+           XMAX = 25.0D+00
+           CALL CHEBY (MMAX,NTMS,NTOL,XMAX)
+         END IF
+      END IF
+C
+C  RECIPROCAL FACTORS USED IN THE DOWNWARDS RECURSION FOR FM(T)
+C
+      DO M = 1, MXQT
+        RMR(M) = ONE/(2*M-1)
+      END DO
+C
+C  (2M-1)!! FACTORS FOR LARGE-T (IN FM(T))
+C
+      DO I = 0, MMAX
+        FII = ONE
+        DO J = 1, 2*I-1, 2
+          FII = J*FII
+        END DO
+        TLGM(I) = FII
+      END DO
+C
+C  SETUP FOR ROTATED AXIS CODE, ORIGINALLY IN GAMGEN
+C  1) SCREENING PARAMETERS
+C
+      EI1 = EC1*CUTOFF
+      EI2 = EC2*CUTOFF
+      CUX = CX1*RLN10
+C
+C  2) FIND MAXIMUM VALUE OF S, P, AND/OR D COEFFICIENTS
+C     FOR SCREENINGS IN THE ROTATED AXIS INTEGRAL CODES.
+C
+      DO I = 1, NSHELL
+        L = KSTART(I)
+        N = L+KNG(I)-1
+        DO J = L, N
+          CMAX(J)= MAX( ABS(CS(J)), ABS(CP(J)), ABS(CD(J)) )
+        END DO
+      END DO
+      RETURN
+C
+ 9900 FORMAT(/20X,22(1H-)/20X,'AO INTEGRAL TECHNOLOGY'/20X,22(1H-)/
+     *  5X,'S,P,L SHELL ROTATED AXIS INTEGRALS, REPROGRAMMED BY'/
+     *  8X,'KAZUYA ISHIMURA (IMS) AND JOSE SIERRA (SYNSTAR).'/
+     *  5X,'S,P,D,L SHELL ROTATED AXIS INTEGRALS PROGRAMMED BY'/
+     *  8X,'KAZUYA ISHIMURA (INSTITUTE FOR MOLECULAR SCIENCE).'/
+     *  5X,'S,P,D,F,G SHELL TO TOTAL QUARTET ANGULAR MOMENTUM SUM 5,'/
+     *  8X,'ERIC PROGRAM BY GRAHAM FLETCHER (ELORET AND NASA ADVANCED'/
+     *  8X,'SUPERCOMPUTING DIVISION, AMES RESEARCH CENTER).'/
+     *  5X,'S,P,D,F,G,L SHELL GENERAL RYS QUADRATURE PROGRAMMED BY'/
+     *  8X,'MICHEL DUPUIS (PACIFIC NORTHWEST NATIONAL LABORATORY).')
+      END
+C*MODULE INT2C   *DECK CHEBY
+      SUBROUTINE CHEBY (MMAX,NTMS,NTOL,XMAX)
+C
+C  THIS ROUTINE GENERATES INTERPOLATION GRIDS FOR THE INCOMPLETE
+C  GAMMA FUNCTION AND EXP(-X) BASED UPON A CHEBYSHEV POLYNOMIAL FIT.
+C  IN THIS APPROACH THE GRID SPACING IS A FUNCTION OF THE REQUESTED
+C  ACCURACY, SO HIGHER ORDER (SEE NTMS, BELOW) CORRESPONDS TO FEWER
+C  GRID POINTS BUT MORE INTERPOLATION FLOPS IN THE INTEGRAL CODE,
+C  AND VICE VERSA FOR LOWER ORDER. GAMMA FUNCTIONS ARE COMPUTED
+C  USING THE TAYLOR SERIES FORMULA FOR SMALL ARGUMENT. QUAD
+C  PRECISION SEEMS ESSENTIAL FOR OBTAINING ACCURATE GRID DATA NEAR
+C  TO THE LIMIT (25), ESPECIALLY FOR HIGH ORDER (SEE MMAX, BELOW).
+C  A TABLE OF RECIPROCALS IS PRE-COMPUTED FOR SPEED. FOR MMAX
+C  HIGHER THAN 16, KFX (BELOW) MAY NEED TO BE INCREASED.
+C
+C  INPUT:
+C     MMAX  = HIGHEST ORDER OF GAMMA FUNCTION
+C     NTMS  = ORDER OF POLYNOMIAL (4TH IS USUALLY SUFFICIENT)
+C     NTOL  = ACCURACY OF INTERPOLATION
+C     XMAX  = END OF INTERPOLATION RANGE (25.0)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      LOGICAL WTGRID
+      PARAMETER (NTX=4, NPF=450, NGRD=7, NPX=1000, MXQT=16)
+      COMMON /FMTTBL/ FGRID(0:NTX,0:NPF,0:NGRD),XGRID(0:NTX,0:NPX)
+     *,               TMAX,RFINC(0:NGRD),RXINC
+     *,               RMR(MXQT),TLGM(0:MXQT),NORD
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00, TWO=2.0D+00, TEN=10.0D+00)
+      DOUBLE PRECISION XPW(0:NTX)
+      PARAMETER (KFX=300)
+      REAL*16 RMK(KFX),QI
+C
+C  CHEBYSHEV COEFFICIENTS UP TO 12TH ORDER (!)
+C  GDF 12/09/02: DO NOT KNOW IF 12TH ORDER WORKS, TRIED 8TH ORDER.
+C
+      INTEGER ICHEB(49)
+      DATA ICHEB/1,1,-1,2,-3,4,1,-8,8,5,-20,16,-1,18,-48,32,-7,56
+     *,         -112,64,1,-32,160,-256,128,9,-120,432,-576,256
+     *,         -1,50,-400,1120,-1280,512,-11,220,-1232,2816,-2816
+     *,          1024,1,-72,840,-3584,6912,-6144,2048/
+C
+C  BINOMIAL COEFFICIENTS - ARRANGED TO MATCH CHEBYSHEV TERMS
+C
+      INTEGER IBINO(252)
+      DATA IBINO/1,1,1,1,1,2,1,1,1,1,3,3,1,1,1,2,1,1,4,6,4,1
+     *,          1,1,1,3,3,1,1,5,10,10,5,1,1,1,2,1,1,4,6,4,1
+     *,          1,6,15,20,15,6,1,1,1,1,3,3,1,1,5,10,10,5,1,1
+     *,          7,21,35,35,21,7,1,1,1,2,1,1,4,6,4,1,1,6,15,20
+     *,          15,6,1,1,8,28,56,70,56,28,8,1,1,1,1,3,3,1,1,5
+     *,          10,10,5,1,1,7,21,35,35,21,7,1,1,9,36,84,126,126
+     *,          84,36,9,1,1,1,2,1,1,4,6,4,1,1,6,15,20,15,6,1,1,8
+     *,          28,56,70,56,28,8,1,1,10,45,120,210,252,210,120,45
+     *,          10,1,1,1,1,3,3,1,1,5,10,10,5,1,1,7,21,35,35,21,7,1
+     *,          1,9,36,84,126,126,84,36,9,1,1,11,55,165,330,462,462
+     *,          330,165,55,11,1,1,1,2,1,1,4,6,4,1,1,6,15,20,15,6,1,1
+     *,          8,28,56,70,56,28,8,1,1,10,45,120,210,252,210,120,45
+     *,          10,1,1,12,66,220,495,792,924,792,495,220,66,12,1/
+C
+      NORD = NTMS
+      TMAX = XMAX
+C
+      TOL  = TEN**(-NTOL)
+      NT2  = 2**NTMS
+      NTF  = 1
+      DO I = 1, NTMS + 1
+        NTF = NTF*I
+      END DO
+      EPN  = ONE/( NTMS + 1 )
+C
+C  PRE-COMPUTE RECIPROCALS IN QUAD
+C
+      DO I = 1, KFX
+        QI = I
+        RMK(I) = 1.0Q+00/QI
+      END DO
+C
+C  LOOP OVER SELECTED GAMMA FUNCTION ORDERS, M
+C  GRIDS ARE COMPUTED FOR M = 0,1,2,3,4, 8, 12, 16, ...
+C  TO SAVE STORAGE, THE GRIDS FOR 8,12,16 ARE STORED AT FGRID(,,5),
+C  FGRID(,,6),FGRID(,,7) RESPECTIVELY, AND YOU MUST RECUR DOWNWARD
+C  FROM 8,12,16 WASTING 8,7,6 VALUES, IF FOR EXAMPLE YOU WANT M=5.
+C
+      NGRIDS = 4
+      IF (MMAX.GT.4) NGRIDS = NGRIDS + (MMAX-1)/4
+      DO IGRD = 0, NGRIDS
+        MFT = IGRD
+        IF (IGRD.GT.4) MFT = (IGRD-3)*4
+C
+C  FORMULA FOR OPTIMUM INTERVAL WIDTH
+C
+        DEL  = NT2*NTF*(2*(MFT+NTMS+1)+1)
+        DEL  = DEL**EPN
+        DEL  = DEL*(TOL**EPN)
+        FINC = DEL*TWO
+        RFINC(IGRD) = ONE/FINC
+        NPTS = NINT(XMAX/FINC)
+C
+C  LOOP OVER GRID POINTS
+C
+        XPT  = ZERO
+        DO IPT = 0, NPTS
+C
+C  GENERATE POWERS OF NORMALIZED GRID POINT
+C
+          XD = -XPT/DEL
+          XPK = ONE
+          DO J = 0, NTMS
+            XPW(J) = XPK
+            XPK = XPK*XD
+            FGRID(J,IPT,IGRD) = ZERO
+          END DO
+C
+C  GENERATE TERM COEFFICIENTS
+C
+          IC = 0
+          IB = 0
+          DO KTM = 0, NTMS
+            CALL CHEBYG (DEL,XPT,KTM,MFT,RMK,AWT)
+            NCHEB = (KTM+2)/2    ! TRUNCATE
+            IN = MOD(KTM,2)
+            DO I = 1, NCHEB
+              IC = IC + 1
+              CHEB = ICHEB(IC)*AWT
+              DO J = 0, IN
+                IB = IB + 1
+                II = IN - J
+                FGRID(II,IPT,IGRD) = FGRID(II,IPT,IGRD) +
+     *                    IBINO(IB)*CHEB*XPW(J)*(2**II)
+              END DO
+              IN = IN + 2
+            END DO
+          END DO
+          XPT = XPT + FINC
+        END DO
+      END DO
+C
+C  INTERPOLATION GRID FOR EXP(-X)
+C  FORMULA FOR OPTIMUM INTERVAL WIDTH
+C
+      DEL  = NT2*NTF
+      DEL  = DEL**EPN
+      DEL  = DEL*(TOL**EPN)
+      XINC = DEL*TWO
+      RXINC= ONE/XINC
+      NPTS = NINT(XMAX/XINC)
+C
+C  LOOP OVER GRID POINTS
+C
+      XPT  = ZERO
+      DO IPT = 0, NPTS
+C
+C  GENERATE POWERS OF NORMALIZED GRID POINT
+C
+        XD = -XPT/DEL
+        XPK = ONE
+        DO J = 0, NTMS
+          XPW(J) = XPK
+          XPK = XPK*XD
+          XGRID(J,IPT) = ZERO
+        END DO
+C
+C  GENERATE TERM COEFFICIENTS
+C
+        IC = 0
+        IB = 0
+        DO KTM = 0, NTMS
+          CALL CHEBYX (DEL,XPT,KTM,AWT)
+          NCHEB = (KTM+2)/2    ! TRUNCATE
+          IN = MOD(KTM,2)
+          DO I = 1, NCHEB
+            IC = IC + 1
+            CHEB = ICHEB(IC)*AWT
+            DO J = 0, IN
+              IB = IB + 1
+              II = IN - J
+              XGRID(II,IPT) = XGRID(II,IPT) +
+     *             IBINO(IB)*CHEB*XPW(J)*(2**II)
+            END DO
+            IN = IN + 2
+          END DO
+        END DO
+        XPT = XPT + XINC
+      END DO
+C
+C        OPTION TO SAVE THE FM(T) INTERPOLATION DATA JUST GENERATED,
+C        FLIP VARIABLES RDGRID/WTGRID IN ORDER TO REGENERATE THE DATA.
+C
+C        MACHINES LACKING QUADRUPLE PRECISION MUST READ THIS DATA FROM
+C        DISC, AS THEY CANNOT GENERATE IT SUFFICIENTLY ACCURATELY.
+C
+      WTGRID = .FALSE.
+      IF (.NOT.WTGRID) RETURN
+      IF (.NOT.MASWRK) RETURN
+C
+      OPEN(UNIT=2, FILE='/U1/MIKE/GAMESS/ERICFMT.DAT', STATUS='UNKNOWN',
+     *     FORM='FORMATTED', ACCESS='SEQUENTIAL')
+      WRITE(2,9000)
+      WRITE(2,9010)
+      WRITE(2,9100) (RFINC(III),III=0,NGRD)
+      WRITE(2,9020)
+      DO KKK=0,NGRD
+         DO JJJ=0,NPF
+            WRITE(2,9100) (FGRID(III,JJJ,KKK),III=0,NTX)
+         ENDDO
+      ENDDO
+      WRITE(2,9030)
+      WRITE(2,9100) RXINC,TMAX
+      WRITE(2,9040)
+      DO JJJ=0,NPX
+         WRITE(2,9100) (XGRID(III,JJJ),III=0,NTX)
+      ENDDO
+      CLOSE(UNIT=2, STATUS='KEEP')
+      RETURN
+C
+ 9000 FORMAT('DATA FOR ERIC AND ROTATED AXIS INTEGRAL CODE''S GAMMA',
+     *       ' FUNCTION INTERPOLATION')
+ 9010 FORMAT('FGRID INCREMENT VALUES')
+ 9020 FORMAT('FGRID TABLE')
+ 9030 FORMAT('XGRID INCREMENT, TMAX VALUE')
+ 9040 FORMAT('XGRID TABLE')
+ 9100 FORMAT(1P,3E25.16)
+      END
+C*MODULE INT2C   *DECK CHEBYG
+      SUBROUTINE CHEBYG (DEL,XPT,KTM,MFT,RMK,AWT)
+C
+C  CHEBYSHEV WEIGHT FOR GAMMA FUNCTION
+C
+C  DEL = HALF INTERVAL WIDTH     [INPUT]
+C  XPT = GRID POINT              [INPUT]
+C  KTM = POLYNOMIAL TERM         [INPUT]
+C  MFT = ORDER OF GAMMA FUNCTION [INPUT]
+C  RMK = TABLE OF RECIPROCALS    [INPUT]
+C        QUAD NOT ESSENTIAL HERE BUT HEY
+C  AWT = TERM WEIGHT             [OUTPUT]
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00, TWO=2.0D+00)
+      PARAMETER (HALF=0.5D+00, TOL=1.0D-12)
+      PARAMETER (KFX=300)
+      REAL*16 RMK(KFX)
+      LOGICAL CONVERGED
+C
+      CONVERGED = .FALSE.
+      DD2 = DEL*HALF
+      DSQ = DD2*DD2
+      AWT = ZERO
+      AM  = ONE
+      FK  = ONE
+      DO M = 1, KTM
+        FK = FK*RMK(M)
+      END DO
+      M   = 0
+      FM  = ONE
+C
+      DO WHILE (.NOT.CONVERGED)
+        AP  = AWT
+        MMK = KTM + MFT + 2*M
+        CALL FTMVAL (XPT,MMK,RMK,FTM)
+        AWT = AWT + AM*FTM*FM*FK
+        CONVERGED = ABS(AP-AWT).LT.TOL
+        M = M + 1
+        FM = FM*RMK(M)
+        FK = FK*RMK(KTM+M)
+        AM = AM*DSQ
+      END DO
+      AWT = AWT*(DD2**KTM)
+      IF (KTM.GT.0) AWT = AWT*TWO
+      IF (MOD(KTM,2).NE.0) AWT = -AWT
+      RETURN
+      END
+C*MODULE INT2C   *DECK FTMVAL
+      SUBROUTINE FTMVAL (TT8,MFT,RMK,FTM8)
+C
+C  FORMULA FOR COMPUTING THE GAMMA FUNCTION
+C  USING TAYLOR EXPANSION FOR TT<25. CARE TAKEN
+C  TO DO THIS IN A NUMERICALLY STABLE WAY.
+C  NOTE THAT QUADRUPLE PRECISION IS USED, ALTHOUGH DOUBLE PRECISION
+C  ARGUMENTS ARE PASSED. QUADRUPLE PRECISION IS CRITICAL!
+C
+C  TT8  = GAMMA FUNCTION ARGUMENT  [INPUT]
+C  MFT  = ORDER OF GAMMA FUNCTION  [INPUT]
+C  RMK  = TABLE OF RECIPROCALS     [INPUT]
+C  FTM8 = VALUE OF GAMMA FUNCTION [OUTPUT]
+C
+      IMPLICIT REAL*16 (A-H,O-Z)
+      LOGICAL CONVERGED
+      PARAMETER (KFX=300, ONE=1.0Q+00, TOL=1.0Q-17)
+      REAL*16 RMK(KFX)
+      DOUBLE PRECISION TT8,FTM8
+C
+      TT = TT8
+C
+      CONVERGED = .FALSE.
+      L   = 1
+      M   = 2*MFT + 1
+      FTM = RMK(M)
+      XK  = ONE
+      DO WHILE (.NOT.CONVERGED)
+        M = M + 2
+        A = -TT*RMK(M)
+        FP = FTM
+        FTM = FTM + A*XK
+        CONVERGED = ABS(FP-FTM).LT.TOL
+        L = L + 1
+        XK = -XK*TT*RMK(L)
+      END DO
+C
+      FTM8 = FTM
+C
+      RETURN
+      END
+C*MODULE INT2C   *DECK CHEBYX
+      SUBROUTINE CHEBYX (DEL,XPT,KTM,AWT)
+C
+C  CHEBYSHEV WEIGHT FOR EXP(-X)
+C
+C  DEL = HALF INTERVAL WIDTH  [INPUT]
+C  XPT = GRID POINT           [INPUT]
+C  KTM = POLYNOMIAL TERM      [INPUT]
+C  AWT = TERM WEIGHT         [OUTPUT]
+C
+C  NOTE THAT APART FROM THE LAST LINE THE WEIGHTS
+C  ARE INDEPENDENT OF THE VALUE OF XPT
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00, TWO=2.0D+00)
+      PARAMETER (HALF=0.5D+00, TOL=1.0D-12)
+      LOGICAL CONVERGED
+C
+      CONVERGED = .FALSE.
+      DD2 = DEL*HALF
+      DSQ = DD2*DD2
+      AWT = ZERO
+      AM  = ONE
+      FK  = ONE
+      DO M = 1, KTM
+        FK = FK*M
+      END DO
+      M   = 0
+      FM  = ONE
+C
+      DO WHILE (.NOT.CONVERGED)
+        AP  = AWT
+        AWT = AWT + AM/(FM*FK)
+        CONVERGED = ABS(AP-AWT).LT.TOL
+        M = M + 1
+        FM = FM*M
+        FK = FK*(KTM+M)
+        AM = AM*DSQ
+      END DO
+      AWT = AWT*(DD2**KTM)
+      IF (KTM.GT.0) AWT = AWT*TWO
+      IF (MOD(KTM,2).NE.0) AWT = -AWT
+      AWT = AWT*EXP(-XPT)
+      RETURN
+      END
+C*MODULE INT2C   *DECK GRIDIN
+      SUBROUTINE GRIDIN
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      PARAMETER (NTX=4, NPF=450, NGRD=7, NPX=1000, MXQT=16)
+      COMMON /FMTTBL/ FGRID(0:NTX,0:NPF,0:NGRD),XGRID(0:NTX,0:NPX)
+     *,               TMAX,RFINC(0:NGRD),RXINC
+     *,               RMR(MXQT),TLGM(0:MXQT),NORD
+      LOGICAL GOPARR,DSKWRK,MASWRK,SVDSKW
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+C         FORMATTED READ OF VARIOUS GAMMA FUNCTION INTERPOLATION TABLES.
+C         DATA MUST BE GENERATED ON A MACHINE WITH QUADRUPLE PRECISION.
+C
+      SVDSKW = DSKWRK
+      DSKWRK = .FALSE.
+      LU=2
+      CALL SEQOPN(LU, 'ERICFMT', 'OLD', .TRUE., 'FORMATTED')
+C
+      IF(MASWRK) THEN
+         READ(LU,9000)
+         READ(LU,9000)
+         READ(LU,9100) (RFINC(III),III=0,NGRD)
+         READ(LU,9000)
+         DO KKK=0,NGRD
+            DO JJJ=0,NPF
+               READ(LU,9100) (FGRID(III,JJJ,KKK),III=0,NTX)
+            ENDDO
+         ENDDO
+         READ(LU,9000)
+         READ(LU,9100) RXINC,TMAX
+         READ(LU,9000)
+         DO JJJ=0,NPX
+            READ(LU,9100) (XGRID(III,JJJ),III=0,NTX)
+         ENDDO
+      END IF
+C
+      CALL SEQCLO(LU,'KEEP')
+      DSKWRK = SVDSKW
+C
+C         PARALLEL MCSCF RUNS USING DUPLICATED AO INTEGRALS MAY CALL
+C         THE INTEGRAL PACKAGE WITH GOPARR TEMPORARILY SET .FALSE.,
+C         BUT WE MUST BROADCAST THE TABLE INFORMATION ANYWAY.
+C
+      IF(GOPARR  .OR.  NPROC.GT.1) THEN
+         CALL DDI_BCAST(241,'F',RFINC, NGRD+1                 ,MASTER)
+         CALL DDI_BCAST(242,'F',FGRID,(NGRD+1)*(NPF+1)*(NTX+1),MASTER)
+         CALL DDI_BCAST(243,'F',RXINC,1                       ,MASTER)
+         CALL DDI_BCAST(244,'F',TMAX ,1                       ,MASTER)
+         CALL DDI_BCAST(245,'F',XGRID,         (NPX+1)*(NTX+1),MASTER)
+      END IF
+      RETURN
+C
+ 9000 FORMAT(1X)
+ 9100 FORMAT(3E25.16)
+      END
+C
+C  START OF FAST ROUTINES
+C  SP CASES
+C
+C  LPHI=       1
+C  LWK1=       1
+C  LWK2=       1
+C  IDIM=       1
+C*MODULE INT2C   *DECK SSSS
+      SUBROUTINE SSSS (IPRIM,JPRIM,KPRIM,LPRIM,IEQJ,KEQL,PHI,WRK2,IDIM)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      COMMON /SHLNOS/ QQ4,IDUMMY(20)
+      PARAMETER (NTX=4,NPF=450,NGRD=7,NPX=1000,MXQT=16)
+      COMMON /FMTTBL/ FGRID(0:NTX,0:NPF,0:NGRD)
+     *,XGRID(0:NTX,0:NPX),TMAX,RFINC(0:NGRD)
+     *,RXINC,RMR(MXQT),TLGM(0:MXQT),NORD
+      PARAMETER (MXGSH=30, MXPS=MXGSH*MXGSH)
+      COMMON /ERIPRM/ EXI(MXGSH),EXJ(MXGSH),EXK(MXGSH),EXL(MXGSH)
+     *,CCI(MXGSH),CCJ(MXGSH),CCK(MXGSH),CCL(MXGSH)
+     *,XAB(MXPS),YAB(MXPS),ZAB(MXPS)
+     *,XCD(MXPS),YCD(MXPS),ZCD(MXPS)
+     *,CCBRA(MXPS),CCKET(MXPS),RXB(MXPS)
+     *,SLBRA(MXPS),SLKET(MXPS),RXK(MXPS)
+      COMMON /NLRC  / LCFLAG,LRINT,EMU,EMU2,LRFILE
+      LOGICAL   LCFLAG,LRINT
+      LOGICAL IEQJ,KEQL
+      DOUBLE PRECISION PHI(*),WRK2(IDIM,*)
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00)
+      PARAMETER (CCTOL=1.0D-13)
+      PHI(1)=ZERO
+      RFAC=RFINC( 0)
+      KL=0
+      DO LL=1,LPRIM
+      KTOP=KPRIM
+      IF (KEQL) KTOP=LL
+      DO KK=1,KTOP
+      KL=KL+1
+      CCKF=CCKET(KL)
+      IF (ABS(CCKF).GT.CCTOL) THEN
+      EKL=EXL(LL)+EXK(KK)
+      XKL=XCD(KL)
+      YKL=YCD(KL)
+      ZKL=ZCD(KL)
+      IJ=0
+      DO JJ=1,JPRIM
+      ITOP=IPRIM
+      IF (IEQJ) ITOP=JJ
+      DO II=1,ITOP
+      IJ=IJ+1
+      CCBF=CCBRA(IJ)
+      IF (ABS(CCBF).GT.CCTOL) THEN
+      EIJ=EXJ(JJ)+EXI(II)
+      EIJKL=EIJ+EKL
+      EINV=ONE/EIJKL
+      RX=XKL-XAB(IJ)
+      RY=YKL-YAB(IJ)
+      RZ=ZKL-ZAB(IJ)
+      R2=RX*RX+RY*RY+RZ*RZ
+      VS=EIJ*EKL*EINV
+      IF(LRINT) THEN
+         VS0=VS
+         VS=VS0*EMU2/(VS0+EMU2)
+      ENDIF
+      TT=VS*R2
+      IF (TT.LE.TMAX) THEN
+      TVAL=TT*RFAC
+      IPT=NINT(TVAL)
+      FX= TVAL*FGRID(4,IPT, 0)
+      FX=(FX + FGRID(3,IPT, 0))*TVAL
+      FX=(FX + FGRID(2,IPT, 0))*TVAL
+      FX=(FX + FGRID(1,IPT, 0))*TVAL
+      FX= FX + FGRID(0,IPT, 0)
+      ZEROL=CCBF*CCKF*SQRT(EINV)
+      IF(LRINT)ZEROL=ZEROL*SQRT(VS/VS0)
+      SAUX=ZEROL*FX
+      ELSE
+      ZEROL=CCBF*CCKF*SLBRA(IJ)*SLKET(KL)
+      RINV=ONE/R2
+      SAUX=ZEROL*SQRT(RINV)
+      END IF
+      PHI(1)=PHI(1)+SAUX
+      END IF
+      END DO
+      END DO
+      END IF
+      END DO
+      END DO
+C  POST-CONTRACTION PHASE
+      WRK2(1,1)=PHI(1)*QQ4
+      RETURN
+      END
+C  LPHI=      21
+C  LWK1=       1
+C  LWK2=       4
+C  IDIM=       4
+C*MODULE INT2C   *DECK PSSS
+      SUBROUTINE PSSS (IPRIM,JPRIM,KPRIM,LPRIM,IEQJ,KEQL,
+     *                 XC,YC,ZC,XD,YD,ZD,PHI,WRK2,IDIM)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      COMMON /SHLNOS/ QQ4,IDUMMY(20)
+      PARAMETER (NTX=4,NPF=450,NGRD=7,NPX=1000,MXQT=16)
+      COMMON /FMTTBL/ FGRID(0:NTX,0:NPF,0:NGRD)
+     *,XGRID(0:NTX,0:NPX),TMAX,RFINC(0:NGRD)
+     *,RXINC,RMR(MXQT),TLGM(0:MXQT),NORD
+      PARAMETER (MXGSH=30, MXPS=MXGSH*MXGSH)
+      COMMON /ERIPRM/ EXI(MXGSH),EXJ(MXGSH),EXK(MXGSH),EXL(MXGSH)
+     *,CCI(MXGSH),CCJ(MXGSH),CCK(MXGSH),CCL(MXGSH)
+     *,XAB(MXPS),YAB(MXPS),ZAB(MXPS)
+     *,XCD(MXPS),YCD(MXPS),ZCD(MXPS)
+     *,CCBRA(MXPS),CCKET(MXPS),RXB(MXPS)
+     *,SLBRA(MXPS),SLKET(MXPS),RXK(MXPS)
+      COMMON /NLRC  / LCFLAG,LRINT,EMU,EMU2,LRFILE
+      LOGICAL   LCFLAG,LRINT
+      LOGICAL IEQJ,KEQL
+      DOUBLE PRECISION CONF(11),FT(0:16)
+      DOUBLE PRECISION SAUX(0: 1),CXYZ(  4)
+      DOUBLE PRECISION PHI(*),WRK2(IDIM,*)
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00, TWO=2.0D+00)
+      PARAMETER (CCTOL=1.0D-13)
+      DATA CONF/0.0D+00,0.0D+00,0.0D+00,1.0D+00,2.0D+00,3.0D+00
+     &,         4.0D+00,5.0D+00,6.0D+00,7.0D+00,8.0D+00/
+      SAVE CONF
+      RFAC=RFINC( 1)
+      KL=0
+      PHI(       8)=ZERO
+      PHI(      18)=ZERO
+      PHI(      19)=ZERO
+      PHI(      20)=ZERO
+      DO LL=1,LPRIM
+      PHI(       7)=ZERO
+      PHI(      15)=ZERO
+      PHI(      16)=ZERO
+      PHI(      17)=ZERO
+      KTOP=KPRIM
+      IF (KEQL) KTOP=LL
+      DO KK=1,KTOP
+      KL=KL+1
+      CCKF=CCKET(KL)
+      IF (ABS(CCKF).GT.CCTOL) THEN
+      EKL=EXL(LL)+EXK(KK)
+      XKL=XCD(KL)
+      YKL=YCD(KL)
+      ZKL=ZCD(KL)
+      IJ=0
+      PHI(       6)=ZERO
+      PHI(      12)=ZERO
+      PHI(      13)=ZERO
+      PHI(      14)=ZERO
+      DO JJ=1,JPRIM
+      PHI(       5)=ZERO
+      PHI(       9)=ZERO
+      PHI(      10)=ZERO
+      PHI(      11)=ZERO
+      ITOP=IPRIM
+      IF (IEQJ) ITOP=JJ
+      DO II=1,ITOP
+      IJ=IJ+1
+      CCBF=CCBRA(IJ)
+      IF (ABS(CCBF).GT.CCTOL) THEN
+      EIJ=EXJ(JJ)+EXI(II)
+      EIJKL=EIJ+EKL
+      EINV=ONE/EIJKL
+      RX=XKL-XAB(IJ)
+      RY=YKL-YAB(IJ)
+      RZ=ZKL-ZAB(IJ)
+      R2=RX*RX+RY*RY+RZ*RZ
+      VS=EIJ*EKL*EINV
+      IF(LRINT) THEN
+         VS0=VS
+         VS=VS0*EMU2/(VS0+EMU2)
+      ENDIF
+      TT=VS*R2
+      IF (TT.LE.TMAX) THEN
+      TVAL=TT*RFAC
+      IPT=NINT(TVAL)
+      FX= TVAL*FGRID(4,IPT, 1)
+      FX=(FX + FGRID(3,IPT, 1))*TVAL
+      FX=(FX + FGRID(2,IPT, 1))*TVAL
+      FX=(FX + FGRID(1,IPT, 1))*TVAL
+      FX= FX + FGRID(0,IPT, 1)
+      FT( 1)=FX
+      TVAL=TT*RXINC
+      IPT=NINT(TVAL)
+      ET= TVAL*XGRID(4,IPT)
+      ET=(ET + XGRID(3,IPT))*TVAL
+      ET=(ET + XGRID(2,IPT))*TVAL
+      ET=(ET + XGRID(1,IPT))*TVAL
+      ET= ET + XGRID(0,IPT)
+      T2=TT*TWO
+      FT( 0)=RMR( 1)*(T2*FT( 1)+ET)
+      ZEROL=CCBF*CCKF*SQRT(EINV)*QQ4
+      IF(LRINT)ZEROL=ZEROL*SQRT(VS/VS0)
+      SAUX(0)=ZEROL*FT(0)
+      VS2=TWO*VS
+      VSM=ONE
+      VSM=VSM*VS2
+      SAUX( 1)=ZEROL*FT( 1)*VSM
+      ELSE
+      ZEROL=CCBF*CCKF*SLBRA(IJ)*SLKET(KL)*QQ4
+      RINV=ONE/R2
+      SAUX(0)=ZEROL*SQRT(RINV)
+      RR=SAUX(0)
+      RR=RR*RINV
+      SAUX( 1)=TLGM( 1)*RR
+      END IF
+      CXYZ(1)=ONE
+      CXYZ(2)=RX
+      CXYZ(3)=RY
+      CXYZ(4)=RZ
+      PHI(1)=SAUX(0)
+      PHI(       2)=CXYZ(     2)*SAUX( 1)
+      PHI(       3)=CXYZ(     3)*SAUX( 1)
+      PHI(       4)=CXYZ(     4)*SAUX( 1)
+C      FAC=RXB(IJ)
+C      SF=ONE
+C      DIMENSION SFAC(9)
+C      SFAC(1)=SF
+C      FAC=SFAC( 1)
+      FAC=ONE
+      PHI(       5)=PHI(       5)+FAC*PHI(       1)
+C      FAC=SFAC( 1)
+      PHI(       9)=PHI(       9)+FAC*PHI(       2)
+      PHI(      10)=PHI(      10)+FAC*PHI(       3)
+      PHI(      11)=PHI(      11)+FAC*PHI(       4)
+      END IF
+      END DO
+C      FAC=EXJ(JJ)*TWO
+C      SF=ONE
+C      SFAC(1)=SF
+C      FAC=SFAC( 1)
+      FAC=ONE
+      PHI(       6)=PHI(       6)+FAC*PHI(       5)
+C      FAC=SFAC( 1)
+      PHI(      12)=PHI(      12)+FAC*PHI(       9)
+      PHI(      13)=PHI(      13)+FAC*PHI(      10)
+      PHI(      14)=PHI(      14)+FAC*PHI(      11)
+      END DO
+      FAC=RXK(KL)
+C      SF=ONE
+C      SFAC(1)=SF
+C      SF=SF*FAC
+C      SFAC( 2)=SF
+C      FAC=SFAC( 2)
+      PHI(       7)=PHI(       7)+FAC*PHI(       6)
+C      FAC=SFAC( 2)
+      PHI(      15)=PHI(      15)+FAC*PHI(      12)
+      PHI(      16)=PHI(      16)+FAC*PHI(      13)
+      PHI(      17)=PHI(      17)+FAC*PHI(      14)
+      END IF
+      END DO
+C      FAC=EXL(LL)*TWO
+C      SF=ONE
+C      SFAC(1)=SF
+C      SF=SF*FAC
+C      SFAC( 2)=SF
+C      FAC=SFAC( 1)
+      FAC=ONE
+      PHI(      18)=PHI(      18)+FAC*PHI(      15)
+      PHI(      19)=PHI(      19)+FAC*PHI(      16)
+      PHI(      20)=PHI(      20)+FAC*PHI(      17)
+      FAC=EXL(LL)*TWO
+C      FAC=SFAC( 2)
+      PHI(       8)=PHI(       8)+FAC*PHI(       7)
+      END DO
+C  POST-CONTRACTION PHASE
+      WRK2(    1,1)= PHI(       8)
+      WRK2(    2,1)=-PHI(      18)
+      WRK2(    3,1)=-PHI(      19)
+      WRK2(    4,1)=-PHI(      20)
+      CONF(1)=XD-XC
+      CONF(2)=YD-YC
+      CONF(3)=ZD-ZC
+      DO I=1,     1
+      WRK2(    2,I)=WRK2(    2,I)+CONF( 1)*WRK2(    1,I)
+      WRK2(    3,I)=WRK2(    3,I)+CONF( 2)*WRK2(    1,I)
+      WRK2(    4,I)=WRK2(    4,I)+CONF( 3)*WRK2(    1,I)
+      END DO
+      RETURN
+      END
+C  LPHI=      65
+C  LWK1=       4
+C  LWK2=      12
+C  IDIM=       4
+C*MODULE INT2C   *DECK PSPS
+      SUBROUTINE PSPS (IPRIM,JPRIM,KPRIM,LPRIM,IEQJ
+     *,KEQL,XA,YA,ZA,XB,YB,ZB,XC,YC,ZC,XD,YD,ZD,PHI
+     *,WRK1,WRK2,IDIM)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      COMMON /SHLNOS/ QQ4,IDUMMY(20)
+      PARAMETER (NTX=4,NPF=450,NGRD=7,NPX=1000,MXQT=16)
+      COMMON /FMTTBL/ FGRID(0:NTX,0:NPF,0:NGRD)
+     *,XGRID(0:NTX,0:NPX),TMAX,RFINC(0:NGRD)
+     *,RXINC,RMR(MXQT),TLGM(0:MXQT),NORD
+      PARAMETER (MXGSH=30, MXPS=MXGSH*MXGSH)
+      COMMON /ERIPRM/ EXI(MXGSH),EXJ(MXGSH),EXK(MXGSH),EXL(MXGSH)
+     *,CCI(MXGSH),CCJ(MXGSH),CCK(MXGSH),CCL(MXGSH)
+     *,XAB(MXPS),YAB(MXPS),ZAB(MXPS)
+     *,XCD(MXPS),YCD(MXPS),ZCD(MXPS)
+     *,CCBRA(MXPS),CCKET(MXPS),RXB(MXPS)
+     *,SLBRA(MXPS),SLKET(MXPS),RXK(MXPS)
+      COMMON /NLRC  / LCFLAG,LRINT,EMU,EMU2,LRFILE
+      LOGICAL   LCFLAG,LRINT
+      LOGICAL IEQJ,KEQL
+      DOUBLE PRECISION RXYZ(3),CONF(11),FT(0:16)
+      DOUBLE PRECISION SAUX(0: 2),CXYZ( 10)
+      DOUBLE PRECISION PHI(*),WRK1(*),WRK2(IDIM,*)
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00, TWO=2.0D+00)
+      PARAMETER (D01=1.0D+00)
+      PARAMETER (CCTOL=1.0D-13)
+      DATA CONF/0.0D+00,0.0D+00,0.0D+00,1.0D+00,2.0D+00,3.0D+00
+     &,         4.0D+00,5.0D+00,6.0D+00,7.0D+00,8.0D+00/
+      SAVE CONF
+      RFAC=RFINC( 2)
+      KL=0
+      PHI(      15)=ZERO
+      PHI(      25)=ZERO
+      PHI(      26)=ZERO
+      PHI(      27)=ZERO
+      PHI(      34)=ZERO
+      PHI(      35)=ZERO
+      PHI(      36)=ZERO
+      DO I=      58,      64
+      PHI(I)=ZERO
+      END DO
+      DO LL=1,LPRIM
+      PHI(      14)=ZERO
+      PHI(      22)=ZERO
+      PHI(      23)=ZERO
+      PHI(      24)=ZERO
+      PHI(      31)=ZERO
+      PHI(      32)=ZERO
+      PHI(      33)=ZERO
+      DO I=      51,      57
+      PHI(I)=ZERO
+      END DO
+      KTOP=KPRIM
+      IF (KEQL) KTOP=LL
+      DO KK=1,KTOP
+      KL=KL+1
+      CCKF=CCKET(KL)
+      IF (ABS(CCKF).GT.CCTOL) THEN
+      EKL=EXL(LL)+EXK(KK)
+      XKL=XCD(KL)
+      YKL=YCD(KL)
+      ZKL=ZCD(KL)
+      IJ=0
+      PHI(      13)=ZERO
+      PHI(      19)=ZERO
+      PHI(      20)=ZERO
+      PHI(      21)=ZERO
+      PHI(      28)=ZERO
+      PHI(      29)=ZERO
+      PHI(      30)=ZERO
+      DO I=      44,      50
+      PHI(I)=ZERO
+      END DO
+      DO JJ=1,JPRIM
+      PHI(      12)=ZERO
+      PHI(      16)=ZERO
+      PHI(      17)=ZERO
+      PHI(      18)=ZERO
+      DO I=      37,      43
+      PHI(I)=ZERO
+      END DO
+      ITOP=IPRIM
+      IF (IEQJ) ITOP=JJ
+      DO II=1,ITOP
+      IJ=IJ+1
+      CCBF=CCBRA(IJ)
+      IF (ABS(CCBF).GT.CCTOL) THEN
+      EIJ=EXJ(JJ)+EXI(II)
+      EIJKL=EIJ+EKL
+      EINV=ONE/EIJKL
+      RX=XKL-XAB(IJ)
+      RY=YKL-YAB(IJ)
+      RZ=ZKL-ZAB(IJ)
+      R2=RX*RX+RY*RY+RZ*RZ
+      VS=EIJ*EKL*EINV
+      IF(LRINT) THEN
+         VS0=VS
+         VS=VS0*EMU2/(VS0+EMU2)
+      ENDIF
+      TT=VS*R2
+      IF (TT.LE.TMAX) THEN
+      TVAL=TT*RFAC
+      IPT=NINT(TVAL)
+      FX= TVAL*FGRID(4,IPT, 2)
+      FX=(FX + FGRID(3,IPT, 2))*TVAL
+      FX=(FX + FGRID(2,IPT, 2))*TVAL
+      FX=(FX + FGRID(1,IPT, 2))*TVAL
+      FX= FX + FGRID(0,IPT, 2)
+      FT( 2)=FX
+      TVAL=TT*RXINC
+      IPT=NINT(TVAL)
+      ET= TVAL*XGRID(4,IPT)
+      ET=(ET + XGRID(3,IPT))*TVAL
+      ET=(ET + XGRID(2,IPT))*TVAL
+      ET=(ET + XGRID(1,IPT))*TVAL
+      ET= ET + XGRID(0,IPT)
+      T2=TT*TWO
+      FT( 1)=RMR( 2)*(T2*FT( 2)+ET)
+      FT( 0)=RMR( 1)*(T2*FT( 1)+ET)
+      ZEROL=CCBF*CCKF*SQRT(EINV)*QQ4
+      IF(LRINT)ZEROL=ZEROL*SQRT(VS/VS0)
+      SAUX(0)=ZEROL*FT(0)
+      VS2=TWO*VS
+      VSM=ONE
+      VSM=VSM*VS2
+      SAUX( 1)=ZEROL*FT( 1)*VSM
+      VSM=VSM*VS2
+      SAUX( 2)=ZEROL*FT( 2)*VSM
+      ELSE
+      ZEROL=CCBF*CCKF*SLBRA(IJ)*SLKET(KL)*QQ4
+      RINV=ONE/R2
+      SAUX(0)=ZEROL*SQRT(RINV)
+      RR=SAUX(0)
+      RR=RR*RINV
+      SAUX( 1)=TLGM( 1)*RR
+      RR=RR*RINV
+      SAUX( 2)=TLGM( 2)*RR
+      END IF
+      RXYZ(1)=RX
+      RXYZ(2)=RY
+      RXYZ(3)=RZ
+      CXYZ(1)=ONE
+      CXYZ(2)=RX
+      CXYZ(3)=RY
+      CXYZ(4)=RZ
+      CXYZ(     5)=CXYZ(     2)*RXYZ(1)
+      CXYZ(     6)=CXYZ(     3)*RXYZ(1)
+      CXYZ(     7)=CXYZ(     3)*RXYZ(2)
+      CXYZ(     8)=CXYZ(     4)*RXYZ(1)
+      CXYZ(     9)=CXYZ(     4)*RXYZ(2)
+      CXYZ(    10)=CXYZ(     4)*RXYZ(3)
+      PHI(1)=SAUX(0)
+      PHI(       2)=CXYZ(     2)*SAUX( 1)
+      PHI(       3)=CXYZ(     3)*SAUX( 1)
+      PHI(       4)=CXYZ(     4)*SAUX( 1)
+      PHI(       5)=CXYZ(     1)*SAUX( 1)
+      PHI(       6)=CXYZ(     5)*SAUX( 2)
+      PHI(       7)=CXYZ(     6)*SAUX( 2)
+      PHI(       8)=CXYZ(     7)*SAUX( 2)
+      PHI(       9)=CXYZ(     8)*SAUX( 2)
+      PHI(      10)=CXYZ(     9)*SAUX( 2)
+      PHI(      11)=CXYZ(    10)*SAUX( 2)
+      FAC=RXB(IJ)
+C      SF=ONE
+C      SFAC(1)=SF
+C      SF=SF*FAC
+C      SFAC( 2)=SF
+C      FAC=SFAC( 2)
+      PHI(      12)=PHI(      12)+FAC*PHI(       1)
+C      FAC=SFAC( 2)
+      PHI(      16)=PHI(      16)+FAC*PHI(       2)
+      PHI(      17)=PHI(      17)+FAC*PHI(       3)
+      PHI(      18)=PHI(      18)+FAC*PHI(       4)
+C      FAC=SFAC( 2)
+      J=       5
+      DO I=      37,      43
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+      END IF
+      END DO
+C      FAC=EXJ(JJ)*TWO
+C      SF=ONE
+C      SFAC(1)=SF
+C      SF=SF*FAC
+C      SFAC( 2)=SF
+C      FAC=SFAC( 1)
+      FAC=ONE
+      PHI(      19)=PHI(      19)+FAC*PHI(      16)
+      PHI(      20)=PHI(      20)+FAC*PHI(      17)
+      PHI(      21)=PHI(      21)+FAC*PHI(      18)
+C      FAC=SFAC( 1)
+      J=      37
+      DO I=      44,      50
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 2)
+      FAC=EXJ(JJ)*TWO
+      PHI(      13)=PHI(      13)+FAC*PHI(      12)
+C      FAC=SFAC( 2)
+      PHI(      28)=PHI(      28)+FAC*PHI(      16)
+      PHI(      29)=PHI(      29)+FAC*PHI(      17)
+      PHI(      30)=PHI(      30)+FAC*PHI(      18)
+      END DO
+      FAC=RXK(KL)
+C      SF=ONE
+C      SFAC(1)=SF
+C      SF=SF*FAC
+C      SFAC( 2)=SF
+C      FAC=SFAC( 2)
+      PHI(      14)=PHI(      14)+FAC*PHI(      13)
+C      FAC=SFAC( 2)
+      PHI(      22)=PHI(      22)+FAC*PHI(      19)
+      PHI(      23)=PHI(      23)+FAC*PHI(      20)
+      PHI(      24)=PHI(      24)+FAC*PHI(      21)
+C      FAC=SFAC( 2)
+      PHI(      31)=PHI(      31)+FAC*PHI(      28)
+      PHI(      32)=PHI(      32)+FAC*PHI(      29)
+      PHI(      33)=PHI(      33)+FAC*PHI(      30)
+C      FAC=SFAC( 2)
+      J=      44
+      DO I=      51,      57
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+      END IF
+      END DO
+C      FAC=EXL(LL)*TWO
+C      SF=ONE
+C      SFAC(1)=SF
+C      SF=SF*FAC
+C      SFAC( 2)=SF
+C      FAC=SFAC( 1)
+      FAC=ONE
+      PHI(      34)=PHI(      34)+FAC*PHI(      31)
+      PHI(      35)=PHI(      35)+FAC*PHI(      32)
+      PHI(      36)=PHI(      36)+FAC*PHI(      33)
+C      FAC=SFAC( 1)
+      J=      51
+      DO I=      58,      64
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+      FAC=EXL(LL)*TWO
+C      FAC=SFAC( 2)
+      PHI(      15)=PHI(      15)+FAC*PHI(      14)
+C      FAC=SFAC( 2)
+      PHI(      25)=PHI(      25)+FAC*PHI(      22)
+      PHI(      26)=PHI(      26)+FAC*PHI(      23)
+      PHI(      27)=PHI(      27)+FAC*PHI(      24)
+      END DO
+C  POST-CONTRACTION PHASE
+      PHI(      59)=PHI(      59)-D01*PHI(      58)
+      PHI(      61)=PHI(      61)-D01*PHI(      58)
+      PHI(      64)=PHI(      64)-D01*PHI(      58)
+      CONF(1)=XB-XA
+      CONF(2)=YB-YA
+      CONF(3)=ZB-ZA
+      WRK1(    2)= PHI(      25)+CONF( 1)*PHI(      15)
+      WRK1(    3)= PHI(      26)+CONF( 2)*PHI(      15)
+      WRK1(    4)= PHI(      27)+CONF( 3)*PHI(      15)
+      CALL PSPS_BCTE(WRK1,WRK2,IDIM,1)
+      WRK1(    2)=-PHI(      59)-CONF( 1)*PHI(      34)
+      WRK1(    3)=-PHI(      60)-CONF( 2)*PHI(      34)
+      WRK1(    4)=-PHI(      62)-CONF( 3)*PHI(      34)
+      CALL PSPS_BCTE(WRK1,WRK2,IDIM,2)
+      WRK1(    2)=-PHI(      60)-CONF( 1)*PHI(      35)
+      WRK1(    3)=-PHI(      61)-CONF( 2)*PHI(      35)
+      WRK1(    4)=-PHI(      63)-CONF( 3)*PHI(      35)
+      CALL PSPS_BCTE(WRK1,WRK2,IDIM,3)
+      WRK1(    2)=-PHI(      62)-CONF( 1)*PHI(      36)
+      WRK1(    3)=-PHI(      63)-CONF( 2)*PHI(      36)
+      WRK1(    4)=-PHI(      64)-CONF( 3)*PHI(      36)
+      CALL PSPS_BCTE(WRK1,WRK2,IDIM,4)
+      CONF(1)=XD-XC
+      CONF(2)=YD-YC
+      CONF(3)=ZD-ZC
+      DO I=1,     3
+      WRK2(    2,I)=WRK2(    2,I)+CONF( 1)*WRK2(    1,I)
+      WRK2(    3,I)=WRK2(    3,I)+CONF( 2)*WRK2(    1,I)
+      WRK2(    4,I)=WRK2(    4,I)+CONF( 3)*WRK2(    1,I)
+      END DO
+      RETURN
+      END
+C*MODULE INT2C   *DECK PSPS_BCTE
+      SUBROUTINE PSPS_BCTE(WRK1,WRK2,IDIM,JR)
+      INTEGER IDIM,I,J,JR
+      DOUBLE PRECISION WRK1(*),WRK2(IDIM,*)
+      J=       1
+      DO I=1,     3
+      J=J+1
+      WRK2(JR,I)=WRK1(J)
+      END DO
+      END
+C  LPHI=      65
+C  LWK1=       1
+C  LWK2=      24
+C  IDIM=      24
+C*MODULE INT2C   *DECK PPSS
+      SUBROUTINE PPSS (IPRIM,JPRIM,KPRIM,LPRIM,IEQJ,KEQL,
+     *                 XC,YC,ZC,XD,YD,ZD,PHI,WRK2,IDIM)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      COMMON /SHLNOS/ QQ4,IDUMMY(20)
+      PARAMETER (NTX=4,NPF=450,NGRD=7,NPX=1000,MXQT=16)
+      COMMON /FMTTBL/ FGRID(0:NTX,0:NPF,0:NGRD)
+     *,XGRID(0:NTX,0:NPX),TMAX,RFINC(0:NGRD)
+     *,RXINC,RMR(MXQT),TLGM(0:MXQT),NORD
+      PARAMETER (MXGSH=30, MXPS=MXGSH*MXGSH)
+      COMMON /ERIPRM/ EXI(MXGSH),EXJ(MXGSH),EXK(MXGSH),EXL(MXGSH)
+     *,CCI(MXGSH),CCJ(MXGSH),CCK(MXGSH),CCL(MXGSH)
+     *,XAB(MXPS),YAB(MXPS),ZAB(MXPS)
+     *,XCD(MXPS),YCD(MXPS),ZCD(MXPS)
+     *,CCBRA(MXPS),CCKET(MXPS),RXB(MXPS)
+     *,SLBRA(MXPS),SLKET(MXPS),RXK(MXPS)
+      COMMON /NLRC  / LCFLAG,LRINT,EMU,EMU2,LRFILE
+      LOGICAL   LCFLAG,LRINT
+      LOGICAL IEQJ,KEQL
+      DOUBLE PRECISION RXYZ(3),CONF(11),FT(0:16)
+      DOUBLE PRECISION SAUX(0: 2),CXYZ( 10)
+      DOUBLE PRECISION PHI(*),WRK2(IDIM,*)
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00, TWO=2.0D+00)
+      PARAMETER (D01=1.0D+00)
+      PARAMETER (CCTOL=1.0D-13)
+      DATA CONF/0.0D+00,0.0D+00,0.0D+00,1.0D+00,2.0D+00,3.0D+00
+     &,         4.0D+00,5.0D+00,6.0D+00,7.0D+00,8.0D+00/
+      SAVE CONF
+      RFAC=RFINC( 2)
+      KL=0
+      PHI(      15)=ZERO
+      PHI(      16)=ZERO
+      PHI(      18)=ZERO
+      PHI(      28)=ZERO
+      PHI(      29)=ZERO
+      PHI(      30)=ZERO
+      PHI(      34)=ZERO
+      PHI(      35)=ZERO
+      PHI(      36)=ZERO
+      DO I=      58,      64
+      PHI(I)=ZERO
+      END DO
+      DO LL=1,LPRIM
+      PHI(      14)=ZERO
+      PHI(      17)=ZERO
+      PHI(      25)=ZERO
+      PHI(      26)=ZERO
+      PHI(      27)=ZERO
+      PHI(      31)=ZERO
+      PHI(      32)=ZERO
+      PHI(      33)=ZERO
+      DO I=      51,      57
+      PHI(I)=ZERO
+      END DO
+      KTOP=KPRIM
+      IF (KEQL) KTOP=LL
+      DO KK=1,KTOP
+      KL=KL+1
+      CCKF=CCKET(KL)
+      IF (ABS(CCKF).GT.CCTOL) THEN
+      EKL=EXL(LL)+EXK(KK)
+      XKL=XCD(KL)
+      YKL=YCD(KL)
+      ZKL=ZCD(KL)
+      IJ=0
+      PHI(      13)=ZERO
+      PHI(      22)=ZERO
+      PHI(      23)=ZERO
+      PHI(      24)=ZERO
+      DO I=      44,      50
+      PHI(I)=ZERO
+      END DO
+      DO JJ=1,JPRIM
+      PHI(      12)=ZERO
+      PHI(      19)=ZERO
+      PHI(      20)=ZERO
+      PHI(      21)=ZERO
+      DO I=      37,      43
+      PHI(I)=ZERO
+      END DO
+      ITOP=IPRIM
+      IF (IEQJ) ITOP=JJ
+      DO II=1,ITOP
+      IJ=IJ+1
+      CCBF=CCBRA(IJ)
+      IF (ABS(CCBF).GT.CCTOL) THEN
+      EIJ=EXJ(JJ)+EXI(II)
+      EIJKL=EIJ+EKL
+      EINV=ONE/EIJKL
+      RX=XKL-XAB(IJ)
+      RY=YKL-YAB(IJ)
+      RZ=ZKL-ZAB(IJ)
+      R2=RX*RX+RY*RY+RZ*RZ
+      VS=EIJ*EKL*EINV
+      IF(LRINT) THEN
+         VS0=VS
+         VS=VS0*EMU2/(VS0+EMU2)
+      ENDIF
+      TT=VS*R2
+      IF (TT.LE.TMAX) THEN
+      TVAL=TT*RFAC
+      IPT=NINT(TVAL)
+      FX= TVAL*FGRID(4,IPT, 2)
+      FX=(FX + FGRID(3,IPT, 2))*TVAL
+      FX=(FX + FGRID(2,IPT, 2))*TVAL
+      FX=(FX + FGRID(1,IPT, 2))*TVAL
+      FX= FX + FGRID(0,IPT, 2)
+      FT( 2)=FX
+      TVAL=TT*RXINC
+      IPT=NINT(TVAL)
+      ET= TVAL*XGRID(4,IPT)
+      ET=(ET + XGRID(3,IPT))*TVAL
+      ET=(ET + XGRID(2,IPT))*TVAL
+      ET=(ET + XGRID(1,IPT))*TVAL
+      ET= ET + XGRID(0,IPT)
+      T2=TT*TWO
+      FT( 1)=RMR( 2)*(T2*FT( 2)+ET)
+      FT( 0)=RMR( 1)*(T2*FT( 1)+ET)
+      ZEROL=CCBF*CCKF*SQRT(EINV)*QQ4
+      IF(LRINT)ZEROL=ZEROL*SQRT(VS/VS0)
+      SAUX(0)=ZEROL*FT(0)
+      VS2=TWO*VS
+      VSM=ONE
+      VSM=VSM*VS2
+      SAUX( 1)=ZEROL*FT( 1)*VSM
+      VSM=VSM*VS2
+      SAUX( 2)=ZEROL*FT( 2)*VSM
+      ELSE
+      ZEROL=CCBF*CCKF*SLBRA(IJ)*SLKET(KL)*QQ4
+      RINV=ONE/R2
+      SAUX(0)=ZEROL*SQRT(RINV)
+      RR=SAUX(0)
+      RR=RR*RINV
+      SAUX( 1)=TLGM( 1)*RR
+      RR=RR*RINV
+      SAUX( 2)=TLGM( 2)*RR
+      END IF
+      RXYZ(1)=RX
+      RXYZ(2)=RY
+      RXYZ(3)=RZ
+      CXYZ(1)=ONE
+      CXYZ(2)=RX
+      CXYZ(3)=RY
+      CXYZ(4)=RZ
+      CXYZ(     5)=CXYZ(     2)*RXYZ(1)
+      CXYZ(     6)=CXYZ(     3)*RXYZ(1)
+      CXYZ(     7)=CXYZ(     3)*RXYZ(2)
+      CXYZ(     8)=CXYZ(     4)*RXYZ(1)
+      CXYZ(     9)=CXYZ(     4)*RXYZ(2)
+      CXYZ(    10)=CXYZ(     4)*RXYZ(3)
+      PHI(1)=SAUX(0)
+      PHI(       2)=CXYZ(     2)*SAUX( 1)
+      PHI(       3)=CXYZ(     3)*SAUX( 1)
+      PHI(       4)=CXYZ(     4)*SAUX( 1)
+      PHI(       5)=CXYZ(     1)*SAUX( 1)
+      PHI(       6)=CXYZ(     5)*SAUX( 2)
+      PHI(       7)=CXYZ(     6)*SAUX( 2)
+      PHI(       8)=CXYZ(     7)*SAUX( 2)
+      PHI(       9)=CXYZ(     8)*SAUX( 2)
+      PHI(      10)=CXYZ(     9)*SAUX( 2)
+      PHI(      11)=CXYZ(    10)*SAUX( 2)
+C      FAC=RXB(IJ)
+C      SF=ONE
+C      SFAC(1)=SF
+C      FAC=SFAC( 1)
+      FAC=ONE
+      PHI(      12)=PHI(      12)+FAC*PHI(       1)
+C      FAC=SFAC( 1)
+      PHI(      19)=PHI(      19)+FAC*PHI(       2)
+      PHI(      20)=PHI(      20)+FAC*PHI(       3)
+      PHI(      21)=PHI(      21)+FAC*PHI(       4)
+C      FAC=SFAC( 1)
+      J=       5
+      DO I=      37,      43
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+      END IF
+      END DO
+C      FAC=EXJ(JJ)*TWO
+C      SF=ONE
+C      SFAC(1)=SF
+C      FAC=SFAC( 1)
+      FAC=ONE
+      PHI(      13)=PHI(      13)+FAC*PHI(      12)
+C      FAC=SFAC( 1)
+      PHI(      22)=PHI(      22)+FAC*PHI(      19)
+      PHI(      23)=PHI(      23)+FAC*PHI(      20)
+      PHI(      24)=PHI(      24)+FAC*PHI(      21)
+C      FAC=SFAC( 1)
+      J=      37
+      DO I=      44,      50
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+      END DO
+C      FAC=RXK(KL)
+C      SF=ONE
+C      SFAC(1)=SF
+C      SF=SF*FAC
+C      SFAC( 2)=SF
+C      SF=SF*FAC
+C      SFAC( 3)=SF
+      FAC=RXK(KL)
+C      FAC=SFAC( 2)
+      PHI(      14)=PHI(      14)+FAC*PHI(      13)
+C      FAC=SFAC( 2)
+      PHI(      25)=PHI(      25)+FAC*PHI(      22)
+      PHI(      26)=PHI(      26)+FAC*PHI(      23)
+      PHI(      27)=PHI(      27)+FAC*PHI(      24)
+      FAC=FAC*RXK(KL)
+C      FAC=SFAC( 3)
+      PHI(      17)=PHI(      17)+FAC*PHI(      13)
+C      FAC=SFAC( 3)
+      PHI(      31)=PHI(      31)+FAC*PHI(      22)
+      PHI(      32)=PHI(      32)+FAC*PHI(      23)
+      PHI(      33)=PHI(      33)+FAC*PHI(      24)
+C      FAC=SFAC( 3)
+      J=      44
+      DO I=      51,      57
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+      END IF
+      END DO
+C      FAC=EXL(LL)*TWO
+C      SF=ONE
+C      SFAC(1)=SF
+C      SF=SF*FAC
+C      SFAC( 2)=SF
+C      SF=SF*FAC
+C      SFAC( 3)=SF
+      FAC=ONE
+C      FAC=SFAC( 1)
+      PHI(      15)=PHI(      15)+FAC*PHI(      14)
+C      FAC=SFAC( 1)
+      PHI(      28)=PHI(      28)+FAC*PHI(      25)
+      PHI(      29)=PHI(      29)+FAC*PHI(      26)
+      PHI(      30)=PHI(      30)+FAC*PHI(      27)
+C      FAC=SFAC( 1)
+      J=      51
+      DO I=      58,      64
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+      FAC=EXL(LL)*TWO
+C      FAC=SFAC( 2)
+      PHI(      16)=PHI(      16)+FAC*PHI(      14)
+C      FAC=SFAC( 2)
+      PHI(      34)=PHI(      34)+FAC*PHI(      31)
+      PHI(      35)=PHI(      35)+FAC*PHI(      32)
+      PHI(      36)=PHI(      36)+FAC*PHI(      33)
+      FAC=FAC*EXL(LL)*TWO
+C      FAC=SFAC( 3)
+      PHI(      18)=PHI(      18)+FAC*PHI(      17)
+      END DO
+C  POST-CONTRACTION PHASE
+      PHI(      59)=PHI(      59)-D01*PHI(      58)
+      PHI(      61)=PHI(      61)-D01*PHI(      58)
+      PHI(      64)=PHI(      64)-D01*PHI(      58)
+      WRK2(    1,1)= PHI(      16)
+      WRK2(    2,1)=-PHI(      28)
+      WRK2(    3,1)=-PHI(      29)
+      WRK2(    4,1)=-PHI(      30)
+      WRK2(    5,1)= PHI(      18)
+      WRK2(    6,1)= PHI(      15)
+      WRK2(    7,1)=-PHI(      34)
+      WRK2(    8,1)=-PHI(      35)
+      WRK2(    9,1)=-PHI(      36)
+      WRK2(   10,1)= PHI(      59)
+      WRK2(   11,1)= PHI(      60)
+      WRK2(   12,1)= PHI(      61)
+      WRK2(   13,1)= PHI(      62)
+      WRK2(   14,1)= PHI(      63)
+      WRK2(   15,1)= PHI(      64)
+      CONF(1)=XD-XC
+      CONF(2)=YD-YC
+      CONF(3)=ZD-ZC
+      DO I=1,     1
+      WRK2(    2,I)=WRK2(    2,I)+CONF( 1)*WRK2(    1,I)
+      WRK2(    3,I)=WRK2(    3,I)+CONF( 2)*WRK2(    1,I)
+      WRK2(    4,I)=WRK2(    4,I)+CONF( 3)*WRK2(    1,I)
+      WRK2(   10,I)=WRK2(   10,I)+CONF( 1)*WRK2(    7,I)
+      WRK2(   10,I)=WRK2(   10,I)+CONF( 4)*WRK2(    6,I)
+      WRK2(   11,I)=WRK2(   11,I)+CONF( 1)*WRK2(    8,I)
+      WRK2(   12,I)=WRK2(   12,I)+CONF( 2)*WRK2(    8,I)
+      WRK2(   12,I)=WRK2(   12,I)+CONF( 4)*WRK2(    6,I)
+      WRK2(   13,I)=WRK2(   13,I)+CONF( 1)*WRK2(    9,I)
+      WRK2(   14,I)=WRK2(   14,I)+CONF( 2)*WRK2(    9,I)
+      WRK2(   15,I)=WRK2(   15,I)+CONF( 3)*WRK2(    9,I)
+      WRK2(   15,I)=WRK2(   15,I)+CONF( 4)*WRK2(    6,I)
+      WRK2(    7,I)=WRK2(    7,I)+CONF( 1)*WRK2(    5,I)
+      WRK2(    8,I)=WRK2(    8,I)+CONF( 2)*WRK2(    5,I)
+      WRK2(    9,I)=WRK2(    9,I)+CONF( 3)*WRK2(    5,I)
+      WRK2(   10,I)=WRK2(   10,I)+CONF( 1)*WRK2(    7,I)
+      WRK2(   11,I)=WRK2(   11,I)+CONF( 2)*WRK2(    7,I)
+      WRK2(   12,I)=WRK2(   12,I)+CONF( 2)*WRK2(    8,I)
+      WRK2(   13,I)=WRK2(   13,I)+CONF( 3)*WRK2(    7,I)
+      WRK2(   14,I)=WRK2(   14,I)+CONF( 3)*WRK2(    8,I)
+      WRK2(   15,I)=WRK2(   15,I)+CONF( 3)*WRK2(    9,I)
+      WRK2(   16,I)=WRK2(   10,I)-CONF( 1)*WRK2(    2,I)
+      WRK2(   17,I)=WRK2(   11,I)-CONF( 1)*WRK2(    3,I)
+      WRK2(   18,I)=WRK2(   13,I)-CONF( 1)*WRK2(    4,I)
+      WRK2(   19,I)=WRK2(   11,I)-CONF( 2)*WRK2(    2,I)
+      WRK2(   20,I)=WRK2(   12,I)-CONF( 2)*WRK2(    3,I)
+      WRK2(   21,I)=WRK2(   14,I)-CONF( 2)*WRK2(    4,I)
+      WRK2(   22,I)=WRK2(   13,I)-CONF( 3)*WRK2(    2,I)
+      WRK2(   23,I)=WRK2(   14,I)-CONF( 3)*WRK2(    3,I)
+      WRK2(   24,I)=WRK2(   15,I)-CONF( 3)*WRK2(    4,I)
+      END DO
+      RETURN
+      END
+C  LPHI=     183
+C  LWK1=       4
+C  LWK2=      72
+C  IDIM=      24
+C*MODULE INT2C   *DECK PPPS
+      SUBROUTINE PPPS (IPRIM,JPRIM,KPRIM,LPRIM,IEQJ
+     *,KEQL,XA,YA,ZA,XB,YB,ZB,XC,YC,ZC,XD,YD,ZD,PHI
+     *,WRK1,WRK2,IDIM)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      COMMON /SHLNOS/ QQ4,IDUMMY(20)
+      PARAMETER (NTX=4,NPF=450,NGRD=7,NPX=1000,MXQT=16)
+      COMMON /FMTTBL/ FGRID(0:NTX,0:NPF,0:NGRD)
+     *,XGRID(0:NTX,0:NPX),TMAX,RFINC(0:NGRD)
+     *,RXINC,RMR(MXQT),TLGM(0:MXQT),NORD
+      PARAMETER (MXGSH=30, MXPS=MXGSH*MXGSH)
+      COMMON /ERIPRM/ EXI(MXGSH),EXJ(MXGSH),EXK(MXGSH),EXL(MXGSH)
+     *,CCI(MXGSH),CCJ(MXGSH),CCK(MXGSH),CCL(MXGSH)
+     *,XAB(MXPS),YAB(MXPS),ZAB(MXPS)
+     *,XCD(MXPS),YCD(MXPS),ZCD(MXPS)
+     *,CCBRA(MXPS),CCKET(MXPS),RXB(MXPS)
+     *,SLBRA(MXPS),SLKET(MXPS),RXK(MXPS)
+      COMMON /NLRC  / LCFLAG,LRINT,EMU,EMU2,LRFILE
+      LOGICAL   LCFLAG,LRINT
+      LOGICAL IEQJ,KEQL
+      DOUBLE PRECISION RXYZ(3),CONF(11),FT(0:16)
+      DOUBLE PRECISION SAUX(0: 3),CXYZ( 20)
+      DOUBLE PRECISION PHI(*),WRK1(*),WRK2(IDIM,*)
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00, TWO=2.0D+00)
+      PARAMETER (D01=1.0D+00, D02=2.0D+00)
+      PARAMETER (CCTOL=1.0D-13)
+      DATA CONF/0.0D+00,0.0D+00,0.0D+00,1.0D+00,2.0D+00,3.0D+00
+     &,         4.0D+00,5.0D+00,6.0D+00,7.0D+00,8.0D+00/
+      SAVE CONF
+      RFAC=RFINC( 3)
+      KL=0
+      PHI(      28)=ZERO
+      PHI(      29)=ZERO
+      PHI(      31)=ZERO
+      PHI(      41)=ZERO
+      PHI(      42)=ZERO
+      PHI(      43)=ZERO
+      PHI(      44)=ZERO
+      PHI(      45)=ZERO
+      PHI(      46)=ZERO
+      PHI(      50)=ZERO
+      PHI(      51)=ZERO
+      PHI(      52)=ZERO
+      PHI(      59)=ZERO
+      PHI(      60)=ZERO
+      PHI(      61)=ZERO
+      PHI(      65)=ZERO
+      PHI(      66)=ZERO
+      PHI(      67)=ZERO
+      DO I=      89,      95
+      PHI(I)=ZERO
+      END DO
+      DO I=     103,     109
+      PHI(I)=ZERO
+      END DO
+      DO I=     124,     130
+      PHI(I)=ZERO
+      END DO
+      DO I=     170,     182
+      PHI(I)=ZERO
+      END DO
+      DO LL=1,LPRIM
+      PHI(      27)=ZERO
+      PHI(      30)=ZERO
+      PHI(      38)=ZERO
+      PHI(      39)=ZERO
+      PHI(      40)=ZERO
+      PHI(      47)=ZERO
+      PHI(      48)=ZERO
+      PHI(      49)=ZERO
+      PHI(      56)=ZERO
+      PHI(      57)=ZERO
+      PHI(      58)=ZERO
+      PHI(      62)=ZERO
+      PHI(      63)=ZERO
+      PHI(      64)=ZERO
+      DO I=      82,      88
+      PHI(I)=ZERO
+      END DO
+      DO I=      96,     102
+      PHI(I)=ZERO
+      END DO
+      DO I=     117,     123
+      PHI(I)=ZERO
+      END DO
+      DO I=     157,     169
+      PHI(I)=ZERO
+      END DO
+      KTOP=KPRIM
+      IF (KEQL) KTOP=LL
+      DO KK=1,KTOP
+      KL=KL+1
+      CCKF=CCKET(KL)
+      IF (ABS(CCKF).GT.CCTOL) THEN
+      EKL=EXL(LL)+EXK(KK)
+      XKL=XCD(KL)
+      YKL=YCD(KL)
+      ZKL=ZCD(KL)
+      IJ=0
+      PHI(      26)=ZERO
+      PHI(      35)=ZERO
+      PHI(      36)=ZERO
+      PHI(      37)=ZERO
+      PHI(      53)=ZERO
+      PHI(      54)=ZERO
+      PHI(      55)=ZERO
+      DO I=      75,      81
+      PHI(I)=ZERO
+      END DO
+      DO I=     110,     116
+      PHI(I)=ZERO
+      END DO
+      DO I=     144,     156
+      PHI(I)=ZERO
+      END DO
+      DO JJ=1,JPRIM
+      PHI(      25)=ZERO
+      PHI(      32)=ZERO
+      PHI(      33)=ZERO
+      PHI(      34)=ZERO
+      DO I=      68,      74
+      PHI(I)=ZERO
+      END DO
+      DO I=     131,     143
+      PHI(I)=ZERO
+      END DO
+      ITOP=IPRIM
+      IF (IEQJ) ITOP=JJ
+      DO II=1,ITOP
+      IJ=IJ+1
+      CCBF=CCBRA(IJ)
+      IF (ABS(CCBF).GT.CCTOL) THEN
+      EIJ=EXJ(JJ)+EXI(II)
+      EIJKL=EIJ+EKL
+      EINV=ONE/EIJKL
+      RX=XKL-XAB(IJ)
+      RY=YKL-YAB(IJ)
+      RZ=ZKL-ZAB(IJ)
+      R2=RX*RX+RY*RY+RZ*RZ
+      VS=EIJ*EKL*EINV
+      IF(LRINT) THEN
+         VS0=VS
+         VS=VS0*EMU2/(VS0+EMU2)
+      ENDIF
+      TT=VS*R2
+      IF (TT.LE.TMAX) THEN
+      TVAL=TT*RFAC
+      IPT=NINT(TVAL)
+      FX= TVAL*FGRID(4,IPT, 3)
+      FX=(FX + FGRID(3,IPT, 3))*TVAL
+      FX=(FX + FGRID(2,IPT, 3))*TVAL
+      FX=(FX + FGRID(1,IPT, 3))*TVAL
+      FX= FX + FGRID(0,IPT, 3)
+      FT( 3)=FX
+      TVAL=TT*RXINC
+      IPT=NINT(TVAL)
+      ET= TVAL*XGRID(4,IPT)
+      ET=(ET + XGRID(3,IPT))*TVAL
+      ET=(ET + XGRID(2,IPT))*TVAL
+      ET=(ET + XGRID(1,IPT))*TVAL
+      ET= ET + XGRID(0,IPT)
+      T2=TT*TWO
+      FT( 2)=RMR( 3)*(T2*FT( 3)+ET)
+      FT( 1)=RMR( 2)*(T2*FT( 2)+ET)
+      FT( 0)=RMR( 1)*(T2*FT( 1)+ET)
+      ZEROL=CCBF*CCKF*SQRT(EINV)*QQ4
+      IF(LRINT)ZEROL=ZEROL*SQRT(VS/VS0)
+      SAUX(0)=ZEROL*FT(0)
+      VS2=TWO*VS
+      VSM=ONE
+      VSM=VSM*VS2
+      SAUX( 1)=ZEROL*FT( 1)*VSM
+      VSM=VSM*VS2
+      SAUX( 2)=ZEROL*FT( 2)*VSM
+      VSM=VSM*VS2
+      SAUX( 3)=ZEROL*FT( 3)*VSM
+      ELSE
+      ZEROL=CCBF*CCKF*SLBRA(IJ)*SLKET(KL)*QQ4
+      RINV=ONE/R2
+      SAUX(0)=ZEROL*SQRT(RINV)
+      RR=SAUX(0)
+      RR=RR*RINV
+      SAUX( 1)=TLGM( 1)*RR
+      RR=RR*RINV
+      SAUX( 2)=TLGM( 2)*RR
+      RR=RR*RINV
+      SAUX( 3)=TLGM( 3)*RR
+      END IF
+      RXYZ(1)=RX
+      RXYZ(2)=RY
+      RXYZ(3)=RZ
+      CXYZ(1)=ONE
+      CXYZ(2)=RX
+      CXYZ(3)=RY
+      CXYZ(4)=RZ
+      CXYZ(     5)=CXYZ(     2)*RXYZ(1)
+      CXYZ(     6)=CXYZ(     3)*RXYZ(1)
+      CXYZ(     7)=CXYZ(     3)*RXYZ(2)
+      CXYZ(     8)=CXYZ(     4)*RXYZ(1)
+      CXYZ(     9)=CXYZ(     4)*RXYZ(2)
+      CXYZ(    10)=CXYZ(     4)*RXYZ(3)
+      CXYZ(    11)=CXYZ(     5)*RXYZ(1)
+      CXYZ(    12)=CXYZ(     6)*RXYZ(1)
+      CXYZ(    13)=CXYZ(     7)*RXYZ(1)
+      CXYZ(    14)=CXYZ(     7)*RXYZ(2)
+      CXYZ(    15)=CXYZ(     8)*RXYZ(1)
+      CXYZ(    16)=CXYZ(     9)*RXYZ(1)
+      CXYZ(    17)=CXYZ(     9)*RXYZ(2)
+      CXYZ(    18)=CXYZ(    10)*RXYZ(1)
+      CXYZ(    19)=CXYZ(    10)*RXYZ(2)
+      CXYZ(    20)=CXYZ(    10)*RXYZ(3)
+      PHI(1)=SAUX(0)
+      PHI(       2)=CXYZ(     2)*SAUX( 1)
+      PHI(       3)=CXYZ(     3)*SAUX( 1)
+      PHI(       4)=CXYZ(     4)*SAUX( 1)
+      PHI(       5)=CXYZ(     1)*SAUX( 1)
+      PHI(       6)=CXYZ(     5)*SAUX( 2)
+      PHI(       7)=CXYZ(     6)*SAUX( 2)
+      PHI(       8)=CXYZ(     7)*SAUX( 2)
+      PHI(       9)=CXYZ(     8)*SAUX( 2)
+      PHI(      10)=CXYZ(     9)*SAUX( 2)
+      PHI(      11)=CXYZ(    10)*SAUX( 2)
+      PHI(      12)=CXYZ(     2)*SAUX( 2)
+      PHI(      13)=CXYZ(     3)*SAUX( 2)
+      PHI(      14)=CXYZ(     4)*SAUX( 2)
+      PHI(      15)=CXYZ(    11)*SAUX( 3)
+      PHI(      16)=CXYZ(    12)*SAUX( 3)
+      PHI(      17)=CXYZ(    13)*SAUX( 3)
+      PHI(      18)=CXYZ(    14)*SAUX( 3)
+      PHI(      19)=CXYZ(    15)*SAUX( 3)
+      PHI(      20)=CXYZ(    16)*SAUX( 3)
+      PHI(      21)=CXYZ(    17)*SAUX( 3)
+      PHI(      22)=CXYZ(    18)*SAUX( 3)
+      PHI(      23)=CXYZ(    19)*SAUX( 3)
+      PHI(      24)=CXYZ(    20)*SAUX( 3)
+      FAC=RXB(IJ)
+C      SF=ONE
+C      SFAC(1)=SF
+C      SF=SF*FAC
+C      SFAC( 2)=SF
+C      FAC=SFAC( 2)
+      PHI(      25)=PHI(      25)+FAC*PHI(       1)
+C      FAC=SFAC( 2)
+      PHI(      32)=PHI(      32)+FAC*PHI(       2)
+      PHI(      33)=PHI(      33)+FAC*PHI(       3)
+      PHI(      34)=PHI(      34)+FAC*PHI(       4)
+C      FAC=SFAC( 2)
+      J=       5
+      DO I=      68,      74
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 2)
+      J=      12
+      DO I=     131,     143
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+      END IF
+      END DO
+C      FAC=EXJ(JJ)*TWO
+C      SF=ONE
+C      SFAC(1)=SF
+C      SF=SF*FAC
+C      SFAC( 2)=SF
+      FAC=ONE
+C      FAC=SFAC( 1)
+      PHI(      35)=PHI(      35)+FAC*PHI(      32)
+      PHI(      36)=PHI(      36)+FAC*PHI(      33)
+      PHI(      37)=PHI(      37)+FAC*PHI(      34)
+C      FAC=SFAC( 1)
+      J=      68
+      DO I=      75,      81
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 1)
+      J=     131
+      DO I=     144,     156
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+      FAC=EXJ(JJ)*TWO
+C      FAC=SFAC( 2)
+      PHI(      26)=PHI(      26)+FAC*PHI(      25)
+C      FAC=SFAC( 2)
+      PHI(      53)=PHI(      53)+FAC*PHI(      32)
+      PHI(      54)=PHI(      54)+FAC*PHI(      33)
+      PHI(      55)=PHI(      55)+FAC*PHI(      34)
+C      FAC=SFAC( 2)
+      J=      68
+      DO I=     110,     116
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+      END DO
+C      FAC=RXK(KL)
+C      SF=ONE
+C      SFAC(1)=SF
+C      SF=SF*FAC
+C      SFAC( 2)=SF
+C      SF=SF*FAC
+C      SFAC( 3)=SF
+      FAC=RXK(KL)
+C      FAC=SFAC( 2)
+      PHI(      27)=PHI(      27)+FAC*PHI(      26)
+C      FAC=SFAC( 2)
+      PHI(      38)=PHI(      38)+FAC*PHI(      35)
+      PHI(      39)=PHI(      39)+FAC*PHI(      36)
+      PHI(      40)=PHI(      40)+FAC*PHI(      37)
+C      FAC=SFAC( 2)
+      PHI(      56)=PHI(      56)+FAC*PHI(      53)
+      PHI(      57)=PHI(      57)+FAC*PHI(      54)
+      PHI(      58)=PHI(      58)+FAC*PHI(      55)
+C      FAC=SFAC( 2)
+      J=      75
+      DO I=      82,      88
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+      FAC=FAC*RXK(KL)
+C      FAC=SFAC( 3)
+      PHI(      30)=PHI(      30)+FAC*PHI(      26)
+C      FAC=SFAC( 3)
+      PHI(      47)=PHI(      47)+FAC*PHI(      35)
+      PHI(      48)=PHI(      48)+FAC*PHI(      36)
+      PHI(      49)=PHI(      49)+FAC*PHI(      37)
+C      FAC=SFAC( 3)
+      PHI(      62)=PHI(      62)+FAC*PHI(      53)
+      PHI(      63)=PHI(      63)+FAC*PHI(      54)
+      PHI(      64)=PHI(      64)+FAC*PHI(      55)
+C      FAC=SFAC( 3)
+      J=      75
+      DO I=      96,     102
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 3)
+      J=     110
+      DO I=     117,     123
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 3)
+      J=     144
+      DO I=     157,     169
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+      END IF
+      END DO
+C      FAC=EXL(LL)*TWO
+C      SF=ONE
+C      SFAC(1)=SF
+C      SF=SF*FAC
+C      SFAC( 2)=SF
+C      SF=SF*FAC
+C      SFAC( 3)=SF
+      FAC=ONE
+C      FAC=SFAC( 1)
+      PHI(      28)=PHI(      28)+FAC*PHI(      27)
+C      FAC=SFAC( 1)
+      PHI(      41)=PHI(      41)+FAC*PHI(      38)
+      PHI(      42)=PHI(      42)+FAC*PHI(      39)
+      PHI(      43)=PHI(      43)+FAC*PHI(      40)
+C      FAC=SFAC( 1)
+      PHI(      59)=PHI(      59)+FAC*PHI(      56)
+      PHI(      60)=PHI(      60)+FAC*PHI(      57)
+      PHI(      61)=PHI(      61)+FAC*PHI(      58)
+C      FAC=SFAC( 1)
+      J=      82
+      DO I=      89,      95
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 1)
+      J=     117
+      DO I=     124,     130
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 1)
+      J=     157
+      DO I=     170,     182
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+      FAC=EXL(LL)*TWO
+C      FAC=SFAC( 2)
+      PHI(      29)=PHI(      29)+FAC*PHI(      27)
+C      FAC=SFAC( 2)
+      PHI(      44)=PHI(      44)+FAC*PHI(      38)
+      PHI(      45)=PHI(      45)+FAC*PHI(      39)
+      PHI(      46)=PHI(      46)+FAC*PHI(      40)
+C      FAC=SFAC( 2)
+      PHI(      65)=PHI(      65)+FAC*PHI(      62)
+      PHI(      66)=PHI(      66)+FAC*PHI(      63)
+      PHI(      67)=PHI(      67)+FAC*PHI(      64)
+C      FAC=SFAC( 2)
+      J=      96
+      DO I=     103,     109
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+      FAC=FAC*EXL(LL)*TWO
+C      FAC=SFAC( 3)
+      PHI(      31)=PHI(      31)+FAC*PHI(      30)
+C      FAC=SFAC( 3)
+      PHI(      50)=PHI(      50)+FAC*PHI(      47)
+      PHI(      51)=PHI(      51)+FAC*PHI(      48)
+      PHI(      52)=PHI(      52)+FAC*PHI(      49)
+      END DO
+C  POST-CONTRACTION PHASE
+      PHI(      90)=PHI(      90)-D01*PHI(      89)
+      PHI(      92)=PHI(      92)-D01*PHI(      89)
+      PHI(      95)=PHI(      95)-D01*PHI(      89)
+      PHI(     104)=PHI(     104)-D01*PHI(     103)
+      PHI(     106)=PHI(     106)-D01*PHI(     103)
+      PHI(     109)=PHI(     109)-D01*PHI(     103)
+      PHI(     125)=PHI(     125)-D01*PHI(     124)
+      PHI(     127)=PHI(     127)-D01*PHI(     124)
+      PHI(     130)=PHI(     130)-D01*PHI(     124)
+      PHI(     173)=PHI(     173)-D01*PHI(     170)
+      PHI(     174)=PHI(     174)-D01*PHI(     171)
+      PHI(     176)=PHI(     176)-D01*PHI(     171)
+      PHI(     177)=PHI(     177)-D01*PHI(     172)
+      PHI(     179)=PHI(     179)-D01*PHI(     172)
+      PHI(     182)=PHI(     182)-D01*PHI(     172)
+      PHI(     173)=PHI(     173)-D02*PHI(     170)
+      PHI(     175)=PHI(     175)-D01*PHI(     170)
+      PHI(     176)=PHI(     176)-D02*PHI(     171)
+      PHI(     180)=PHI(     180)-D01*PHI(     170)
+      PHI(     181)=PHI(     181)-D01*PHI(     171)
+      PHI(     182)=PHI(     182)-D02*PHI(     172)
+      CONF(1)=XB-XA
+      CONF(2)=YB-YA
+      CONF(3)=ZB-ZA
+      WRK1(    2)= PHI(      44)+CONF( 1)*PHI(      29)
+      WRK1(    3)= PHI(      45)+CONF( 2)*PHI(      29)
+      WRK1(    4)= PHI(      46)+CONF( 3)*PHI(      29)
+      CALL PPPS_BCTE(WRK1,WRK2,IDIM,1)
+      WRK1(    2)=-PHI(      90)-CONF( 1)*PHI(      59)
+      WRK1(    3)=-PHI(      91)-CONF( 2)*PHI(      59)
+      WRK1(    4)=-PHI(      93)-CONF( 3)*PHI(      59)
+      CALL PPPS_BCTE(WRK1,WRK2,IDIM,2)
+      WRK1(    2)=-PHI(      91)-CONF( 1)*PHI(      60)
+      WRK1(    3)=-PHI(      92)-CONF( 2)*PHI(      60)
+      WRK1(    4)=-PHI(      94)-CONF( 3)*PHI(      60)
+      CALL PPPS_BCTE(WRK1,WRK2,IDIM,3)
+      WRK1(    2)=-PHI(      93)-CONF( 1)*PHI(      61)
+      WRK1(    3)=-PHI(      94)-CONF( 2)*PHI(      61)
+      WRK1(    4)=-PHI(      95)-CONF( 3)*PHI(      61)
+      CALL PPPS_BCTE(WRK1,WRK2,IDIM,4)
+      WRK1(    2)= PHI(      50)+CONF( 1)*PHI(      31)
+      WRK1(    3)= PHI(      51)+CONF( 2)*PHI(      31)
+      WRK1(    4)= PHI(      52)+CONF( 3)*PHI(      31)
+      CALL PPPS_BCTE(WRK1,WRK2,IDIM,5)
+      WRK1(    2)= PHI(      41)+CONF( 1)*PHI(      28)
+      WRK1(    3)= PHI(      42)+CONF( 2)*PHI(      28)
+      WRK1(    4)= PHI(      43)+CONF( 3)*PHI(      28)
+      CALL PPPS_BCTE(WRK1,WRK2,IDIM,6)
+      WRK1(    2)=-PHI(     104)-CONF( 1)*PHI(      65)
+      WRK1(    3)=-PHI(     105)-CONF( 2)*PHI(      65)
+      WRK1(    4)=-PHI(     107)-CONF( 3)*PHI(      65)
+      CALL PPPS_BCTE(WRK1,WRK2,IDIM,7)
+      WRK1(    2)=-PHI(     105)-CONF( 1)*PHI(      66)
+      WRK1(    3)=-PHI(     106)-CONF( 2)*PHI(      66)
+      WRK1(    4)=-PHI(     108)-CONF( 3)*PHI(      66)
+      CALL PPPS_BCTE(WRK1,WRK2,IDIM,8)
+      WRK1(    2)=-PHI(     107)-CONF( 1)*PHI(      67)
+      WRK1(    3)=-PHI(     108)-CONF( 2)*PHI(      67)
+      WRK1(    4)=-PHI(     109)-CONF( 3)*PHI(      67)
+      CALL PPPS_BCTE(WRK1,WRK2,IDIM,9)
+      WRK1(    2)= PHI(     173)+CONF( 1)*PHI(     125)
+      WRK1(    3)= PHI(     174)+CONF( 2)*PHI(     125)
+      WRK1(    4)= PHI(     177)+CONF( 3)*PHI(     125)
+      CALL PPPS_BCTE(WRK1,WRK2,IDIM,10)
+      WRK1(    2)= PHI(     174)+CONF( 1)*PHI(     126)
+      WRK1(    3)= PHI(     175)+CONF( 2)*PHI(     126)
+      WRK1(    4)= PHI(     178)+CONF( 3)*PHI(     126)
+      CALL PPPS_BCTE(WRK1,WRK2,IDIM,11)
+      WRK1(    2)= PHI(     175)+CONF( 1)*PHI(     127)
+      WRK1(    3)= PHI(     176)+CONF( 2)*PHI(     127)
+      WRK1(    4)= PHI(     179)+CONF( 3)*PHI(     127)
+      CALL PPPS_BCTE(WRK1,WRK2,IDIM,12)
+      WRK1(    2)= PHI(     177)+CONF( 1)*PHI(     128)
+      WRK1(    3)= PHI(     178)+CONF( 2)*PHI(     128)
+      WRK1(    4)= PHI(     180)+CONF( 3)*PHI(     128)
+      CALL PPPS_BCTE(WRK1,WRK2,IDIM,13)
+      WRK1(    2)= PHI(     178)+CONF( 1)*PHI(     129)
+      WRK1(    3)= PHI(     179)+CONF( 2)*PHI(     129)
+      WRK1(    4)= PHI(     181)+CONF( 3)*PHI(     129)
+      CALL PPPS_BCTE(WRK1,WRK2,IDIM,14)
+      WRK1(    2)= PHI(     180)+CONF( 1)*PHI(     130)
+      WRK1(    3)= PHI(     181)+CONF( 2)*PHI(     130)
+      WRK1(    4)= PHI(     182)+CONF( 3)*PHI(     130)
+      CALL PPPS_BCTE(WRK1,WRK2,IDIM,15)
+      CONF(1)=XD-XC
+      CONF(2)=YD-YC
+      CONF(3)=ZD-ZC
+      DO I=1,     3
+      WRK2(    2,I)=WRK2(    2,I)+CONF( 1)*WRK2(    1,I)
+      WRK2(    3,I)=WRK2(    3,I)+CONF( 2)*WRK2(    1,I)
+      WRK2(    4,I)=WRK2(    4,I)+CONF( 3)*WRK2(    1,I)
+      WRK2(   10,I)=WRK2(   10,I)+CONF( 1)*WRK2(    7,I)
+      WRK2(   10,I)=WRK2(   10,I)+CONF( 4)*WRK2(    6,I)
+      WRK2(   11,I)=WRK2(   11,I)+CONF( 1)*WRK2(    8,I)
+      WRK2(   12,I)=WRK2(   12,I)+CONF( 2)*WRK2(    8,I)
+      WRK2(   12,I)=WRK2(   12,I)+CONF( 4)*WRK2(    6,I)
+      WRK2(   13,I)=WRK2(   13,I)+CONF( 1)*WRK2(    9,I)
+      WRK2(   14,I)=WRK2(   14,I)+CONF( 2)*WRK2(    9,I)
+      WRK2(   15,I)=WRK2(   15,I)+CONF( 3)*WRK2(    9,I)
+      WRK2(   15,I)=WRK2(   15,I)+CONF( 4)*WRK2(    6,I)
+      WRK2(    7,I)=WRK2(    7,I)+CONF( 1)*WRK2(    5,I)
+      WRK2(    8,I)=WRK2(    8,I)+CONF( 2)*WRK2(    5,I)
+      WRK2(    9,I)=WRK2(    9,I)+CONF( 3)*WRK2(    5,I)
+      WRK2(   10,I)=WRK2(   10,I)+CONF( 1)*WRK2(    7,I)
+      WRK2(   11,I)=WRK2(   11,I)+CONF( 2)*WRK2(    7,I)
+      WRK2(   12,I)=WRK2(   12,I)+CONF( 2)*WRK2(    8,I)
+      WRK2(   13,I)=WRK2(   13,I)+CONF( 3)*WRK2(    7,I)
+      WRK2(   14,I)=WRK2(   14,I)+CONF( 3)*WRK2(    8,I)
+      WRK2(   15,I)=WRK2(   15,I)+CONF( 3)*WRK2(    9,I)
+      WRK2(   16,I)=WRK2(   10,I)-CONF( 1)*WRK2(    2,I)
+      WRK2(   17,I)=WRK2(   11,I)-CONF( 1)*WRK2(    3,I)
+      WRK2(   18,I)=WRK2(   13,I)-CONF( 1)*WRK2(    4,I)
+      WRK2(   19,I)=WRK2(   11,I)-CONF( 2)*WRK2(    2,I)
+      WRK2(   20,I)=WRK2(   12,I)-CONF( 2)*WRK2(    3,I)
+      WRK2(   21,I)=WRK2(   14,I)-CONF( 2)*WRK2(    4,I)
+      WRK2(   22,I)=WRK2(   13,I)-CONF( 3)*WRK2(    2,I)
+      WRK2(   23,I)=WRK2(   14,I)-CONF( 3)*WRK2(    3,I)
+      WRK2(   24,I)=WRK2(   15,I)-CONF( 3)*WRK2(    4,I)
+      END DO
+      RETURN
+      END
+C*MODULE INT2C   *DECK PPPS_BCTE
+      SUBROUTINE PPPS_BCTE(WRK1,WRK2,IDIM,JR)
+      INTEGER IDIM,I,J,JR
+      DOUBLE PRECISION WRK1(*),WRK2(IDIM,*)
+      J=       1
+      DO I=1,     3
+      J=J+1
+      WRK2(JR,I)=WRK1(J)
+      END DO
+      END
+C  LPHI=     574
+C  LWK1=      24
+C  LWK2=     216
+C  IDIM=      24
+C*MODULE INT2C   *DECK PPPP
+      SUBROUTINE PPPP (IPRIM,JPRIM,KPRIM,LPRIM,IEQJ
+     *,KEQL,XA,YA,ZA,XB,YB,ZB,XC,YC,ZC,XD,YD,ZD,PHI
+     *,WRK1,WRK2,IDIM)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      COMMON /SHLNOS/ QQ4,IDUMMY(20)
+      PARAMETER (NTX=4,NPF=450,NGRD=7,NPX=1000,MXQT=16)
+      COMMON /FMTTBL/ FGRID(0:NTX,0:NPF,0:NGRD)
+     *,XGRID(0:NTX,0:NPX),TMAX,RFINC(0:NGRD)
+     *,RXINC,RMR(MXQT),TLGM(0:MXQT),NORD
+      PARAMETER (MXGSH=30, MXPS=MXGSH*MXGSH)
+      COMMON /ERIPRM/ EXI(MXGSH),EXJ(MXGSH),EXK(MXGSH),EXL(MXGSH)
+     *,CCI(MXGSH),CCJ(MXGSH),CCK(MXGSH),CCL(MXGSH)
+     *,XAB(MXPS),YAB(MXPS),ZAB(MXPS)
+     *,XCD(MXPS),YCD(MXPS),ZCD(MXPS)
+     *,CCBRA(MXPS),CCKET(MXPS),RXB(MXPS)
+     *,SLBRA(MXPS),SLKET(MXPS),RXK(MXPS)
+      COMMON /NLRC  / LCFLAG,LRINT,EMU,EMU2,LRFILE
+      LOGICAL   LCFLAG,LRINT
+      LOGICAL IEQJ,KEQL
+      DOUBLE PRECISION RXYZ(3),CONF(11),FT(0:16)
+      DOUBLE PRECISION SAUX(0: 4),CXYZ( 35)
+      DOUBLE PRECISION PHI(*),WRK1(*),WRK2(IDIM,*)
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00, TWO=2.0D+00)
+      PARAMETER (D01=1.0D+00, D02=2.0D+00, D03=3.0D+00)
+      PARAMETER (CCTOL=1.0D-13)
+      DATA CONF/0.0D+00,0.0D+00,0.0D+00,1.0D+00,2.0D+00,3.0D+00
+     &,         4.0D+00,5.0D+00,6.0D+00,7.0D+00,8.0D+00/
+      SAVE CONF
+      RFAC=RFINC( 4)
+      KL=0
+      PHI(      50)=ZERO
+      PHI(      51)=ZERO
+      PHI(      53)=ZERO
+      PHI(      56)=ZERO
+      PHI(      57)=ZERO
+      PHI(      59)=ZERO
+      PHI(      63)=ZERO
+      PHI(      64)=ZERO
+      PHI(      66)=ZERO
+      PHI(      76)=ZERO
+      PHI(      77)=ZERO
+      PHI(      78)=ZERO
+      PHI(      79)=ZERO
+      PHI(      80)=ZERO
+      PHI(      81)=ZERO
+      PHI(      85)=ZERO
+      PHI(      86)=ZERO
+      PHI(      87)=ZERO
+      PHI(      88)=ZERO
+      PHI(      89)=ZERO
+      PHI(      90)=ZERO
+      PHI(      97)=ZERO
+      PHI(      98)=ZERO
+      PHI(      99)=ZERO
+      PHI(     103)=ZERO
+      PHI(     104)=ZERO
+      PHI(     105)=ZERO
+      PHI(     115)=ZERO
+      PHI(     116)=ZERO
+      PHI(     117)=ZERO
+      PHI(     118)=ZERO
+      PHI(     119)=ZERO
+      PHI(     120)=ZERO
+      PHI(     124)=ZERO
+      PHI(     125)=ZERO
+      PHI(     126)=ZERO
+      PHI(     133)=ZERO
+      PHI(     134)=ZERO
+      PHI(     135)=ZERO
+      PHI(     139)=ZERO
+      PHI(     140)=ZERO
+      PHI(     141)=ZERO
+      DO I=     163,     169
+      PHI(I)=ZERO
+      END DO
+      DO I=     177,     183
+      PHI(I)=ZERO
+      END DO
+      DO I=     184,     190
+      PHI(I)=ZERO
+      END DO
+      DO I=     205,     211
+      PHI(I)=ZERO
+      END DO
+      DO I=     233,     239
+      PHI(I)=ZERO
+      END DO
+      DO I=     240,     246
+      PHI(I)=ZERO
+      END DO
+      DO I=     254,     260
+      PHI(I)=ZERO
+      END DO
+      DO I=     275,     281
+      PHI(I)=ZERO
+      END DO
+      DO I=     289,     295
+      PHI(I)=ZERO
+      END DO
+      DO I=     310,     316
+      PHI(I)=ZERO
+      END DO
+      DO I=     356,     368
+      PHI(I)=ZERO
+      END DO
+      DO I=     408,     420
+      PHI(I)=ZERO
+      END DO
+      DO I=     434,     446
+      PHI(I)=ZERO
+      END DO
+      DO I=     473,     485
+      PHI(I)=ZERO
+      END DO
+      DO I=     552,     573
+      PHI(I)=ZERO
+      END DO
+      DO LL=1,LPRIM
+      PHI(      49)=ZERO
+      PHI(      52)=ZERO
+      PHI(      55)=ZERO
+      PHI(      58)=ZERO
+      PHI(      62)=ZERO
+      PHI(      65)=ZERO
+      PHI(      73)=ZERO
+      PHI(      74)=ZERO
+      PHI(      75)=ZERO
+      PHI(      82)=ZERO
+      PHI(      83)=ZERO
+      PHI(      84)=ZERO
+      PHI(      94)=ZERO
+      PHI(      95)=ZERO
+      PHI(      96)=ZERO
+      PHI(     100)=ZERO
+      PHI(     101)=ZERO
+      PHI(     102)=ZERO
+      PHI(     112)=ZERO
+      PHI(     113)=ZERO
+      PHI(     114)=ZERO
+      PHI(     121)=ZERO
+      PHI(     122)=ZERO
+      PHI(     123)=ZERO
+      PHI(     130)=ZERO
+      PHI(     131)=ZERO
+      PHI(     132)=ZERO
+      PHI(     136)=ZERO
+      PHI(     137)=ZERO
+      PHI(     138)=ZERO
+      DO I=     156,     162
+      PHI(I)=ZERO
+      END DO
+      DO I=     170,     176
+      PHI(I)=ZERO
+      END DO
+      DO I=     198,     204
+      PHI(I)=ZERO
+      END DO
+      DO I=     226,     232
+      PHI(I)=ZERO
+      END DO
+      DO I=     247,     253
+      PHI(I)=ZERO
+      END DO
+      DO I=     268,     274
+      PHI(I)=ZERO
+      END DO
+      DO I=     282,     288
+      PHI(I)=ZERO
+      END DO
+      DO I=     303,     309
+      PHI(I)=ZERO
+      END DO
+      DO I=     343,     355
+      PHI(I)=ZERO
+      END DO
+      DO I=     395,     407
+      PHI(I)=ZERO
+      END DO
+      DO I=     421,     433
+      PHI(I)=ZERO
+      END DO
+      DO I=     460,     472
+      PHI(I)=ZERO
+      END DO
+      DO I=     530,     551
+      PHI(I)=ZERO
+      END DO
+      KTOP=KPRIM
+      IF (KEQL) KTOP=LL
+      DO KK=1,KTOP
+      KL=KL+1
+      CCKF=CCKET(KL)
+      IF (ABS(CCKF).GT.CCTOL) THEN
+      EKL=EXL(LL)+EXK(KK)
+      XKL=XCD(KL)
+      YKL=YCD(KL)
+      ZKL=ZCD(KL)
+      IJ=0
+      PHI(      48)=ZERO
+      PHI(      54)=ZERO
+      PHI(      61)=ZERO
+      PHI(      70)=ZERO
+      PHI(      71)=ZERO
+      PHI(      72)=ZERO
+      PHI(      91)=ZERO
+      PHI(      92)=ZERO
+      PHI(      93)=ZERO
+      PHI(     109)=ZERO
+      PHI(     110)=ZERO
+      PHI(     111)=ZERO
+      PHI(     127)=ZERO
+      PHI(     128)=ZERO
+      PHI(     129)=ZERO
+      DO I=     149,     155
+      PHI(I)=ZERO
+      END DO
+      DO I=     191,     197
+      PHI(I)=ZERO
+      END DO
+      DO I=     219,     225
+      PHI(I)=ZERO
+      END DO
+      DO I=     261,     267
+      PHI(I)=ZERO
+      END DO
+      DO I=     296,     302
+      PHI(I)=ZERO
+      END DO
+      DO I=     330,     342
+      PHI(I)=ZERO
+      END DO
+      DO I=     382,     394
+      PHI(I)=ZERO
+      END DO
+      DO I=     447,     459
+      PHI(I)=ZERO
+      END DO
+      DO I=     508,     529
+      PHI(I)=ZERO
+      END DO
+      DO JJ=1,JPRIM
+      PHI(      47)=ZERO
+      PHI(      60)=ZERO
+      PHI(      67)=ZERO
+      PHI(      68)=ZERO
+      PHI(      69)=ZERO
+      PHI(     106)=ZERO
+      PHI(     107)=ZERO
+      PHI(     108)=ZERO
+      DO I=     142,     148
+      PHI(I)=ZERO
+      END DO
+      DO I=     212,     218
+      PHI(I)=ZERO
+      END DO
+      DO I=     317,     329
+      PHI(I)=ZERO
+      END DO
+      DO I=     369,     381
+      PHI(I)=ZERO
+      END DO
+      DO I=     486,     507
+      PHI(I)=ZERO
+      END DO
+      ITOP=IPRIM
+      IF (IEQJ) ITOP=JJ
+      DO II=1,ITOP
+      IJ=IJ+1
+      CCBF=CCBRA(IJ)
+      IF (ABS(CCBF).GT.CCTOL) THEN
+      EIJ=EXJ(JJ)+EXI(II)
+      EIJKL=EIJ+EKL
+      EINV=ONE/EIJKL
+      RX=XKL-XAB(IJ)
+      RY=YKL-YAB(IJ)
+      RZ=ZKL-ZAB(IJ)
+      R2=RX*RX+RY*RY+RZ*RZ
+      VS=EIJ*EKL*EINV
+      IF(LRINT) THEN
+         VS0=VS
+         VS=VS0*EMU2/(VS0+EMU2)
+      ENDIF
+      TT=VS*R2
+      IF (TT.LE.TMAX) THEN
+      TVAL=TT*RFAC
+      IPT=NINT(TVAL)
+      FX= TVAL*FGRID(4,IPT, 4)
+      FX=(FX + FGRID(3,IPT, 4))*TVAL
+      FX=(FX + FGRID(2,IPT, 4))*TVAL
+      FX=(FX + FGRID(1,IPT, 4))*TVAL
+      FX= FX + FGRID(0,IPT, 4)
+      FT( 4)=FX
+      TVAL=TT*RXINC
+      IPT=NINT(TVAL)
+      ET= TVAL*XGRID(4,IPT)
+      ET=(ET + XGRID(3,IPT))*TVAL
+      ET=(ET + XGRID(2,IPT))*TVAL
+      ET=(ET + XGRID(1,IPT))*TVAL
+      ET= ET + XGRID(0,IPT)
+      T2=TT*TWO
+      FT( 3)=RMR( 4)*(T2*FT( 4)+ET)
+      FT( 2)=RMR( 3)*(T2*FT( 3)+ET)
+      FT( 1)=RMR( 2)*(T2*FT( 2)+ET)
+      FT( 0)=RMR( 1)*(T2*FT( 1)+ET)
+      ZEROL=CCBF*CCKF*SQRT(EINV)*QQ4
+      IF(LRINT)ZEROL=ZEROL*SQRT(VS/VS0)
+      SAUX(0)=ZEROL*FT(0)
+      VS2=TWO*VS
+      VSM=ONE
+      VSM=VSM*VS2
+      SAUX( 1)=ZEROL*FT( 1)*VSM
+      VSM=VSM*VS2
+      SAUX( 2)=ZEROL*FT( 2)*VSM
+      VSM=VSM*VS2
+      SAUX( 3)=ZEROL*FT( 3)*VSM
+      VSM=VSM*VS2
+      SAUX( 4)=ZEROL*FT( 4)*VSM
+      ELSE
+      ZEROL=CCBF*CCKF*SLBRA(IJ)*SLKET(KL)*QQ4
+      RINV=ONE/R2
+      SAUX(0)=ZEROL*SQRT(RINV)
+      RR=SAUX(0)
+      RR=RR*RINV
+      SAUX( 1)=TLGM( 1)*RR
+      RR=RR*RINV
+      SAUX( 2)=TLGM( 2)*RR
+      RR=RR*RINV
+      SAUX( 3)=TLGM( 3)*RR
+      RR=RR*RINV
+      SAUX( 4)=TLGM( 4)*RR
+      END IF
+      RXYZ(1)=RX
+      RXYZ(2)=RY
+      RXYZ(3)=RZ
+      CXYZ(1)=ONE
+      CXYZ(2)=RX
+      CXYZ(3)=RY
+      CXYZ(4)=RZ
+      CXYZ(     5)=CXYZ(     2)*RXYZ(1)
+      CXYZ(     6)=CXYZ(     3)*RXYZ(1)
+      CXYZ(     7)=CXYZ(     3)*RXYZ(2)
+      CXYZ(     8)=CXYZ(     4)*RXYZ(1)
+      CXYZ(     9)=CXYZ(     4)*RXYZ(2)
+      CXYZ(    10)=CXYZ(     4)*RXYZ(3)
+      CXYZ(    11)=CXYZ(     5)*RXYZ(1)
+      CXYZ(    12)=CXYZ(     6)*RXYZ(1)
+      CXYZ(    13)=CXYZ(     7)*RXYZ(1)
+      CXYZ(    14)=CXYZ(     7)*RXYZ(2)
+      CXYZ(    15)=CXYZ(     8)*RXYZ(1)
+      CXYZ(    16)=CXYZ(     9)*RXYZ(1)
+      CXYZ(    17)=CXYZ(     9)*RXYZ(2)
+      CXYZ(    18)=CXYZ(    10)*RXYZ(1)
+      CXYZ(    19)=CXYZ(    10)*RXYZ(2)
+      CXYZ(    20)=CXYZ(    10)*RXYZ(3)
+      CXYZ(    21)=CXYZ(    11)*RXYZ(1)
+      CXYZ(    22)=CXYZ(    12)*RXYZ(1)
+      CXYZ(    23)=CXYZ(    13)*RXYZ(1)
+      CXYZ(    24)=CXYZ(    14)*RXYZ(1)
+      CXYZ(    25)=CXYZ(    14)*RXYZ(2)
+      CXYZ(    26)=CXYZ(    15)*RXYZ(1)
+      CXYZ(    27)=CXYZ(    16)*RXYZ(1)
+      CXYZ(    28)=CXYZ(    17)*RXYZ(1)
+      CXYZ(    29)=CXYZ(    17)*RXYZ(2)
+      CXYZ(    30)=CXYZ(    18)*RXYZ(1)
+      CXYZ(    31)=CXYZ(    19)*RXYZ(1)
+      CXYZ(    32)=CXYZ(    19)*RXYZ(2)
+      CXYZ(    33)=CXYZ(    20)*RXYZ(1)
+      CXYZ(    34)=CXYZ(    20)*RXYZ(2)
+      CXYZ(    35)=CXYZ(    20)*RXYZ(3)
+      PHI(1)=SAUX(0)
+      PHI(       2)=CXYZ(     2)*SAUX( 1)
+      PHI(       3)=CXYZ(     3)*SAUX( 1)
+      PHI(       4)=CXYZ(     4)*SAUX( 1)
+      PHI(       5)=CXYZ(     1)*SAUX( 1)
+      PHI(       6)=CXYZ(     5)*SAUX( 2)
+      PHI(       7)=CXYZ(     6)*SAUX( 2)
+      PHI(       8)=CXYZ(     7)*SAUX( 2)
+      PHI(       9)=CXYZ(     8)*SAUX( 2)
+      PHI(      10)=CXYZ(     9)*SAUX( 2)
+      PHI(      11)=CXYZ(    10)*SAUX( 2)
+      PHI(      12)=CXYZ(     2)*SAUX( 2)
+      PHI(      13)=CXYZ(     3)*SAUX( 2)
+      PHI(      14)=CXYZ(     4)*SAUX( 2)
+      PHI(      15)=CXYZ(    11)*SAUX( 3)
+      PHI(      16)=CXYZ(    12)*SAUX( 3)
+      PHI(      17)=CXYZ(    13)*SAUX( 3)
+      PHI(      18)=CXYZ(    14)*SAUX( 3)
+      PHI(      19)=CXYZ(    15)*SAUX( 3)
+      PHI(      20)=CXYZ(    16)*SAUX( 3)
+      PHI(      21)=CXYZ(    17)*SAUX( 3)
+      PHI(      22)=CXYZ(    18)*SAUX( 3)
+      PHI(      23)=CXYZ(    19)*SAUX( 3)
+      PHI(      24)=CXYZ(    20)*SAUX( 3)
+      PHI(      25)=CXYZ(     1)*SAUX( 2)
+      PHI(      26)=CXYZ(     5)*SAUX( 3)
+      PHI(      27)=CXYZ(     6)*SAUX( 3)
+      PHI(      28)=CXYZ(     7)*SAUX( 3)
+      PHI(      29)=CXYZ(     8)*SAUX( 3)
+      PHI(      30)=CXYZ(     9)*SAUX( 3)
+      PHI(      31)=CXYZ(    10)*SAUX( 3)
+      PHI(      32)=CXYZ(    21)*SAUX( 4)
+      PHI(      33)=CXYZ(    22)*SAUX( 4)
+      PHI(      34)=CXYZ(    23)*SAUX( 4)
+      PHI(      35)=CXYZ(    24)*SAUX( 4)
+      PHI(      36)=CXYZ(    25)*SAUX( 4)
+      PHI(      37)=CXYZ(    26)*SAUX( 4)
+      PHI(      38)=CXYZ(    27)*SAUX( 4)
+      PHI(      39)=CXYZ(    28)*SAUX( 4)
+      PHI(      40)=CXYZ(    29)*SAUX( 4)
+      PHI(      41)=CXYZ(    30)*SAUX( 4)
+      PHI(      42)=CXYZ(    31)*SAUX( 4)
+      PHI(      43)=CXYZ(    32)*SAUX( 4)
+      PHI(      44)=CXYZ(    33)*SAUX( 4)
+      PHI(      45)=CXYZ(    34)*SAUX( 4)
+      PHI(      46)=CXYZ(    35)*SAUX( 4)
+C      FAC=RXB(IJ)
+C      SF=ONE
+C      SFAC(1)=SF
+C      SF=SF*FAC
+C      SFAC( 2)=SF
+C      SF=SF*FAC
+C      SFAC( 3)=SF
+      FAC=RXB(IJ)
+C      FAC=SFAC( 2)
+      PHI(      47)=PHI(      47)+FAC*PHI(       1)
+C      FAC=SFAC( 2)
+      PHI(      67)=PHI(      67)+FAC*PHI(       2)
+      PHI(      68)=PHI(      68)+FAC*PHI(       3)
+      PHI(      69)=PHI(      69)+FAC*PHI(       4)
+C      FAC=SFAC( 2)
+      J=       5
+      DO I=     142,     148
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 2)
+      J=      12
+      DO I=     317,     329
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+      FAC=FAC*RXB(IJ)
+C      FAC=SFAC( 3)
+      PHI(      60)=PHI(      60)+FAC*PHI(       1)
+C      FAC=SFAC( 3)
+      PHI(     106)=PHI(     106)+FAC*PHI(       2)
+      PHI(     107)=PHI(     107)+FAC*PHI(       3)
+      PHI(     108)=PHI(     108)+FAC*PHI(       4)
+C      FAC=SFAC( 3)
+      J=       5
+      DO I=     212,     218
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 3)
+      J=      12
+      DO I=     369,     381
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 3)
+      J=      25
+      DO I=     486,     507
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+      END IF
+      END DO
+C      FAC=EXJ(JJ)*TWO
+C      SF=ONE
+C      SFAC(1)=SF
+C      SF=SF*FAC
+C      SFAC( 2)=SF
+C      SF=SF*FAC
+C      SFAC( 3)=SF
+      FAC=ONE
+C      FAC=SFAC( 1)
+      PHI(      48)=PHI(      48)+FAC*PHI(      47)
+C      FAC=SFAC( 1)
+      PHI(      70)=PHI(      70)+FAC*PHI(      67)
+      PHI(      71)=PHI(      71)+FAC*PHI(      68)
+      PHI(      72)=PHI(      72)+FAC*PHI(      69)
+C      FAC=SFAC( 1)
+      J=     142
+      DO I=     149,     155
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 1)
+      J=     212
+      DO I=     219,     225
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 1)
+      J=     317
+      DO I=     330,     342
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 1)
+      J=     369
+      DO I=     382,     394
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 1)
+      J=     486
+      DO I=     508,     529
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+      FAC=EXJ(JJ)*TWO
+C      FAC=SFAC( 2)
+      PHI(      54)=PHI(      54)+FAC*PHI(      47)
+C      FAC=SFAC( 2)
+      PHI(      91)=PHI(      91)+FAC*PHI(      67)
+      PHI(      92)=PHI(      92)+FAC*PHI(      68)
+      PHI(      93)=PHI(      93)+FAC*PHI(      69)
+C      FAC=SFAC( 2)
+      PHI(     109)=PHI(     109)+FAC*PHI(     106)
+      PHI(     110)=PHI(     110)+FAC*PHI(     107)
+      PHI(     111)=PHI(     111)+FAC*PHI(     108)
+C      FAC=SFAC( 2)
+      J=     142
+      DO I=     191,     197
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 2)
+      J=     212
+      DO I=     261,     267
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 2)
+      J=     369
+      DO I=     447,     459
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+      FAC=FAC*EXJ(JJ)*TWO
+C      FAC=SFAC( 3)
+      PHI(      61)=PHI(      61)+FAC*PHI(      60)
+C      FAC=SFAC( 3)
+      PHI(     127)=PHI(     127)+FAC*PHI(     106)
+      PHI(     128)=PHI(     128)+FAC*PHI(     107)
+      PHI(     129)=PHI(     129)+FAC*PHI(     108)
+C      FAC=SFAC( 3)
+      J=     212
+      DO I=     296,     302
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+      END DO
+C      FAC=RXK(KL)
+C      SF=ONE
+C      SFAC(1)=SF
+C      SF=SF*FAC
+C      SFAC( 2)=SF
+C      SF=SF*FAC
+C      SFAC( 3)=SF
+      FAC=RXK(KL)
+C      FAC=SFAC( 2)
+      PHI(      49)=PHI(      49)+FAC*PHI(      48)
+C      FAC=SFAC( 2)
+      PHI(      55)=PHI(      55)+FAC*PHI(      54)
+C      FAC=SFAC( 2)
+      PHI(      62)=PHI(      62)+FAC*PHI(      61)
+C      FAC=SFAC( 2)
+      PHI(      73)=PHI(      73)+FAC*PHI(      70)
+      PHI(      74)=PHI(      74)+FAC*PHI(      71)
+      PHI(      75)=PHI(      75)+FAC*PHI(      72)
+C      FAC=SFAC( 2)
+      PHI(      94)=PHI(      94)+FAC*PHI(      91)
+      PHI(      95)=PHI(      95)+FAC*PHI(      92)
+      PHI(      96)=PHI(      96)+FAC*PHI(      93)
+C      FAC=SFAC( 2)
+      PHI(     112)=PHI(     112)+FAC*PHI(     109)
+      PHI(     113)=PHI(     113)+FAC*PHI(     110)
+      PHI(     114)=PHI(     114)+FAC*PHI(     111)
+C      FAC=SFAC( 2)
+      PHI(     130)=PHI(     130)+FAC*PHI(     127)
+      PHI(     131)=PHI(     131)+FAC*PHI(     128)
+      PHI(     132)=PHI(     132)+FAC*PHI(     129)
+C      FAC=SFAC( 2)
+      J=     149
+      DO I=     156,     162
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 2)
+      J=     219
+      DO I=     226,     232
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 2)
+      J=     261
+      DO I=     268,     274
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 2)
+      J=     382
+      DO I=     395,     407
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+      FAC=FAC*RXK(KL)
+C      FAC=SFAC( 3)
+      PHI(      52)=PHI(      52)+FAC*PHI(      48)
+C      FAC=SFAC( 3)
+      PHI(      58)=PHI(      58)+FAC*PHI(      54)
+C      FAC=SFAC( 3)
+      PHI(      65)=PHI(      65)+FAC*PHI(      61)
+C      FAC=SFAC( 3)
+      PHI(      82)=PHI(      82)+FAC*PHI(      70)
+      PHI(      83)=PHI(      83)+FAC*PHI(      71)
+      PHI(      84)=PHI(      84)+FAC*PHI(      72)
+C      FAC=SFAC( 3)
+      PHI(     100)=PHI(     100)+FAC*PHI(      91)
+      PHI(     101)=PHI(     101)+FAC*PHI(      92)
+      PHI(     102)=PHI(     102)+FAC*PHI(      93)
+C      FAC=SFAC( 3)
+      PHI(     121)=PHI(     121)+FAC*PHI(     109)
+      PHI(     122)=PHI(     122)+FAC*PHI(     110)
+      PHI(     123)=PHI(     123)+FAC*PHI(     111)
+C      FAC=SFAC( 3)
+      PHI(     136)=PHI(     136)+FAC*PHI(     127)
+      PHI(     137)=PHI(     137)+FAC*PHI(     128)
+      PHI(     138)=PHI(     138)+FAC*PHI(     129)
+C      FAC=SFAC( 3)
+      J=     149
+      DO I=     170,     176
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 3)
+      J=     191
+      DO I=     198,     204
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 3)
+      J=     219
+      DO I=     247,     253
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 3)
+      J=     261
+      DO I=     282,     288
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 3)
+      J=     296
+      DO I=     303,     309
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 3)
+      J=     330
+      DO I=     343,     355
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 3)
+      J=     382
+      DO I=     421,     433
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 3)
+      J=     447
+      DO I=     460,     472
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 3)
+      J=     508
+      DO I=     530,     551
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+      END IF
+      END DO
+C      FAC=EXL(LL)*TWO
+C      SF=ONE
+C      SFAC(1)=SF
+C      SF=SF*FAC
+C      SFAC( 2)=SF
+C      SF=SF*FAC
+C      SFAC( 3)=SF
+      FAC=ONE
+C      FAC=SFAC( 1)
+      PHI(      50)=PHI(      50)+FAC*PHI(      49)
+C      FAC=SFAC( 1)
+      PHI(      56)=PHI(      56)+FAC*PHI(      55)
+C      FAC=SFAC( 1)
+      PHI(      63)=PHI(      63)+FAC*PHI(      62)
+C      FAC=SFAC( 1)
+      PHI(      76)=PHI(      76)+FAC*PHI(      73)
+      PHI(      77)=PHI(      77)+FAC*PHI(      74)
+      PHI(      78)=PHI(      78)+FAC*PHI(      75)
+C      FAC=SFAC( 1)
+      PHI(      97)=PHI(      97)+FAC*PHI(      94)
+      PHI(      98)=PHI(      98)+FAC*PHI(      95)
+      PHI(      99)=PHI(      99)+FAC*PHI(      96)
+C      FAC=SFAC( 1)
+      PHI(     115)=PHI(     115)+FAC*PHI(     112)
+      PHI(     116)=PHI(     116)+FAC*PHI(     113)
+      PHI(     117)=PHI(     117)+FAC*PHI(     114)
+C      FAC=SFAC( 1)
+      PHI(     133)=PHI(     133)+FAC*PHI(     130)
+      PHI(     134)=PHI(     134)+FAC*PHI(     131)
+      PHI(     135)=PHI(     135)+FAC*PHI(     132)
+C      FAC=SFAC( 1)
+      J=     156
+      DO I=     163,     169
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 1)
+      J=     170
+      DO I=     177,     183
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 1)
+      J=     198
+      DO I=     205,     211
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 1)
+      J=     226
+      DO I=     233,     239
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 1)
+      J=     268
+      DO I=     275,     281
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 1)
+      J=     303
+      DO I=     310,     316
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 1)
+      J=     343
+      DO I=     356,     368
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 1)
+      J=     395
+      DO I=     408,     420
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 1)
+      J=     460
+      DO I=     473,     485
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 1)
+      J=     530
+      DO I=     552,     573
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+      FAC=EXL(LL)*TWO
+C      FAC=SFAC( 2)
+      PHI(      51)=PHI(      51)+FAC*PHI(      49)
+C      FAC=SFAC( 2)
+      PHI(      57)=PHI(      57)+FAC*PHI(      55)
+C      FAC=SFAC( 2)
+      PHI(      64)=PHI(      64)+FAC*PHI(      62)
+C      FAC=SFAC( 2)
+      PHI(      79)=PHI(      79)+FAC*PHI(      73)
+      PHI(      80)=PHI(      80)+FAC*PHI(      74)
+      PHI(      81)=PHI(      81)+FAC*PHI(      75)
+C      FAC=SFAC( 2)
+      PHI(      85)=PHI(      85)+FAC*PHI(      82)
+      PHI(      86)=PHI(      86)+FAC*PHI(      83)
+      PHI(      87)=PHI(      87)+FAC*PHI(      84)
+C      FAC=SFAC( 2)
+      PHI(     103)=PHI(     103)+FAC*PHI(     100)
+      PHI(     104)=PHI(     104)+FAC*PHI(     101)
+      PHI(     105)=PHI(     105)+FAC*PHI(     102)
+C      FAC=SFAC( 2)
+      PHI(     118)=PHI(     118)+FAC*PHI(     112)
+      PHI(     119)=PHI(     119)+FAC*PHI(     113)
+      PHI(     120)=PHI(     120)+FAC*PHI(     114)
+C      FAC=SFAC( 2)
+      PHI(     139)=PHI(     139)+FAC*PHI(     136)
+      PHI(     140)=PHI(     140)+FAC*PHI(     137)
+      PHI(     141)=PHI(     141)+FAC*PHI(     138)
+C      FAC=SFAC( 2)
+      J=     170
+      DO I=     184,     190
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 2)
+      J=     226
+      DO I=     240,     246
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 2)
+      J=     282
+      DO I=     289,     295
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+C      FAC=SFAC( 2)
+      J=     421
+      DO I=     434,     446
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+      FAC=FAC*EXL(LL)*TWO
+C      FAC=SFAC( 3)
+      PHI(      53)=PHI(      53)+FAC*PHI(      52)
+C      FAC=SFAC( 3)
+      PHI(      59)=PHI(      59)+FAC*PHI(      58)
+C      FAC=SFAC( 3)
+      PHI(      66)=PHI(      66)+FAC*PHI(      65)
+C      FAC=SFAC( 3)
+      PHI(      88)=PHI(      88)+FAC*PHI(      82)
+      PHI(      89)=PHI(      89)+FAC*PHI(      83)
+      PHI(      90)=PHI(      90)+FAC*PHI(      84)
+C      FAC=SFAC( 3)
+      PHI(     124)=PHI(     124)+FAC*PHI(     121)
+      PHI(     125)=PHI(     125)+FAC*PHI(     122)
+      PHI(     126)=PHI(     126)+FAC*PHI(     123)
+C      FAC=SFAC( 3)
+      J=     247
+      DO I=     254,     260
+      PHI(I)=PHI(I)+FAC*PHI(J)
+      J=J+1
+      END DO
+      END DO
+C  POST-CONTRACTION PHASE
+      PHI(     164)=PHI(     164)-D01*PHI(     163)
+      PHI(     166)=PHI(     166)-D01*PHI(     163)
+      PHI(     169)=PHI(     169)-D01*PHI(     163)
+      PHI(     178)=PHI(     178)-D01*PHI(     177)
+      PHI(     180)=PHI(     180)-D01*PHI(     177)
+      PHI(     183)=PHI(     183)-D01*PHI(     177)
+      PHI(     185)=PHI(     185)-D01*PHI(     184)
+      PHI(     187)=PHI(     187)-D01*PHI(     184)
+      PHI(     190)=PHI(     190)-D01*PHI(     184)
+      PHI(     206)=PHI(     206)-D01*PHI(     205)
+      PHI(     208)=PHI(     208)-D01*PHI(     205)
+      PHI(     211)=PHI(     211)-D01*PHI(     205)
+      PHI(     234)=PHI(     234)-D01*PHI(     233)
+      PHI(     236)=PHI(     236)-D01*PHI(     233)
+      PHI(     239)=PHI(     239)-D01*PHI(     233)
+      PHI(     241)=PHI(     241)-D01*PHI(     240)
+      PHI(     243)=PHI(     243)-D01*PHI(     240)
+      PHI(     246)=PHI(     246)-D01*PHI(     240)
+      PHI(     255)=PHI(     255)-D01*PHI(     254)
+      PHI(     257)=PHI(     257)-D01*PHI(     254)
+      PHI(     260)=PHI(     260)-D01*PHI(     254)
+      PHI(     276)=PHI(     276)-D01*PHI(     275)
+      PHI(     278)=PHI(     278)-D01*PHI(     275)
+      PHI(     281)=PHI(     281)-D01*PHI(     275)
+      PHI(     290)=PHI(     290)-D01*PHI(     289)
+      PHI(     292)=PHI(     292)-D01*PHI(     289)
+      PHI(     295)=PHI(     295)-D01*PHI(     289)
+      PHI(     311)=PHI(     311)-D01*PHI(     310)
+      PHI(     313)=PHI(     313)-D01*PHI(     310)
+      PHI(     316)=PHI(     316)-D01*PHI(     310)
+      PHI(     359)=PHI(     359)-D01*PHI(     356)
+      PHI(     360)=PHI(     360)-D01*PHI(     357)
+      PHI(     362)=PHI(     362)-D01*PHI(     357)
+      PHI(     363)=PHI(     363)-D01*PHI(     358)
+      PHI(     365)=PHI(     365)-D01*PHI(     358)
+      PHI(     368)=PHI(     368)-D01*PHI(     358)
+      PHI(     359)=PHI(     359)-D02*PHI(     356)
+      PHI(     361)=PHI(     361)-D01*PHI(     356)
+      PHI(     362)=PHI(     362)-D02*PHI(     357)
+      PHI(     366)=PHI(     366)-D01*PHI(     356)
+      PHI(     367)=PHI(     367)-D01*PHI(     357)
+      PHI(     368)=PHI(     368)-D02*PHI(     358)
+      PHI(     411)=PHI(     411)-D01*PHI(     408)
+      PHI(     412)=PHI(     412)-D01*PHI(     409)
+      PHI(     414)=PHI(     414)-D01*PHI(     409)
+      PHI(     415)=PHI(     415)-D01*PHI(     410)
+      PHI(     417)=PHI(     417)-D01*PHI(     410)
+      PHI(     420)=PHI(     420)-D01*PHI(     410)
+      PHI(     411)=PHI(     411)-D02*PHI(     408)
+      PHI(     413)=PHI(     413)-D01*PHI(     408)
+      PHI(     414)=PHI(     414)-D02*PHI(     409)
+      PHI(     418)=PHI(     418)-D01*PHI(     408)
+      PHI(     419)=PHI(     419)-D01*PHI(     409)
+      PHI(     420)=PHI(     420)-D02*PHI(     410)
+      PHI(     437)=PHI(     437)-D01*PHI(     434)
+      PHI(     438)=PHI(     438)-D01*PHI(     435)
+      PHI(     440)=PHI(     440)-D01*PHI(     435)
+      PHI(     441)=PHI(     441)-D01*PHI(     436)
+      PHI(     443)=PHI(     443)-D01*PHI(     436)
+      PHI(     446)=PHI(     446)-D01*PHI(     436)
+      PHI(     437)=PHI(     437)-D02*PHI(     434)
+      PHI(     439)=PHI(     439)-D01*PHI(     434)
+      PHI(     440)=PHI(     440)-D02*PHI(     435)
+      PHI(     444)=PHI(     444)-D01*PHI(     434)
+      PHI(     445)=PHI(     445)-D01*PHI(     435)
+      PHI(     446)=PHI(     446)-D02*PHI(     436)
+      PHI(     476)=PHI(     476)-D01*PHI(     473)
+      PHI(     477)=PHI(     477)-D01*PHI(     474)
+      PHI(     479)=PHI(     479)-D01*PHI(     474)
+      PHI(     480)=PHI(     480)-D01*PHI(     475)
+      PHI(     482)=PHI(     482)-D01*PHI(     475)
+      PHI(     485)=PHI(     485)-D01*PHI(     475)
+      PHI(     476)=PHI(     476)-D02*PHI(     473)
+      PHI(     478)=PHI(     478)-D01*PHI(     473)
+      PHI(     479)=PHI(     479)-D02*PHI(     474)
+      PHI(     483)=PHI(     483)-D01*PHI(     473)
+      PHI(     484)=PHI(     484)-D01*PHI(     474)
+      PHI(     485)=PHI(     485)-D02*PHI(     475)
+      PHI(     559)=PHI(     559)-D01*PHI(     553)
+      PHI(     560)=PHI(     560)-D01*PHI(     554)
+      PHI(     561)=PHI(     561)-D01*PHI(     555)
+      PHI(     563)=PHI(     563)-D01*PHI(     555)
+      PHI(     564)=PHI(     564)-D01*PHI(     556)
+      PHI(     565)=PHI(     565)-D01*PHI(     557)
+      PHI(     567)=PHI(     567)-D01*PHI(     557)
+      PHI(     568)=PHI(     568)-D01*PHI(     558)
+      PHI(     570)=PHI(     570)-D01*PHI(     558)
+      PHI(     573)=PHI(     573)-D01*PHI(     558)
+      PHI(     559)=PHI(     559)-D02*PHI(     553)
+      PHI(     560)=PHI(     560)-D02*PHI(     554)
+      PHI(     562)=PHI(     562)-D01*PHI(     554)
+      PHI(     563)=PHI(     563)-D02*PHI(     555)
+      PHI(     564)=PHI(     564)-D02*PHI(     556)
+      PHI(     566)=PHI(     566)-D01*PHI(     556)
+      PHI(     567)=PHI(     567)-D02*PHI(     557)
+      PHI(     571)=PHI(     571)-D01*PHI(     556)
+      PHI(     572)=PHI(     572)-D01*PHI(     557)
+      PHI(     573)=PHI(     573)-D02*PHI(     558)
+      PHI(     553)=PHI(     553)-D01*PHI(     552)
+      PHI(     555)=PHI(     555)-D01*PHI(     552)
+      PHI(     558)=PHI(     558)-D01*PHI(     552)
+      PHI(     559)=PHI(     559)-D03*PHI(     553)
+      PHI(     561)=PHI(     561)-D01*PHI(     553)
+      PHI(     562)=PHI(     562)-D02*PHI(     554)
+      PHI(     563)=PHI(     563)-D03*PHI(     555)
+      PHI(     568)=PHI(     568)-D01*PHI(     553)
+      PHI(     569)=PHI(     569)-D01*PHI(     554)
+      PHI(     570)=PHI(     570)-D01*PHI(     555)
+      PHI(     571)=PHI(     571)-D02*PHI(     556)
+      PHI(     572)=PHI(     572)-D02*PHI(     557)
+      PHI(     573)=PHI(     573)-D03*PHI(     558)
+      CONF(1)=XB-XA
+      CONF(2)=YB-YA
+      CONF(3)=ZB-ZA
+      WRK1(    2)= PHI(      79)+CONF( 1)*PHI(      57)
+      WRK1(    3)= PHI(      80)+CONF( 2)*PHI(      57)
+      WRK1(    4)= PHI(      81)+CONF( 3)*PHI(      57)
+      WRK1(   10)= PHI(     241)+CONF( 1)*PHI(     118)
+      WRK1(   11)= PHI(     242)+CONF( 1)*PHI(     119)
+      WRK1(   12)= PHI(     243)+CONF( 2)*PHI(     119)
+      WRK1(   13)= PHI(     244)+CONF( 1)*PHI(     120)
+      WRK1(   14)= PHI(     245)+CONF( 2)*PHI(     120)
+      WRK1(   15)= PHI(     246)+CONF( 3)*PHI(     120)
+      WRK1(    7)= PHI(     118)+CONF( 1)*PHI(      64)
+      WRK1(    8)= PHI(     119)+CONF( 2)*PHI(      64)
+      WRK1(    9)= PHI(     120)+CONF( 3)*PHI(      64)
+      WRK1(   10)=WRK1(   10)+CONF( 4)*PHI(      51)
+      WRK1(   12)=WRK1(   12)+CONF( 4)*PHI(      51)
+      WRK1(   15)=WRK1(   15)+CONF( 4)*PHI(      51)
+      CALL PPPP_BCTE(WRK1,WRK2,IDIM,CONF,    1)
+      WRK1(    2)=-PHI(     164)-CONF( 1)*PHI(      97)
+      WRK1(    3)=-PHI(     165)-CONF( 2)*PHI(      97)
+      WRK1(    4)=-PHI(     167)-CONF( 3)*PHI(      97)
+      WRK1(   10)=-PHI(     411)-CONF( 1)*PHI(     276)
+      WRK1(   11)=-PHI(     412)-CONF( 1)*PHI(     277)
+      WRK1(   12)=-PHI(     413)-CONF( 2)*PHI(     277)
+      WRK1(   13)=-PHI(     415)-CONF( 1)*PHI(     279)
+      WRK1(   14)=-PHI(     416)-CONF( 2)*PHI(     279)
+      WRK1(   15)=-PHI(     418)-CONF( 3)*PHI(     279)
+      WRK1(    7)=-PHI(     276)-CONF( 1)*PHI(     133)
+      WRK1(    8)=-PHI(     277)-CONF( 2)*PHI(     133)
+      WRK1(    9)=-PHI(     279)-CONF( 3)*PHI(     133)
+      WRK1(   10)=WRK1(   10)-CONF( 4)*PHI(      76)
+      WRK1(   12)=WRK1(   12)-CONF( 4)*PHI(      76)
+      WRK1(   15)=WRK1(   15)-CONF( 4)*PHI(      76)
+      CALL PPPP_BCTE(WRK1,WRK2,IDIM,CONF,    2)
+      WRK1(    2)=-PHI(     165)-CONF( 1)*PHI(      98)
+      WRK1(    3)=-PHI(     166)-CONF( 2)*PHI(      98)
+      WRK1(    4)=-PHI(     168)-CONF( 3)*PHI(      98)
+      WRK1(   10)=-PHI(     412)-CONF( 1)*PHI(     277)
+      WRK1(   11)=-PHI(     413)-CONF( 1)*PHI(     278)
+      WRK1(   12)=-PHI(     414)-CONF( 2)*PHI(     278)
+      WRK1(   13)=-PHI(     416)-CONF( 1)*PHI(     280)
+      WRK1(   14)=-PHI(     417)-CONF( 2)*PHI(     280)
+      WRK1(   15)=-PHI(     419)-CONF( 3)*PHI(     280)
+      WRK1(    7)=-PHI(     277)-CONF( 1)*PHI(     134)
+      WRK1(    8)=-PHI(     278)-CONF( 2)*PHI(     134)
+      WRK1(    9)=-PHI(     280)-CONF( 3)*PHI(     134)
+      WRK1(   10)=WRK1(   10)-CONF( 4)*PHI(      77)
+      WRK1(   12)=WRK1(   12)-CONF( 4)*PHI(      77)
+      WRK1(   15)=WRK1(   15)-CONF( 4)*PHI(      77)
+      CALL PPPP_BCTE(WRK1,WRK2,IDIM,CONF,    3)
+      WRK1(    2)=-PHI(     167)-CONF( 1)*PHI(      99)
+      WRK1(    3)=-PHI(     168)-CONF( 2)*PHI(      99)
+      WRK1(    4)=-PHI(     169)-CONF( 3)*PHI(      99)
+      WRK1(   10)=-PHI(     415)-CONF( 1)*PHI(     279)
+      WRK1(   11)=-PHI(     416)-CONF( 1)*PHI(     280)
+      WRK1(   12)=-PHI(     417)-CONF( 2)*PHI(     280)
+      WRK1(   13)=-PHI(     418)-CONF( 1)*PHI(     281)
+      WRK1(   14)=-PHI(     419)-CONF( 2)*PHI(     281)
+      WRK1(   15)=-PHI(     420)-CONF( 3)*PHI(     281)
+      WRK1(    7)=-PHI(     279)-CONF( 1)*PHI(     135)
+      WRK1(    8)=-PHI(     280)-CONF( 2)*PHI(     135)
+      WRK1(    9)=-PHI(     281)-CONF( 3)*PHI(     135)
+      WRK1(   10)=WRK1(   10)-CONF( 4)*PHI(      78)
+      WRK1(   12)=WRK1(   12)-CONF( 4)*PHI(      78)
+      WRK1(   15)=WRK1(   15)-CONF( 4)*PHI(      78)
+      CALL PPPP_BCTE(WRK1,WRK2,IDIM,CONF,    4)
+      WRK1(    2)= PHI(      88)+CONF( 1)*PHI(      59)
+      WRK1(    3)= PHI(      89)+CONF( 2)*PHI(      59)
+      WRK1(    4)= PHI(      90)+CONF( 3)*PHI(      59)
+      WRK1(   10)= PHI(     255)+CONF( 1)*PHI(     124)
+      WRK1(   11)= PHI(     256)+CONF( 1)*PHI(     125)
+      WRK1(   12)= PHI(     257)+CONF( 2)*PHI(     125)
+      WRK1(   13)= PHI(     258)+CONF( 1)*PHI(     126)
+      WRK1(   14)= PHI(     259)+CONF( 2)*PHI(     126)
+      WRK1(   15)= PHI(     260)+CONF( 3)*PHI(     126)
+      WRK1(    7)= PHI(     124)+CONF( 1)*PHI(      66)
+      WRK1(    8)= PHI(     125)+CONF( 2)*PHI(      66)
+      WRK1(    9)= PHI(     126)+CONF( 3)*PHI(      66)
+      WRK1(   10)=WRK1(   10)+CONF( 4)*PHI(      53)
+      WRK1(   12)=WRK1(   12)+CONF( 4)*PHI(      53)
+      WRK1(   15)=WRK1(   15)+CONF( 4)*PHI(      53)
+      CALL PPPP_BCTE(WRK1,WRK2,IDIM,CONF,    5)
+      WRK1(    2)= PHI(      76)+CONF( 1)*PHI(      56)
+      WRK1(    3)= PHI(      77)+CONF( 2)*PHI(      56)
+      WRK1(    4)= PHI(      78)+CONF( 3)*PHI(      56)
+      WRK1(   10)= PHI(     234)+CONF( 1)*PHI(     115)
+      WRK1(   11)= PHI(     235)+CONF( 1)*PHI(     116)
+      WRK1(   12)= PHI(     236)+CONF( 2)*PHI(     116)
+      WRK1(   13)= PHI(     237)+CONF( 1)*PHI(     117)
+      WRK1(   14)= PHI(     238)+CONF( 2)*PHI(     117)
+      WRK1(   15)= PHI(     239)+CONF( 3)*PHI(     117)
+      WRK1(    7)= PHI(     115)+CONF( 1)*PHI(      63)
+      WRK1(    8)= PHI(     116)+CONF( 2)*PHI(      63)
+      WRK1(    9)= PHI(     117)+CONF( 3)*PHI(      63)
+      WRK1(   10)=WRK1(   10)+CONF( 4)*PHI(      50)
+      WRK1(   12)=WRK1(   12)+CONF( 4)*PHI(      50)
+      WRK1(   15)=WRK1(   15)+CONF( 4)*PHI(      50)
+      CALL PPPP_BCTE(WRK1,WRK2,IDIM,CONF,    6)
+      WRK1(    2)=-PHI(     185)-CONF( 1)*PHI(     103)
+      WRK1(    3)=-PHI(     186)-CONF( 2)*PHI(     103)
+      WRK1(    4)=-PHI(     188)-CONF( 3)*PHI(     103)
+      WRK1(   10)=-PHI(     437)-CONF( 1)*PHI(     290)
+      WRK1(   11)=-PHI(     438)-CONF( 1)*PHI(     291)
+      WRK1(   12)=-PHI(     439)-CONF( 2)*PHI(     291)
+      WRK1(   13)=-PHI(     441)-CONF( 1)*PHI(     293)
+      WRK1(   14)=-PHI(     442)-CONF( 2)*PHI(     293)
+      WRK1(   15)=-PHI(     444)-CONF( 3)*PHI(     293)
+      WRK1(    7)=-PHI(     290)-CONF( 1)*PHI(     139)
+      WRK1(    8)=-PHI(     291)-CONF( 2)*PHI(     139)
+      WRK1(    9)=-PHI(     293)-CONF( 3)*PHI(     139)
+      WRK1(   10)=WRK1(   10)-CONF( 4)*PHI(      85)
+      WRK1(   12)=WRK1(   12)-CONF( 4)*PHI(      85)
+      WRK1(   15)=WRK1(   15)-CONF( 4)*PHI(      85)
+      CALL PPPP_BCTE(WRK1,WRK2,IDIM,CONF,    7)
+      WRK1(    2)=-PHI(     186)-CONF( 1)*PHI(     104)
+      WRK1(    3)=-PHI(     187)-CONF( 2)*PHI(     104)
+      WRK1(    4)=-PHI(     189)-CONF( 3)*PHI(     104)
+      WRK1(   10)=-PHI(     438)-CONF( 1)*PHI(     291)
+      WRK1(   11)=-PHI(     439)-CONF( 1)*PHI(     292)
+      WRK1(   12)=-PHI(     440)-CONF( 2)*PHI(     292)
+      WRK1(   13)=-PHI(     442)-CONF( 1)*PHI(     294)
+      WRK1(   14)=-PHI(     443)-CONF( 2)*PHI(     294)
+      WRK1(   15)=-PHI(     445)-CONF( 3)*PHI(     294)
+      WRK1(    7)=-PHI(     291)-CONF( 1)*PHI(     140)
+      WRK1(    8)=-PHI(     292)-CONF( 2)*PHI(     140)
+      WRK1(    9)=-PHI(     294)-CONF( 3)*PHI(     140)
+      WRK1(   10)=WRK1(   10)-CONF( 4)*PHI(      86)
+      WRK1(   12)=WRK1(   12)-CONF( 4)*PHI(      86)
+      WRK1(   15)=WRK1(   15)-CONF( 4)*PHI(      86)
+      CALL PPPP_BCTE(WRK1,WRK2,IDIM,CONF,    8)
+      WRK1(    2)=-PHI(     188)-CONF( 1)*PHI(     105)
+      WRK1(    3)=-PHI(     189)-CONF( 2)*PHI(     105)
+      WRK1(    4)=-PHI(     190)-CONF( 3)*PHI(     105)
+      WRK1(   10)=-PHI(     441)-CONF( 1)*PHI(     293)
+      WRK1(   11)=-PHI(     442)-CONF( 1)*PHI(     294)
+      WRK1(   12)=-PHI(     443)-CONF( 2)*PHI(     294)
+      WRK1(   13)=-PHI(     444)-CONF( 1)*PHI(     295)
+      WRK1(   14)=-PHI(     445)-CONF( 2)*PHI(     295)
+      WRK1(   15)=-PHI(     446)-CONF( 3)*PHI(     295)
+      WRK1(    7)=-PHI(     293)-CONF( 1)*PHI(     141)
+      WRK1(    8)=-PHI(     294)-CONF( 2)*PHI(     141)
+      WRK1(    9)=-PHI(     295)-CONF( 3)*PHI(     141)
+      WRK1(   10)=WRK1(   10)-CONF( 4)*PHI(      87)
+      WRK1(   12)=WRK1(   12)-CONF( 4)*PHI(      87)
+      WRK1(   15)=WRK1(   15)-CONF( 4)*PHI(      87)
+      CALL PPPP_BCTE(WRK1,WRK2,IDIM,CONF,    9)
+      WRK1(    2)= PHI(     359)+CONF( 1)*PHI(     206)
+      WRK1(    3)= PHI(     360)+CONF( 2)*PHI(     206)
+      WRK1(    4)= PHI(     363)+CONF( 3)*PHI(     206)
+      WRK1(   10)= PHI(     559)+CONF( 1)*PHI(     476)
+      WRK1(   11)= PHI(     560)+CONF( 1)*PHI(     477)
+      WRK1(   12)= PHI(     561)+CONF( 2)*PHI(     477)
+      WRK1(   13)= PHI(     564)+CONF( 1)*PHI(     480)
+      WRK1(   14)= PHI(     565)+CONF( 2)*PHI(     480)
+      WRK1(   15)= PHI(     568)+CONF( 3)*PHI(     480)
+      WRK1(    7)= PHI(     476)+CONF( 1)*PHI(     311)
+      WRK1(    8)= PHI(     477)+CONF( 2)*PHI(     311)
+      WRK1(    9)= PHI(     480)+CONF( 3)*PHI(     311)
+      WRK1(   10)=WRK1(   10)+CONF( 4)*PHI(     178)
+      WRK1(   12)=WRK1(   12)+CONF( 4)*PHI(     178)
+      WRK1(   15)=WRK1(   15)+CONF( 4)*PHI(     178)
+      CALL PPPP_BCTE(WRK1,WRK2,IDIM,CONF,   10)
+      WRK1(    2)= PHI(     360)+CONF( 1)*PHI(     207)
+      WRK1(    3)= PHI(     361)+CONF( 2)*PHI(     207)
+      WRK1(    4)= PHI(     364)+CONF( 3)*PHI(     207)
+      WRK1(   10)= PHI(     560)+CONF( 1)*PHI(     477)
+      WRK1(   11)= PHI(     561)+CONF( 1)*PHI(     478)
+      WRK1(   12)= PHI(     562)+CONF( 2)*PHI(     478)
+      WRK1(   13)= PHI(     565)+CONF( 1)*PHI(     481)
+      WRK1(   14)= PHI(     566)+CONF( 2)*PHI(     481)
+      WRK1(   15)= PHI(     569)+CONF( 3)*PHI(     481)
+      WRK1(    7)= PHI(     477)+CONF( 1)*PHI(     312)
+      WRK1(    8)= PHI(     478)+CONF( 2)*PHI(     312)
+      WRK1(    9)= PHI(     481)+CONF( 3)*PHI(     312)
+      WRK1(   10)=WRK1(   10)+CONF( 4)*PHI(     179)
+      WRK1(   12)=WRK1(   12)+CONF( 4)*PHI(     179)
+      WRK1(   15)=WRK1(   15)+CONF( 4)*PHI(     179)
+      CALL PPPP_BCTE(WRK1,WRK2,IDIM,CONF,   11)
+      WRK1(    2)= PHI(     361)+CONF( 1)*PHI(     208)
+      WRK1(    3)= PHI(     362)+CONF( 2)*PHI(     208)
+      WRK1(    4)= PHI(     365)+CONF( 3)*PHI(     208)
+      WRK1(   10)= PHI(     561)+CONF( 1)*PHI(     478)
+      WRK1(   11)= PHI(     562)+CONF( 1)*PHI(     479)
+      WRK1(   12)= PHI(     563)+CONF( 2)*PHI(     479)
+      WRK1(   13)= PHI(     566)+CONF( 1)*PHI(     482)
+      WRK1(   14)= PHI(     567)+CONF( 2)*PHI(     482)
+      WRK1(   15)= PHI(     570)+CONF( 3)*PHI(     482)
+      WRK1(    7)= PHI(     478)+CONF( 1)*PHI(     313)
+      WRK1(    8)= PHI(     479)+CONF( 2)*PHI(     313)
+      WRK1(    9)= PHI(     482)+CONF( 3)*PHI(     313)
+      WRK1(   10)=WRK1(   10)+CONF( 4)*PHI(     180)
+      WRK1(   12)=WRK1(   12)+CONF( 4)*PHI(     180)
+      WRK1(   15)=WRK1(   15)+CONF( 4)*PHI(     180)
+      CALL PPPP_BCTE(WRK1,WRK2,IDIM,CONF,   12)
+      WRK1(    2)= PHI(     363)+CONF( 1)*PHI(     209)
+      WRK1(    3)= PHI(     364)+CONF( 2)*PHI(     209)
+      WRK1(    4)= PHI(     366)+CONF( 3)*PHI(     209)
+      WRK1(   10)= PHI(     564)+CONF( 1)*PHI(     480)
+      WRK1(   11)= PHI(     565)+CONF( 1)*PHI(     481)
+      WRK1(   12)= PHI(     566)+CONF( 2)*PHI(     481)
+      WRK1(   13)= PHI(     568)+CONF( 1)*PHI(     483)
+      WRK1(   14)= PHI(     569)+CONF( 2)*PHI(     483)
+      WRK1(   15)= PHI(     571)+CONF( 3)*PHI(     483)
+      WRK1(    7)= PHI(     480)+CONF( 1)*PHI(     314)
+      WRK1(    8)= PHI(     481)+CONF( 2)*PHI(     314)
+      WRK1(    9)= PHI(     483)+CONF( 3)*PHI(     314)
+      WRK1(   10)=WRK1(   10)+CONF( 4)*PHI(     181)
+      WRK1(   12)=WRK1(   12)+CONF( 4)*PHI(     181)
+      WRK1(   15)=WRK1(   15)+CONF( 4)*PHI(     181)
+      CALL PPPP_BCTE(WRK1,WRK2,IDIM,CONF,   13)
+      WRK1(    2)= PHI(     364)+CONF( 1)*PHI(     210)
+      WRK1(    3)= PHI(     365)+CONF( 2)*PHI(     210)
+      WRK1(    4)= PHI(     367)+CONF( 3)*PHI(     210)
+      WRK1(   10)= PHI(     565)+CONF( 1)*PHI(     481)
+      WRK1(   11)= PHI(     566)+CONF( 1)*PHI(     482)
+      WRK1(   12)= PHI(     567)+CONF( 2)*PHI(     482)
+      WRK1(   13)= PHI(     569)+CONF( 1)*PHI(     484)
+      WRK1(   14)= PHI(     570)+CONF( 2)*PHI(     484)
+      WRK1(   15)= PHI(     572)+CONF( 3)*PHI(     484)
+      WRK1(    7)= PHI(     481)+CONF( 1)*PHI(     315)
+      WRK1(    8)= PHI(     482)+CONF( 2)*PHI(     315)
+      WRK1(    9)= PHI(     484)+CONF( 3)*PHI(     315)
+      WRK1(   10)=WRK1(   10)+CONF( 4)*PHI(     182)
+      WRK1(   12)=WRK1(   12)+CONF( 4)*PHI(     182)
+      WRK1(   15)=WRK1(   15)+CONF( 4)*PHI(     182)
+      CALL PPPP_BCTE(WRK1,WRK2,IDIM,CONF,   14)
+      WRK1(    2)= PHI(     366)+CONF( 1)*PHI(     211)
+      WRK1(    3)= PHI(     367)+CONF( 2)*PHI(     211)
+      WRK1(    4)= PHI(     368)+CONF( 3)*PHI(     211)
+      WRK1(   10)= PHI(     568)+CONF( 1)*PHI(     483)
+      WRK1(   11)= PHI(     569)+CONF( 1)*PHI(     484)
+      WRK1(   12)= PHI(     570)+CONF( 2)*PHI(     484)
+      WRK1(   13)= PHI(     571)+CONF( 1)*PHI(     485)
+      WRK1(   14)= PHI(     572)+CONF( 2)*PHI(     485)
+      WRK1(   15)= PHI(     573)+CONF( 3)*PHI(     485)
+      WRK1(    7)= PHI(     483)+CONF( 1)*PHI(     316)
+      WRK1(    8)= PHI(     484)+CONF( 2)*PHI(     316)
+      WRK1(    9)= PHI(     485)+CONF( 3)*PHI(     316)
+      WRK1(   10)=WRK1(   10)+CONF( 4)*PHI(     183)
+      WRK1(   12)=WRK1(   12)+CONF( 4)*PHI(     183)
+      WRK1(   15)=WRK1(   15)+CONF( 4)*PHI(     183)
+      CALL PPPP_BCTE(WRK1,WRK2,IDIM,CONF,   15)
+      CONF(1)=XD-XC
+      CONF(2)=YD-YC
+      CONF(3)=ZD-ZC
+      DO I=1,     9
+      WRK2(    2,I)=WRK2(    2,I)+CONF( 1)*WRK2(    1,I)
+      WRK2(    3,I)=WRK2(    3,I)+CONF( 2)*WRK2(    1,I)
+      WRK2(    4,I)=WRK2(    4,I)+CONF( 3)*WRK2(    1,I)
+      WRK2(   10,I)=WRK2(   10,I)+CONF( 1)*WRK2(    7,I)
+      WRK2(   10,I)=WRK2(   10,I)+CONF( 4)*WRK2(    6,I)
+      WRK2(   11,I)=WRK2(   11,I)+CONF( 1)*WRK2(    8,I)
+      WRK2(   12,I)=WRK2(   12,I)+CONF( 2)*WRK2(    8,I)
+      WRK2(   12,I)=WRK2(   12,I)+CONF( 4)*WRK2(    6,I)
+      WRK2(   13,I)=WRK2(   13,I)+CONF( 1)*WRK2(    9,I)
+      WRK2(   14,I)=WRK2(   14,I)+CONF( 2)*WRK2(    9,I)
+      WRK2(   15,I)=WRK2(   15,I)+CONF( 3)*WRK2(    9,I)
+      WRK2(   15,I)=WRK2(   15,I)+CONF( 4)*WRK2(    6,I)
+      WRK2(    7,I)=WRK2(    7,I)+CONF( 1)*WRK2(    5,I)
+      WRK2(    8,I)=WRK2(    8,I)+CONF( 2)*WRK2(    5,I)
+      WRK2(    9,I)=WRK2(    9,I)+CONF( 3)*WRK2(    5,I)
+      WRK2(   10,I)=WRK2(   10,I)+CONF( 1)*WRK2(    7,I)
+      WRK2(   11,I)=WRK2(   11,I)+CONF( 2)*WRK2(    7,I)
+      WRK2(   12,I)=WRK2(   12,I)+CONF( 2)*WRK2(    8,I)
+      WRK2(   13,I)=WRK2(   13,I)+CONF( 3)*WRK2(    7,I)
+      WRK2(   14,I)=WRK2(   14,I)+CONF( 3)*WRK2(    8,I)
+      WRK2(   15,I)=WRK2(   15,I)+CONF( 3)*WRK2(    9,I)
+      WRK2(   16,I)=WRK2(   10,I)-CONF( 1)*WRK2(    2,I)
+      WRK2(   17,I)=WRK2(   11,I)-CONF( 1)*WRK2(    3,I)
+      WRK2(   18,I)=WRK2(   13,I)-CONF( 1)*WRK2(    4,I)
+      WRK2(   19,I)=WRK2(   11,I)-CONF( 2)*WRK2(    2,I)
+      WRK2(   20,I)=WRK2(   12,I)-CONF( 2)*WRK2(    3,I)
+      WRK2(   21,I)=WRK2(   14,I)-CONF( 2)*WRK2(    4,I)
+      WRK2(   22,I)=WRK2(   13,I)-CONF( 3)*WRK2(    2,I)
+      WRK2(   23,I)=WRK2(   14,I)-CONF( 3)*WRK2(    3,I)
+      WRK2(   24,I)=WRK2(   15,I)-CONF( 3)*WRK2(    4,I)
+      END DO
+      RETURN
+      END
+C*MODULE INT2C   *DECK PPPP_BCTE
+      SUBROUTINE PPPP_BCTE(WRK1,WRK2,IDIM,CONF,JR)
+      INTEGER IDIM,I,J,JR
+      DOUBLE PRECISION WRK1(*),WRK2(IDIM,*),CONF(*)
+      WRK1(   10)=WRK1(   10)+CONF( 1)*WRK1(    7)
+      WRK1(   11)=WRK1(   11)+CONF( 2)*WRK1(    7)
+      WRK1(   12)=WRK1(   12)+CONF( 2)*WRK1(    8)
+      WRK1(   13)=WRK1(   13)+CONF( 3)*WRK1(    7)
+      WRK1(   14)=WRK1(   14)+CONF( 3)*WRK1(    8)
+      WRK1(   15)=WRK1(   15)+CONF( 3)*WRK1(    9)
+      WRK1(   16)=WRK1(   10)-CONF( 1)*WRK1(    2)
+      WRK1(   17)=WRK1(   11)-CONF( 1)*WRK1(    3)
+      WRK1(   18)=WRK1(   13)-CONF( 1)*WRK1(    4)
+      WRK1(   19)=WRK1(   11)-CONF( 2)*WRK1(    2)
+      WRK1(   20)=WRK1(   12)-CONF( 2)*WRK1(    3)
+      WRK1(   21)=WRK1(   14)-CONF( 2)*WRK1(    4)
+      WRK1(   22)=WRK1(   13)-CONF( 3)*WRK1(    2)
+      WRK1(   23)=WRK1(   14)-CONF( 3)*WRK1(    3)
+      WRK1(   24)=WRK1(   15)-CONF( 3)*WRK1(    4)
+      J=      15
+      DO I=1,     9
+      J=J+1
+      WRK2(JR,I)=WRK1(J)
+      END DO
+      END

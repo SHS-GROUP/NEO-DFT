@@ -1,0 +1,1911 @@
+C 25 Mar 10 - DGF - gradient projection args changed
+C 14 Oct 09 - DGF - changes for FMO 3.3
+C 22 May 09 - DGF - fix for MCP/FMO gradients
+C  1 May 09 - NMT - new dimension for EFPBAS
+C 15 Dec 08 - TN,DGF - various changes for FMO 3.2 release
+C 20 Aug 07 - DGF - various changes for FMO 3.1 release
+C 24 Mar 07 - MWS - pad FRGINF common block
+C 22 Dec 06 - DGF - various changes for FMO 3.0 release
+C  6 Nov 06 - MWS - adjust GDDI common block
+C 14 Nov 05 - DGF - pad common block ENRGYS
+C 19 Sep 05 - IA  - synchronize FRGINF common
+C  5 Jul 05 - MWS - SELECT NEW ATOM,BASIS,EFP,PCM,DAF DIMENSIONS
+C  1 Jun 05 - DGF - fixes for the 2nd release
+c 15 Mar 05 - DGF - major changes for the second release
+C  7 Mar 05 - IA  - fix common block FRGINF
+C 13 Feb 05 - MWS - pad common block NSHEL, FRGINF
+C  5 Feb 05 - MWS - pad common FMORUN
+C 23 Jul 04 - MWS - GMSXYZ: use of character strings to obey f77 rules
+C 19 May 04 - DGF,KK - implement Fragment Molecular Orbital (FMO) method
+c
+C*MODULE fmogrd  *DECK optfmox
+      SUBROUTINE optfmox
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      PARAMETER (nnam=11,tiny=1.0D-06,zero=0.0D+00,one=1.0D+00,
+     *           three=3.0D+00,UNITS=0.52917724924D+00,diagval=THREE)
+      PARAMETER (MXRT=100, MXFRG=1050, MXFGPT=12000, MXDFG=5,
+     *           MXATM=2000, MXAO=8192, MXPT=2000,
+     *           MXDPPT=MXFRG*MXDFG*12, MXSHEF=1000, MXGEFP=4000)
+      LOGICAL DOEFPOPT,PACK2E,GOPARR,DSKWRK,MASWRK,CVGED,DSKsav,newp
+      COMMON /EFPBAS/ EX(MXGEFP,MXDFG),CCS(MXGEFP,MXDFG),
+     *                CCP(MXGEFP,MXDFG),CCD(MXGEFP,MXDFG),
+     *                CCF(MXGEFP,MXDFG),CCG(MXGEFP,MXDFG),
+     *                PRNAME(MXFGPT),PRCORD(3,MXFGPT),EFZNUC(MXFGPT),
+     *                KSTART(MXSHEF,MXDFG),KATOM(MXSHEF,MXDFG),
+     *                KTYPE(MXSHEF,MXDFG),KNG(MXSHEF,MXDFG),
+     *                KLOC(MXSHEF,MXDFG),KMIN(MXSHEF,MXDFG),
+     *                KMAX(MXSHEF,MXDFG),NSHELL(MXDFG),NGAUSS(MXDFG),
+     *                NATEF(MXDFG),NUMEF(MXDFG),NTPATM
+      COMMON /EFPCMO/ NOCC(MXDFG),NVIR(MXDFG),NAO(MXDFG),NTAO,
+     *                CANFOK(MXAO,MXDFG)
+      COMMON /EFPFMO/ IEFPFMO,ISWENUC,REPNUCEFP,EFPEFP,RUNEFP
+      COMMON /EFPOTD/ METHOF,ISCCHG,MOVE
+      COMMON /ENRGYS/ ENUCR,EELCT,ETOT,SZ,SZZ,ECORE,ESCF,EERD,E1,E2,
+     *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2)
+      COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
+     *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
+     *                ATORQ(3,MXFRG)
+      COMMON /FMCOM / X(1)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /FRGTYP/ NDFRG,ISET(MXFRG),NAMIDX(MXDFG)
+      common /INT2IC/ NINTIC,iNINTIC,nxxic,lbufpic,lixic,labsix,nintix
+      COMMON /INTFIL/ NINTMX,NHEX,NTUPL,PACK2E,INTTYP,IGRDTYP
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /MACHIN/ NWDVAR,MAXFM,MAXSM,LIMFM,LIMSM
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PAULMO/ CENTNM(MXFGPT),CENTCD(3,MXFGPT),NORB(MXFRG),
+     *                NPBF(MXFRG),NTMO
+      COMMON /PCKLAB/ LABSIZ
+      COMMON /POLTMP/ TCLPD(4*MXPT),TZLPD(4*MXPT),
+     *                JNLPR(4*MXPT),JKFR(MXPT),JKLR(MXPT),
+     *                NDPTS(MXFRG),NDTTPT
+      Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
+      common /fmopnt/ lichfg,lmulfg,lidmrec,lfrgnam,llayfrg,lindat,
+     *                lnCBS,lfmozan,lfmoc,lfmomas,lizbas,liaglob,libdgh,
+     *                liabdfg,ljabdfg,lnCAO,lidxCAO,liaprjo,ljaprjo,
+     *                lCoreAO,lOccCor,lshiftb,liodfmo,lfmoda,lfmodb,
+     *                lfmoespa,lfmoespb,llocfmo,lscffrg,lfmoscf,lrij,
+     *                lpopmul,lpopmat,lialoc,lindbd,liatfrg,lindfrg,
+     *                lindgfrg,lnatfrg,lnat0frg,lianfrg,lzanfrg,lcfrg,
+     *                llibish,llibnsh,llibng,lindatg,lfmobuf(3),lfmode,
+     *                lnumfrg,lloctat,liaoglob,lloadm,lfmoge,ldgrid,
+     *                liodcfmo,ljob2grp,lfmopg,lemocdr,luntxyz,luntrot,
+     *                lstonep,lmapsu,lfrgmul,lclmo,lialmo,lindlmo,
+     *                latclmo,llmobdf,lfgflmo,lnfglmo,llfglmo,lpfglmo,
+     *                LPOPDMAT
+      dimension KQNAM(nnam),QNAM(nnam),dum3(3)
+      DATA KQNAM /3,3,1,5,1, 5,5,1,3,3, 3/
+      DATA QNAM/8HOPTTOL  ,8HSTEP    ,8HNSTEP   ,8HMETHOD  ,8HLINSER  ,
+     *          8HUPDATE  ,8HHESS    ,8HIFREEZ  ,8HSTPMIN  ,8HSTPMAX  ,
+     *          8HSTPFAC  /
+     *     optfmo/8HOPTFMO  /,steep/8HSTEEP   /,cg/8HCG      /,
+     *     hssupd/8HHSSUPD  /,bfgsl/8HLBFGS   /,bfgs/8HBFGS    /,
+     *     dfp/8HDFP     /,rnone/8HNONE    /,GUESS/8HGUESS   /
+c
+c     Main driver for genuine FMO optimisations.
+c     parstat: GlobalNone
+c
+C        ----- READ NAMELIST $OPTFMO -----
+C
+c     Scan $FMOXYZ to find natfmo.
+c
+      call fmoxyz(' $FMOXYZ',1,natfmo,dum,dum3,idum)
+c
+      nc1=natfmo*3
+CZ
+      DOEFPOPT = IEFPFMO.EQ.1.AND.MOVE.NE.0
+      NCVAL = NC1
+      IF (DOEFPOPT) NC1=NC1+NFRG*6
+CZ
+      nc2=(nc1*nc1+nc1)/2
+      CALL VALFM(LOADFM)
+      lifreez=LOADFM+1
+      last=lifreez+(NCVAL-1)/nwdvar+1
+      NEED2 = LAST- LOADFM -1
+      CALL GETFM(NEED2)
+c
+      opttol=1.0D-04
+      nstep=200
+      step=0.75D+00
+      stepmin=zero
+      stepmax=one
+      stepfac=one
+c     Currently supported methods:
+c     steep:  steepest descent, delta-x = - alpha * grad
+c     cg:     Fletcher-Reeves conjugate gradient
+c     lbfgs:  limited memory BGFS
+c     hssupd: hessian update methods: BGFS or DFP updates supported.
+      rmethod=hssupd
+      update=bfgs
+c
+c     All of these can be combined with linear search.
+c     Linear search options (LINSER):
+c     0: do not perform 
+c     1: perform 
+c
+      linser=0
+c
+c     At present hess can be read or guess.
+      HESS=GUESS
+c
+c     IFREEZ is the array of coordinates to be brozen. Only Cartesians are
+c     supported 
+      KQNAM(8)=nc1*10+1
+      call viclr(x(lifreez),1,NCVAL)
+c
+      JRET = 0
+      CALL NAMEIO(IR,JRET,optfmo,NNAM,QNAM,KQNAM,
+     *            opttol,step,nstep,rmethod,
+     *            linser,update,hess,x(lifreez),stepmin,stepmax,stepfac,
+     *            0,0,0,
+     *            0,0,0,0,0,  0,0,0,0,0,
+     *            0,0,0,0,0,  0,0,0,0,0,   0,0,0,0,0,  0,0,0,0,0,
+     *            0,0,0,0,0,  0,0,0,0,0,   0,0,0,0,0,  0,0,0,0,0)
+      IF(JRET.EQ.2) THEN
+         IF (MASWRK) WRITE(IW,*) 'Error reading $OPTFMO' 
+         CALL ABRT
+      END IF
+      if(rmethod.ne.steep.and.rmethod.ne.cg.and.rmethod.ne.bfgsl.and.
+     *   rmethod.ne.hssupd) then
+        if(maswrk) write(iw,9800) rmethod
+        call abrt
+      endif
+      if(rmethod.ne.hssupd) then
+        update=rnone 
+      else if(update.ne.dfp.and.update.ne.bfgs) then
+        if(maswrk) write(iw,9810) update
+        call abrt
+      endif
+c
+      if(rmethod.eq.hssupd) then
+        nhblock=(nc2-1)/nproc+1
+        lmin=me*nhblock+1
+        lmax=min(lmin+nhblock-1,nc2)
+c       triangular Hessian matrix is divided into nodes as a linear array
+c       Node ME handles elements from lmin to lmax.
+        call tribrk(lmin,-1,imin,jmin)
+        imin=imin-1
+        call tribrk(lmax,-1,imax,jmax)
+        imax=imax-1
+c       write(6,*) 'wwwints',nc1,nc2,nhblock,lmin,lmax,imin,jmin,imax,jmax
+      else
+        nhblock=0
+      endif
+c
+      CALL VALFM(LOADFM)
+      lfmoc=LOADFM+1
+      lfmozan=lfmoc+nc1+3
+      lfmomas=lfmozan+NCVAL/3
+      lfmoge=lfmomas+NCVAL/3
+      lizbas=lfmoge+nc1
+      lp=lizbas+(NCVAL/3-1)/nwdvar+1
+      last=lp+nc1
+      if(rmethod.eq.bfgsl.or.rmethod.eq.hssupd.or.linser.ne.0) then
+        lfmocp=last
+        lfmogep=lfmocp+nc1
+        last=lfmogep+nc1
+        if(rmethod.eq.hssupd) then
+          lhdg=last
+          lu=lhdg+nc1
+          last=lu+nc1
+        endif
+      endif
+      NEED = LAST- LOADFM -1
+      CALL GETFM(NEED)
+c
+c     See if we can surrepticiosly use incore integral buffer to store the
+c     Hessian. The code below needs to be synchronised with INT2EIC.
+c     Nota bene: it takes about 113 megawords just for a 5000 atom molecule!
+c
+      iuse2e=0
+      if(NINTIC.gt.0) then
+        LABSIZ2=2/LABSIZ
+        n2ebuf=NINTMX+NINTIC+(NINTMX+NINTIC-1)/LABSIZ2+1
+c       write(6,*) 'Buffer',n2ebuf,nhblock
+        if(n2ebuf.ge.nhblock) then
+          lhess=LBUFPIC 
+          iuse2e=1
+        endif
+      endif
+c
+      nfrz=0
+      do i=1,NCVAL
+        if(ixftch(x(lifreez),i).ne.0) then
+          nfrz=nfrz+1
+        else
+          goto 90 
+        endif 
+      enddo 
+   90 continue
+c
+      nfthes=38
+      DSKsav=dskwrk
+      if(rmethod.eq.hssupd) then
+        dskwrk=.true.
+        CALL SEQOPN(NFThes,'HESSIAN','UNKNOWN',.FALSE.,'UNFORMATTED')
+        dskwrk=dsksav
+      endif
+c
+c     Attempt ro read in restart data other than Hessian 
+c
+      frmsp=one
+      irest=0
+      if(rmethod.eq.hssupd.or.rmethod.eq.bfgsl)
+     *  call rstopt1(natfmo,x(lfmocp),x(lfmogep),irest)
+      if(rmethod.eq.cg) call rstopt2(natfmo,frmsp,x(lp),irest)
+c
+      NSERCH=0
+      CVGED=.false.
+      modef=0
+      e0=zero
+      depre=zero
+      newp=irest.eq.0
+      slopenew=zero
+      slope0=zero
+      stepold=zero
+      stepnew=zero
+      step0=zero
+      pnorm=one
+      lsiter=0
+      rad2ang=9.0D+01/acos(zero)
+      if(maswrk) then
+        write(iw,9000) rmethod,update,hess,linser,nfrz,step,stepmin,
+     *                 stepmax,stepfac,need+need2
+        IF(NFRZ.GT.0) WRITE(IW,9010) (ixftch(x(lifreez),i),I=1,NFRZ)
+        if(nhblock.ne.0) then
+          if(iuse2e.eq.0) then
+            WRITE(IW,9020) nhblock
+          else
+            WRITE(IW,9030) nhblock
+          endif
+        endif
+      endif
+c
+c     Initialise the step size.
+c
+      stepi=step
+c
+  100 continue
+c
+c       Compute single point energy+gradient.
+c
+        call fmox(modef) 
+c
+        do i=1,nfrz
+          x(lfmoge-1+ixftch(x(lifreez),i))=zero
+        enddo
+        IF (DOEFPOPT) THEN
+          II=NCVAL
+          DO INF=1,NFRG
+            X(LFMOGE+II  )=DEFT(1,INF)
+            X(LFMOGE+II+1)=DEFT(2,INF)
+            X(LFMOGE+II+2)=DEFT(3,INF)
+            X(LFMOGE+II+3)=TORQ(1,INF)
+            X(LFMOGE+II+4)=TORQ(2,INF)
+            X(LFMOGE+II+5)=TORQ(3,INF)
+            II=II+6
+          END DO
+        END IF
+c
+        if(rmethod.eq.hssupd.and.iuse2e.eq.0) then
+          CALL VALFM(LOADFM)
+          lhess=LOADFM+1
+          last=lhess+nhblock
+          NEED1 = LAST- LOADFM -1
+          CALL GETFM(NEED1)
+        endif
+c
+        NSERCH=NSERCH+1 
+        modef=2
+        call EGMAX(x(lfmoge),NCVAL,DEFT,TORQ,NFRG,FMAX,FRMS)
+        CVGED= (FRMS .LT. opttol/THREE) .AND. (FMAX .LT. opttol)
+        if(maswrk) write(iw,9200) NSERCH,etot,FMAX,FRMS
+c
+        if(CVGED) goto 150
+c
+        if(rmethod.eq.hssupd) then
+          if(NSERCH.eq.1.and.HESS.eq.GUESS) then 
+            call hssini(x(lhess),imin,jmin,imax,jmax)
+          else
+            dskwrk=.true.
+            CALL SEQREW(NFThes)
+            read(nfthes) (x(lhess+i-1),i=1,nhblock)
+            dskwrk=dsksav
+            if(NSERCH.eq.1.and.maswrk) write(iw,9250)
+          endif
+        endif
+c
+c       The search vector P is updated during linear search only if any 
+c       is satisfied:
+c       1. this is the first iteration and there was no restart 
+c       2. the energy is lower than at the previous iteration
+c       3. too many linear search iterations 
+c       If no linear search is used, P is always updated except for the
+c       first iteration with a restart.
+c
+        if(linser.ne.0) then
+          if(lsiter.ge.linser) then
+            newp=.true.
+          else
+            newp=etot.le.e0.or.irest.eq.0
+          endif
+        endif
+c       write(6,*) 'wwwnewp chosen of',newp
+c
+        if(irest.eq.0.or.rmethod.eq.steep) then
+c         Unless restart data have been read, the first step in all three 
+c         methods is the steepest descent.
+c
+c         The search vector (P) is updated before
+c         linear search iterations start.
+c
+          if(newp) then
+            call dcopy(nc1,x(lfmoge),1,x(lp),1)
+            call dscal(nc1,-one,x(lp),1)
+          endif
+        else if(rmethod.eq.cg) then
+          if(newp) then
+            call dscal(nc1,frms/frmsp,x(lp),1)
+            call daxpy(nc1,-one,x(lfmoge),1,x(lp),1)
+            frmsp=frms
+          endif
+        else 
+c         Inverse Hessian update (bfgsl or hssupd).
+c         Update for all points, including all of linear search. 
+
+c         lfmocp and lfmogep hold previous coordinates and gradient. 
+          call daxpy(NCVAL,-ONE,x(lfmoc),1,x(lfmocp),1)
+          call daxpy(nc1,-ONE,x(lfmoge),1,x(lfmogep),1)
+          cgnorm=ddot(nc1,x(lfmocp),1,x(lfmogep),1)
+          if(rmethod.eq.bfgsl) then
+            if(newp) then
+              cfnorm=ddot(nc1,x(lfmocp),1,x(lfmoge),1)
+              gfnorm=ddot(nc1,x(lfmogep),1,x(lfmoge),1)
+              ggnorm=ddot(nc1,x(lfmogep),1,x(lfmogep),1)
+              dampc=gfnorm/cgnorm-(one+ggnorm/cgnorm)*cfnorm/cgnorm
+              dampg=cfnorm/cgnorm
+c
+              call dcopy(nc1,x(lfmoge),1,x(lp),1)
+              call dscal(nc1,-one,x(lp),1)
+              call daxpy(nc1,dampc,x(lfmocp),1,x(lp),1)
+              call daxpy(nc1,dampg,x(lfmogep),1,x(lp),1)
+            endif
+          else
+c           hdg=[1/H]*dg
+            call pMTAV(x(lhess),x(lfmogep),x(lhdg),nc1,imin,jmin,
+     *                                                 imax,jmax)
+            ghgnorm=ddot(nc1,x(lfmogep),1,x(lhdg),1)
+            if(update.eq.bfgs) then
+              call dcopy(nc1,x(lfmocp),1,x(lu),1)
+              call dscal(nc1,one/cgnorm,x(lu),1)
+              call daxpy(nc1,-one/ghgnorm,x(lhdg),1,x(lu),1)
+            endif
+            call updhss(update,x(lhess),imin,jmin,imax,jmax,
+     *                  x(lfmocp),x(lhdg),x(lu),cgnorm,ghgnorm)
+          endif
+        endif
+        if(rmethod.eq.hssupd.and.newp) then
+c         hdg=[1/H]*g
+          call pMTAV(x(lhess),x(lfmoge),x(lhdg),nc1,imin,jmin,imax,jmax)
+c         p=-hdg=-[1/H]*g
+          call vclr(x(lp),1,nc1)
+          call daxpy(nc1,-one,x(lhdg),1,x(lp),1)
+        endif
+c
+c       Determine step size using linear search 
+c
+        if(linser.eq.0) then 
+c
+          IF(NSERCH.gt.1)
+     *      call stepofmo(etot,e0,depre,stepi,stepmin,stepmax,stepfac)
+c
+          stepnew=stepi
+          e0=etot
+c
+c         Save previous point energy+gradient and
+c         update the coordinates with the search vector.
+c
+          if(rmethod.eq.bfgsl.or.rmethod.eq.hssupd) then
+            call dcopy(NCVAL,x(lfmoc),1,x(lfmocp),1)
+            call dcopy(nc1,x(lfmoge),1,x(lfmogep),1)
+          endif
+        else
+          if(etot.gt.e0.and.lsiter.lt.linser) then
+            lsiter=lsiter+1
+            ediff=etot-e0
+            slopenew=ddot(nc1,x(lp),1,x(lfmoge),1)
+            call stepsize(ediff,slope0,slopenew,step0,stepold,stepnew)
+            stepnew=MAX(stepnew,stepmin)
+c           Do not let step size go below stepmin.
+c
+c           check the angle between the search vector and the negative gradient
+c           vector (=force)
+c
+            cosang = -slopenew/(FRMS*pnorm)
+            cosang = min(one, max(-one,cosang))
+            ang = rad2ang*acos(cosang)
+            if(maswrk) write(iw,9300) lsiter,ang,stepnew,ediff
+c
+c           Revert to the linser.eq.0's coordinate+gradient.
+c
+            if(rmethod.eq.hssupd.or.rmethod.eq.bfgsl) then
+              call daxpy(NCVAL,ONE,x(lfmoc),1,x(lfmocp),1)
+              call daxpy(nc1,ONE,x(lfmoge),1,x(lfmogep),1)
+            endif
+            call dcopy(NCVAL,x(lfmocp),1,x(lfmoc),1)
+            call dcopy(nc1,x(lfmogep),1,x(lfmoge),1)
+c
+c           Unless we reset the pre-LS step size (stepi), it will never go 
+c           down and will only increase (by stepfac).
+c           Therefore, if energy went up during linear search, reset stepi
+c           to the default value. Note that stepi is not stepnew. The latter
+c           is the current step size during LS. 
+c
+            stepi=step
+          else
+c           Use linear search to adjust the step size for energy raising.
+c           and use stepofmo for energy lowering. 
+            IF(NSERCH.gt.1.and.etot.lt.e0)
+     *        call stepofmo(etot,e0,depre,stepi,stepmin,stepmax,stepfac)
+            lsiter=0
+            e0=etot
+            stepnew=stepi
+            pnorm=sqrt(ddot(nc1,x(lp),1,x(lp),1))
+            slope0=ddot(nc1,x(lp),1,x(lfmoge),1)
+            call dcopy(NCVAL,x(lfmoc),1,x(lfmocp),1)
+            call dcopy(nc1,x(lfmoge),1,x(lfmogep),1)
+          endif
+          stepold=stepnew
+        endif
+c
+c       Find the next set of coordinates.
+c
+        do i=1,nfrz
+          x(lp-1+ixftch(x(lifreez),i))=zero
+        enddo
+c
+c       write(6,*) 'the P vector is'
+c       call prsq(x(lp),nc1,1,1)
+c
+c       This is an empirical fix. Guess Hessian produces too wide a step. 
+c
+        if(rmethod.eq.hssupd.and.NSERCH.eq.1.and.hess.eq.guess) 
+     *    stepnew=stepnew/diagval
+c
+C       calculate the new coordinates of EFPs
+C
+C       ROTATE AND TRANSLATE EFP FRAGMENTS
+C
+        IF (DOEFPOPT) THEN
+          NMST=0
+          NPST=0
+          NDPST=0
+          NRST=0
+          NDST=0
+          NATST=0
+          NORST=0
+          NAOST=0
+          II=NCVAL
+C
+          MXBF=0
+          DO I=1,NFRG
+             MXBF=MAX(MXBF,NPBF(I))
+          END DO
+          CALL VALFM(LOADFM)
+          LPROVEC = LOADFM  + 1
+          LCANVEC = LPROVEC + MXBF*NTMO
+          LAST    = LCANVEC + MXBF*NTAO
+          NEEDefp = LAST-LOADFM-1
+          CALL GETFM(NEEDefp)
+          LENPV=MXBF*NTMO
+          IF (NFRG.GT.0.AND.NTMO.GT.0)
+     *       CALL DAREAD(IDAF,IODA,X(LPROVEC),LENPV,267,0)
+          LENCV=MXBF*NTAO
+          IF (NFRG.GT.0.AND.NTAO.GT.0)
+     *       CALL DAREAD(IDAF,IODA,X(LCANVEC),LENCV,269,0)
+C
+          DO I1=1,NFRG
+cz          XDEL=D(II)
+cz          YDEL=D(II+1)
+cz          ZDEL=D(II+2)
+cz          THETAX=D(II+3)
+cz          THETAY=D(II+4)
+cz          THETAZ=D(II+5)
+            XDEL=  stepnew*X(LP+II)
+            YDEL=  stepnew*X(LP+II+1)
+            ZDEL=  stepnew*X(LP+II+2)
+            THETAX=stepnew*X(LP+II+3)
+            THETAY=stepnew*X(LP+II+4)
+            THETAZ=stepnew*X(LP+II+5)
+            X(LFMOCP+II  ) = -XDEL
+            X(LFMOCP+II+1) = -YDEL
+            X(LFMOCP+II+2) = -ZDEL
+            X(LFMOCP+II+3) = -THETAX
+            X(LFMOCP+II+4) = -THETAY
+            X(LFMOCP+II+5) = -THETAZ
+            II=II+6
+C
+C
+            CALL EFDSPL(I1,XDEL,YDEL,ZDEL,THETAX,THETAY,THETAZ,
+     *                  NMST,NPST,NDPST,NRST,NDST,NATST,NORST,
+     *                  X(LPROVEC),NAOST,X(LCANVEC),MXBF)
+C
+            NMST  = NMST  + NMPTS(I1)
+            NPST  = NPST  + NPPTS(I1)
+            NDPST = NDPST + NDPPTS(I1)
+            NRST  = NRST  + NRPTS(I1)
+            NDST  = NDST  + NDPTS(I1)
+            NATST = NATST + NATEF(ISET(I1))
+            NORST = NORST + NORB(I1)
+            NAOST = NAOST + NAO(ISET(I1))
+          END DO
+C
+          IF (NFRG.GT.0.AND.NTMO.GT.0)
+     *       CALL DAWRIT(IDAF,IODA,X(LPROVEC),LENPV,267,0)
+          IF (NFRG.GT.0.AND.NTAO.GT.0)
+     *       CALL DAWRIT(IDAF,IODA,X(LCANVEC),LENCV,269,0)
+C
+          CALL RETFM(NEEDefp)
+        END IF
+        call daxpy(NCVAL,stepnew,x(lp),1,x(lfmoc),1)
+        depre=stepnew*ddot(nc1,x(lp),1,x(lfmoge),1)
+c       depre does not include Hessian correctiosn to the predicted energy
+c       change.
+  150   continue
+c
+c       Save restart data (Hessian and others).
+c
+        if(rmethod.eq.hssupd) then
+          dskwrk=.true.
+          CALL SEQREW(NFThes)
+          write(nfthes) (x(lhess+i-1),i=1,nhblock)
+          dskwrk=dsksav
+          if(iuse2e.eq.0) CALL RETFM(NEED1)
+        endif
+        irest=1
+        if(rmethod.eq.hssupd.or.rmethod.eq.bfgsl)
+     *    call rstopt1(natfmo,x(lfmocp),x(lfmogep),irest)
+        if(rmethod.eq.cg) call rstopt2(natfmo,frmsp,x(lp),irest)
+c
+        if(linser.eq.0) newp=.true.
+c
+c 150   continue
+        if(maswrk) then
+          if(CVGED) then
+            write(iw,9230)
+          else
+            write(iw,9210) NSERCH+1
+          endif
+          write(iw,9220) (i,int(x(lfmozan-1+i)+tiny),
+     *                   (x(lfmoc-1+j+(i-1)*3)*UNITS,j=1,3),i=1,NCVAL/3)
+          IF (DOEFPOPT) THEN
+            NATT = NAT
+            NUMM = NUM
+            NAT  = 0
+            NUM  = 0
+            CALL PRATM(IW,1)
+            CALL PRATM(IP,1)
+            NAT  = NATT
+            NUM  = NUMM
+          END IF
+        endif
+        if(CVGED.or.NSERCH.ge.nstep) goto 200
+      goto 100
+  200 continue
+c
+      if(rmethod.eq.hssupd) then
+        dskwrk=.true.
+        CALL SEQCLO(NFThes,'KEEP')
+        dskwrk=dsksav
+      endif
+c
+      if(cvged) then
+        if(maswrk) write(iw,9500) NSERCH
+      else 
+        if(maswrk) write(iw,9510) NSERCH
+      endif 
+c
+      CALL RETFM(NEED)
+      CALL RETFM(NEED2)
+c
+      RETURN
+ 9000 format(/1x,75(1H"),/1x,'FMO geometry optimisation driver:',/,
+     *       /1x,'Method=',A8,' UPDATE=',A8,'   Hess=',A8,' LINSER=',I4,
+     *           '   NFRZ=',I6,
+     *       /1x,'  STEP=',F8.4,' STPMIN=',F8.4,' STPMAX=',F8.4,
+     *           ' STPFAC=',F8.4,
+     *     //1x,'Using',I9,' words of memory.',/1x,75(1H"),/)
+ 9010 FORMAT(1X,'FROZEN COORD(S)=',10I6/(17X,(10I6)))
+ 9020 FORMAT(1x,I9,' words will be used to store inverse Hessian.',/)
+ 9030 FORMAT(1x,'Using',I9,' words of incore integral buffer to store',
+     *          ' inverse Hessian.',/)
+ 9200 format(/1x,'NSERCH=',I4,' E=',F19.9,' GMAX=',F9.7,' GRMS=',F9.7/)
+ 9210 format(/1x,'Cartesian coordinates for NSERCH =',I4,
+     *           ' are (Angst.):')
+ 9220 format(I6,I4,3F19.12)
+ 9230 format(/1x,'Cartesian coordinates for the CONVERGED geometry ',
+     *           '(Angst.):')
+ 9250 format(/1x,'Hessian was read successfully.')
+ 9300 format(/8x,'linear search iteration ',i14,
+     *       /8x,' angle (step/-gradient) ',f14.4,
+     *       /8x,'       step size        ',f14.8
+     *       /8x,'   energy difference    ',f14.10,
+     *       /8x,38(1H.),/)
+ 9500 format(/1x,'Geometry optimisation converged in',I5,' steps.',/)
+ 9510 format(/1x,'Geometry optimisation DID NOT converge in',I5,
+     *           ' steps.',/)
+ 9800 format(/1x,'Unknown FMO optimisation driver: ',A8)
+ 9810 format(/1x,'Unknown inverse Hessian update: ',A8)
+      END
+C*MODULE fmogrd  *DECK readmond
+      SUBROUTINE readmond(d,orbxch,odexch,na,nb,l1,iodfmo,idmrec0)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      dimension d(*),iodfmo(*)
+      logical orbxch,odexch
+      common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
+     *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
+     *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
+     *                IESDPPC,idoprop,mp2run,icurit
+c
+c     read monomer density, based on 3 ways of storing:
+c     1. density
+c     2. orbitals
+c     3. density+orbitals
+c     d thus must be allocated appropriate space (l2 or l2+l3).
+c
+      l2=(l1*l1+l1)/2
+      l3=l1*l1
+      if(orbxch) then
+        if(odexch) then
+          call rareads(IDAFMO,iodfmo,d,l2+l3,idmrec0,0)
+        else
+          call rareads(IDAFMO,iodfmo,d(l2+1),l3,idmrec0,0)
+          call DMTX2(d,d(l2+1),na,l1,l1,nb)
+        endif
+      else
+        call rareads(IDAFMO,iodfmo,d,l2,idmrec0,0)
+      endif
+      RETURN
+      END
+C*MODULE fmogrd  *DECK readumond
+      SUBROUTINE readumond(d,wrk,orbxch,odexch,na,nb,l1,l1i,
+     *                     iodfmo,idmrec0)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      dimension d(*),wrk(*),iodfmo(*) 
+      logical orbxch,odexch
+      common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
+     *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
+     *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
+     *                IESDPPC,idoprop,mp2run,icurit
+c
+c     read monomer density, based on 3 ways of storing:
+c     1. density
+c     2. orbitals
+c     3. density+orbitals
+c     d thus must be allocated appropriate space (l2 or l2+l3).
+c     For ROHF/UHF, this becomes
+c     1. density(alpha)+density(beta)
+c     2. the same for orbitals is not implemented (no DFT!)
+c     wrk(l3)
+c
+      l2=(l1*l1+l1)/2 
+      l3=l1*l1
+      if(orbxch) then
+        if(odexch) then
+          call rareads(IDAFMO,iodfmo,d,l2+l3,idmrec0,0)
+        else
+          call rareads(IDAFMO,iodfmo,d(l2+1),l3,idmrec0,0)
+          if(icurunt.gt.0) then
+            call rotmo(d(l2+1),l1,na,l1i,ncursh,wrk)
+            call dcopy(l1*na,wrk,1,d(l2+1),1)
+c           Only occupied are rotated.
+          endif
+          call DMTX2(d,d(l2+1),na,l1,l1,nb)
+        endif
+      else
+        call rareads(IDAFMO,iodfmo,d,l2,idmrec0,0)
+      endif
+      RETURN
+      END
+C*MODULE fmogrd  *DECK stuff123
+      SUBROUTINE stuff123(l1ij,l1,ld3,mapi,mapj,map3i,map3j,maptmp,d2,d3
+     *                   )
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      dimension mapi(*),mapj(*),map3i(*),map3j(*),maptmp(ld3,2),d2(*),
+     *          d3(*)
+c
+c     Stuff dimer(IJ) density d2 into the trimer IJK density d3
+c     d3 is accumulated (added to whatever there was).
+c
+c     invert mapi and mapj. mapi,mapj map dimer index to monomer, maptmp
+c     maps monomer index to dimer.
+c
+c     l2=(l1*l1+l1)/2
+c     call vclr(d3,1,l2)
+      call viclr(maptmp,1,ld3*2)
+      do i=1,l1ij
+        mi=mapi(i)
+        if(mi.ne.0) maptmp(mi,1)=i
+        mj=mapj(i)
+        if(mj.ne.0) maptmp(mj,2)=i
+      enddo
+      loop=0
+      do i=1,l1
+        do j=1,i
+          loop=loop+1
+          ii=map3i(i)
+          ij=map3i(j)
+          ji=map3j(i)
+          jj=map3j(j)
+          id=0
+          if(ii.ne.0) then
+            id=maptmp(ii,1)
+          else if(ji.ne.0) then
+            id=maptmp(ji,2)
+          endif
+          if(id.ne.0) then
+            jd=0
+            if(ij.ne.0) then
+              jd=maptmp(ij,1)
+            else if(jj.ne.0) then
+              jd=maptmp(jj,2)
+            endif
+            if(jd.ne.0) then
+              if(id.ge.jd) then
+                ij=(id*id-id)/2+jd
+              else
+                ij=(jd*jd-jd)/2+id
+              endif
+              d3(loop)=d3(loop)+d2(ij)
+            endif 
+          endif 
+        enddo
+      enddo
+      RETURN
+      END
+C*MODULE fmogrd  *DECK grdprj
+      SUBROUTINE grdprj(de,c,rmass,nat)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      parameter (MXFRG=1050,MXDFG=5,MXDPPT=MXFRG*MXDFG*12)
+      COMMON /FMCOM / X(1)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      dimension DE(3,nat),c(3,*),rmass(*)
+c
+c     project out rot+tran for DFT gradient
+cnb   use this sub in grd2a.src 
+c     This subroutine is not parallelised(?) and is called for the 
+c     whole molecule!
+c
+c     Note on DFT gradients: normally if one does a 2-body run with 2 fragments
+c     the results are indentical to regular RHF (or whatever) to ALL printed
+c     digits. This is not so for DFT gradient. The reason is the projection
+c     of rotational degrees of freedom, that is done for fragments 1 and 2 in 
+c     the order 2-1, whereas for conventional it is done in the order 1-2.
+c     However, if one switches fragments 1 and 2 in the input then the DFT
+c     gradient matches identically (with mental switching 1 and 2 back). 
+c     Otherwise a difference of 1e-7 was observed.
+c
+      NCCF = 3*NAT + 6*NFRG
+      CALL VALFM(LOADFM)
+      LX   = LOADFM+ 1
+      LGTOT= LX    + NCCF
+      LRM  = LGTOT + NCCF
+      LP   = LRM   + 3*NAT + 21*NFRG
+      last = LP    + nccf
+      NEEDP= LAST-LOADFM-1
+      CALL GETFM(NEEDP)
+c     call fmorams(nat,zan,TABM,X(LRM),1)
+      CALL PRJGRD(DE,C,X(LX),X(LGTOT),X(LRM),X(LP),rmass,nat,
+     *            3*NAT,NCCF,.false.)
+      CALL RETFM(NEEDP)
+      RETURN
+      END
+C*MODULE fmogrd  *DECK fmorams
+      SUBROUTINE fmorams(nat,zan,tabm,rmass,iopt)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      parameter (zero=0.0D+00,one=1.0D+00)
+      dimension zan(*),tabm(*),rmass(*)
+c
+c     a clone of RAMS working with an arbitrary number of atoms.
+C     IOPT.EQ.0 RETURNS MASS OF EACH ATOM
+C     IOPT.EQ.1 RETURNS TRIPLETS OF INVERSE SQUARE ROOT MASSES
+C
+C         RETURN THE NORMAL MASSES
+C     
+      if(iopt.eq.0) then
+        DO 310 I=1,NAT
+          RMASS(I) = tabm(int(zan(I)+1.0D-03))
+  310   CONTINUE 
+      else
+C
+C         TRIPLETS OF THE INVERSE SQUARE ROOTS OF THE
+C         MASSES ARE USEFUL FOR MASS WEIGHTED CARTESIANS.
+C
+        K = 0
+        DO 480 I = 1,NAT
+          amass=tabm(int(zan(I)+1.0D-03))
+          IF(AMASS.GT.ZERO) THEN
+            DUM = ONE/SQRT(AMASS)
+          ELSE
+            DUM = ONE
+          END IF
+          DO 470 J = 1,3
+            K = K+1
+            RMASS(K) = DUM
+  470     CONTINUE
+  480   CONTINUE
+      endif
+      RETURN
+      END
+C*MODULE fmogrd  *DECK esdgrd
+      SUBROUTINE esdgrd(ilay,loadhf,jobgrp,loadm,layfrg,numfrg,iodfmo,
+     *                  maxl30,iaglob,scffrg,ngrfmo,mannod,mastid,da,fa,
+     *                  fb,wrk,fmode,fmopg,isdrec,orbxch,irec0)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      Parameter (MXATM=2000,maxpst=10,half=0.5D+00)
+      integer ddi_group,ddi_masters
+      Parameter(ddi_group=1,ddi_masters=2)
+      logical isgddi,parout,INITGDDI,GOPARR,DSKWRK,MASWRK,orbxch,
+     *        iodexch,myjob
+      COMMON /GDDI/   ISCOPE,NGROUPS,MYGROUP,MEGLOB,npglob,nnglob,JBTYP,
+     *                ISGDDI,PAROUT,INITGDDI
+      COMMON /GRAD  / DE(3,MXATM)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+      Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
+      common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
+     *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
+     *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
+     *                IESDPPC,idoprop,mp2run,icurit
+      dimension jobgrp(*),loadm(*),layfrg(*),numfrg(*),iodfmo(*),
+     *          maxl30(*),iaglob(*),scffrg(*),ngrfmo(maxpst,*),mannod(*)
+     *         ,mastid(*),da(*),fa(*),fb(*),wrk(*),fmode(3,natfmo,*),
+     *          fmopg(3,*),isdrec(*)
+      data RMC/8HMCSCF   /
+c
+c     finish computing derivatives of separated dimers
+c     (Lagrangian or density derivative terms). 
+c     parstat: GlobalFull+GlobalFull
+c
+c     Here is how the separated dimer gradient is computed. All contributions
+c     are scattered over all nodes!
+c     <mu|V|nu> derivative contributions are computed in TVDER
+c     (both derivatives of mu,nu and V) (ifmostp=2).
+c     Enr (nuclear repulsion) derivative contributions are computed in
+c     ESDNRDER (ifmostp=6).
+c     (mu,nu|ro,sigma) derivative contributions are computed in ESD2DER 
+c     (ifmostp=6).
+c     Dmu,nu (density) derivative contributions are computed here (ESDGRD)
+c     (ifmostp=7).
+c     jobgrp is reused here with no connexion to previous usage.
+c
+      ifmostp=7
+      icurlay=ilay
+      jcurfg=0
+      kcurfg=0
+c     WRITE(IW,9086)
+c     CALL EGOUT(fmode(1,1,2),natfmo)
+c
+c     Read, exchange and save monomer potentials
+c     (that is, V(I)=sum(J)V(IJ), where V(IJ) is potential for monomer I
+c     due to external field of separated monomer J). 
+c     Those are scattered over nodes after edimer. 
+c     Note that we still are and should be in the (separated) dimer group 
+c     division.
+c
+c     First find out if some fragments have no separated external field. 
+c     (in which case jobgrp(ifg) is 0).
+c
+      if(maswrk) then
+        do ifg=1,nfg
+          nrec=1+ifg+nfg
+          jobgrp(ifg)=isdrec(nrec)
+        enddo 
+      end if
+c
+      if(isgddi) then
+         call gddi_scope(ddi_masters)
+         if(maswrk) then 
+           call ddi_gsumi(2419,jobgrp,nfg)
+           do 100 ifg=1,nfg
+             if(layfrg(ifg).lt.ilay.or.jobgrp(ifg).eq.0) goto 100
+             l1=iand(numfrg(ifg),65535)
+             l2=(l1*l1+l1)/2
+c            The potentials are duplicated on slaves (within a group). 
+c            The amount of communications here is not negligible and some 
+c            more thoughts later may be helpful. (mainly it is the dilemma:
+c            whether to sum on masters only and then broadcast or global
+c            sum everywhere substituting zeroes on slaves. At present the
+c            Gordian knot is cut the first way). Note that masters need to 
+c            broadcast not everything, but only what their groups will do:
+c            thus this solution seems agreeable -> unfortunately this glorious
+c            approach is flawed: masters can become slaves after regrouping
+c            which would lead to a total mess, thus the solution is to plain
+c            broadcast by masters after global summing here.
+             nrec=1+ifg+nfg
+             if(isdrec(nrec).eq.0) then
+               call vclr(fa,1,l2)
+             else
+               CALL rareads(IDAFMO,iodfmo,fa,l2,nrec,0)
+             endif
+c            Global sum potentials over masters.
+             call ddi_gsumf(2419,fa,l2)
+             imxl30=maxl30(ifg)
+             CALL rawrites(IDAFMO,iodfmo,fa,imxl30,l2,nrec,0)
+  100      continue 
+         endif
+         call gddi_scope(ddi_group)
+      endif
+c
+c     Broadcast now, before it is too late! (before fmopre)
+c  
+      CALL DDI_BCAST(2421,'I',jobgrp,nfg,MASTER)
+c
+c     write(6,*) 'jobgrp=',(jobgrp(i),i=1,nfg)
+      do 120 ifg=1,nfg
+        if(layfrg(ifg).lt.ilay.or.jobgrp(ifg).eq.0) goto 120
+        l1=iand(numfrg(ifg),65535)
+        l2=(l1*l1+l1)/2
+        nrec=1+ifg+nfg
+        if(maswrk) CALL rareads(IDAFMO,iodfmo,fa,l2,nrec,0)
+        CALL DDI_BCAST(2421,'F',fa,l2,MASTER)
+        imxl30=maxl30(ifg)
+        if(.not.maswrk) CALL rawrites(IDAFMO,iodfmo,fa,imxl30,l2,nrec,0)
+  120 continue 
+c
+c     switch GDDI groups to monomers (using monomer group division).
+c
+      if(isgddi.and.ngrfmo(1,ilay).ne.0) 
+     *  call fmopre(ilay,1,ngrfmo,mannod,mastid)
+c
+c     Now add contributions to the gradient.
+c     Obtain Lagrangians by transforming potentials with densities:
+c     L(I)=D(I) V(I) D(I)-dagger 
+c     Finally contract with derivative overlaps:
+c     grad E=Tr(L*gradS).
+c
+      if(isgddi) call GDDICOUNT(-1,lgroup,myjob)
+c
+      do 200 iifg=1,nfg
+        ifg=iifg
+        if(loadhf.eq.1) ifg=loadm(iifg)
+        if(layfrg(ifg).lt.ilay.or.jobgrp(ifg).eq.0) goto 200
+        icurfg=ifg
+        if(isgddi) then
+          call GDDICOUNT(0,lgroup,myjob)
+          if(.not.myjob) goto 200
+        endif
+        if(maswrk) write(iw,9000) ifg
+c       if(maswrk) CLOSE(UNIT=IDAF,STATUS='DELETE')
+        call CLOSDA('DELETE')
+        CALL OPENDA(0)
+        NEVALS=0
+        call makemol(ifg,0,0,ilay,0,0,0,0,0,0,0,.true.)
+        l1=num
+        l2=(l1*l1+l1)/2
+        iodexch=scffrg(ifg).eq.rmc
+c
+c       Read densities and external potentials, compute the Lagrangian.
+c
+        call readmond(da,orbxch,iodexch,na,nb,l1,iodfmo,ifg+irec0)
+        nrec=1+ifg+nfg
+        CALL rareads(IDAFMO,iodfmo,fa,l2,nrec,0)
+        call CPYTSQ(da,da(1+l2),l1,1)
+        call TFTRI(fb,fa,da(1+l2),WRK,l1,l1,l1)
+        call dscal(l2,-half,fb,1)
+c       IF(OUT) THEN
+c         WRITE(IW,*) 'THE LAGRANGIAN MATRIX IS'
+c         CALL PRTRI(fb,L1)
+c       END IF
+c         WRITE(IW,*) 'THE density for SDER is',nfg
+c         CALL PRTRI(da,L1)
+        call vclr(de,1,NAT*3)
+        call SDER(fb,fa,L1,L2,.false.)
+c       Not only masters accumulate the gradient here: all nodes have
+c       contributions (no global sum in SDER). 
+        call fmodeg(1,fmode(1,1,2),fmopg,iaglob)
+        call timit(1)
+  200 continue 
+c
+      if(isgddi) call GDDICOUNT( 1,lgroup,myjob)
+c
+c     WRITE(IW,9088)
+c     CALL EGOUT(fmode(1,1,2),natfmo)
+c9086 FORMAT(/10X,36(1H-)/10X,'gradient of NR+2e+1e (VDER+HELFEY)',
+c    *       /10X,36(1H-))
+c9088 FORMAT(/10X,36(1H-)/10X,'GRADIENT OF THE ENERGY',/10X,36(1H-))
+      return
+ 9000 format(/1x,'Finishing separated dimer gradients, ifg=',I5)
+      end
+C*MODULE fmogrd  *DECK ESDnrder
+      SUBROUTINE ESDnrder(nat0)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (MXATM=2000)
+      logical GOPARR,DSKWRK,MASWRK
+      COMMON /GRAD  / DE(3,MXATM)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+c     Add contributions to the gradient due to nuclear energy for
+c     separated dimers IJ. 
+c     This subroutine produces wrong results for overlapping I and J.
+c     I and J can only overlap if RESDIM<0, which should never happen!
+c     This subroutine is statically parallelised.
+c
+      call vclr(de,1,NAT*3)
+      DO 100 K=1,NAT0
+        if(mod(k,nproc).ne.me) goto 100
+        ZAK=ZAN(K)
+        DO L=nat0+1,nat
+          ZAL=ZAN(L)
+          PKL=(C(1,K)-C(1,L))**2+(C(2,K)-C(2,L))**2+(C(3,K)-C(3,L))**2
+          SKL=ZAK*ZAL/(PKL*sqrt(PKL))
+          DO KK = 1,3
+            DERKL=(C(KK,K)-C(KK,L))*SKL
+            DE(KK,K)=DE(KK,K)-DERKL
+            DE(KK,L)=DE(KK,L)+DERKL
+         enddo
+       enddo
+  100 continue
+c     No global sum here: it is done in ESD2DER that is called after this. 
+c     WRITE(IW,9088)
+c     CALL EGOUT(DE,NAT)
+      RETURN
+c9088 FORMAT(/10X,36(1H-)/10X,'GRADIENT OF NUCLEAR REPULSION FORCE',
+c    *       /10X,36(1H-))
+      END
+C*MODULE fmogrd  *DECK esdderz
+      SUBROUTINE esdderz(iat,layfrg,indat,iabdfg,jabdfg,indbd,fmozan,
+     *                   fmoc,fzcor,znuc,cx,cy,cz)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      logical layman
+      COMMON /MCPFMO/ IMCPFMO,LFZCOR,LIFMPTYP,LIFMPTYP2,LMCPSW,
+     *                LIZCOR2,imp0,jmp0,icorsh0,igtf0
+      common /fmodim/ maxbnd,maxknd,maxcbs,maxcao,maxvec,maxl1,maxnat,
+     *                maxabd,maxbas,maxbbd,maxlmo,maxslo,maxabd2
+      Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
+      common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
+     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(3),
+     *                orshft,cnvafo,IXESP,mxitfg,nguess,NBSSE,modorb,
+     *                modpar,irststp,irstlay,nprfmo,nfmopal,modprp,
+     *                maxl1c,ipieda,modgrd,modesp,ivmul,modlmo,nopden,
+     *                mofock
+      common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
+     *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
+     *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
+     *                IESDPPC,idoprop,mp2run,icurit
+      dimension layfrg(*),indat(*),iabdfg(*),jabdfg(*),indbd(maxabd,*),
+     *          fmozan(*),fmoc(3,*),fzcor(*)
+c
+c     Determine partial charges for the external potentials due to 
+c     the terms in the sum(J) of the separated dimer 
+c     IJ energy derivative, that is, derivatives of the form <mu|Vext|nu>. 
+c     This subroutine is similar to fmoatfrg. 
+c     Vext are just Coulomb point charges due to atoms in separated dimers
+c     (relative to the atoms in the current fragment I, mu,nu are in I as well).
+c     It produces wrong results for frac2 in case of overlapping I and J.
+c     I and J can only overlap if RESDIM<0, which should never happen!
+c
+c     An atom IAT is divided into M+1 pieces. The first (major) piece is
+c     the fragment to where it belongs (indat(iat)). Then IAT can be shared
+c     with M other fragments (M.ge.0) (loop over iabd). Each shared piece
+c     (along with the main) can either be included in or excluded from ZNUC,
+c     as determined by interfragment distances (included for separated dimers). 
+c
+      IF (IMCPFMO.EQ.1) THEN
+        znuc=fmozan(iat)-fzcor(iat)
+      else
+        znuc=fmozan(iat)
+      endif
+      cx=fmoc(1,iat)
+      cy=fmoc(2,iat)
+      cz=fmoc(3,iat)
+      znuc2=0
+      ifg=icurfg
+      jfg=indat(iat)
+      ilay=layfrg(ifg)
+      jlay=layfrg(jfg)
+      layman=(ilay.eq.icurlay .or.jlay.eq.icurlay).and.
+     *        ilay.ge.icurlay.and.jlay.ge.icurlay
+c     accept charges only from appropriate layers.
+      if(jfg.ne.ifg) then
+c       note that distance R(ifg,ifg) is not defined!
+        if(fmodist(ifg,0,0,jfg).gt.resdim.and.layman) znuc2=znuc
+        if(nbdfg.ne.0) then
+          znuc2a=znuc2
+          do iabd=1,maxabd
+            ibdfg=indbd(iabd,iat)
+            if(ibdfg.eq.0) goto 100
+            ia=abs(iabdfg(ibdfg))
+            ja=abs(jabdfg(ibdfg))
+            jfg=indat(ja)
+            jlay=layfrg(jfg)
+            layman=(ilay.eq.icurlay .or.jlay.eq.icurlay).and.
+     *              ilay.ge.icurlay.and.jlay.ge.icurlay
+            if(ia.eq.iat.and.ifg.ne.jfg.and.layman) then 
+              if(fmodist(ifg,0,0,jfg).le.resdim) then
+                if(znuc2a.ne.0) znuc2=znuc2-1
+              else
+                if(znuc2a.eq.0) znuc2=znuc2+1
+              endif
+            endif
+          enddo
+  100     continue
+        endif
+      endif
+      znuc=-znuc2
+      RETURN
+      END
+C*MODULE fmogrd  *DECK TIN2fmo
+      SUBROUTINE tin2fmo(natfmo,fmozan,fmoc)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      dimension fmozan(*),fmoc(3,*)
+C
+C    GAMESS
+      PARAMETER (MAXLNK=50, MAXR1=100)
+      PARAMETER (ONE=1.0D+00,units=0.52917724924D+00)
+C
+      CHARACTER*10 NAME
+      INTEGER TYPE,TAG,CLASS,ATOMIC,VALENCE
+      REAL*8 DY,DZ,X,Y,Z,MASS
+      CHARACTER*20 STORY
+      LOGICAL IMOMM,SIMOMM
+      DIMENSION ITMPLNK(3*MAXLNK)
+C
+c     COMMON /COORDN/ UZNUC(MXATM),CUNIQ(MXATM,3),NATREL,UATOM(MXATM)
+C
+C          THIS IS AN INTERFACE TO TINKER.  MEMORY FOR MAXATM
+C          IS DELIBERATELY SET LOW SO THERE'S NO PENALTY
+C          TO GAMESS WHEN TINKER IS NOT BEING USED.  IF TINKER
+C          IS BEING USED, YOU MUST MODIFY MAXATM TO MATCH THE
+C          VALUE SPECIFIED IN THE "SIZES.I" INCLUDE FILE.
+C
+      PARAMETER (MAXATM=1000)
+      COMMON /ATMTYP/ MASS(MAXATM),TAG(MAXATM),CLASS(MAXATM),
+     *                ATOMIC(MAXATM),VALENCE(MAXATM),NAME(MAXATM),
+     *                STORY(MAXATM)
+      COMMON /ATOMST/ X(MAXATM),Y(MAXATM),Z(MAXATM),N,TYPE(MAXATM)
+C
+      COMMON /QMMM1/ IMOMM,SIMOMM,NPAIR,NSEQ
+      COMMON /QMMM2/ IQMATM(MAXR1)
+      COMMON /QMMM3/ LINKGE(3*MAXLNK),BLQM(MAXLNK),BLMM(MAXLNK)
+C
+c     FMO interface, cloned from TIN2GMS by DGF.
+c
+C     TOTAL NUMBER OF QUANTUM ATOMS
+      natfmo=NSEQ+NPAIR
+      DO 10 I=1,NSEQ
+        fmozan(I)=ATOMIC(IQMATM(I))
+        fmoc(1,I)=X(IQMATM(I))/units
+        fmoc(2,I)=Y(IQMATM(I))/units
+        fmoc(3,I)=Z(IQMATM(I))/units
+c       UATOM(I)=NAME(IQMATM(I))
+ 10   CONTINUE
+C     DANGLING BONDS ARE REPLACED BY HYDROGENS
+         DO 20 I=1,NPAIR
+            LR1=LINKGE(2*I-1)
+            LR2=LINKGE(2*I  )
+            DX=(X(LR2)-X(LR1))
+            DY=(Y(LR2)-Y(LR1))
+            DZ=(Z(LR2)-Z(LR1))
+            TDIST=SQRT(DX**2+DY**2+DZ**2)
+            DO 30 J=1,NSEQ
+               IF (LR1.EQ.IQMATM(J)) ITMPLNK(I*3-2)=J
+ 30         CONTINUE
+            CALL GTDIST(fmozan(ITMPLNK(I*3-2)),ONE,RDIST)
+            fmozan(I+NSEQ)=ONE
+c           UATOM(I+NSEQ)='H         '
+            fmoc(1,I+NSEQ)=(X(LR1)+DX*RDIST/TDIST)/units
+            fmoc(2,I+NSEQ)=(Y(LR1)+DY*RDIST/TDIST)/units
+            fmoc(3,I+NSEQ)=(Z(LR1)+DZ*RDIST/TDIST)/units
+            ITMPLNK(I*3-1)=I+NSEQ
+            ITMPLNK(I*3  )=LR2
+  20     CONTINUE
+c        UATOM(NSEQ+NPAIR+1)='$END      '
+         DO 40 I=1,NPAIR*3
+            LINKGE(I)=ITMPLNK(I)
+ 40      CONTINUE
+C
+      RETURN
+      END
+C*MODULE fmogrd  *DECK gmsxyz
+      subroutine gmsxyz(modef,nfthes,nc1,natfmo,fmozan,fmoc,izbas,
+     *                  nfcrec,nevsav,grandmas,quit)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      logical quit,GOPARR,DSKWRK,MASWRK,LINEAR,gopsav,grandmas
+      parameter (MXATM=2000,MXAO=8192)
+      character*4 atm
+      character*8 cdum,nill
+      COMMON /ECP2  / CLP(400),ZLP(400),NLP(400),KFIRST(MXATM,6),
+     *                KLAST(MXATM,6),MMAX(MXATM),LPSKIP(MXATM),
+     *                IZCORE(MXATM)
+      COMMON /EFPFMO/ IEFPFMO,ISWENUC,REPNUCEFP,EFPEFP,RUNEFP
+      COMMON /FMCOM / X(1)
+      COMMON /INFO  / CDUP(MXATM,3),IZAN(MXATM),NATOMS,IUNTRD,ATM(MXATM)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /OPTGRD/ XYZ(3*MXATM),ES,FE(20),
+     *                CONVF,FMAXT,DXMAXT,RMAX,RMIN,RLIM,
+     *                EIGMAX,EIGMIN,GRDERR,FRMS,FMAX,TRMAX,TRMIN,
+     *                IC(20),NSTEP,NSERCH,NPMAX,NP,IFOLOW,
+     *                NNEG,IUPHSS,IEXIT,ITRUPD,IPAD,kdiagf
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /RUNLAB/ TITLE(10),ANAM(MXATM),BNAM(MXATM),BFLAB(MXAO)
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+c     COMMON /TINOPT/ MMONLY, QMMM
+      COMMON /ZMAT  / NZMAT,NZVAR,NVAR,NSYMC,LINEAR
+      COMMON /MCPFMO/ IMCPFMO,LFZCOR,LIFMPTYP,LIFMPTYP2,LMCPSW,
+     *                LIZCOR2,imp0,jmp0,icorsh0,igtf0
+      dimension fmozan(*),fmoc(3,*),izbas(*)
+      equivalence (dum,cdum),(dnill,nill)
+      data OPTMIZ /8HOPTIMIZE/, SADPT  /8HSADPOINT/,GLOBOP /8HGLOBOP  /,
+     *     dnill/8H        /,cdum/' '/,HSSIAN/8HHESSIAN /
+c
+c     Interface GAMESS and FMO coordinates if needed
+c     quit is set to true for SIGX runs, that at this point only read 
+c     coordinates.
+c
+      call timit(1)
+      quit=.false. 
+c     if(qmmm) then
+c       if(modef.ne.0) call tin2fmo(natfmo,fmozan,fmoc)
+c       return
+c     endif   
+c
+      if(modef.eq.0) then
+c       natbl=nat
+        if(runtyp.eq.OPTMIZ.or.runtyp.eq.SADPT.or.runtyp.eq.HSSIAN.or.
+     *    runefp.eq.globop) then
+c         copy FMO -> GAMESS
+          nat=natfmo
+          if(nat.gt.MXATM) then
+            if(maswrk) write(iw,9000) MXATM
+            call abrt
+          endif 
+          call dcopy(3*nat,fmoc,1,C,1)
+          call dcopy(nat,fmozan,1,ZAN,1)
+          IF (IMCPFMO.EQ.1) call viclr(iZCORe,1,NATFMO)
+c         For MCP, the nuclear charge is not split between ZAN and IZCORE.
+c         Instead, the sum is stored in ZAN and IZCORE is zero.
+c         It is easy to split ZAN and IZCORE, but is that necessary?
+          do i=1,nat
+            ian(i)=int(ZAN(i)+0.5D-02)
+c           IF (IMCPFMO.EQ.1) IZCORE(I)=INT(FZCOR(I)+0.01D+00)
+            call zsymnum(cdum,ATM(i),ian(i))
+c           write(UNIT=cdum,FMT='(A4,I4)') ATM(i),i
+            write(UNIT=cdum,FMT='(A4,A4)') ATM(i),'    '
+            ANAM(i)=dum
+            BNAM(i)=dnill
+          enddo 
+c         Generate or read Z-matrix.
+          IF(NZVAR.GT.0) THEN
+            CALL ZMATIN(NZVAR.EQ.0)
+            CALL BANDBI
+            if(nevsav.eq.0) CALL PZANDG(egdum,0)
+          END IF
+c
+c         Now comes the mean part. We rewrite BNAM for our evil purposes.
+c         (namely, storing basis set ID for each atom).
+c
+          do i=1,nat
+            dum=BNAM(i)
+            write(UNIT=cdum,FMT='(I8)') izbas(i)
+            BNAM(i)=dum
+          enddo
+          write(6,*) 'Copied FMO -> GAMESS'
+          quit=.true. 
+        endif
+      else
+c       running with modef=1 means being called from SIGX (through ENERGX)
+c       save the Hessian
+c       copy GAMESS -> FMO
+          natfmo=nat
+          call dcopy(3*nat,c,1,fmoC,1)
+          call dcopy(nat,zan,1,fmoZAN,1)
+c         Hessian was saved in the world scope which means only the grand
+c         master has it. Moreover, the whole group must call daread.
+c
+c         For SCHLEGEL optimisations Hessian storage will be used to save
+c         Coords+grads of NPMAX previous points.
+c
+          gopsav=goparr
+          goparr=.false.
+          if(grandmas) then
+            nc3=nc1*nc1
+            nc13=3*nc1
+            if(runtyp.ne.hssian) nc13=0
+            nc1sch=nc1*NPMAX
+            CALL VALFM(LOADFM)
+            lfcm=LOADFM+1
+            lddm=lfcm+max(nc3,nc1sch)
+            last=lddm+nc13 
+            NEEDH = LAST- LOADFM -1
+            CALL GETFM(NEEDH)
+            CALL daread(IDAF,IODA,x(lFCM),NC3,nfcrec,0)
+           if(runtyp.eq.hssian) CALL daread(IDAF,IODA,x(lddm),NC13,34,0)
+            call seqrew(nfthes)
+c           Hessian restart: if the Hessian file was there, use it rather
+c           than the initial Hessian computed during this run. 
+            igothes=0 
+            if(nserch.eq.0.and.runtyp.ne.hssian) then 
+              READ(nfthes,END=604) nserch0,nc10
+c             aha! read was successful, should we use continuous nserch?
+              if(nc1.ne.nc10) then
+                write(6,*) 'Hessian found but the size is wrong',
+     *                     nc1,nc10
+                call abrt
+              endif
+              write(6,*) 'Hessian restart successful, ',nserch0
+              igothes=1 
+c             DO NOT overwrite nfthes
+  604         continue
+            endif 
+            if(igothes.eq.0) then
+c             write(6,*) 'No Hessian found, using the initial one'
+              call seqrew(nfthes)
+              write(nfthes) nserch,nc1 
+              write(nfthes) (x(lFCM+i),i=0,nc3-1)
+              if(runtyp.eq.hssian) write(nfthes) (x(lddm+i),i=0,nc13-1)
+            endif
+            if(NPMAX.ne.0.and.nserch.gt.0) then
+              write(6,*) 'Saving Schlegel...'
+              CALL daread(IDAF,IODA,x(lFCM),nc1sch,98,0) 
+              write(nfthes) (x(lFCM+i),i=0,nc1sch-1)
+              CALL daread(IDAF,IODA,x(lFCM),nc1sch,99,0) 
+              write(nfthes) (x(lFCM+i),i=0,nc1sch-1)
+            endif
+            CALL RETFM(NEEDH)
+          else
+c           call vclr(FCM,1,NC1*NC1)
+          endif
+          goparr=gopsav
+          if(maswrk) write(6,*) 'Copied GAMESS -> FMO',NC1
+c         if(meglob.eq.0) call prsq(FCM,nc1,nc1,nc1)
+          do i=1,natfmo 
+            dum=BNAM(i)
+            read(UNIT=cdum,FMT='(I8)') izbas(i)
+          enddo
+      endif
+      call timit(1)
+      return
+ 9000 format(/1x,'Too many atoms: ',I7,
+     *        '. Either use TINKER or recompile with a larger MXATM.',/)
+      END
+C*MODULE fmogrd  *DECK gmsprop
+      subroutine gmsprop(modef,nfthes,nc1,fmode,fmomas,nfcrec,grandmas)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      dimension fmode(3,*),fmomas(*)
+      parameter (MXATM=2000,mxrt=100)
+      logical grandmas
+      COMMON /ENRGYS/ ENUCR,EELCT,ETOT,SZ,SZZ,ECORE,ESCF,EERD,E1,E2,
+     *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2)
+      COMMON /FMCOM / X(1)
+      COMMON /FUNCT / EHF,EG(3*MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /MASSES/ ZMASS(MXATM)
+      COMMON /OPTGRD/ XDUM(3*MXATM),ES,FE(20),
+     *                CONVF,FMAXT,DXMAXT,RMAX,RMIN,RLIM,
+     *                EIGMAX,EIGMIN,GRDERR,FRMS,FMAX,TRMAX,TRMIN,
+     *                IC(20),NSTEP,NSERCH,NPMAX,NP,IFOLOW,
+     *                NNEG,IUPHSS,IEXIT,ITRUPD,IPAD,kdiagf
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+      Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
+      data HSSIAN/8HHESSIAN /
+c     data OPTMIZ /8HOPTIMIZE/, SADPT  /8HSADPOINT/
+c 
+c     Copy FMO properties to conventional GAMESS storage.
+c
+      if(modef.ne.0) then
+        if(natfmo.gt.mxatm) call abrt
+        call dcopy(3*natfmo,fmode,1,eg,1)
+c       write(6,*) 'gradient Copied',natfmo
+        EHF=etot
+        call dcopy(natfmo,fmomas,1,zmass,1)
+      endif
+c     if(maswrk) CLOSE(UNIT=IDAF,STATUS='DELETE')
+      call CLOSDA('DELETE')
+      CALL OPENDA(0)
+      if(modef.ne.0) then
+c     only the grand master has the true hessian, other nodes write zeroes.
+c     It is important, because otherwise indexing of F10 will be broken.
+      nc3=nc1*nc1
+      nc13=3*nc1
+      if(runtyp.ne.hssian) nc13=0
+      nc1sch=nc1*NPMAX
+      CALL VALFM(LOADFM)
+      lfcm=LOADFM+1
+      lddm=lfcm+max(nc3,nc1sch)
+      last=lddm+nc13 
+      NEEDH = LAST- LOADFM -1
+      CALL GETFM(NEEDH)
+c     The way of reading below can possibly raise portability issues:
+c     (for parallel runs, reading and writing by a single node).
+c     if(meglob.eq.0) then
+      if(grandmas) then
+         call seqrew(nfthes)
+         read(nfthes) nserch0,nc10
+c        dummy
+         if(nserch0.lt.0) nserch0=nserch+nc10
+         read(nfthes) (x(lFCM+i),i=0,nc3-1)
+         if(runtyp.eq.hssian) read(nfthes) (x(lddm+i),i=0,nc13-1)
+      else
+         call vclr(x(lFCM),1,nc3) 
+         if(nc13.ne.0) call vclr(x(lddm),1,nc13) 
+      endif  
+      CALL DAWRIT(IDAF,IODA,x(lFCM),NC1*NC1,nfcrec,0)
+      if(runtyp.eq.hssian)
+     *  CALL DAWRIT(IDAF,IODA,x(lddm),NC13,34,0)
+      if(NPMAX.ne.0.and.nserch.gt.0) then
+        write(6,*) 'Getting Schlegel...'
+        if(grandmas) read(nfthes) (x(lFCM+i),i=0,nc1sch-1)
+        CALL dawrit(IDAF,IODA,x(lFCM),nc1sch,98,0)
+        if(grandmas) read(nfthes) (x(lFCM+i),i=0,nc1sch-1)
+        CALL dawrit(IDAF,IODA,x(lFCM),nc1sch,99,0)
+      endif
+c
+      CALL RETFM(NEEDH)
+      endif
+      CALL DAWRIT(IDAF,IODA,ENUCR,MXRT+15,2,0)
+c     punch Cartesian hessian for unconverged runs (not ready for internals) 
+c     if(nerr.gt.1.and.nfcrec.eq.4) then
+c       write(6,*) 'Emergent punch of hessian enforced',NC1
+c       CALL FCMPUN(x(lFCM),NC1)
+c     endif
+      return
+      END
+c
+C*MODULE fmogrd  *DECK fmorst
+      subroutine fmorst(nfg2,nfg3,nen,nent,l1fmo,NDAR30,NDAR30f,iodfmo,
+     *                  layfrg,emon,edim,etrim,idmrec0,ifgfmo0,skipfini,
+     *                  irestl,nts0,nts2,some)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      dimension iodfmo(*),layfrg(*),emon(*),edim(*),etrim(*),idmrec0(*)
+      logical skipfini,some
+      COMMON /RAIOLN/ JRECLN(10),JRECST(10)
+      Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
+      common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
+     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(3),
+     *                orshft,cnvafo,IXESP,mxitfg,nguess,NBSSE,modorb,
+     *                modpar,irststp,irstlay,nprfmo,nfmopal,modprp,
+     *                maxl1c,ipieda,modgrd,modesp,ivmul,modlmo,nopden,
+     *                mofock
+      common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
+     *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
+     *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
+     *                IESDPPC,idoprop,mp2run,icurit
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+      DATA CHECK/8HCHECK    /
+c
+c     FMO restart initialisation
+c
+c     reserve the first record for record indexing by writing something there
+c
+c     skipfini is true for the F40 broadcast option when the grand master (GM)
+c     broadcasts to everybody, so only the GM needs to read F40 restart info.
+c     Layer restarts will probably be messed up.
+c
+      nts0=0
+      if(irststp.eq.0.or.skipfini) then
+        irstlay=1
+        modrst=0
+c       Setting modrst to 1 means the density will be read from the 1st rec. 
+c       This is now changed to the unified modrst (in inidfmo).
+        if(skipfini) modrst=1
+        iodfmo(NDAR30+1)=modorb
+        iodfmo(NDAR30+2)=l1fmo
+        iodfmo(NDAR30+3)=irstlay
+        iodfmo(NDAR30+4)=modrst
+        iodfmo(NDAR30+5)=JRECST(IDAFMO/10)
+        iodfmo(NDAR30+6)=nts2
+        call icopy(nlayer,idmrec0,1,iodfmo(NDAR30+7),1)
+        call rawrites(IDAFMO,iodfmo,iodfmo,NDAR30f,NDAR30f,1,0)
+        if(iodfmo(1).ne.1.and.EXETYP.ne.CHECK) then
+          write(6,*) 'iolib.src has been changed! No restarts.'
+          call abrt
+        endif
+      else
+c       here is a potentially dangerous part (if iolib is later altered)
+c       emulate record indices, by giving 1 as the first physical record
+c       where the first logical record starts. It is assumed that no other
+c       index matters (for the first record).
+        iodfmo(1)=1 
+        call rareads(IDAFMO,iodfmo,iodfmo,NDAR30f,1,0)
+c
+c       check if the file provided is acceptable.
+c
+        modorb0=iodfmo(NDAR30+1)
+        l1fmo0= iodfmo(NDAR30+2)
+        irstlay=iodfmo(NDAR30+3)
+        modrst= iodfmo(NDAR30+4)
+        JRECST(IDAFMO/10)=iodfmo(NDAR30+5)
+        nts0= iodfmo(NDAR30+6)
+        call icopy(nlayer,iodfmo(NDAR30+7),1,idmrec0,1)
+c       l1fmo0 is 0 for FMO0 when l1fmo is not computed, so by writing zero
+c       we skip the check here as a temporary measure. 
+        if((l1fmo.ne.l1fmo0.and.l1fmo0.ne.0).or.modorb.ne.modorb0.or.
+     *     irstlay.gt.nlayer) then
+c         refuse to use the restart file if
+c         1) basis set size for the whole molecule mismatches
+c         2) orbital/density/energy flag mismatches
+c         Note: it is wrong to think that for example one can read in 
+c         F40 computed with energies and reuse without (in general).
+c         The reason is that writing to this file allocates certain size
+c         and mixing this size is not going to work. Note that if one runs
+c         dimers in some cases it may work. 
+c         Sometimes the error below comes from forgetting to adjust $FMOLMO
+c         groups so that l1fmo is not computed correctly.
+          write(6,*) 'Incompatible restart file: l1,l1, modorb,modorb=',
+     *               l1fmo,l1fmo0,modorb,modorb0
+c         call abrt
+        endif
+        
+c       modify modrst if needed (mostly to use RHF, not MP2 densities for
+c       restart jobs.
+        if(iand(nguess,8192).ne.0) modrst=modrst-1
+c       if(iand(nguess,65536).ne.0) irstlay=1
+        if(irestl.ne.0) irstlay=irestl
+c       write(6,*) 'modrst is',modrst
+      endif
+c     Care should be taken lest FMOENM and FMOEND be read during geometry 
+c     optimisations (they should not be, except possibly the first step). 
+c     During optimisations irststp is 2, so the present code seems correct.
+      ilay=0
+c     layer structure may be broken? irstlay.gt.0? 
+      if(irststp.gt.2.or.irstlay.gt.1.or.(nbsse.eq.3.and.irststp.gt.0))
+     *  call eminout(0,ilay,ifgfmo0,layfrg,emon,some)
+      if((irststp.ge.4.or.irstlay.gt.1).and.nbody.gt.1) 
+     *  call edin(nfg2,nen,layfrg,edim,some)
+      if((irststp.ge.9.or.irstlay.gt.1).and.nbody.gt.2) 
+     *  call etin(nfg3,nent,layfrg,etrim,some)
+      return
+      end
+c
+C*MODULE fmogrd  *DECK grdrst
+      subroutine grdrst(imode,nfthes,nde,de,nem,em,nie,ie,lie,IDAFMO,
+     *                  ndar30,niod,iodfmo)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      dimension de(nde),em(nem),ie(nie),iodfmo(*)
+      logical lie,GOPARR,DSKWRK,MASWRK
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /RAIOLN/ JRECLN(10),JRECST(10)
+c     
+c     read (imode=0) or write (imode=1) gradient restart file.
+c     de gradient
+c     em dipole moments 
+c     ie RESDIM record indices
+c     lie says if IODFMO was updated and should be saved.
+c     
+      CALL SEQREW(NFThes)
+      if(imode.eq.0) then
+        READ(nfthes,END=604) nde0,nem0,nie0
+        if(nde.ne.nde0.or.nem.ne.nem0.or.nie.ne.nie0) then
+          if(maswrk) write(iw,*) 'Wrong restart:',nde,nde0,nem,nem0,
+     *                                            nie,nie0
+          call abrt
+        endif
+        READ(nfthes) de
+        if(nem.ne.0) READ(nfthes) em
+        if(nie.ne.0) READ(nfthes) ie 
+c       There is no need to read iodfmo here: it is done elsewhere.
+        if(maswrk) write(iw,*) 'Gradient restart is successful!'
+c       write(iw,*) de
+        write(iw,*) 'wwwnie=',nie,(ie(i),i=1,nie)
+  604   continue
+c       write(iw,*) 'no grad restart'
+      else 
+        write(NFThes) nde,nem,nie
+        write(NFThes) de
+        if(nem.ne.0) write(nfthes) em
+        if(nie.ne.0) then
+          write(nfthes) ie 
+          if(lie) then
+            iodfmo(NDAR30+5)=JRECST(IDAFMO/10)
+            call rawrites(IDAFMO,iodfmo,iodfmo,niod,niod,1,0)
+          endif 
+c         Indexing information should be saved if IDAFMO was updated.
+        endif
+        if(maswrk) write(iw,*) 'Updated gradient restart file.'
+c       write(iw,*) de
+c       write(iw,*) 'wwwnie=',nie,(ie(i),i=1,nie)
+      endif
+      return
+      END
+C*MODULE fmogrd  *DECK hssini
+      subroutine hssini(hssinv,imin,jmin,imax,jmax)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      dimension hssinv(*)
+      PARAMETER (three=3.0D+00,zero=0.0D+00)
+      logical GOPARR,DSKWRK,MASWRK
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+c
+c     Generate initial inverse Hessian for the FMO methods.
+c     The Hessian is stored as a lower triangular matrix divided over nodes.
+c 
+      diagval=three 
+c     hssinv(iloop)=1.0D+00
+      iloop=0
+      jstart=jmin
+      do i=imin,imax
+        jend=i
+        if(i.eq.imax) jend=jmax
+        if(jend.eq.i) jend=jend-1
+c       Off-diagonal 
+        do j=jstart,jend
+          iloop=iloop+1
+          hssinv(iloop)=zero
+        enddo 
+c       diagonal 
+        if(i.ne.imax.or.jmax.eq.imax) then
+          iloop=iloop+1
+          hssinv(iloop)=diagval
+c         3 comes from 1/(1/3) where 1/3 is used in other parts of GAMESS.
+        endif
+        jstart=1
+      enddo
+      if(maswrk) write(iw,9000) diagval
+c     write(6,*) 'inv hess',imin,jmin,imax,jmax
+c     call prtri(hssinv,imax)
+      return
+ 9000 format(1x,'Using diagonal inverse hessian guess of ',F4.1)
+      END
+c
+C*MODULE fmogrd  *DECK pMTAV
+      subroutine pMTAV(A,V,AV,n,imin,jmin,imax,jmax)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (zero=0.0D+00)
+      dimension a(*),v(n),av(n) 
+c
+c     Multiply a symmetric (lower tringular) matrix A(n x n) times
+c     a vector V(n) and store the results into a vector AV. 
+c     A is divided over nodes.
+c
+      call vclr(av,1,n) 
+      iloop=0
+      jstart=jmin
+      do i=imin,imax
+        jend=i
+        if(i.eq.imax) jend=jmax
+        vi=v(i)
+        sum=zero
+        do j=jstart,jend
+          iloop=iloop+1
+          sum=sum+a(iloop)*v(j)
+          av(j)=av(j)+a(iloop)*vi
+c         write(6,*) 'wwwij',i,j,sum,a(iloop),iloop,vi,v(j)
+        enddo
+c       subtract double counting of the diagonal
+        if(jend.eq.i) sum=sum-a(iloop)*vi
+        av(i)=av(i)+sum
+        jstart=1
+      enddo
+      call ddi_gsumf(2422,av,n)
+c     write(6,*) 'inv hess',n,imin,jmin,imax,jmax
+c     call prtri(a,n)
+c     write(6,*) 'wwwv',(v(i),i=1,n)
+c     write(6,*) 'wwwav',(av(i),i=1,n)
+      return
+      END
+C*MODULE fmogrd  *DECK updhss
+      subroutine updhss(update,hssinv,imin,jmin,imax,jmax,
+     *                  cfdif,hdg,u,dxdg,dghdg)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      dimension hssinv(*),cfdif(*),hdg(*),u(*)
+      data bfgs/8HBFGS    /,dfp/8HDFP     /
+c
+c     Numeric updates of the inverse Hessian matrix.
+c     Supported types:
+c     update=bfgs, ref: JCC, 18, 1011 (1997).
+c     update=dfp,  ref: JCC, 18, 1011 (1997).
+c
+      iloop=0
+      jstart=jmin
+      do i=imin,imax
+        jend=i
+        if(i.eq.imax) jend=jmax
+c
+c       BFGS updating scheme
+c
+        if(update.eq.bfgs) then
+          do j=jstart,jend
+            iloop=iloop+1
+            hssinv(iloop)=hssinv(iloop)+ ( cfdif(i)*cfdif(j) )/dxdg
+     *                                 - ( hdg(i)*hdg(j) )/dghdg
+     *                                 + dghdg* (u(i)*u(j))
+          enddo
+c
+c       DFP updating scheme
+c
+        else if(update.eq.dfp) then
+          do j=jstart,jend
+            iloop=iloop+1
+            hssinv(iloop)=hssinv(iloop)+ ( cfdif(i)*cfdif(j) )/dxdg
+     *                                 - ( hdg(i)*hdg(j) )/dghdg
+          enddo
+        else
+          call abrt
+        endif
+        jstart=1
+      enddo
+c     psb update (optional)
+c       do i = 1,3*natfmo
+c        do j = 1,3*natfmo
+c         hesinv(i,j) = hesinv(i,j)
+c    1                + ( gdif(i) - hdg(i) )*cdif(j)/dxdx
+c    1                + ( gdif(j) - hdg(j) )*cdif(i)/dxdx
+c    1                - cdif(i)*cdif(j)*( dxdg - dxhdx )/(dxdx*dxdx)
+c         hesinv(j,i) = hesinv(i,j)
+c        end do
+c       end do
+c     write(6,*) 'inv hess',imin,jmin,imax,jmax
+c     call prtri(hssinv,imax)
+      return
+      END
+c
+C*MODULE fmogrd  *DECK stepsize
+      subroutine stepsize(ediff,slope0,slopeold,step0,stepold,stepnew)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (two=2.0D+00,three=3.0D+00)
+c
+c     Determine the next step size during geometry optimisation,
+c     using cubic interpolation methods.
+c
+c     The result is in stepnew, the rest are input arguments.
+c
+c     written by T. Ishida and D. Fedorov.
+c
+      ramda = 0.1d+00
+      rmiu = 0.5d+00
+c
+      aa = -two*ediff + (slope0+slopeold)*(stepold-step0)
+      aa = aa/(stepold-step0)**3
+      bb = three*ediff - (two*slope0+slopeold)*(stepold-step0)
+      bb = bb/(stepold-step0)**2
+      cc = slope0
+c
+      step=step0 + ( -bb + sqrt( bb*bb - three*aa*cc ) )/(three*aa)
+      stepnew=max( ramda*stepold , min(step,rmiu*stepold) )
+c
+c         optional  .........................................................
+c         step size is determind by quadratic interpolation methods
+c         note : stepc is the calculated new step size
+c                cc = (fb - fa - (slopea)*stepb)/(stepb**2)
+c                stepc = - ( (slopea)/(2.0D+00*cc) )
+c                stepc = max( ramda*stepb , min(stepc,rmiu*stepb) )
+c        ....................................................................
+c
+      return 
+      end 
+C*MODULE fmogrd  *DECK rstopt1
+      subroutine rstopt1(natfmo,fmocp,fmogep,irest)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      logical GOPARR,DSKWRK,MASWRK
+      character*8 grpnam
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      dimension fmocp(3,natfmo),fmogep(3,natfmo)
+      data grpnam/' $OPTRST'/
+c
+c     Read(irest=0)/write(irest=1) FMO optimisation restart. 
+c     Set irest to 1 if read successfully.
+c
+      if(irest.eq.0) then
+        CALL SEQREW(IR)
+        CALL FNDGRP(IR,grpnam,IEOF)
+        IF(IEOF.EQ.0) then
+          if(maswrk) then
+            read(ir,9020) fmocp 
+            read(ir,9030) fmogep
+          endif 
+          if(goparr) then
+            CALL DDI_BCAST(2422,'F',fmocp,3*natfmo,master)
+            CALL DDI_BCAST(2422,'F',fmogep,3*natfmo,master)
+          endif
+          if(maswrk) write(iw,9200)
+          irest=1
+        endif 
+      else
+        write(ip,9005) grpnam
+        write(ip,9020) fmocp 
+        write(ip,9030) fmogep
+        write(ip,9100)
+      endif
+      return 
+ 9005 format(1x,'Restart data for RUNTYP=OPTFMO, METHOD=HSSUPD or BFGSL'
+     *     ,/A8)
+ 9020 format(6f13.8)
+ 9030 format(8f10.7)
+ 9100 format(1x,'$END')
+ 9200 format(/1x,'Successfully read optimisation restart data.')
+      end 
+C*MODULE fmogrd  *DECK rstopt2
+      subroutine rstopt2(natfmo,frmsp,p,irest)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      logical GOPARR,DSKWRK,MASWRK
+      character*8 grpnam
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      dimension p(3,natfmo)
+      data grpnam/' $OPTRST'/
+c
+c     Read(irest=0)/write(irest=1) FMO optimisation restart.
+c     Set irest to 1 if read successfully.
+c
+      if(irest.eq.0) then
+        CALL SEQREW(IR)
+        CALL FNDGRP(IR,grpnam,IEOF)
+        IF(IEOF.EQ.0) then
+          if(maswrk) then
+            read(ir,9020) frmsp
+            read(ir,9030) p
+          endif
+          if(goparr) then
+            CALL DDI_BCAST(2422,'F',frmsp,1,master)
+            CALL DDI_BCAST(2422,'F',p,3*natfmo,master)
+          endif
+          if(maswrk) write(iw,9200)
+          irest=1
+        endif
+      else
+        write(ip,9005) grpnam
+        write(ip,9020) frmsp 
+        write(ip,9030) p
+        write(ip,9100)
+      endif
+      return
+ 9005 format(1x,'Restart data for RUNTYP=OPTFMO, METHOD=CG',/A8)
+ 9020 format(1x,f14.10)
+ 9030 format(8f10.7)
+ 9100 format(1x,'$END')
+ 9200 format(/1x,'Successfully read optimisation restart data.')
+      end
+C*MODULE fmogrd  *DECK stepofmo
+      SUBROUTINE stepofmo(ENERGY,olde,depre,step,stepmin,stepmax,stepfac
+     *                   )
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      logical GOPARR,DSKWRK,MASWRK
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+c     PARAMETER (ONE=1.0D+00, TWO=2.0D+00, THREE=3.0D+00, FOUR=4.0D+00,
+c    *           TMONE=1.0D-01, PT75=0.75D+00)
+c
+      DEACT = ENERGY-OLDE
+      if(DEPRE.ne.0.0D+00) then
+        RATIO = DEACT/DEPRE
+C
+C       THE STARTING POINT FOR DXMAXT IS THE PREVIOUS VALUE
+C       IF THIS WAS A GOOD STEP, INCREASE THE ALLOWED STEP LENGTH
+C       REDUCE IT IF IT WAS A POOR STEP
+C
+c       IF(RATIO.LE.TMONE .OR. RATIO.GE.THREE)        step=step/TWO
+c       IF(RATIO.GE.PT75 .AND. RATIO.LE.(FOUR/THREE)) step=step*SQRT(TWO)
+c       IF(ABS(RATIO-ONE).LT.TMONE)                   step=step*SQRT(TWO)
+        if(ratio.lt.-0.25D-00) step=step*stepfac
+        if(ratio.gt. 1.25D+00) step=step/stepfac
+      else
+        RATIO=1.0D+00
+      endif
+      step=MAX(step,stepmin)
+      step=MIN(step,stepmax)
+      IF(MASWRK) WRITE(IW,9060) DEACT,DEPRE,RATIO,step
+c
+      return
+ 9060 FORMAT(10X,'   ACTUAL ENERGY CHANGE WAS',F15.10/
+     *       10X,'PREDICTED ENERGY CHANGE WAS',F15.10,' RATIO=',F7.3,/,
+     *       10X,'Current step size is       ',F9.4)
+      end

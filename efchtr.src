@@ -1,0 +1,5137 @@
+C  1 MAY 09 - NMT - NEW DIMENSION FOR EFPBAS
+C  7 DEC 07 - LVS - FIX PARALLEL USAGE OF TFSQP
+C 20 AUG 07 - LVS - PBC-EFP CLEANED
+C 25 JUN 07 - MWS - DEACTIVATE SCREENING CODE
+C 24 MAR 07 - LVS - ABORT USE OF SCREENING WITH CHARGE TRANSFER
+C 17 JAN 06 - HL  - SWITCHING FUNCTIONS FOR MD, FIX PBC BUGS
+C 19 SEP 05 - HMN,IA - CHANGES FOR MOLECULAR DYNAMICS
+C 13 JUL 05 - MWS - EFXEF,DEFXEF: PASSED MORE DYNAMIC MEMORY
+C  5 JUL 05 - MWS - SELECT NEW ATOM,BASIS,EFP,PCM,DAF DIMENSIONS
+C 27 JUN 05 - HL  - PERIODIC BOUNDARY COND. FOR EFP
+C 14 MAR 05 - HL  - NEW MODULE TO COMPUTE EFP CHARGE TRANSFER E+GRAD
+C
+C*MODULE EFCHTR  *DECK CHGTRN
+      SUBROUTINE CHGTRN(ECT,CANVEC,SMAT,TFRG,TMAT,WRK,SAB,TAB,
+     *                  VEFP,VABEFB,VABEFA,VAAEFB,VBBEFA,
+     *                  ECTFRG,IDOIT,QUAD,MXBFEFP,MXAOEFP)
+C
+      IMPLICIT DOUBLE PRECISION (A-H, O-Z)
+C
+      LOGICAL GOPARR, DSKWRK, MASWRK
+C
+C
+      PARAMETER (MXAO=8192, MXSHEF=1000, MXGEFP=4000,
+     *           MXDFG=5, MXFRG=1050, MXFGPT=12000,
+     *           MXDPPT=MXFRG*MXDFG*12)
+      PARAMETER (ZERO=0.0D+00)
+C
+      CHARACTER*8 FRGNME
+C
+      COMMON /EFMULT/ EFC(3,MXFGPT),EFCHG(2,MXFGPT),EFATRM(MXFGPT),
+     *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
+     *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
+     *                EFOCT(10,MXFGPT),FRGNME(MXFGPT)
+      COMMON /EFPCMO/ NOCC(MXDFG),NVIR(MXDFG),NAO(MXDFG),NTAO,
+     *                CANFOK(MXAO,MXDFG)
+      COMMON /EFPBAS/ EX(MXGEFP,MXDFG),CS(MXGEFP,MXDFG),
+     *                CP(MXGEFP,MXDFG),CD(MXGEFP,MXDFG),
+     *                CF(MXGEFP,MXDFG),CG(MXGEFP,MXDFG),
+     *                PRNAME(MXFGPT),PRCORD(3,MXFGPT),EFZNUC(MXFGPT),
+     *                KSTART(MXSHEF,MXDFG),KATOM(MXSHEF,MXDFG),
+     *                KTYPE(MXSHEF,MXDFG),KNG(MXSHEF,MXDFG),
+     *                KLOC(MXSHEF,MXDFG),KMIN(MXSHEF,MXDFG),
+     *                KMAX(MXSHEF,MXDFG),NSHELL(MXDFG),NGAUSS(MXDFG),
+     *                NAT(MXDFG),NUM(MXDFG),NTPATM
+      COMMON /EFPPBC/ XBOX,YBOX,ZBOX,XCUT,YCUT,ZCUT,RCUT
+     *                ,SWR1,SWR2,ISWF
+      COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
+     *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
+     *                ATORQ(3,MXFRG)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /FRGTYP/ NDFRG,ISET(MXFRG),NAMIDX(MXDFG)
+C
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+      DIMENSION CANVEC(MXBFEFP,NTAO),SMAT(MXBFEFP,MXBFEFP),
+     *          TFRG(MXAOEFP*MXAOEFP,MXDFG),TMAT(MXBFEFP,MXBFEFP),
+     *          SAB(MXAOEFP,MXAOEFP),TAB(MXAOEFP,MXAOEFP),
+     *          VEFP(MXBFEFP,MXBFEFP),VABEFB(MXAOEFP,MXAOEFP),
+     *          VABEFA(MXAOEFP,MXAOEFP),VAAEFB(MXAOEFP,MXAOEFP),
+     *          VBBEFA(MXAOEFP,MXAOEFP),ECTFRG(NFRG,NFRG),
+     *          WRK(MXBFEFP),IDOIT(*),QUAD(6,*)
+C
+C     CALCULATE THE EFP CHARGE TRANSFER ENERGY
+C     HUI LI, 02/14/2005, AMES
+C
+      ECT = ZERO
+      IF(NTAO.EQ.0) RETURN
+C
+      JNAT = 1
+      JMO = 1
+      DO MJ = 1,NFRG
+         JM=ISET(MJ)
+         CALL STINT(SMAT,TMAT,MXBFEFP,MXBFEFP,NAT(JM),NAT(JM),
+     *              NGAUSS(JM),NSHELL(JM),EX(1,JM),CS(1,JM),
+     *              CP(1,JM),CD(1,JM),CF(1,JM),CG(1,JM),KSTART(1,JM),
+     *              KATOM(1,JM),KTYPE(1,JM),KNG(1,JM),KLOC(1,JM),
+     *              KMIN(1,JM),KMAX(1,JM),NGAUSS(JM),NSHELL(JM),
+     *              EX(1,JM),CS(1,JM),CP(1,JM),CD(1,JM),CF(1,JM),
+     *              CG(1,JM),KSTART(1,JM),KATOM(1,JM),KTYPE(1,JM),
+     *              KNG(1,JM),KLOC(1,JM),KMIN(1,JM),KMAX(1,JM),
+     *              PRCORD(1,JNAT),PRCORD(1,JNAT))
+         CALL VCLR(TFRG(1,JM),1,MXAOEFP*MXAOEFP)
+         CALL TFSQP(TFRG(1,JM),TMAT,CANVEC(1,JMO),
+     *              CANVEC(1,JMO),WRK,MXBFEFP,MXBFEFP,NAO(JM),NAO(JM),
+     *              MXAOEFP,MXAOEFP,.TRUE.)
+         JMO = JMO + NAO(JM)
+         JNAT = JNAT + NAT(JM)
+      END DO
+C
+C
+C
+C     NOTE 'JM' IS MOLECULE 'A', 'IM' IS MOLECULE 'B'
+C
+C     - INITIALIZE PARALLEL
+      IPCOUNT = ME - 1
+C
+      JNAT = 1
+      JMO = 1
+      DO MJ = 1,NFRG
+         COMX1 = EFCENT(1,MJ)
+         COMY1 = EFCENT(2,MJ)
+         COMZ1 = EFCENT(3,MJ)
+         JM=ISET(MJ)
+         INAT = 1
+         IMO = 1
+         IEFPT = 1
+         DO MI = 1,NFRG
+            IM=ISET(MI)
+            IF(MI.LE.MJ) GOTO 500
+C           - GO PARALLEL!
+            IF(GOPARR) THEN
+               IPCOUNT = IPCOUNT + 1
+               IF(MOD(IPCOUNT,NPROC).NE.0) GO TO 500
+            END IF
+C
+              COMX2 = EFCENT(1,MI)
+              COMY2 = EFCENT(2,MI)
+              COMZ2 = EFCENT(3,MI)
+C
+               COMX = COMX1 - COMX2
+               COMY = COMY1 - COMY2
+               COMZ = COMZ1 - COMZ2
+C
+               PBCX = ZERO
+               PBCY = ZERO
+               PBCZ = ZERO
+               IF (XBOX .NE. ZERO) PBCX = XBOX * ANINT(COMX/XBOX)
+               IF (YBOX .NE. ZERO) PBCY = YBOX * ANINT(COMY/YBOX)
+               IF (ZBOX .NE. ZERO) PBCZ = ZBOX * ANINT(COMZ/ZBOX)
+C
+C   ----  DISTANCE BETWEEN FRAGMENTS
+               X12  = ABS(COMX - PBCX)
+               Y12  = ABS(COMY - PBCY)
+               Z12  = ABS(COMZ - PBCZ)
+               R12  = X12*X12+Y12*Y12+Z12*Z12
+C
+            IF(X12.GT.XCUT.OR.Y12.GT.YCUT.OR.Z12.GT.ZCUT)GOTO 500
+            R12  = X12*X12+Y12*Y12+Z12*Z12
+            IF(R12.GT.RCUT)GOTO 500
+C
+               SWF   = 1.0D+00
+               IF(R12.GT.SWR2*SWR2) THEN
+                 GOTO 500
+               ELSE IF(R12.GT.SWR1*SWR1) THEN
+                 IF(ISWF.EQ.1) THEN
+                    DUMY1 = 1.0D+00/(SWR2*SWR2 - SWR1*SWR1)
+                    DUMY2 = DUMY1*DUMY1
+                    DUMY3 = DUMY2*DUMY1
+                    DUMY4 = DUMY2*DUMY2
+                    DUMY5 = DUMY2*DUMY3
+                    VUMY1 = R12 - SWR1*SWR1
+                    VUMY2 = VUMY1*VUMY1
+                    VUMY3 = VUMY2*VUMY1
+                    VUMY4 = VUMY2*VUMY2
+                    VUMY5 = VUMY2*VUMY3
+                    DSWF  = -30.0D+00*DUMY3*VUMY2
+     *                      +60.0D+00*DUMY4*VUMY3
+     *                      -30.0D+00*DUMY5*VUMY4
+                    DSWF  = 2.0D+00*DSWF
+                    SWF   = 1.0D+00 - 10.0D+00*DUMY3*VUMY3
+     *                              + 15.0D+00*DUMY4*VUMY4
+     *                              -  6.0D+00*DUMY5*VUMY5
+                 ELSE IF(ISWF.EQ.2) THEN
+                    R12   = SQRT(R12)
+                    PIL   = 3.1415926535897932D+00/(SWR2-SWR1)
+                    DUMY  = (R12 - SWR1) * PIL
+                    SWF   = 0.50D+00 * (COS(DUMY) + 1.0D+00)
+                 END IF
+               END IF
+C
+            EFCENT(1,MI) = EFCENT(1,MI) + PBCX
+            EFCENT(2,MI) = EFCENT(2,MI) + PBCY
+            EFCENT(3,MI) = EFCENT(3,MI) + PBCZ
+            DO NATIM=1,NAT(IM)
+            PRCORD(1,INAT+NATIM-1) = PRCORD(1,INAT+NATIM-1) + PBCX
+            PRCORD(2,INAT+NATIM-1) = PRCORD(2,INAT+NATIM-1) + PBCY
+            PRCORD(3,INAT+NATIM-1) = PRCORD(3,INAT+NATIM-1) + PBCZ
+            ENDDO
+            DO NPTIM=1,NMPTS(MI)
+            EFC(1,IEFPT+NPTIM-1) = EFC(1,IEFPT+NPTIM-1) + PBCX
+            EFC(2,IEFPT+NPTIM-1) = EFC(2,IEFPT+NPTIM-1) + PBCY
+            EFC(3,IEFPT+NPTIM-1) = EFC(3,IEFPT+NPTIM-1) + PBCZ
+            ENDDO
+C
+C           -- SAB AND TAB --
+C
+            CALL STINT(SMAT,TMAT,MXBFEFP,MXBFEFP,NAT(IM),NAT(JM),
+     *                 NGAUSS(IM),NSHELL(IM),EX(1,IM),CS(1,IM),
+     *                 CP(1,IM),CD(1,IM),CF(1,IM),CG(1,IM),KSTART(1,IM),
+     *                 KATOM(1,IM),KTYPE(1,IM),KNG(1,IM),KLOC(1,IM),
+     *                 KMIN(1,IM),KMAX(1,IM),NGAUSS(JM),NSHELL(JM),
+     *                 EX(1,JM),CS(1,JM),CP(1,JM),CD(1,JM),CF(1,JM),
+     *                 CG(1,JM),KSTART(1,JM),KATOM(1,JM),KTYPE(1,JM),
+     *                 KNG(1,JM),KLOC(1,JM),KMIN(1,JM),KMAX(1,JM),
+     *                 PRCORD(1,INAT),PRCORD(1,JNAT))
+            CALL VCLR(SAB,1,MXAOEFP*MXAOEFP)
+            CALL TFSQP(SAB,SMAT,CANVEC(1,JMO),CANVEC(1,IMO),WRK,
+     *                 MXBFEFP,MXBFEFP,NAO(JM),NAO(IM),
+     *                 MXAOEFP,MXAOEFP,.FALSE.)
+C
+C           USE SAB TO CHECK IF THE CT TERM IS SIGNIFICANT
+            DO II = 1, NOCC(IM)+NVIR(IM)
+               DO JJ = 1, NOCC(JM)+NVIR(JM)
+                  IF(ABS(SAB(JJ,II)).GT.0.10D+00) GOTO 600
+               END DO
+            END DO
+C
+            EFCENT(1,MI) = EFCENT(1,MI) - PBCX
+            EFCENT(2,MI) = EFCENT(2,MI) - PBCY
+            EFCENT(3,MI) = EFCENT(3,MI) - PBCZ
+            DO NATIM=1,NAT(IM)
+            PRCORD(1,INAT+NATIM-1) = PRCORD(1,INAT+NATIM-1) - PBCX
+            PRCORD(2,INAT+NATIM-1) = PRCORD(2,INAT+NATIM-1) - PBCY
+            PRCORD(3,INAT+NATIM-1) = PRCORD(3,INAT+NATIM-1) - PBCZ
+            ENDDO
+            DO NPTIM=1,NMPTS(MI)
+            EFC(1,IEFPT+NPTIM-1) = EFC(1,IEFPT+NPTIM-1) - PBCX
+            EFC(2,IEFPT+NPTIM-1) = EFC(2,IEFPT+NPTIM-1) - PBCY
+            EFC(3,IEFPT+NPTIM-1) = EFC(3,IEFPT+NPTIM-1) - PBCZ
+            ENDDO
+C
+            GOTO 500
+ 600        CONTINUE
+C
+            CALL VCLR(TAB,1,MXAOEFP*MXAOEFP)
+            CALL TFSQP(TAB,TMAT,CANVEC(1,JMO),CANVEC(1,IMO),WRK,
+     *                 MXBFEFP,MXBFEFP,NAO(JM),NAO(IM),
+     *                 MXAOEFP,MXAOEFP,.FALSE.)
+C
+C           -- VAAEFB --
+C
+            CALL VCLR(VEFP,1,MXBFEFP*MXBFEFP)
+            CALL EFCEF(VEFP,MI,MXBFEFP,MXBFEFP,NAT(JM),NAT(JM),
+     *                 NGAUSS(JM),NSHELL(JM),EX(1,JM),CS(1,JM),
+     *                 CP(1,JM),CD(1,JM),CF(1,JM),CG(1,JM),KSTART(1,JM),
+     *                 KATOM(1,JM),KTYPE(1,JM),KNG(1,JM),KLOC(1,JM),
+     *                 KMIN(1,JM),KMAX(1,JM),NGAUSS(JM),NSHELL(JM),
+     *                 EX(1,JM),CS(1,JM),CP(1,JM),CD(1,JM),CF(1,JM),
+     *                 CG(1,JM),KSTART(1,JM),KATOM(1,JM),KTYPE(1,JM),
+     *                 KNG(1,JM),KLOC(1,JM),KMIN(1,JM),KMAX(1,JM),
+     *                 PRCORD(1,JNAT),PRCORD(1,JNAT),IDOIT)
+            CALL EFDEF(VEFP,MI,MXBFEFP,MXBFEFP,NAT(JM),NAT(JM),
+     *                 NGAUSS(JM),NSHELL(JM),EX(1,JM),CS(1,JM),
+     *                 CP(1,JM),CD(1,JM),CF(1,JM),CG(1,JM),KSTART(1,JM),
+     *                 KATOM(1,JM),KTYPE(1,JM),KNG(1,JM),KLOC(1,JM),
+     *                 KMIN(1,JM),KMAX(1,JM),NGAUSS(JM),NSHELL(JM),
+     *                 EX(1,JM),CS(1,JM),CP(1,JM),CD(1,JM),CF(1,JM),
+     *                 CG(1,JM),KSTART(1,JM),KATOM(1,JM),KTYPE(1,JM),
+     *                 KNG(1,JM),KLOC(1,JM),KMIN(1,JM),KMAX(1,JM),
+     *                 PRCORD(1,JNAT),PRCORD(1,JNAT),IDOIT)
+            CALL EFQEF(VEFP,MI,MXBFEFP,MXBFEFP,NAT(JM),NAT(JM),
+     *                 NGAUSS(JM),NSHELL(JM),EX(1,JM),CS(1,JM),
+     *                 CP(1,JM),CD(1,JM),CF(1,JM),CG(1,JM),KSTART(1,JM),
+     *                 KATOM(1,JM),KTYPE(1,JM),KNG(1,JM),KLOC(1,JM),
+     *                 KMIN(1,JM),KMAX(1,JM),NGAUSS(JM),NSHELL(JM),
+     *                 EX(1,JM),CS(1,JM),CP(1,JM),CD(1,JM),CF(1,JM),
+     *                 CG(1,JM),KSTART(1,JM),KATOM(1,JM),KTYPE(1,JM),
+     *                 KNG(1,JM),KLOC(1,JM),KMIN(1,JM),KMAX(1,JM),
+     *                 PRCORD(1,JNAT),PRCORD(1,JNAT),IDOIT,QUAD)
+            CALL VCLR(VAAEFB(1,1),1,MXAOEFP*MXAOEFP)
+            CALL TFSQP(VAAEFB(1,1),VEFP,CANVEC(1,JMO),
+     *                 CANVEC(1,JMO),WRK,
+     *                 MXBFEFP,MXBFEFP,NAO(JM),NAO(JM),
+     *                 MXAOEFP,MXAOEFP,.FALSE.)
+C
+C           -- VBBEFA --
+C
+            CALL VCLR(VEFP,1,MXBFEFP*MXBFEFP)
+            CALL EFCEF(VEFP,MJ,MXBFEFP,MXBFEFP,NAT(IM),NAT(IM),
+     *                 NGAUSS(IM),NSHELL(IM),EX(1,IM),CS(1,IM),
+     *                 CP(1,IM),CD(1,IM),CF(1,IM),CG(1,IM),KSTART(1,IM),
+     *                 KATOM(1,IM),KTYPE(1,IM),KNG(1,IM),KLOC(1,IM),
+     *                 KMIN(1,IM),KMAX(1,IM),NGAUSS(IM),NSHELL(IM),
+     *                 EX(1,IM),CS(1,IM),CP(1,IM),CD(1,IM),CF(1,IM),
+     *                 CG(1,IM),KSTART(1,IM),KATOM(1,IM),KTYPE(1,IM),
+     *                 KNG(1,IM),KLOC(1,IM),KMIN(1,IM),KMAX(1,IM),
+     *                 PRCORD(1,INAT),PRCORD(1,INAT),IDOIT)
+            CALL EFDEF(VEFP,MJ,MXBFEFP,MXBFEFP,NAT(IM),NAT(IM),
+     *                 NGAUSS(IM),NSHELL(IM),EX(1,IM),CS(1,IM),
+     *                 CP(1,IM),CD(1,IM),CF(1,IM),CG(1,IM),KSTART(1,IM),
+     *                 KATOM(1,IM),KTYPE(1,IM),KNG(1,IM),KLOC(1,IM),
+     *                 KMIN(1,IM),KMAX(1,IM),NGAUSS(IM),NSHELL(IM),
+     *                 EX(1,IM),CS(1,IM),CP(1,IM),CD(1,IM),CF(1,IM),
+     *                 CG(1,IM),KSTART(1,IM),KATOM(1,IM),KTYPE(1,IM),
+     *                 KNG(1,IM),KLOC(1,IM),KMIN(1,IM),KMAX(1,IM),
+     *                 PRCORD(1,INAT),PRCORD(1,INAT),IDOIT)
+            CALL EFQEF(VEFP,MJ,MXBFEFP,MXBFEFP,NAT(IM),NAT(IM),
+     *                 NGAUSS(IM),NSHELL(IM),EX(1,IM),CS(1,IM),
+     *                 CP(1,IM),CD(1,IM),CF(1,IM),CG(1,IM),KSTART(1,IM),
+     *                 KATOM(1,IM),KTYPE(1,IM),KNG(1,IM),KLOC(1,IM),
+     *                 KMIN(1,IM),KMAX(1,IM),NGAUSS(IM),NSHELL(IM),
+     *                 EX(1,IM),CS(1,IM),CP(1,IM),CD(1,IM),CF(1,IM),
+     *                 CG(1,IM),KSTART(1,IM),KATOM(1,IM),KTYPE(1,IM),
+     *                 KNG(1,IM),KLOC(1,IM),KMIN(1,IM),KMAX(1,IM),
+     *                 PRCORD(1,INAT),PRCORD(1,INAT),IDOIT,QUAD)
+            CALL VCLR(VBBEFA(1,1),1,MXAOEFP*MXAOEFP)
+            CALL TFSQP(VBBEFA(1,1),VEFP,CANVEC(1,IMO),
+     *                 CANVEC(1,IMO),WRK,
+     *                 MXBFEFP,MXBFEFP,NAO(IM),NAO(IM),
+     *                 MXAOEFP,MXAOEFP,.FALSE.)
+C
+C           -- VABEFA --
+C
+            CALL VCLR(VEFP,1,MXBFEFP*MXBFEFP)
+            CALL EFCEF(VEFP,MJ,MXBFEFP,MXBFEFP,NAT(IM),NAT(JM),
+     *                 NGAUSS(IM),NSHELL(IM),EX(1,IM),CS(1,IM),
+     *                 CP(1,IM),CD(1,IM),CF(1,IM),CG(1,IM),KSTART(1,IM),
+     *                 KATOM(1,IM),KTYPE(1,IM),KNG(1,IM),KLOC(1,IM),
+     *                 KMIN(1,IM),KMAX(1,IM),NGAUSS(JM),NSHELL(JM),
+     *                 EX(1,JM),CS(1,JM),CP(1,JM),CD(1,JM),CF(1,JM),
+     *                 CG(1,JM),KSTART(1,JM),KATOM(1,JM),KTYPE(1,JM),
+     *                 KNG(1,JM),KLOC(1,JM),KMIN(1,JM),KMAX(1,JM),
+     *                 PRCORD(1,INAT),PRCORD(1,JNAT),IDOIT)
+            CALL EFDEF(VEFP,MJ,MXBFEFP,MXBFEFP,NAT(IM),NAT(JM),
+     *                 NGAUSS(IM),NSHELL(IM),EX(1,IM),CS(1,IM),
+     *                 CP(1,IM),CD(1,IM),CF(1,IM),CG(1,IM),KSTART(1,IM),
+     *                 KATOM(1,IM),KTYPE(1,IM),KNG(1,IM),KLOC(1,IM),
+     *                 KMIN(1,IM),KMAX(1,IM),NGAUSS(JM),NSHELL(JM),
+     *                 EX(1,JM),CS(1,JM),CP(1,JM),CD(1,JM),CF(1,JM),
+     *                 CG(1,JM),KSTART(1,JM),KATOM(1,JM),KTYPE(1,JM),
+     *                 KNG(1,JM),KLOC(1,JM),KMIN(1,JM),KMAX(1,JM),
+     *                 PRCORD(1,INAT),PRCORD(1,JNAT),IDOIT)
+            CALL EFQEF(VEFP,MJ,MXBFEFP,MXBFEFP,NAT(IM),NAT(JM),
+     *                 NGAUSS(IM),NSHELL(IM),EX(1,IM),CS(1,IM),
+     *                 CP(1,IM),CD(1,IM),CF(1,IM),CG(1,IM),KSTART(1,IM),
+     *                 KATOM(1,IM),KTYPE(1,IM),KNG(1,IM),KLOC(1,IM),
+     *                 KMIN(1,IM),KMAX(1,IM),NGAUSS(JM),NSHELL(JM),
+     *                 EX(1,JM),CS(1,JM),CP(1,JM),CD(1,JM),CF(1,JM),
+     *                 CG(1,JM),KSTART(1,JM),KATOM(1,JM),KTYPE(1,JM),
+     *                 KNG(1,JM),KLOC(1,JM),KMIN(1,JM),KMAX(1,JM),
+     *                 PRCORD(1,INAT),PRCORD(1,JNAT),IDOIT,QUAD)
+            CALL VCLR(VABEFA,1,MXAOEFP*MXAOEFP)
+            CALL TFSQP(VABEFA,VEFP,CANVEC(1,JMO),CANVEC(1,IMO),WRK,
+     *                 MXBFEFP,MXBFEFP,NAO(JM),NAO(IM),
+     *                 MXAOEFP,MXAOEFP,.FALSE.)
+C
+C           -- VABEFB --
+C
+            CALL VCLR(VEFP,1,MXBFEFP*MXBFEFP)
+            CALL EFCEF(VEFP,MI,MXBFEFP,MXBFEFP,NAT(IM),NAT(JM),
+     *                 NGAUSS(IM),NSHELL(IM),EX(1,IM),CS(1,IM),
+     *                 CP(1,IM),CD(1,IM),CF(1,IM),CG(1,IM),KSTART(1,IM),
+     *                 KATOM(1,IM),KTYPE(1,IM),KNG(1,IM),KLOC(1,IM),
+     *                 KMIN(1,IM),KMAX(1,IM),NGAUSS(JM),NSHELL(JM),
+     *                 EX(1,JM),CS(1,JM),CP(1,JM),CD(1,JM),CF(1,JM),
+     *                 CG(1,JM),KSTART(1,JM),KATOM(1,JM),KTYPE(1,JM),
+     *                 KNG(1,JM),KLOC(1,JM),KMIN(1,JM),KMAX(1,JM),
+     *                 PRCORD(1,INAT),PRCORD(1,JNAT),IDOIT)
+            CALL EFDEF(VEFP,MI,MXBFEFP,MXBFEFP,NAT(IM),NAT(JM),
+     *                 NGAUSS(IM),NSHELL(IM),EX(1,IM),CS(1,IM),
+     *                 CP(1,IM),CD(1,IM),CF(1,IM),CG(1,IM),KSTART(1,IM),
+     *                 KATOM(1,IM),KTYPE(1,IM),KNG(1,IM),KLOC(1,IM),
+     *                 KMIN(1,IM),KMAX(1,IM),NGAUSS(JM),NSHELL(JM),
+     *                 EX(1,JM),CS(1,JM),CP(1,JM),CD(1,JM),CF(1,JM),
+     *                 CG(1,JM),KSTART(1,JM),KATOM(1,JM),KTYPE(1,JM),
+     *                 KNG(1,JM),KLOC(1,JM),KMIN(1,JM),KMAX(1,JM),
+     *                 PRCORD(1,INAT),PRCORD(1,JNAT),IDOIT)
+            CALL EFQEF(VEFP,MI,MXBFEFP,MXBFEFP,NAT(IM),NAT(JM),
+     *                 NGAUSS(IM),NSHELL(IM),EX(1,IM),CS(1,IM),
+     *                 CP(1,IM),CD(1,IM),CF(1,IM),CG(1,IM),KSTART(1,IM),
+     *                 KATOM(1,IM),KTYPE(1,IM),KNG(1,IM),KLOC(1,IM),
+     *                 KMIN(1,IM),KMAX(1,IM),NGAUSS(JM),NSHELL(JM),
+     *                 EX(1,JM),CS(1,JM),CP(1,JM),CD(1,JM),CF(1,JM),
+     *                 CG(1,JM),KSTART(1,JM),KATOM(1,JM),KTYPE(1,JM),
+     *                 KNG(1,JM),KLOC(1,JM),KMIN(1,JM),KMAX(1,JM),
+     *                 PRCORD(1,INAT),PRCORD(1,JNAT),IDOIT,QUAD)
+            CALL VCLR(VABEFB,1,MXAOEFP*MXAOEFP)
+            CALL TFSQP(VABEFB,VEFP,CANVEC(1,JMO),CANVEC(1,IMO),WRK,
+     *                 MXBFEFP,MXBFEFP,NAO(JM),NAO(IM),
+     *                 MXAOEFP,MXAOEFP,.FALSE.)
+C
+C           COMPUTE E(CT)
+C
+            CALL ECHTR(SAB,TAB,TFRG(1,JM),TFRG(1,IM),
+     *          VABEFB,VABEFA,VAAEFB,VBBEFA,
+     *          CANFOK(1,JM),CANFOK(1,IM),
+     *          CTA,CTB,NOCC(JM),NVIR(JM),NOCC(IM),NVIR(IM),
+     *          MXAOEFP)
+C
+C           -- APPLY SWITCHING FUNCTIONS
+C
+            CTA = CTA*SWF
+            CTB = CTB*SWF
+C
+            ECT = ECT + (CTA+CTB)
+            ECTFRG(MI,MJ) = CTA + CTB
+C
+C
+            EFCENT(1,MI) = EFCENT(1,MI) - PBCX
+            EFCENT(2,MI) = EFCENT(2,MI) - PBCY
+            EFCENT(3,MI) = EFCENT(3,MI) - PBCZ
+            DO NATIM=1,NAT(IM)
+            PRCORD(1,INAT+NATIM-1) = PRCORD(1,INAT+NATIM-1) - PBCX
+            PRCORD(2,INAT+NATIM-1) = PRCORD(2,INAT+NATIM-1) - PBCY
+            PRCORD(3,INAT+NATIM-1) = PRCORD(3,INAT+NATIM-1) - PBCZ
+            ENDDO
+            DO NPTIM=1,NMPTS(MI)
+            EFC(1,IEFPT+NPTIM-1) = EFC(1,IEFPT+NPTIM-1) - PBCX
+            EFC(2,IEFPT+NPTIM-1) = EFC(2,IEFPT+NPTIM-1) - PBCY
+            EFC(3,IEFPT+NPTIM-1) = EFC(3,IEFPT+NPTIM-1) - PBCZ
+            ENDDO
+C
+C
+ 500        CONTINUE
+            IEFPT = IEFPT + NMPTS(MI)
+            IMO = IMO + NAO(IM)
+            INAT = INAT + NAT(IM)
+         END DO
+         JMO = JMO + NAO(JM)
+         JNAT = JNAT + NAT(JM)
+      END DO
+C     - SUM UP
+      IF(GOPARR) THEN
+         CALL DDI_GSUMF(1512,ECT,1)
+      END IF
+C
+      RETURN
+      END
+C*MODULE EFCHTR  *DECK ECHTR
+      SUBROUTINE ECHTR(SAB,TAB,TAA,TBB,
+     *            VABEFB,VABEFA,VAAEFB,VBBEFA,
+     *            FA,FB,CTA,CTB,
+     *            NOCCA,NVIRA,NOCCB,NVIRB,MXAO)
+C
+      IMPLICIT DOUBLE PRECISION (A-H, O-Z)
+C
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00)
+C
+      DIMENSION SAB(MXAO,MXAO), TAB(MXAO,MXAO),
+     *          VABEFB(MXAO,MXAO), VABEFA(MXAO,MXAO),
+     *          VAAEFB(MXAO,MXAO), VBBEFA(MXAO,MXAO),
+     *          TAA(MXAO,MXAO), TBB(MXAO,MXAO),
+     *          FA(MXAO), FB(MXAO)
+C
+      CT=ZERO
+      DO 200 I = 1, NOCCA
+         DO 300 N = NOCCB+1, NOCCB+NVIRB
+            STIN  = ZERO
+            SNMVIM= ZERO
+            SAB2  = ZERO
+            DO M = 1, NOCCA+NVIRA
+               SNMVIM=SNMVIM+SAB(M,N)*VAAEFB(I,M)
+               SAB2=SAB2+SAB(M,N)*SAB(M,N)
+            END DO
+            DO J = 1, NOCCB
+               SNMTJM=ZERO
+               DO M = 1, NOCCA+NVIRA
+                  SNMTJM=SNMTJM+SAB(M,N)*TAB(M,J)
+               END DO
+               STIN  = STIN  +  (TBB(N,J)-SNMTJM)*SAB(I,J)
+            END DO
+            T10=ONE/(ONE-SAB2)
+            T20=(VABEFB(I,N)-SNMVIM)/(FA(I)-TBB(N,N))
+            T30=VABEFB(I,N)-SNMVIM+STIN
+            CT = CT + T10*T20*T30
+ 300     CONTINUE
+ 200  CONTINUE
+      CTA = CT + CT
+C
+      CT=ZERO
+      DO 400 I = 1, NOCCB
+         DO 500 N = NOCCA+1, NOCCA+NVIRA
+            STIN  = ZERO
+            SNMVIM= ZERO
+            SAB2  = ZERO
+            DO M = 1, NOCCB+NVIRB
+               SNMVIM=SNMVIM+SAB(N,M)*VBBEFA(M,I)
+               SAB2=SAB2+SAB(N,M)*SAB(N,M)
+            END DO
+            DO J = 1, NOCCA
+               SNMTJM=ZERO
+               DO M = 1, NOCCB+NVIRB
+                  SNMTJM=SNMTJM+SAB(N,M)*TAB(J,M)
+               END DO
+               STIN  = STIN  +  (TAA(J,N)-SNMTJM)*SAB(J,I)
+            END DO
+            T10=ONE/(ONE-SAB2)
+            T20=(VABEFA(N,I)-SNMVIM)/(FB(I)-TAA(N,N))
+            T30=VABEFA(N,I)-SNMVIM+STIN
+            CT = CT + T10*T20*T30
+ 500     CONTINUE
+ 400  CONTINUE
+      CTB = CT + CT
+C
+      RETURN
+      END
+C*MODULE EFCHTR  *DECK SETCON
+      SUBROUTINE SETCON(CONI,IPP,CS,CP,CD,CF,CG)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      DIMENSION CONI(*),KARTEN(0:4)
+      DIMENSION CS(*),CP(*),CD(*),CF(*),CG(*)
+      DATA KARTEN/1,3,6,10,15/
+C
+      CONI(1)=CS(IPP)
+      CALL DACOPY(KARTEN(1),CP(IPP),CONI(2),1)
+      CALL DACOPY(KARTEN(2),CD(IPP),CONI(5),1)
+      CALL DACOPY(KARTEN(3),CF(IPP),CONI(11),1)
+      CALL DACOPY(KARTEN(4),CG(IPP),CONI(21),1)
+      RETURN
+      END
+C*MODULE EFCHTR  *DECK STINT
+      SUBROUTINE STINT(SMATCO,TMATCO,L1,L1CO,NATM,NATMCO,
+     *                 NGAU,NSHL,EX,CS,CP,CD,CF,CG,
+     *                 KSTART,KATOM,KTYPE,KNG,KLOC,KMIN,KMAX,
+     *                 NGAUCO,NSHLCO,EXCO,CSCO,CPCO,CDCO,CFCO,CGCO,
+     *                 KSTRCO,KATMCO,KTYPCO,KNGCO,KLOCCO,KMINCO,
+     *                 KMAXCO,C,CCO)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      LOGICAL IANDJ
+C
+      DIMENSION EX(NGAU),CS(NGAU),CP(NGAU),CD(NGAU),
+     *          CF(NGAU),CG(NGAU),KSTART(NSHL),KATOM(NSHL),
+     *          KTYPE(NSHL),KNG(NSHL),KLOC(NSHL),KMIN(NSHL),KMAX(NSHL),
+     *          EXCO(NGAUCO),CSCO(NGAUCO),CPCO(NGAUCO),CDCO(NGAUCO),
+     *          CFCO(NGAUCO),CGCO(NGAUCO),KSTRCO(NSHLCO),KATMCO(NSHLCO),
+     *          KTYPCO(NSHLCO),KNGCO(NSHLCO),KLOCCO(NSHLCO),
+     *          KMINCO(NSHLCO),KMAXCO(NSHLCO),SMATCO(L1CO,L1),
+     *          C(3,NATM),CCO(3,NATMCO),TMATCO(L1CO,L1)
+      DIMENSION SBLK(225),TBLK(225),
+     *          FT(225),DIJ(225),IJX(225),IJY(225),IJZ(225),
+     *          XIN(225),YIN(225),ZIN(225),CONI(35),CONJ(35),
+     *          IX(35),IY(35),IZ(35),JX(35),JY(35),JZ(35)
+C
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /ROOT  / XX,U(13),W(13),NROOTS
+      COMMON /STV   / XINT,YINT,ZINT,TAA,X0,Y0,Z0,
+     *                XI,YI,ZI,XJ,YJ,ZJ,NI,NJ
+      COMMON /SHLNRM/ PNRM(84)
+      COMMON /SYMIND/ TOL,II,JJ,LIT,LJT,MINI,MINJ,MAXI,MAXJ,IANDJ
+C
+      PARAMETER (ZERO=0.0D+00, PT5=0.5D+00, ONE=1.0D+00, TWO=2.0D+00,
+     *           THREE=3.0D+00, FIVE=5.0D+00, SEVEN=7.0D+00,
+     *           ANINE=9.0D+00, ELEVEN=11.0D+00,
+     *           RLN10=2.30258D+00)
+C
+      DATA JX / 0, 1, 0, 0, 2, 0, 0, 1, 1, 0,
+     *          3, 0, 0, 2, 2, 1, 0, 1, 0, 1,
+     *          4, 0, 0, 3, 3, 1, 0, 1, 0, 2,
+     *          2, 0, 2, 1, 1/
+      DATA IX / 1, 6, 1, 1,11, 1, 1, 6, 6, 1,
+     *         16, 1, 1,11,11, 6, 1, 6, 1, 6,
+     *         21, 1, 1,16,16, 6, 1, 6, 1,11,
+     *         11, 1,11, 6, 6/
+      DATA JY / 0, 0, 1, 0, 0, 2, 0, 1, 0, 1,
+     *          0, 3, 0, 1, 0, 2, 2, 0, 1, 1,
+     *          0, 4, 0, 1, 0, 3, 3, 0, 1, 2,
+     *          0, 2, 1, 2, 1/
+      DATA IY / 1, 1, 6, 1, 1,11, 1, 6, 1, 6,
+     *          1,16, 1, 6, 1,11,11, 1, 6, 6,
+     *          1,21, 1, 6, 1,16,16, 1, 6,11,
+     *          1,11, 6,11, 6/
+      DATA JZ / 0, 0, 0, 1, 0, 0, 2, 0, 1, 1,
+     *          0, 0, 3, 0, 1, 0, 1, 2, 2, 1,
+     *          0, 0, 4, 0, 1, 0, 1, 3, 3, 0,
+     *          2, 2, 1, 1, 2/
+      DATA IZ / 1, 1, 1, 6, 1, 1,11, 1, 6, 6,
+     *          1, 1,16, 1, 6, 1, 6,11,11, 6,
+     *          1, 1,21, 1, 6, 1, 6,16,16, 1,
+     *         11,11, 6, 6,11/
+C
+C     ----- COMPUTE CONVENTIONAL S AND T INTEGRALS -----
+C
+      TOL = RLN10*ITOL
+C
+      CALL VCLR(SMATCO,1,L1CO*L1)
+      CALL VCLR(TMATCO,1,L1CO*L1)
+C
+C     ----- I SHELL -----
+C
+      DO 720 II = 1,NSHLCO
+         I = KATMCO(II)
+         XI = CCO(1,I)
+         YI = CCO(2,I)
+         ZI = CCO(3,I)
+         I1 = KSTRCO(II)
+         I2 = I1+KNGCO(II)-1
+         LIT = KTYPCO(II)
+         MINI = KMINCO(II)
+         MAXI = KMAXCO(II)
+         LOCI = KLOCCO(II)-MINI
+C
+C     ----- J SHELL -----
+C
+         DO 700 JJ = 1,NSHL
+            J = KATOM(JJ)
+            XJ = C(1,J)
+            YJ = C(2,J)
+            ZJ = C(3,J)
+            J1 = KSTART(JJ)
+            J2 = J1+KNG(JJ)-1
+            LJT = KTYPE(JJ)
+            MINJ = KMIN(JJ)
+            MAXJ = KMAX(JJ)
+            LOCJ = KLOC(JJ)-MINJ
+            NROOTS = (LIT+LJT-2)/2+1
+            RR = (XI-XJ)**2+(YI-YJ)**2+(ZI-ZJ)**2
+C
+C     ----- PREPARE INDICES FOR PAIRS OF (I,J) FUNCTIONS
+C
+            IJ = 0
+            DO 160 I = MINI,MAXI
+               NX = IX(I)
+               NY = IY(I)
+               NZ = IZ(I)
+               DO 140 J = MINJ,MAXJ
+                  IJ = IJ+1
+                  IJX(IJ) = NX+JX(J)
+                  IJY(IJ) = NY+JY(J)
+                  IJZ(IJ) = NZ+JZ(J)
+                  IF (J.LE.1) FT(IJ) = THREE
+                  IF ((J.GT.1).AND.(J.LE.4)) FT(IJ) = FIVE
+                  IF ((J.GT.4).AND.(J.LE.10)) FT(IJ) = SEVEN
+                  IF ((J.GT.10).AND.(J.LE.20)) FT(IJ) = ANINE
+                  IF (J.GT.20) FT(IJ) = ELEVEN
+  140          CONTINUE
+  160       CONTINUE
+C
+            CALL VCLR(SBLK,1,IJ)
+            CALL VCLR(TBLK,1,IJ)
+C
+C     ----- I PRIMITIVE
+C
+            DO 520 IG = I1,I2
+               AI = EXCO(IG)
+               ARRI = AI*RR
+               AXI = AI*XI
+               AYI = AI*YI
+               AZI = AI*ZI
+               CALL SETCON(CONI,IG,CSCO,CPCO,CDCO,CFCO,CGCO)
+C
+C     ----- J PRIMITIVE
+C
+               DO 500 JG = J1,J2
+                  AJ = EX(JG)
+                  AA = AI+AJ
+                  AA1 = ONE/AA
+                  DUM = AJ*ARRI*AA1
+                  IF (DUM .GT. TOL) GO TO 500
+                  FAC = EXP(-DUM)
+                  CALL SETCON(CONJ,JG,CS,CP,CD,CF,CG)
+                  AX = (AXI+AJ*XJ)*AA1
+                  AY = (AYI+AJ*YJ)*AA1
+                  AZ = (AZI+AJ*ZJ)*AA1
+C
+C     ----- DENSITY FACTOR
+C
+                  NN = 0
+                  DO 220 I = MINI,MAXI
+                     FACI=FAC*CONI(I)*PNRM(I)
+                     DO 200 J = MINJ,MAXJ
+                        NN = NN+1
+                        DIJ(NN)=FACI*CONJ(J)*PNRM(J)
+  200                CONTINUE
+  220             CONTINUE
+C
+C     ----- OVERLAP AND KINETIC ENERGY
+C
+                  TAA = SQRT(AA1)
+                  T1 = -TWO*AJ*AJ*TAA
+                  T2 = -PT5*TAA
+                  X0 = AX
+                  Y0 = AY
+                  Z0 = AZ
+                  IN = -5
+                  DO 320 I = 1,LIT
+                     IN = IN+5
+                     NI = I
+                     DO 300 J = 1,LJT
+                        JN = IN+J
+                        NJ = J
+                        CALL STVINT
+                        XIN(JN) = XINT*TAA
+                        YIN(JN) = YINT*TAA
+                        ZIN(JN) = ZINT*TAA
+                        NJ = J+2
+                        CALL STVINT
+                        XIN(JN+45) = XINT*T1
+                        YIN(JN+45) = YINT*T1
+                        ZIN(JN+45) = ZINT*T1
+                        NJ = J-2
+                        IF (NJ .GT. 0) THEN
+                           CALL STVINT
+                        ELSE
+                           XINT = ZERO
+                           YINT = ZERO
+                           ZINT = ZERO
+                        END IF
+                        N = (J-1)*(J-2)
+                        DUM = N * T2
+                        XIN(JN+90) = XINT*DUM
+                        YIN(JN+90) = YINT*DUM
+                        ZIN(JN+90) = ZINT*DUM
+  300                CONTINUE
+  320             CONTINUE
+                  DO 340 I = 1,IJ
+                     NX = IJX(I)
+                     NY = IJY(I)
+                     NZ = IJZ(I)
+                     YZ = YIN(NY)*ZIN(NZ)
+                     DUM = YZ*XIN(NX)
+                     DUM1 = (XIN(NX+45)+XIN(NX+90))*YZ+
+     *                      (YIN(NY+45)+YIN(NY+90))*XIN(NX)*ZIN(NZ)+
+     *                      (ZIN(NZ+45)+ZIN(NZ+90))*XIN(NX)*YIN(NY)
+                     SBLK(I) = SBLK(I) + DIJ(I)*DUM
+                     TBLK(I) = TBLK(I) + DIJ(I)*(DUM*AJ*FT(I)+DUM1)
+  340             CONTINUE
+C
+C     ----- END PRIMITIVES -----
+C
+  500          CONTINUE
+  520       CONTINUE
+C
+C     ----- STORE THE INTEGRALS FOR THESE SHELLS -----
+C
+            NN = 0
+            DO 620 I = MINI,MAXI
+               LI = LOCI+I
+               DO 600 J = MINJ,MAXJ
+                  LJ = LOCJ+J
+                  NN = NN+1
+                  SMATCO(LI,LJ) = SBLK(NN)
+                  TMATCO(LI,LJ) = TBLK(NN)
+  600          CONTINUE
+  620       CONTINUE
+C
+C     ----- END SHELLS -----
+C
+  700    CONTINUE
+  720 CONTINUE
+      RETURN
+      END
+C*MODULE EFCHTR  *DECK EFCEF
+      SUBROUTINE EFCEF(VEFP,KEFP,L1,L1CO,NATM,NATMCO,
+     *                 NGAU,NSHL,EX,CS,CP,CD,CF,CG,
+     *                 KSTART,KATOM,KTYPE,KNG,KLOC,KMIN,KMAX,
+     *                 NGAUCO,NSHLCO,EXCO,CSCO,CPCO,CDCO,CFCO,CGCO,
+     *                 KSTRCO,KATMCO,KTYPCO,KNGCO,KLOCCO,KMINCO,
+     *                 KMAXCO,C,CCO,IDOIT)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      CHARACTER*8 FRGNME
+C
+      LOGICAL IANDJ
+C
+      PARAMETER (MXFRG=1050, MXFGPT=12000,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      DIMENSION EX(NGAU),CS(NGAU),CP(NGAU),CD(NGAU),
+     *          CF(NGAU),CG(NGAU),KSTART(NSHL),KATOM(NSHL),
+     *          KTYPE(NSHL),KNG(NSHL),KLOC(NSHL),KMIN(NSHL),KMAX(NSHL),
+     *          EXCO(NGAUCO),CSCO(NGAUCO),CPCO(NGAUCO),CDCO(NGAUCO),
+     *          CFCO(NGAUCO),CGCO(NGAUCO),KSTRCO(NSHLCO),KATMCO(NSHLCO),
+     *          KTYPCO(NSHLCO),KNGCO(NSHLCO),KLOCCO(NSHLCO),
+     *          KMINCO(NSHLCO),KMAXCO(NSHLCO),
+     *          C(3,NATM),CCO(3,NATMCO),
+     *          VEFP(L1CO,L1),IDOIT(*)
+      DIMENSION DIJ(225),XIN(225),YIN(225),ZIN(225),
+     *          IX(35),IY(35),IZ(35),JX(35),JY(35),JZ(35),
+     *          IJX(225),IJY(225),IJZ(225),CONI(35),CONJ(35),
+     *          CHCINT(225),FIJ(225),GIJ(225)
+C
+      COMMON /EFMULT/ EFC(3,MXFGPT),EFCHG(2,MXFGPT),EFATRM(MXFGPT),
+     *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
+     *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
+     *                EFOCT(10,MXFGPT),FRGNME(MXFGPT)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /ROOT  / XX,U(13),W(13),NROOTS
+      COMMON /SHLNRM/ PNRM(84)
+      COMMON /STV   / XINT,YINT,ZINT,T,X0,Y0,Z0,XI,YI,ZI,XJ,YJ,ZJ,NI,NJ
+      COMMON /SYMIND/ TOL,II,JJ,LIT,LJT,MINI,MINJ,MAXI,MAXJ,IANDJ
+C
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00,
+     *           PI212=1.1283791670955D+00,
+     *           RLN10=2.30258D+00)
+C
+      DATA JX / 0, 1, 0, 0, 2, 0, 0, 1, 1, 0,
+     *          3, 0, 0, 2, 2, 1, 0, 1, 0, 1,
+     *          4, 0, 0, 3, 3, 1, 0, 1, 0, 2,
+     *          2, 0, 2, 1, 1/
+      DATA IX / 1, 6, 1, 1,11, 1, 1, 6, 6, 1,
+     *         16, 1, 1,11,11, 6, 1, 6, 1, 6,
+     *         21, 1, 1,16,16, 6, 1, 6, 1,11,
+     *         11, 1,11, 6, 6/
+      DATA JY / 0, 0, 1, 0, 0, 2, 0, 1, 0, 1,
+     *          0, 3, 0, 1, 0, 2, 2, 0, 1, 1,
+     *          0, 4, 0, 1, 0, 3, 3, 0, 1, 2,
+     *          0, 2, 1, 2, 1/
+      DATA IY / 1, 1, 6, 1, 1,11, 1, 6, 1, 6,
+     *          1,16, 1, 6, 1,11,11, 1, 6, 6,
+     *          1,21, 1, 6, 1,16,16, 1, 6,11,
+     *          1,11, 6,11, 6/
+      DATA JZ / 0, 0, 0, 1, 0, 0, 2, 0, 1, 1,
+     *          0, 0, 3, 0, 1, 0, 1, 2, 2, 1,
+     *          0, 0, 4, 0, 1, 0, 1, 3, 3, 0,
+     *          2, 2, 1, 1, 2/
+      DATA IZ / 1, 1, 1, 6, 1, 1,11, 1, 6, 6,
+     *          1, 1,16, 1, 6, 1, 6,11,11, 6,
+     *          1, 1,21, 1, 6, 1, 6,16,16, 1,
+     *         11,11, 6, 6,11/
+C
+      DATA QLIM/1.00D-08/
+C
+C     CALCULATE THE CHARGE-CHARGE CONTRIBUTION TO THE ONE ELECTRON
+C     INTEGRALS FOR THE EFFECTIVE FRAGMENT POTENTIALS
+C
+C     IF KEFP < 0, DO INTEGRALS EXCEPT FOR KEFP
+C     IF KEFP = 0, DO INTEGRALS FOR ALL EFP'S
+C     IF KEFP > 0, DO INTEGRALS ONLY FOR KEFP
+C
+      NEFC = NMTTPT
+      NEND=0
+      IF(ABS(KEFP).GT.1)THEN
+         DO KFRG=1,ABS(KEFP)-1
+            NEND=NEND+NMPTS(KFRG)
+         END DO
+      END IF
+      DO IC = 1,NEFC
+         IDOIT(IC)=1
+         IF(KEFP.NE.0)THEN
+            IDO=0
+            DO IPTS = NEND+1, NEND+NMPTS(ABS(KEFP))
+               IF(IPTS.EQ.IC.AND.KEFP.LT.0) IDOIT(IC)=0
+               IF(IPTS.EQ.IC.AND.KEFP.GT.0) IDO=1
+            END DO
+            IF(KEFP.GT.0.AND.IDO.EQ.0) IDOIT(IC)=0
+         END IF
+      ENDDO
+      TOL = RLN10*ITOL
+C
+C
+C     ----- ISHELL
+C
+      DO 720 II = 1,NSHLCO
+         I = KATMCO(II)
+         XI = CCO(1,I)
+         YI = CCO(2,I)
+         ZI = CCO(3,I)
+C
+         I1 = KSTRCO(II)
+         I2 = I1+KNGCO(II)-1
+         LIT = KTYPCO(II)
+         MINI = KMINCO(II)
+         MAXI = KMAXCO(II)
+         LOCI = KLOCCO(II)-MINI
+C
+C     ----- JSHELL
+C
+         DO 700 JJ = 1,NSHL
+C
+            J = KATOM(JJ)
+            XJ = C(1,J)
+            YJ = C(2,J)
+            ZJ = C(3,J)
+            J1 = KSTART(JJ)
+            J2 = J1+KNG(JJ)-1
+            LJT = KTYPE(JJ)
+            MINJ = KMIN(JJ)
+            MAXJ = KMAX(JJ)
+            LOCJ = KLOC(JJ)-MINJ
+            NROOTS = (LIT+LJT-2)/2+1
+            RR = (XI-XJ)**2+(YI-YJ)**2+(ZI-ZJ)**2
+C
+C     ----- PREPARE INDICES FOR PAIRS OF (I,J) FUNCTIONS
+C
+            IJ = 0
+            DO 160 I = MINI,MAXI
+               NX = IX(I)
+               NY = IY(I)
+               NZ = IZ(I)
+               DO 140 J = MINJ,MAXJ
+                  IJ = IJ+1
+                  IJX(IJ) = NX+JX(J)
+                  IJY(IJ) = NY+JY(J)
+                  IJZ(IJ) = NZ+JZ(J)
+  140          CONTINUE
+  160       CONTINUE
+            DO 180 I = 1,IJ
+               CHCINT(I) = ZERO
+  180       CONTINUE
+C
+C     ----- I PRIMITIVE
+C
+            DO 520 IG = I1,I2
+               AI = EXCO(IG)
+               ARRI = AI*RR
+               AXI = AI*XI
+               AYI = AI*YI
+               AZI = AI*ZI
+               CALL SETCON(CONI,IG,CSCO,CPCO,CDCO,CFCO,CGCO)
+C
+C
+C     ----- J PRIMITIVE
+C
+               DO 500 JG = J1,J2
+                  AJ = EX(JG)
+                  AA = AI+AJ
+                  AA1 = ONE/AA
+                  DUM = AJ*ARRI*AA1
+                  IF (DUM .GT. TOL) GO TO 500
+                  FAC = EXP(-DUM)
+                  CALL SETCON(CONJ,JG,CS,CP,CD,CF,CG)
+                  AX = (AXI+AJ*XJ)*AA1
+                  AY = (AYI+AJ*YJ)*AA1
+                  AZ = (AZI+AJ*ZJ)*AA1
+C
+C     ----- DENSITY FACTOR
+C
+                  NN = 0
+                  DO 220 I = MINI,MAXI
+                     FACI=FAC*CONI(I)*PNRM(I)
+                     DO 200 J = MINJ,MAXJ
+                        NN = NN+1
+                        DIJ(NN)=FACI*CONJ(J)*PNRM(J)
+  200                CONTINUE
+  220             CONTINUE
+C
+C     EFFECTIVE POINT CHARGES INTEGRALS.
+C
+                  DUM = PI212*AA1
+                  DO 400 I=1,IJ
+                     FIJ(I) = DIJ(I)*DUM
+  400             CONTINUE
+                  AAX = AA*AX
+                  AAY = AA*AY
+                  AAZ = AA*AZ
+C
+                  DO 492 IC = 1,NEFC
+                     IF(IDOIT(IC).EQ.0) GOTO 492
+                     ZNUC = -(EFCHG(1,IC)+EFCHG(2,IC))
+                     CX = EFC(1,IC)
+                     CY = EFC(2,IC)
+                     CZ = EFC(3,IC)
+                     XX = AA*((AX-CX)**2+(AY-CY)**2+(AZ-CZ)**2)
+                     IF (NROOTS.LE.3) CALL RT123
+                     IF (NROOTS.EQ.4) CALL ROOT4
+                     IF (NROOTS.EQ.5) CALL ROOT5
+                     IF (NROOTS.GE.6) CALL ROOT6
+                     MM = 0
+                     DO 477 K = 1,NROOTS
+                        UU = AA*U(K)
+                        WW = W(K)*ZNUC
+                        TT = ONE/(AA+UU)
+                        T = SQRT(TT)
+                        X0 = (AAX+UU*CX)*TT
+                        Y0 = (AAY+UU*CY)*TT
+                        Z0 = (AAZ+UU*CZ)*TT
+                        IN = -5+MM
+                        DO 476 I = 1,LIT
+                           IN = IN+5
+                           NI = I
+                           DO 475 J = 1,LJT
+                              JN = IN+J
+                              NJ = J
+                              CALL STVINT
+                              XIN(JN) = XINT
+                              YIN(JN) = YINT
+                              ZIN(JN) = ZINT*WW
+  475                      CONTINUE
+  476                   CONTINUE
+                        MM = MM+25
+  477                CONTINUE
+                     DO 481 I = 1,IJ
+                        NX = IJX(I)
+                        NY = IJY(I)
+                        NZ = IJZ(I)
+                        DUM = ZERO
+                        MM = 0
+                        DO 479 K = 1,NROOTS
+                           DUM = DUM+XIN(NX+MM)*YIN(NY+MM)*ZIN(NZ+MM)
+                           MM = MM+25
+  479                   CONTINUE
+                        CHCINT(I) = CHCINT(I)+DUM*FIJ(I)
+  481                CONTINUE
+C
+C ---- SUBTRACT DAMPING FUNCTION TERM ----
+C   THESE INTEGRAL ROUTINES WERE COPIED FROM OTHER PLACES WITH
+C   SCREENING.  SCREENING MIGHT BE USEFUL SOMEDAY, SO WE KEEP THE
+C   CODE AS A HEAD START, BUT WE MUST GIVE IT A GOOD RETHINK IN
+C   ORDER TO ACTUALLY IMPLEMENT SOMETHING.
+C   NOTE, THERE ARE SIX PLACES LIKE THIS IN THIS FILE.
+C
+                     ALFA = EFATRM(IC)
+                     BETA = EFBTRM(IC)
+C            DEACTIVATE SCREENING...
+                     ALFA = 0.0D+00
+                     BETA = 0.0D+00
+C
+                     IF(ABS(ALFA).LE.QLIM) GO TO 492
+C
+                     DUM = PI212/(AA+ALFA)
+                     DO 482 I=1,IJ
+                        GIJ(I) = DIJ(I) * DUM
+  482                CONTINUE
+                     ZNUC = -EFCHG(1,IC)
+                     PCSQ = ((AX-CX)**2+(AY-CY)**2+(AZ-CZ)**2)
+                     XX = AA*AA*PCSQ/(AA+ALFA)
+                     PREI = EXP(-AA*ALFA*PCSQ/(AA+ALFA))
+                     IF (NROOTS.LE.3) CALL RT123
+                     IF (NROOTS.EQ.4) CALL ROOT4
+                     IF (NROOTS.EQ.5) CALL ROOT5
+                     IF (NROOTS.GE.6) CALL ROOT6
+                     MM = 0
+                     DO 485 K = 1,NROOTS
+                        UU = (AA+ALFA)*U(K)
+                        WW = W(K)*ZNUC
+                        TT = ONE/(AA+UU+ALFA)
+                        T = SQRT(TT)
+                        X0 = (AAX+(UU+ALFA)*CX)*TT
+                        Y0 = (AAY+(UU+ALFA)*CY)*TT
+                        Z0 = (AAZ+(UU+ALFA)*CZ)*TT
+                        IN = -5+MM
+                        DO 484 I = 1,LIT
+                           IN = IN+5
+                           NI = I
+                           DO 483 J = 1,LJT
+                              JN = IN+J
+                              NJ = J
+                              CALL STVINT
+                              XIN(JN) = XINT
+                              YIN(JN) = YINT
+                              ZIN(JN) = ZINT*WW
+  483                      CONTINUE
+  484                   CONTINUE
+                        MM = MM+25
+  485                CONTINUE
+                     DO 489 I = 1,IJ
+                        NX = IJX(I)
+                        NY = IJY(I)
+                        NZ = IJZ(I)
+                        DUM = ZERO
+                        MM = 0
+                        DO 487 K = 1,NROOTS
+                           DUM = DUM+XIN(NX+MM)*YIN(NY+MM)*ZIN(NZ+MM)
+                           MM = MM+25
+  487                   CONTINUE
+                        DAMPT = -GIJ(I) * PREI * BETA * DUM
+                        CHCINT(I) = CHCINT(I) + DAMPT
+  489                CONTINUE
+  492             CONTINUE
+C
+C     ----- END PRIMITIVES -----
+C
+  500          CONTINUE
+  520       CONTINUE
+C
+C     ----- STORE THE INTEGRALS FOR THESE SHELLS -----
+C
+            NN = 0
+            DO 620 I = MINI,MAXI
+               LI = LOCI+I
+               DO 600 J = MINJ,MAXJ
+                  LJ = LOCJ+J
+                  NN = NN+1
+                  VEFP(LI,LJ) = CHCINT(NN)
+  600          CONTINUE
+  620       CONTINUE
+C
+C     ----- END SHELLS -----
+C
+  700    CONTINUE
+  720 CONTINUE
+      RETURN
+      END
+C*MODULE EFCHTR  *DECK EFDEF
+      SUBROUTINE EFDEF(VEFP,KEFP,L1,L1CO,NATM,NATMCO,
+     *                 NGAU,NSHL,EX,CS,CP,CD,CF,CG,
+     *                 KSTART,KATOM,KTYPE,KNG,KLOC,KMIN,KMAX,
+     *                 NGAUCO,NSHLCO,EXCO,CSCO,CPCO,CDCO,CFCO,CGCO,
+     *                 KSTRCO,KATMCO,KTYPCO,KNGCO,KLOCCO,KMINCO,
+     *                 KMAXCO,C,CCO,IDOIT)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      CHARACTER*8 FRGNME
+C
+      PARAMETER (MXFRG=1050, MXFGPT=12000,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      DIMENSION EX(NGAU),CS(NGAU),CP(NGAU),CD(NGAU),
+     *          CF(NGAU),CG(NGAU),KSTART(NSHL),KATOM(NSHL),
+     *          KTYPE(NSHL),KNG(NSHL),KLOC(NSHL),KMIN(NSHL),KMAX(NSHL),
+     *          EXCO(NGAUCO),CSCO(NGAUCO),CPCO(NGAUCO),CDCO(NGAUCO),
+     *          CFCO(NGAUCO),CGCO(NGAUCO),KSTRCO(NSHLCO),KATMCO(NSHLCO),
+     *          KTYPCO(NSHLCO),KNGCO(NSHLCO),KLOCCO(NSHLCO),
+     *          KMINCO(NSHLCO),KMAXCO(NSHLCO),
+     *          C(3,NATM),CCO(3,NATMCO),
+     *          VEFP(L1CO,L1),IDOIT(*)
+      DIMENSION CHDINT(225),
+     *          DIJ(225),XIN(450),YIN(450),ZIN(450),
+     *          FIJ(225),GIJ(225),
+     *          IX(35),IY(35),IZ(35),JX(35),JY(35),JZ(35),
+     *          IJX(225),IJY(225),IJZ(225),CONI(35),CONJ(35)
+C
+      COMMON /CSSTV / CX,CY,CZ
+      COMMON /EFMULT/ EFC(3,MXFGPT),EFCHG(2,MXFGPT),EFATRM(MXFGPT),
+     *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
+     *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
+     *                EFOCT(10,MXFGPT),FRGNME(MXFGPT)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /ROOT  / XX,U(13),W(13),NROOTS
+      COMMON /SHLNRM/ PNRM(84)
+      COMMON /STV   / XINT,YINT,ZINT,T,X0,Y0,Z0,XI,YI,ZI,XJ,YJ,ZJ,NI,NJ
+C
+      DATA PI212 /1.1283791670955D+00/
+C
+      DATA JX / 0, 1, 0, 0, 2, 0, 0, 1, 1, 0,
+     *          3, 0, 0, 2, 2, 1, 0, 1, 0, 1,
+     *          4, 0, 0, 3, 3, 1, 0, 1, 0, 2,
+     *          2, 0, 2, 1, 1/
+      DATA IX / 1, 6, 1, 1,11, 1, 1, 6, 6, 1,
+     *         16, 1, 1,11,11, 6, 1, 6, 1, 6,
+     *         21, 1, 1,16,16, 6, 1, 6, 1,11,
+     *         11, 1,11, 6, 6/
+      DATA JY / 0, 0, 1, 0, 0, 2, 0, 1, 0, 1,
+     *          0, 3, 0, 1, 0, 2, 2, 0, 1, 1,
+     *          0, 4, 0, 1, 0, 3, 3, 0, 1, 2,
+     *          0, 2, 1, 2, 1/
+      DATA IY / 1, 1, 6, 1, 1,11, 1, 6, 1, 6,
+     *          1,16, 1, 6, 1,11,11, 1, 6, 6,
+     *          1,21, 1, 6, 1,16,16, 1, 6,11,
+     *          1,11, 6,11, 6/
+      DATA JZ / 0, 0, 0, 1, 0, 0, 2, 0, 1, 1,
+     *          0, 0, 3, 0, 1, 0, 1, 2, 2, 1,
+     *          0, 0, 4, 0, 1, 0, 1, 3, 3, 0,
+     *          2, 2, 1, 1, 2/
+      DATA IZ / 1, 1, 1, 6, 1, 1,11, 1, 6, 6,
+     *          1, 1,16, 1, 6, 1, 6,11,11, 6,
+     *          1, 1,21, 1, 6, 1, 6,16,16, 1,
+     *         11,11, 6, 6,11/
+C
+      DATA ZERO,ONE/0.0D+00,1.0D+00/
+      DATA RLN10 /2.30258D+00/
+      DATA QLIM /1.0D-07/
+C
+C
+C     IF KEFP < 0, DO INTEGRALS EXCEPT FOR KEFP
+C     IF KEFP = 0, DO INTEGRALS FOR ALL EFP'S
+C     IF KEFP > 0, DO INTEGRALS ONLY FOR KEFP
+C
+      NEFD = NMTTPT
+      NEND=0
+      IF(ABS(KEFP).GT.1)THEN
+         DO KFRG=1,ABS(KEFP)-1
+            NEND=NEND+NMPTS(KFRG)
+         END DO
+      END IF
+      DO IC = 1,NEFD
+         IDOIT(IC)=1
+         IF(KEFP.NE.0)THEN
+            IDO=0
+            DO IPTS = NEND+1, NEND+NMPTS(ABS(KEFP))
+               IF(IPTS.EQ.IC.AND.KEFP.LT.0) IDOIT(IC)=0
+               IF(IPTS.EQ.IC.AND.KEFP.GT.0) IDO=1
+            END DO
+            IF(KEFP.GT.0.AND.IDO.EQ.0) IDOIT(IC)=0
+         END IF
+      ENDDO
+C
+      TOL = RLN10*ITOL
+C
+C     ----- ISHELL
+C
+      DO 600 II = 1,NSHLCO
+      I = KATMCO(II)
+      XI = CCO(1,I)
+      YI = CCO(2,I)
+      ZI = CCO(3,I)
+      I1 = KSTRCO(II)
+      I2 = I1+KNGCO(II)-1
+      LIT = KTYPCO(II)
+      MINI = KMINCO(II)
+      MAXI = KMAXCO(II)
+      LOCI = KLOCCO(II)-MINI
+C
+C     ----- JSHELL
+C
+      DO 580 JJ = 1,NSHL
+C
+      JAT= KATOM(JJ)
+      XJ = C(1,JAT)
+      YJ = C(2,JAT)
+      ZJ = C(3,JAT)
+      J1 = KSTART(JJ)
+      J2 = J1+KNG(JJ)-1
+      LJT = KTYPE(JJ)
+      MINJ = KMIN(JJ)
+      MAXJ = KMAX(JJ)
+      LOCJ = KLOC(JJ)-MINJ
+      NROOTS = (LIT+LJT+1-2)/2 + 1
+      RR = (XI-XJ)**2+(YI-YJ)**2+(ZI-ZJ)**2
+C
+C     ----- PREPARE INDICES FOR PAIRS OF (I,J) FUNCTIONS
+C
+      IJ = 0
+      MAX = MAXJ
+      DO 50 I = MINI,MAXI
+      NX = IX(I)
+      NY = IY(I)
+      NZ = IZ(I)
+      DO 50 J = MINJ,MAX
+      IJ = IJ+1
+      IJX(IJ) = NX+JX(J)
+      IJY(IJ) = NY+JY(J)
+      IJZ(IJ) = NZ+JZ(J)
+  50  CONTINUE
+      DO 60 I=1,IJ
+  60  CHDINT(I) = ZERO
+C
+C     ----- I PRIMITIVE
+C
+      JGMAX = J2
+      DO 520 IG = I1,I2
+      AI = EXCO(IG)
+      ARRI = AI*RR
+      AXI = AI*XI
+      AYI = AI*YI
+      AZI = AI*ZI
+      CALL SETCON(CONI,IG,CSCO,CPCO,CDCO,CFCO,CGCO)
+C
+C     ----- J PRIMTIVE
+C
+      DO 500 JG = J1,JGMAX
+      AJ = EX(JG)
+      AA = AI+AJ
+      AA1 = ONE/AA
+      DUM = AJ*ARRI*AA1
+      IF (DUM .GT. TOL) GO TO 500
+      FAC =  EXP(-DUM)
+      CALL SETCON(CONJ,JG,CS,CP,CD,CF,CG)
+      AX = (AXI+AJ*XJ)*AA1
+      AY = (AYI+AJ*YJ)*AA1
+      AZ = (AZI+AJ*ZJ)*AA1
+C
+C     ----- DENSITY FACTOR
+C
+      MAX = MAXJ
+      NN = 0
+      DO 220 I = MINI,MAXI
+         FACI=FAC*CONI(I)*PNRM(I)
+         DO 200 J = MINJ,MAXJ
+            NN = NN+1
+            DIJ(NN)=FACI*CONJ(J)*PNRM(J)
+  200    CONTINUE
+  220 CONTINUE
+C
+C     ..... HELLMANN-FEYNMAN TERM .....
+C
+      DUM = PI212*AA1
+      DUM=DUM+DUM
+      DO 380 I = 1,IJ
+      FIJ(I) = DIJ(I)*DUM
+  380 CONTINUE
+      AAX = AA*AX
+      AAY = AA*AY
+      AAZ = AA*AZ
+C
+      DO 480 IC = 1,NEFD
+      IF(IDOIT(IC).EQ.0) GOTO 480
+      ALFA = EFATRM(IC)
+      BETA = EFBTRM(IC)
+C            DEACTIVATE SCREENING...
+                     ALFA = 0.0D+00
+                     BETA = 0.0D+00
+      CX   = EFC(1,IC)
+      CY   = EFC(2,IC)
+      CZ   = EFC(3,IC)
+      XMU=EFDIP(1,IC)
+      YMU=EFDIP(2,IC)
+      ZMU=EFDIP(3,IC)
+      DUMA = PI212/(AA+ALFA)
+      DUMA=DUMA+DUMA
+      DO 385 I = 1,IJ
+      GIJ(I) = DIJ(I)*DUMA
+  385 CONTINUE
+      XX   = AA*((AX-CX)**2+(AY-CY)**2+(AZ-CZ)**2)
+      IF(NROOTS.LE.3) CALL RT123
+      IF(NROOTS.EQ.4) CALL ROOT4
+      IF(NROOTS.EQ.5) CALL ROOT5
+      IF(NROOTS.GE.6) CALL ROOT6
+      MM = 0
+      DO 401 K = 1,NROOTS
+      UU = AA*U(K)
+      WW = W(K)
+      WW=WW*UU
+      TT = ONE/(AA+UU)
+      T  =  SQRT(TT)
+      X0 = (AAX+UU*CX)*TT
+      Y0 = (AAY+UU*CY)*TT
+      Z0 = (AAZ+UU*CZ)*TT
+      IN = -5+MM
+      DO 400 I = 1,LIT
+      IN = IN+5
+      NI = I
+      DO 400 J = 1,LJT
+      JN = IN+J
+      NJ = J
+      CALL STVINT
+      XIN(JN   ) = XINT
+      YIN(JN   ) = YINT
+      ZIN(JN   ) = ZINT*WW
+      CALL POLXYZ
+      XIN(JN+225) = XINT
+      YIN(JN+225) = YINT
+      ZIN(JN+225) = ZINT*WW
+  400 CONTINUE
+  401 MM = MM+25
+      DO 403 I = 1,IJ
+      NX    = IJX(I)
+      NY    = IJY(I)
+      NZ    = IJZ(I)
+      DUMX = ZERO
+      DUMY = ZERO
+      DUMZ = ZERO
+      MM    = 0
+      DO 402 K = 1,NROOTS
+      DUMX= DUMX+XIN(NX+MM+225)*YIN(NY+MM    )*ZIN(NZ+MM    )
+      DUMY= DUMY+XIN(NX+MM    )*YIN(NY+MM+225)*ZIN(NZ+MM    )
+      DUMZ= DUMZ+XIN(NX+MM    )*YIN(NY+MM    )*ZIN(NZ+MM+225)
+  402 MM  = MM+25
+      DUM = FIJ(I)
+      CHDINT(I)=CHDINT(I)-DUM*(DUMX*XMU+DUMY*YMU+DUMZ*ZMU)
+ 403  CONTINUE
+C
+C  SUBTRACT DAMPING FUNCTION TERM
+C
+      IF ( ABS(ALFA).LE.QLIM ) GO TO 480
+      PCSQ = (AX-CX)**2+(AY-CY)**2+(AZ-CZ)**2
+      XX=AA*AA*PCSQ/(AA+ALFA)
+      PREI = EXP(-AA*ALFA*PCSQ/(AA+ALFA))
+      IF(NROOTS.LE.3) CALL RT123
+      IF(NROOTS.EQ.4) CALL ROOT4
+      IF(NROOTS.EQ.5) CALL ROOT5
+      IF(NROOTS.GE.6) CALL ROOT6
+      MM = 0
+      DO 425 K = 1,NROOTS
+      UU = (ALFA+AA)*U(K)
+      WW = W(K)
+      WW = WW*UU
+      TT = ONE/(AA+UU+ALFA)
+      T  =  SQRT(TT)
+      X0 = (AAX+(UU+ALFA)*CX)*TT
+      Y0 = (AAY+(UU+ALFA)*CY)*TT
+      Z0 = (AAZ+(UU+ALFA)*CZ)*TT
+      IN = -5+MM
+      DO 405 I = 1,LIT
+      IN = IN+5
+      NI = I
+      DO 405 J = 1,LJT
+      JN = IN+J
+      NJ = J
+      CALL STVINT
+      XIN(JN   ) = XINT
+      YIN(JN   ) = YINT
+      ZIN(JN   ) = ZINT*WW
+      CALL POLXYZ
+      XIN(JN+225) = XINT
+      YIN(JN+225) = YINT
+      ZIN(JN+225) = ZINT*WW
+  405 CONTINUE
+  425 MM = MM+25
+      DO 465 I = 1,IJ
+      NX    = IJX(I)
+      NY    = IJY(I)
+      NZ    = IJZ(I)
+      DUMX = ZERO
+      DUMY = ZERO
+      DUMZ = ZERO
+      MM    = 0
+      DO 445 K = 1,NROOTS
+      DUMX= DUMX+XIN(NX+MM+225)*YIN(NY+MM    )*ZIN(NZ+MM    )
+      DUMY= DUMY+XIN(NX+MM    )*YIN(NY+MM+225)*ZIN(NZ+MM    )
+      DUMZ= DUMZ+XIN(NX+MM    )*YIN(NY+MM    )*ZIN(NZ+MM+225)
+  445 MM  = MM+25
+      DUM =-GIJ(I)*PREI * BETA
+      CHDINT(I)=CHDINT(I)-DUM*(DUMX*XMU+DUMY*YMU+DUMZ*ZMU)
+ 465  CONTINUE
+C
+ 480  CONTINUE
+C-------- END OF EFD CENTERS LOOP
+ 500  CONTINUE
+ 520  CONTINUE
+C
+C     ----- END OF *PRIMITIVE* LOOPS -----
+C
+      MAX=MAXJ
+      NN=0
+      DO 550 I=MINI,MAXI
+      LI=LOCI+I
+      IN = (LI*(LI-1))/2
+      DO 550 J=MINJ,MAX
+      LJ=LOCJ+J
+      NN=NN+1
+      VEFP(LI,LJ) = VEFP(LI,LJ) + CHDINT(NN)
+  550 CONTINUE
+C
+C     ----- END SHELLS -----
+C
+  580 CONTINUE
+  600 CONTINUE
+C
+C     ----- END OF *SHELL* LOOPS -----
+C
+      RETURN
+      END
+C*MODULE EFCHTR  *DECK EFQEF
+      SUBROUTINE EFQEF(VEFP,KEFP,L1,L1CO,NATM,NATMCO,
+     *                 NGAU,NSHL,EX,CS,CP,CD,CF,CG,
+     *                 KSTART,KATOM,KTYPE,KNG,KLOC,KMIN,KMAX,
+     *                 NGAUCO,NSHLCO,EXCO,CSCO,CPCO,CDCO,CFCO,CGCO,
+     *                 KSTRCO,KATMCO,KTYPCO,KNGCO,KLOCCO,KMINCO,
+     *                 KMAXCO,C,CCO,IDOIT,QUAD)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      CHARACTER*8 FRGNME
+C
+      PARAMETER (MXFRG=1050, MXFGPT=12000,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      DIMENSION EX(NGAU),CS(NGAU),CP(NGAU),CD(NGAU),
+     *          CF(NGAU),CG(NGAU),KSTART(NSHL),KATOM(NSHL),
+     *          KTYPE(NSHL),KNG(NSHL),KLOC(NSHL),KMIN(NSHL),KMAX(NSHL),
+     *          EXCO(NGAUCO),CSCO(NGAUCO),CPCO(NGAUCO),CDCO(NGAUCO),
+     *          CFCO(NGAUCO),CGCO(NGAUCO),KSTRCO(NSHLCO),KATMCO(NSHLCO),
+     *          KTYPCO(NSHLCO),KNGCO(NSHLCO),KLOCCO(NSHLCO),
+     *          KMINCO(NSHLCO),KMAXCO(NSHLCO),
+     *          C(3,NATM),CCO(3,NATMCO),
+     *          VEFP(L1CO,L1),IDOIT(*),QUAD(6,*)
+      DIMENSION CHQINT(225),
+     *          DIJ(225),XIN(675),YIN(675),ZIN(675),
+     *          FIJ(225),GIJ(225),CONI(35),CONJ(35),
+     *          IX(35),IY(35),IZ(35),JX(35),JY(35),JZ(35),
+     *          IJX(225),IJY(225),IJZ(225),W2(6),W4(6)
+C
+      COMMON /CSSTV / CX,CY,CZ
+      COMMON /EFMULT/ EFC(3,MXFGPT),EFCHG(2,MXFGPT),EFATRM(MXFGPT),
+     *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
+     *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
+     *                EFOCT(10,MXFGPT),FRGNME(MXFGPT)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /ROOT  / XX,U(13),W(13),NROOTS
+      COMMON /SHLNRM/ PNRM(84)
+      COMMON /STV   / XINT,YINT,ZINT,T,X0,Y0,Z0,XI,YI,ZI,XJ,YJ,ZJ,NI,NJ
+C
+      DATA PI212 /1.1283791670955D+00/
+C
+      DATA JX / 0, 1, 0, 0, 2, 0, 0, 1, 1, 0,
+     *          3, 0, 0, 2, 2, 1, 0, 1, 0, 1,
+     *          4, 0, 0, 3, 3, 1, 0, 1, 0, 2,
+     *          2, 0, 2, 1, 1/
+      DATA IX / 1, 6, 1, 1,11, 1, 1, 6, 6, 1,
+     *         16, 1, 1,11,11, 6, 1, 6, 1, 6,
+     *         21, 1, 1,16,16, 6, 1, 6, 1,11,
+     *         11, 1,11, 6, 6/
+      DATA JY / 0, 0, 1, 0, 0, 2, 0, 1, 0, 1,
+     *          0, 3, 0, 1, 0, 2, 2, 0, 1, 1,
+     *          0, 4, 0, 1, 0, 3, 3, 0, 1, 2,
+     *          0, 2, 1, 2, 1/
+      DATA IY / 1, 1, 6, 1, 1,11, 1, 6, 1, 6,
+     *          1,16, 1, 6, 1,11,11, 1, 6, 6,
+     *          1,21, 1, 6, 1,16,16, 1, 6,11,
+     *          1,11, 6,11, 6/
+      DATA JZ / 0, 0, 0, 1, 0, 0, 2, 0, 1, 1,
+     *          0, 0, 3, 0, 1, 0, 1, 2, 2, 1,
+     *          0, 0, 4, 0, 1, 0, 1, 3, 3, 0,
+     *          2, 2, 1, 1, 2/
+      DATA IZ / 1, 1, 1, 6, 1, 1,11, 1, 6, 6,
+     *          1, 1,16, 1, 6, 1, 6,11,11, 6,
+     *          1, 1,21, 1, 6, 1, 6,16,16, 1,
+     *         11,11, 6, 6,11/
+C
+      DATA ZERO,ONE,TWO,FOUR/0.0D+00,1.0D+00,2.0D+00,4.0D+00/
+      DATA PT5,ONEPT5,THREE /0.5D+00,1.5D+00,3.0D+00/
+      DATA RLN10 /2.30258D+00/
+      DATA QLIM /1.0D-07/
+C
+C
+C     IF KEFP < 0, DO INTEGRALS EXCEPT FOR KEFP
+C     IF KEFP = 0, DO INTEGRALS FOR ALL EFP'S
+C     IF KEFP > 0, DO INTEGRALS ONLY FOR KEFP
+C
+      NEFQ = NMTTPT
+      NEND=0
+      IF(ABS(KEFP).GT.1)THEN
+         DO KFRG=1,ABS(KEFP)-1
+            NEND=NEND+NMPTS(KFRG)
+         END DO
+      END IF
+      DO IC = 1,NEFQ
+         IDOIT(IC)=1
+         IF(KEFP.NE.0)THEN
+            IDO=0
+            DO IPTS = NEND+1, NEND+NMPTS(ABS(KEFP))
+               IF(IPTS.EQ.IC.AND.KEFP.LT.0) IDOIT(IC)=0
+               IF(IPTS.EQ.IC.AND.KEFP.GT.0) IDO=1
+            END DO
+            IF(KEFP.GT.0.AND.IDO.EQ.0) IDOIT(IC)=0
+         END IF
+      ENDDO
+C
+      TOL = RLN10*ITOL
+C
+C  REPLACE SECOND MOMENTS IN EFQAD WITH ELECTRIC QUADRUPOLE TENSORS
+C
+      DO 20 I=1,NEFQ
+      XX =  EFQAD(1,I)
+      YY =  EFQAD(2,I)
+      ZZ =  EFQAD(3,I)
+      XY =  EFQAD(4,I)
+      XZ =  EFQAD(5,I)
+      YZ =  EFQAD(6,I)
+      DUM = XX + YY + ZZ
+      QUAD(1,I) = (THREE * XX - DUM) * PT5
+      QUAD(2,I) = (THREE * YY - DUM) * PT5
+      QUAD(3,I) = (THREE * ZZ - DUM) * PT5
+      QUAD(4,I) = ONEPT5 * XY
+      QUAD(5,I) = ONEPT5 * XZ
+      QUAD(6,I) = ONEPT5 * YZ
+ 20   CONTINUE
+C
+C     ----- ISHELL
+C
+      DO 600 II = 1,NSHLCO
+      I = KATMCO(II)
+      XI = CCO(1,I)
+      YI = CCO(2,I)
+      ZI = CCO(3,I)
+      I1 = KSTRCO(II)
+      I2 = I1+KNGCO(II)-1
+      LIT = KTYPCO(II)
+      MINI = KMINCO(II)
+      MAXI = KMAXCO(II)
+      LOCI = KLOCCO(II)-MINI
+C
+C     ----- JSHELL
+C
+      DO 580 JJ = 1,NSHL
+C
+      JAT= KATOM(JJ)
+      XJ = C(1,JAT)
+      YJ = C(2,JAT)
+      ZJ = C(3,JAT)
+      J1 = KSTART(JJ)
+      J2 = J1+KNG(JJ)-1
+      LJT = KTYPE(JJ)
+      MINJ = KMIN(JJ)
+      MAXJ = KMAX(JJ)
+      LOCJ = KLOC(JJ)-MINJ
+      NROOTS = (LIT+LJT+2-2)/2 + 1
+      RR = (XI-XJ)**2+(YI-YJ)**2+(ZI-ZJ)**2
+C
+C     ----- PREPARE INDICES FOR PAIRS OF (I,J) FUNCTIONS
+C
+      IJ = 0
+      MAX = MAXJ
+      DO 30 I = MINI,MAXI
+      NX = IX(I)
+      NY = IY(I)
+      NZ = IZ(I)
+      DO 30 J = MINJ,MAX
+      IJ = IJ+1
+      IJX(IJ) = NX+JX(J)
+      IJY(IJ) = NY+JY(J)
+      IJZ(IJ) = NZ+JZ(J)
+  30  CONTINUE
+      DO 60 I=1,IJ
+  60  CHQINT(I) = ZERO
+C
+C     ----- I PRIMITIVE
+C
+      JGMAX = J2
+      DO 520 IG = I1,I2
+      AI = EXCO(IG)
+      ARRI = AI*RR
+      AXI = AI*XI
+      AYI = AI*YI
+      AZI = AI*ZI
+      CALL SETCON(CONI,IG,CSCO,CPCO,CDCO,CFCO,CGCO)
+C
+C     ----- J PRIMTIVE
+C
+      DO 500 JG = J1,JGMAX
+      AJ = EX(JG)
+      AA = AI+AJ
+      AA1 = ONE/AA
+      DUM = AJ*ARRI*AA1
+      IF (DUM .GT. TOL) GO TO 500
+      FAC =  EXP(-DUM)
+      CALL SETCON(CONJ,JG,CS,CP,CD,CF,CG)
+      AX = (AXI+AJ*XJ)*AA1
+      AY = (AYI+AJ*YJ)*AA1
+      AZ = (AZI+AJ*ZJ)*AA1
+C
+C     ----- DENSITY FACTOR
+C
+      MAX = MAXJ
+      NN = 0
+      DO 220 I = MINI,MAXI
+         FACI=FAC*CONI(I)*PNRM(I)
+         DO 200 J = MINJ,MAXJ
+            NN = NN+1
+            DIJ(NN)=FACI*CONJ(J)*PNRM(J)
+  200    CONTINUE
+  220 CONTINUE
+C
+C     ..... HELLMANN-FEYNMAN TERM .....
+C
+      DUM = PI212*AA1/THREE
+      DO 380 I = 1,IJ
+      FIJ(I) = DIJ(I)*DUM
+  380 CONTINUE
+      AAX = AA*AX
+      AAY = AA*AY
+      AAZ = AA*AZ
+C
+      DO 480 IC = 1,NEFQ
+      IF(IDOIT(IC).EQ.0) GOTO 480
+      ALFA = EFATRM(IC)
+      BETA = EFBTRM(IC)
+C            DEACTIVATE SCREENING...
+                     ALFA = 0.0D+00
+                     BETA = 0.0D+00
+      CX   = EFC(1,IC)
+      CY   = EFC(2,IC)
+      CZ   = EFC(3,IC)
+      DUMA = PI212/(THREE*(AA+ALFA))
+      DO 385 I = 1,IJ
+      GIJ(I) = DIJ(I)*DUMA
+  385 CONTINUE
+      XX   = AA*((AX-CX)**2+(AY-CY)**2+(AZ-CZ)**2)
+      IF(NROOTS.LE.3) CALL RT123
+      IF(NROOTS.EQ.4) CALL ROOT4
+      IF(NROOTS.EQ.5) CALL ROOT5
+      IF(NROOTS.GE.6) CALL ROOT6
+      MM = 0
+      DO 401 K = 1,NROOTS
+      U2 = AA*U(K)
+      U4 = U2*U2
+      WW = W(K)
+      W2(K) = TWO *WW*U2
+      W4(K) = FOUR*WW*U4
+      TT = ONE/(AA+U2)
+      T  =  SQRT(TT)
+      X0 = (AAX+U2*CX)*TT
+      Y0 = (AAY+U2*CY)*TT
+      Z0 = (AAZ+U2*CZ)*TT
+      IN = -5+MM
+      DO 400 I = 1,LIT
+      IN = IN+5
+      NI = I
+      DO 400 J = 1,LJT
+      JN = IN+J
+      NJ = J
+      CALL STVINT
+      XIN(JN   ) = XINT
+      YIN(JN   ) = YINT
+      ZIN(JN   ) = ZINT
+      CALL POLXYZ
+      XIN(JN+225) = XINT
+      YIN(JN+225) = YINT
+      ZIN(JN+225) = ZINT
+      CALL EFQXYZ
+      XIN(JN+450) = XINT
+      YIN(JN+450) = YINT
+      ZIN(JN+450) = ZINT
+  400 CONTINUE
+  401 MM = MM+25
+      DO 403 I = 1,IJ
+      NX    = IJX(I)
+      NY    = IJY(I)
+      NZ    = IJZ(I)
+      DUMXX = ZERO
+      DUMYY = ZERO
+      DUMZZ = ZERO
+      DUMXY = ZERO
+      DUMXZ = ZERO
+      DUMYZ = ZERO
+      MM    = 0
+      DO 402 K = 1,NROOTS
+      DUMXX= DUMXX-XIN(NX+MM    )*YIN(NY+MM    )*ZIN(NZ+MM    )*W2(K)
+     1            +XIN(NX+MM+450)*YIN(NY+MM    )*ZIN(NZ+MM    )*W4(K)
+      DUMYY= DUMYY-XIN(NX+MM    )*YIN(NY+MM    )*ZIN(NZ+MM    )*W2(K)
+     1            +XIN(NX+MM    )*YIN(NY+MM+450)*ZIN(NZ+MM    )*W4(K)
+      DUMZZ= DUMZZ-XIN(NX+MM    )*YIN(NY+MM    )*ZIN(NZ+MM    )*W2(K)
+     1            +XIN(NX+MM    )*YIN(NY+MM    )*ZIN(NZ+MM+450)*W4(K)
+      DUMXY= DUMXY+XIN(NX+MM+225)*YIN(NY+MM+225)*ZIN(NZ+MM    )*W4(K)
+      DUMXZ= DUMXZ+XIN(NX+MM+225)*YIN(NY+MM    )*ZIN(NZ+MM+225)*W4(K)
+      DUMYZ= DUMYZ+XIN(NX+MM    )*YIN(NY+MM+225)*ZIN(NZ+MM+225)*W4(K)
+  402 MM  = MM+25
+      DUM = FIJ(I)
+      CHQINT(I) = CHQINT(I) -
+     1 DUM * ( DUMXX * QUAD(1,IC)
+     2       + DUMYY * QUAD(2,IC)
+     3       + DUMZZ * QUAD(3,IC)
+     4 +TWO* ( DUMXY * QUAD(4,IC)
+     5       + DUMXZ * QUAD(5,IC)
+     6       + DUMYZ * QUAD(6,IC) ) )
+ 403  CONTINUE
+C
+C  SUBTRACT DAMPING FUNCTION TERM
+C
+      IF ( ABS(ALFA).LE.QLIM ) GO TO 480
+      PCSQ = (AX-CX)**2+(AY-CY)**2+(AZ-CZ)**2
+      XX=AA*AA*PCSQ/(AA+ALFA)
+      PREI = EXP(-AA*ALFA*PCSQ/(AA+ALFA))
+      IF(NROOTS.LE.3) CALL RT123
+      IF(NROOTS.EQ.4) CALL ROOT4
+      IF(NROOTS.EQ.5) CALL ROOT5
+      IF(NROOTS.GE.6) CALL ROOT6
+      MM = 0
+      DO 425 K = 1,NROOTS
+      U2 = (ALFA+AA)*U(K)
+      U4 = U2*U2
+      WW = W(K)
+      W2(K) = TWO *WW*U2
+      W4(K) = FOUR*WW*U4
+      TT = ONE/(AA+U2+ALFA)
+      T  =  SQRT(TT)
+      X0 = (AAX+(U2+ALFA)*CX)*TT
+      Y0 = (AAY+(U2+ALFA)*CY)*TT
+      Z0 = (AAZ+(U2+ALFA)*CZ)*TT
+      IN = -5+MM
+      DO 405 I = 1,LIT
+      IN = IN+5
+      NI = I
+      DO 405 J = 1,LJT
+      JN = IN+J
+      NJ = J
+      CALL STVINT
+      XIN(JN   ) = XINT
+      YIN(JN   ) = YINT
+      ZIN(JN   ) = ZINT
+      CALL POLXYZ
+      XIN(JN+225) = XINT
+      YIN(JN+225) = YINT
+      ZIN(JN+225) = ZINT
+      CALL EFQXYZ
+      XIN(JN+450) = XINT
+      YIN(JN+450) = YINT
+      ZIN(JN+450) = ZINT
+  405 CONTINUE
+  425 MM = MM+25
+      DO 465 I = 1,IJ
+      NX    = IJX(I)
+      NY    = IJY(I)
+      NZ    = IJZ(I)
+      DUMXX = ZERO
+      DUMYY = ZERO
+      DUMZZ = ZERO
+      DUMXY = ZERO
+      DUMXZ = ZERO
+      DUMYZ = ZERO
+      MM    = 0
+      DO 445 K = 1,NROOTS
+      DUMXX= DUMXX-XIN(NX+MM    )*YIN(NY+MM    )*ZIN(NZ+MM    )*W2(K)
+     1            +XIN(NX+MM+450)*YIN(NY+MM    )*ZIN(NZ+MM    )*W4(K)
+      DUMYY= DUMYY-XIN(NX+MM    )*YIN(NY+MM    )*ZIN(NZ+MM    )*W2(K)
+     1            +XIN(NX+MM    )*YIN(NY+MM+450)*ZIN(NZ+MM    )*W4(K)
+      DUMZZ= DUMZZ-XIN(NX+MM    )*YIN(NY+MM    )*ZIN(NZ+MM    )*W2(K)
+     1            +XIN(NX+MM    )*YIN(NY+MM    )*ZIN(NZ+MM+450)*W4(K)
+      DUMXY= DUMXY+XIN(NX+MM+225)*YIN(NY+MM+225)*ZIN(NZ+MM    )*W4(K)
+      DUMXZ= DUMXZ+XIN(NX+MM+225)*YIN(NY+MM    )*ZIN(NZ+MM+225)*W4(K)
+      DUMYZ= DUMYZ+XIN(NX+MM    )*YIN(NY+MM+225)*ZIN(NZ+MM+225)*W4(K)
+  445 MM  = MM+25
+      DUM =-GIJ(I)*PREI * BETA
+      CHQINT(I) = CHQINT(I) -
+     1 DUM * ( DUMXX * QUAD(1,IC)
+     2       + DUMYY * QUAD(2,IC)
+     3       + DUMZZ * QUAD(3,IC)
+     4 +TWO* ( DUMXY * QUAD(4,IC)
+     5       + DUMXZ * QUAD(5,IC)
+     6       + DUMYZ * QUAD(6,IC) ) )
+ 465  CONTINUE
+C
+ 480  CONTINUE
+C-------- END OF EFQ CENTERS LOOP
+ 500  CONTINUE
+ 520  CONTINUE
+C
+C     ----- END OF *PRIMITIVE* LOOPS -----
+C
+      MAX=MAXJ
+      NN=0
+      DO 550 I=MINI,MAXI
+      LI=LOCI+I
+      IN= (LI*(LI-1))/2
+      DO 550 J=MINJ,MAX
+      LJ=LOCJ+J
+      NN=NN+1
+      VEFP(LI,LJ) = VEFP(LI,LJ) + CHQINT(NN)
+  550 CONTINUE
+C
+C     ----- END SHELLS -----
+C
+  580 CONTINUE
+  600 CONTINUE
+C
+C     ----- END OF *SHELL* LOOPS -----
+C
+      RETURN
+      END
+C*MODULE EFCHTR  *DECK DSTINT
+      SUBROUTINE DSTINT(JFRG,DSINT,DTINT,L1,L1CO,NATM,NATMCO,
+     *                 NGAU,NSHL,EX,CS,CP,CD,CF,CG,
+     *                 KSTART,KATOM,KTYPE,KNG,KLOC,KMIN,KMAX,
+     *                 NGAUCO,NSHLCO,EXCO,CSCO,CPCO,CDCO,CFCO,CGCO,
+     *                 KSTRCO,KATMCO,KTYPCO,KNGCO,KLOCCO,KMINCO,
+     *                 KMAXCO,C,CCO)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      LOGICAL NORM
+C
+      PARAMETER (MXFRG=1050, MXFGPT=12000)
+C
+      DIMENSION DSINT(L1CO,L1,6),DTINT(L1CO,L1,6),
+     *          EX(NGAU),CS(NGAU),CP(NGAU),CD(NGAU),
+     *          CF(NGAU),CG(NGAU),KSTART(NSHL),KATOM(NSHL),
+     *          KTYPE(NSHL),KNG(NSHL),KLOC(NSHL),KMIN(NSHL),KMAX(NSHL),
+     *          EXCO(NGAUCO),CSCO(NGAUCO),CPCO(NGAUCO),CDCO(NGAUCO),
+     *          CFCO(NGAUCO),CGCO(NGAUCO),KSTRCO(NSHLCO),KATMCO(NSHLCO),
+     *          KTYPCO(NSHLCO),KNGCO(NSHLCO),KLOCCO(NSHLCO),
+     *          KMINCO(NSHLCO),KMAXCO(NSHLCO),
+     *          C(3,NATM),CCO(3,NATMCO)
+      DIMENSION DIJ(225), IJX(35), IJY(35),IJZ(35),
+     *           XS(6,7), YS(6,7), ZS(6,7), XT(6,5), YT(6,5), ZT(6,5),
+     *          DXS(5,5),DYS(5,5),DZS(5,5),DXT(5,5),DYT(5,5),DZT(5,5)
+C
+      COMMON /DSTV  / XINT,YINT,ZINT,T,X0,Y0,Z0,XI,YI,ZI,
+     *                XJ,YJ,ZJ,NI,NJ,CX,CY,CZ
+      COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
+     *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
+     *                ATORQ(3,MXFRG)
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+C
+      PARAMETER (SQRT3=1.73205080756888D+00)
+      PARAMETER (SQRT5=2.23606797749979D+00, SQRT7=2.64575131106459D+00)
+      PARAMETER (ONE=1.0D+00)
+      PARAMETER (RLN10=2.30258D+00)
+C
+      DATA IJX / 1, 2, 1, 1, 3, 1, 1, 2, 2, 1,
+     *           4, 1, 1, 3, 3, 2, 1, 2, 1, 2,
+     *           5, 1, 1, 4, 4, 2, 1, 2, 1, 3,
+     *           3, 1, 3, 2, 2/
+      DATA IJY / 1, 1, 2, 1, 1, 3, 1, 2, 1, 2,
+     *           1, 4, 1, 2, 1, 3, 3, 1, 2, 2,
+     *           1, 5, 1, 2, 1, 4, 4, 1, 2, 3,
+     *           1, 3, 2, 3, 2/
+      DATA IJZ / 1, 1, 1, 2, 1, 1, 3, 1, 2, 2,
+     *           1, 1, 4, 1, 2, 1, 2, 3, 3, 2,
+     *           1, 1, 5, 1, 2, 1, 2, 4, 4, 1,
+     *           3, 3, 2, 2, 3/
+C
+      TOL = RLN10*ITOL
+      NORM = NORMF .NE. 1 .OR. NORMP .NE. 1
+      MI = JFRG
+      CALL VCLR(DSINT,1,L1CO*L1*6)
+      CALL VCLR(DTINT,1,L1CO*L1*6)
+C
+C     ----- I SHELL
+C
+      DO 780 II = 1,NSHLCO
+C
+      IAT = KATMCO(II)
+      XI = CCO(1,IAT)
+      YI = CCO(2,IAT)
+      ZI = CCO(3,IAT)
+      I1 = KSTRCO(II)
+      I2 = I1+KNGCO(II)-1
+      LIT = KTYPCO(II)
+      MINI = KMINCO(II)
+      MAXI = KMAXCO(II)
+      LOCI = KLOCCO(II)-MINI
+      LITDER = LIT+1
+C
+C     ----- J SHELL
+C
+      DO 760 JJ = 1,NSHL
+C
+      JAT = KATOM(JJ)
+      XJ = C(1,JAT)
+      YJ = C(2,JAT)
+      ZJ = C(3,JAT)
+      J1 = KSTART(JJ)
+      J2 = J1+KNG(JJ)-1
+      LJT = KTYPE(JJ)
+      MINJ = KMIN(JJ)
+      MAXJ = KMAX(JJ)
+      LOCJ = KLOC(JJ)-MINJ
+      LJTMOD = LJT+2
+      RR = (XI-XJ)**2+(YI-YJ)**2+(ZI-ZJ)**2
+C
+C     ----- I PRIMITIVE
+C
+      DO 640 IG = I1,I2
+        AI = EXCO(IG)
+        ARRI = AI*RR
+        AXI = AI*XI
+        AYI = AI*YI
+        AZI = AI*ZI
+        CSI=CSCO(IG)
+        CPI=CPCO(IG)
+        CDI=CDCO(IG)
+        CFI=CFCO(IG)
+        CGI=CGCO(IG)
+C
+C     ----- J PRIMITIVE
+C
+        DO 620 JG = J1,J2
+          AJ = EX(JG)
+          AA = AI+AJ
+          AA1 = ONE/AA
+          DUM = AJ*ARRI*AA1
+          IF(DUM .GT. TOL) GO TO 620
+          FAC = EXP(-DUM)
+          CSJ = CS(JG)
+          CPJ = CP(JG)
+          CDJ = CD(JG)
+          CFJ = CF(JG)
+          CGJ = CG(JG)
+          AX = (AXI+AJ*XJ)*AA1
+          AY = (AYI+AJ*YJ)*AA1
+          AZ = (AZI+AJ*ZJ)*AA1
+C
+C     ----- DENSITY FACTOR
+C
+          IJ = 0
+          DO 580 I = MINI,MAXI
+            IF(I.EQ.1) DUM1=CSI*FAC
+            IF(I.EQ.2) DUM1=CPI*FAC
+            IF(I.EQ.5) DUM1=CDI*FAC
+            IF(I.EQ.8.AND.NORM) DUM1=DUM1*SQRT3
+            IF(I.EQ.11) DUM1=CFI*FAC
+            IF(I.EQ.14.AND.NORM) DUM1=DUM1*SQRT5
+            IF(I.EQ.20.AND.NORM) DUM1=DUM1*SQRT3
+            IF(I.EQ.21) DUM1=CGI*FAC
+            IF(I.EQ.24.AND.NORM) DUM1=DUM1*SQRT7
+            IF(I.EQ.30.AND.NORM) DUM1=DUM1*SQRT5/SQRT3
+            IF(I.EQ.33.AND.NORM) DUM1=DUM1*SQRT3
+            DO 570 J = MINJ,MAXJ
+              IF(J.EQ.1) DUM2=DUM1*CSJ
+              IF(J.EQ.2) DUM2=DUM1*CPJ
+              IF(J.EQ.5) DUM2=DUM1*CDJ
+              IF(J.EQ.8.AND.NORM) DUM2=DUM2*SQRT3
+              IF(J.EQ.11) DUM2=DUM1*CFJ
+              IF(J.EQ.14.AND.NORM) DUM2=DUM2*SQRT5
+              IF(J.EQ.20.AND.NORM) DUM2=DUM2*SQRT3
+              IF(J.EQ.21) DUM2=DUM1*CGJ
+              IF(J.EQ.24.AND.NORM) DUM2=DUM2*SQRT7
+              IF(J.EQ.30.AND.NORM) DUM2=DUM2*SQRT5/SQRT3
+              IF(J.EQ.33.AND.NORM) DUM2=DUM2*SQRT3
+              IJ=IJ+1
+              DIJ(IJ) = DUM2
+  570       CONTINUE
+  580     CONTINUE
+C
+C     ----- OVERLAP
+C
+      T = SQRT(AA1)
+      X0 = AX
+      Y0 = AY
+      Z0 = AZ
+      DO 590 J = 1,LJTMOD
+        NJ = J
+        DO 590 I = 1,LITDER
+          NI = I
+          CALL VINT
+          XS(I,J)=XINT*T
+          YS(I,J)=YINT*T
+          ZS(I,J)=ZINT*T
+  590 CONTINUE
+C
+      CALL DTXYZ(XT,YT,ZT,XS,YS,ZS,LITDER,LJT,AJ)
+      CALL DERI(DXS,DYS,DZS,XS,YS,ZS,LIT,LJT,AI)
+      CALL DERI(DXT,DYT,DZT,XT,YT,ZT,LIT,LJT,AI)
+C
+      IJ=0
+      DO 600 I=MINI,MAXI
+        IX=IJX(I)
+        IY=IJY(I)
+        IZ=IJZ(I)
+        LI=LOCI+I
+        DO 600 J=MINJ,MAXJ
+          JX=IJX(J)
+          JY=IJY(J)
+          JZ=IJZ(J)
+          DUMX=DXS(IX,JX)* YS(IY,JY)* ZS(IZ,JZ)
+          DUMY= XS(IX,JX)*DYS(IY,JY)* ZS(IZ,JZ)
+          DUMZ= XS(IX,JX)* YS(IY,JY)*DZS(IZ,JZ)
+C
+          DUMX2=DXT(IX,JX)* YS(IY,JY)* ZS(IZ,JZ)
+     *         +DXS(IX,JX)* YT(IY,JY)* ZS(IZ,JZ)
+     *         +DXS(IX,JX)* YS(IY,JY)* ZT(IZ,JZ)
+          DUMY2= XT(IX,JX)*DYS(IY,JY)* ZS(IZ,JZ)
+     *         + XS(IX,JX)*DYT(IY,JY)* ZS(IZ,JZ)
+     *         + XS(IX,JX)*DYS(IY,JY)* ZT(IZ,JZ)
+          DUMZ2= XT(IX,JX)* YS(IY,JY)*DZS(IZ,JZ)
+     *         + XS(IX,JX)* YT(IY,JY)*DZS(IZ,JZ)
+     *         + XS(IX,JX)* YS(IY,JY)*DZT(IZ,JZ)
+C
+          IJ=IJ+1
+          LJ=LOCJ+J
+          DIJIJ=DIJ(IJ)
+          DSINT(LI,LJ,1)=DSINT(LI,LJ,1)+DUMX*DIJIJ
+          DSINT(LI,LJ,2)=DSINT(LI,LJ,2)+DUMY*DIJIJ
+          DSINT(LI,LJ,3)=DSINT(LI,LJ,3)+DUMZ*DIJIJ
+          DSINT(LI,LJ,4)=DSINT(LI,LJ,4)
+     *                  +DUMY*DIJIJ*(ZI-EFCENT(3,MI))
+     *                  -DUMZ*DIJIJ*(YI-EFCENT(2,MI))
+          DSINT(LI,LJ,5)=DSINT(LI,LJ,5)
+     *                  +DUMZ*DIJIJ*(XI-EFCENT(1,MI))
+     *                  -DUMX*DIJIJ*(ZI-EFCENT(3,MI))
+          DSINT(LI,LJ,6)=DSINT(LI,LJ,6)
+     *                  +DUMX*DIJIJ*(YI-EFCENT(2,MI))
+     *                  -DUMY*DIJIJ*(XI-EFCENT(1,MI))
+C
+          DTINT(LI,LJ,1)=DTINT(LI,LJ,1)+DUMX2*DIJIJ
+          DTINT(LI,LJ,2)=DTINT(LI,LJ,2)+DUMY2*DIJIJ
+          DTINT(LI,LJ,3)=DTINT(LI,LJ,3)+DUMZ2*DIJIJ
+          DTINT(LI,LJ,4)=DTINT(LI,LJ,4)
+     *                  +DUMY2*DIJIJ*(ZI-EFCENT(3,MI))
+     *                  -DUMZ2*DIJIJ*(YI-EFCENT(2,MI))
+          DTINT(LI,LJ,5)=DTINT(LI,LJ,5)
+     *                  +DUMZ2*DIJIJ*(XI-EFCENT(1,MI))
+     *                  -DUMX2*DIJIJ*(ZI-EFCENT(3,MI))
+          DTINT(LI,LJ,6)=DTINT(LI,LJ,6)
+     *                  +DUMX2*DIJIJ*(YI-EFCENT(2,MI))
+     *                  -DUMY2*DIJIJ*(XI-EFCENT(1,MI))
+  600 CONTINUE
+C
+  620 CONTINUE
+  640 CONTINUE
+C
+C     ----- END OF PRIMITIVE LOOPS -----
+C
+  760 CONTINUE
+  780 CONTINUE
+C
+C     ----- END OF SHELL LOOPS -----
+C
+      RETURN
+C
+      END
+C*MODULE EFCHTR  *DECK GCTANA
+      SUBROUTINE GCTANA(ECT,CANVEC,SMAT,TFRG,TMAT,WRK,SAB,TAB,
+     *                  VEFP,VABEFB,VABEFA,VAAEFB,
+     *                  VBBEFA,DCVEC,DSINT,DTINT,DSAB,DTAB,WRK2,
+     *                  DABEFB,DABEFA,DAAEFB,DBBEFA,DVEFP,
+     *                  GCTFRG,IDOIT,QUAD,MXBFEFP,MXAOEFP)
+C
+      IMPLICIT DOUBLE PRECISION (A-H, O-Z)
+C
+      LOGICAL GOPARR, DSKWRK, MASWRK
+C
+      PARAMETER (MXAO=8192, MXSHEF=1000, MXGEFP=4000,
+     *           MXDFG=5, MXFRG=1050, MXFGPT=12000,
+     *           MXDPPT=MXFRG*MXDFG*12)
+      PARAMETER (ZERO=0.0D+00)
+C
+      CHARACTER*8 FRGNME
+C
+      COMMON /EFMULT/ EFC(3,MXFGPT),EFCHG(2,MXFGPT),EFATRM(MXFGPT),
+     *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
+     *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
+     *                EFOCT(10,MXFGPT),FRGNME(MXFGPT)
+      COMMON /EFPCMO/ NOCC(MXDFG),NVIR(MXDFG),NAO(MXDFG),NTAO,
+     *                CANFOK(MXAO,MXDFG)
+      COMMON /EFPBAS/ EX(MXGEFP,MXDFG),CS(MXGEFP,MXDFG),
+     *                CP(MXGEFP,MXDFG),CD(MXGEFP,MXDFG),
+     *                CF(MXGEFP,MXDFG),CG(MXGEFP,MXDFG),
+     *                PRNAME(MXFGPT),PRCORD(3,MXFGPT),EFZNUC(MXFGPT),
+     *                KSTART(MXSHEF,MXDFG),KATOM(MXSHEF,MXDFG),
+     *                KTYPE(MXSHEF,MXDFG),KNG(MXSHEF,MXDFG),
+     *                KLOC(MXSHEF,MXDFG),KMIN(MXSHEF,MXDFG),
+     *                KMAX(MXSHEF,MXDFG),NSHELL(MXDFG),NGAUSS(MXDFG),
+     *                NAT(MXDFG),NUM(MXDFG),NTPATM
+      COMMON /EFPPBC/ XBOX,YBOX,ZBOX,XCUT,YCUT,ZCUT,RCUT
+     *                ,SWR1,SWR2,ISWF
+      COMMON /EFPGCX/ DCTFRG(6,MXFRG),DXRFRG(6,MXFRG)
+      COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
+     *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
+     *                ATORQ(3,MXFRG)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /FRGTYP/ NDFRG,ISET(MXFRG),NAMIDX(MXDFG)
+C
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+C
+      DIMENSION CANVEC(MXBFEFP,NTAO),SMAT(MXBFEFP,MXBFEFP),
+     *          TFRG(MXAOEFP*MXAOEFP,MXDFG),TMAT(MXBFEFP,MXBFEFP),
+     *          SAB(MXAOEFP,MXAOEFP),TAB(MXAOEFP,MXAOEFP),
+     *          VEFP(MXBFEFP,MXBFEFP),VABEFB(MXAOEFP,MXAOEFP),
+     *          VABEFA(MXAOEFP,MXAOEFP),VAAEFB(MXAOEFP,MXAOEFP),
+     *          VBBEFA(MXAOEFP,MXAOEFP),WRK(MXBFEFP)
+      DIMENSION DSINT(MXBFEFP,MXBFEFP,6),DTINT(MXBFEFP,MXBFEFP,6),
+     *          DSAB(MXAOEFP,MXAOEFP,6),DTAB(MXAOEFP,MXAOEFP,6),
+     *          DCVEC(MXBFEFP,NTAO,3),DVEFP(MXBFEFP,MXBFEFP,6),
+     *          WRK2(MXAOEFP,MXAOEFP),DABEFB(MXAOEFP,MXAOEFP,6),
+     *          DABEFA(MXAOEFP,MXAOEFP,6),DAAEFB(MXAOEFP,MXAOEFP,6),
+     *          DBBEFA(MXAOEFP,MXAOEFP,6),GCTFRG(6,NFRG,NFRG),
+     *          IDOIT(*),QUAD(6,*)
+C
+C     CALCULATE THE EFP CHARGE TRANSFER GRADIENTS
+C     HUI LI, 02/14/2005, AMES
+C
+      ECT = ZERO
+      DO ICRD =1, 6
+         DO IFRG=1,NFRG
+           DCTFRG(ICRD,IFRG) = ZERO
+           DO JFRG=1,NFRG
+              GCTFRG(ICRD,JFRG,IFRG) = ZERO
+           END DO
+         END DO
+      END DO
+      IF(NTAO.EQ.0) RETURN
+C
+      JNAT = 1
+      JMO = 1
+      DO MJ = 1,NFRG
+         JM=ISET(MJ)
+C        -- S AND T INTEGRALS --
+         CALL STINT(SMAT,TMAT,MXBFEFP,MXBFEFP,NAT(JM),NAT(JM),
+     *              NGAUSS(JM),NSHELL(JM),EX(1,JM),CS(1,JM),
+     *              CP(1,JM),CD(1,JM),CF(1,JM),CG(1,JM),KSTART(1,JM),
+     *              KATOM(1,JM),KTYPE(1,JM),KNG(1,JM),KLOC(1,JM),
+     *              KMIN(1,JM),KMAX(1,JM),NGAUSS(JM),NSHELL(JM),
+     *              EX(1,JM),CS(1,JM),CP(1,JM),CD(1,JM),CF(1,JM),
+     *              CG(1,JM),KSTART(1,JM),KATOM(1,JM),KTYPE(1,JM),
+     *              KNG(1,JM),KLOC(1,JM),KMIN(1,JM),KMAX(1,JM),
+     *              PRCORD(1,JNAT),PRCORD(1,JNAT))
+         CALL VCLR(TFRG(1,JM),1,MXAOEFP*MXAOEFP)
+         CALL TFSQP(TFRG(1,JM),TMAT,CANVEC(1,JMO),
+     *              CANVEC(1,JMO),WRK,
+     *              MXBFEFP,MXBFEFP,NAO(JM),NAO(JM),
+     *              MXAOEFP,MXAOEFP,.TRUE.)
+         JMO = JMO + NAO(JM)
+         JNAT = JNAT + NAT(JM)
+      END DO
+C
+C     NOTE 'JM' IS MOLECULE 'A', 'IM' IS MOLECULE 'B'
+C
+C     - INITIALIZE PARALLEL
+      IPCOUNT = ME - 1
+C
+      JNAT = 1
+      JMO = 1
+      DO MJ = 1,NFRG
+          COMX1 = EFCENT(1,MJ)
+          COMY1 = EFCENT(2,MJ)
+          COMZ1 = EFCENT(3,MJ)
+C
+         JM=ISET(MJ)
+         INAT = 1
+         IMO = 1
+         IEFPT = 1
+         DO MI = 1,NFRG
+            IM=ISET(MI)
+            IF(MI.LE.MJ) GOTO 500
+C           - GO PARALLEL!
+            IF(GOPARR) THEN
+               IPCOUNT = IPCOUNT + 1
+               IF(MOD(IPCOUNT,NPROC).NE.0) GO TO 500
+            END IF
+C
+C
+           COMX2 = EFCENT(1,MI)
+           COMY2 = EFCENT(2,MI)
+           COMZ2 = EFCENT(3,MI)
+C
+            COMX = COMX1 - COMX2
+            COMY = COMY1 - COMY2
+            COMZ = COMZ1 - COMZ2
+C
+            PBCX = ZERO
+            PBCY = ZERO
+            PBCZ = ZERO
+            IF (XBOX .NE. ZERO) PBCX = XBOX * ANINT(COMX/XBOX)
+            IF (YBOX .NE. ZERO) PBCY = YBOX * ANINT(COMY/YBOX)
+            IF (ZBOX .NE. ZERO) PBCZ = ZBOX * ANINT(COMZ/ZBOX)
+C
+C   ----  DISTANCE BETWEEN FRAGMENTS
+            X12  = ABS(COMX - PBCX)
+            Y12  = ABS(COMY - PBCY)
+            Z12  = ABS(COMZ - PBCZ)
+            R12  = X12*X12+Y12*Y12+Z12*Z12
+C
+            SWF   = 1.0D+00
+            SWFDX = 0.0D+00
+            SWFDY = 0.0D+00
+            SWFDZ = 0.0D+00
+C
+            IF(X12.GT.XCUT.OR.Y12.GT.YCUT.OR.Z12.GT.ZCUT)GOTO 500
+            R12  = X12*X12+Y12*Y12+Z12*Z12
+            IF(R12.GT.RCUT)GOTO 500
+C
+            IF(R12.GT.SWR2*SWR2) THEN
+              GOTO 500
+            ELSE IF(R12.GT.SWR1*SWR1) THEN
+              IF(ISWF.EQ.1) THEN
+                 DUMY1 = 1.0D+00/(SWR2*SWR2 - SWR1*SWR1)
+                 DUMY2 = DUMY1*DUMY1
+                 DUMY3 = DUMY2*DUMY1
+                 DUMY4 = DUMY2*DUMY2
+                 DUMY5 = DUMY2*DUMY3
+                 VUMY1 = R12 - SWR1*SWR1
+                 VUMY2 = VUMY1*VUMY1
+                 VUMY3 = VUMY2*VUMY1
+                 VUMY4 = VUMY2*VUMY2
+                 VUMY5 = VUMY2*VUMY3
+                 DSWF  = -30.0D+00*DUMY3*VUMY2
+     *                   +60.0D+00*DUMY4*VUMY3
+     *                   -30.0D+00*DUMY5*VUMY4
+                 DSWF  = 2.0D+00*DSWF
+                 SWF   = 1.0D+00 - 10.0D+00*DUMY3*VUMY3
+     *                           + 15.0D+00*DUMY4*VUMY4
+     *                           -  6.0D+00*DUMY5*VUMY5
+                 SWFDX = DSWF*(EFCENT(1,MI)-EFCENT(1,MJ)+PBCX)
+                 SWFDY = DSWF*(EFCENT(2,MI)-EFCENT(2,MJ)+PBCY)
+                 SWFDZ = DSWF*(EFCENT(3,MI)-EFCENT(3,MJ)+PBCZ)
+              ELSE IF(ISWF.EQ.2) THEN
+                 R12   = SQRT(R12)
+                 PIL   = 3.1415926535897932D+00/(SWR2-SWR1)
+                 DUMY  = (R12 - SWR1) * PIL
+                 SWF   = 0.50D+00 * (COS(DUMY) + 1.0D+00)
+                 DUMY2 =-0.50D+00 * SIN(DUMY) * PIL / R12
+                 SWFDX = DUMY2*(EFCENT(1,MI)-EFCENT(1,MJ)+PBCX)
+                 SWFDY = DUMY2*(EFCENT(2,MI)-EFCENT(2,MJ)+PBCY)
+                 SWFDZ = DUMY2*(EFCENT(3,MI)-EFCENT(3,MJ)+PBCZ)
+              END IF
+            END IF
+C
+            EFCENT(1,MI) = EFCENT(1,MI) + PBCX
+            EFCENT(2,MI) = EFCENT(2,MI) + PBCY
+            EFCENT(3,MI) = EFCENT(3,MI) + PBCZ
+            DO NATIM=1,NAT(IM)
+            PRCORD(1,INAT+NATIM-1) = PRCORD(1,INAT+NATIM-1) + PBCX
+            PRCORD(2,INAT+NATIM-1) = PRCORD(2,INAT+NATIM-1) + PBCY
+            PRCORD(3,INAT+NATIM-1) = PRCORD(3,INAT+NATIM-1) + PBCZ
+            ENDDO
+            DO NPTIM=1,NMPTS(MI)
+            EFC(1,IEFPT+NPTIM-1) = EFC(1,IEFPT+NPTIM-1) + PBCX
+            EFC(2,IEFPT+NPTIM-1) = EFC(2,IEFPT+NPTIM-1) + PBCY
+            EFC(3,IEFPT+NPTIM-1) = EFC(3,IEFPT+NPTIM-1) + PBCZ
+            ENDDO
+C
+C           -- SAB AND TAB --
+C
+            CALL STINT(SMAT,TMAT,MXBFEFP,MXBFEFP,NAT(IM),NAT(JM),
+     *                 NGAUSS(IM),NSHELL(IM),EX(1,IM),CS(1,IM),
+     *                 CP(1,IM),CD(1,IM),CF(1,IM),CG(1,IM),KSTART(1,IM),
+     *                 KATOM(1,IM),KTYPE(1,IM),KNG(1,IM),KLOC(1,IM),
+     *                 KMIN(1,IM),KMAX(1,IM),NGAUSS(JM),NSHELL(JM),
+     *                 EX(1,JM),CS(1,JM),CP(1,JM),CD(1,JM),CF(1,JM),
+     *                 CG(1,JM),KSTART(1,JM),KATOM(1,JM),KTYPE(1,JM),
+     *                 KNG(1,JM),KLOC(1,JM),KMIN(1,JM),KMAX(1,JM),
+     *                 PRCORD(1,INAT),PRCORD(1,JNAT))
+            CALL VCLR(SAB,1,MXAOEFP*MXAOEFP)
+            CALL TFSQP(SAB,SMAT,CANVEC(1,JMO),CANVEC(1,IMO),WRK,
+     *                 MXBFEFP,MXBFEFP,NAO(JM),NAO(IM),
+     *                 MXAOEFP,MXAOEFP,.FALSE.)
+C
+C           USE SAB TO CHECK IF THE CT TERM IS SIGNIFICANT
+            DO II = 1, NOCC(IM)+NVIR(IM)
+               DO JJ = 1, NOCC(JM)+NVIR(JM)
+                  IF(ABS(SAB(JJ,II)).GT.0.10D+00) GOTO 600
+               END DO
+            END DO
+C
+            EFCENT(1,MI) = EFCENT(1,MI) - PBCX
+            EFCENT(2,MI) = EFCENT(2,MI) - PBCY
+            EFCENT(3,MI) = EFCENT(3,MI) - PBCZ
+            DO NATIM=1,NAT(IM)
+            PRCORD(1,INAT+NATIM-1) = PRCORD(1,INAT+NATIM-1) - PBCX
+            PRCORD(2,INAT+NATIM-1) = PRCORD(2,INAT+NATIM-1) - PBCY
+            PRCORD(3,INAT+NATIM-1) = PRCORD(3,INAT+NATIM-1) - PBCZ
+            ENDDO
+            DO NPTIM=1,NMPTS(MI)
+            EFC(1,IEFPT+NPTIM-1) = EFC(1,IEFPT+NPTIM-1) - PBCX
+            EFC(2,IEFPT+NPTIM-1) = EFC(2,IEFPT+NPTIM-1) - PBCY
+            EFC(3,IEFPT+NPTIM-1) = EFC(3,IEFPT+NPTIM-1) - PBCZ
+            ENDDO
+C
+C
+            GOTO 500
+ 600        CONTINUE
+C
+            CALL VCLR(TAB,1,MXAOEFP*MXAOEFP)
+            CALL TFSQP(TAB,TMAT,CANVEC(1,JMO),CANVEC(1,IMO),WRK,
+     *                 MXBFEFP,MXBFEFP,NAO(JM),NAO(IM),
+     *                 MXAOEFP,MXAOEFP,.FALSE.)
+C
+C           -- DSAB AND DTAB --
+C
+            CALL DSTINT(MJ,DSINT,DTINT,MXBFEFP,MXBFEFP,NAT(IM),NAT(JM),
+     *                 NGAUSS(IM),NSHELL(IM),EX(1,IM),CS(1,IM),
+     *                 CP(1,IM),CD(1,IM),CF(1,IM),CG(1,IM),KSTART(1,IM),
+     *                 KATOM(1,IM),KTYPE(1,IM),KNG(1,IM),KLOC(1,IM),
+     *                 KMIN(1,IM),KMAX(1,IM),NGAUSS(JM),NSHELL(JM),
+     *                 EX(1,JM),CS(1,JM),CP(1,JM),CD(1,JM),CF(1,JM),
+     *                 CG(1,JM),KSTART(1,JM),KATOM(1,JM),KTYPE(1,JM),
+     *                 KNG(1,JM),KLOC(1,JM),KMIN(1,JM),KMAX(1,JM),
+     *                 PRCORD(1,INAT),PRCORD(1,JNAT))
+            CALL VCLR(DSAB,1,MXAOEFP*MXAOEFP*6)
+            CALL VCLR(DTAB,1,MXAOEFP*MXAOEFP*6)
+            DO ICRD=1,6
+            CALL TFSQP(DSAB(1,1,ICRD),DSINT(1,1,ICRD),
+     *                 CANVEC(1,JMO),CANVEC(1,IMO),WRK,
+     *                 MXBFEFP,MXBFEFP,NAO(JM),NAO(IM),
+     *                 MXAOEFP,MXAOEFP,.FALSE.)
+            CALL TFSQP(DTAB(1,1,ICRD),DTINT(1,1,ICRD),
+     *                 CANVEC(1,JMO),CANVEC(1,IMO),WRK,
+     *                 MXBFEFP,MXBFEFP,NAO(JM),NAO(IM),
+     *                 MXAOEFP,MXAOEFP,.FALSE.)
+            END DO
+            DO ICRD=1,3
+               CALL VCLR(WRK2,1,MXAOEFP*MXAOEFP)
+               CALL TFSQP(WRK2,SMAT,DCVEC(1,JMO,ICRD),CANVEC(1,IMO),
+     *                    WRK,MXBFEFP,MXBFEFP,NAO(JM),NAO(IM),
+     *                    MXAOEFP,MXAOEFP,.FALSE.)
+               DO II=1,MXAOEFP
+               DO JJ=1,MXAOEFP
+                  DSAB(JJ,II,ICRD+3)=DSAB(JJ,II,ICRD+3)+WRK2(JJ,II)
+               END DO
+               END DO
+               CALL VCLR(WRK2,1,MXAOEFP*MXAOEFP)
+               CALL TFSQP(WRK2,TMAT,DCVEC(1,JMO,ICRD),CANVEC(1,IMO),
+     *                    WRK,MXBFEFP,MXBFEFP,NAO(JM),NAO(IM),
+     *                    MXAOEFP,MXAOEFP,.FALSE.)
+               DO II=1,MXAOEFP
+               DO JJ=1,MXAOEFP
+                  DTAB(JJ,II,ICRD+3)=DTAB(JJ,II,ICRD+3)+WRK2(JJ,II)
+               END DO
+               END DO
+            END DO
+C
+C           -- VAAEFB --
+C
+            CALL VCLR(VEFP,1,MXBFEFP*MXBFEFP)
+            CALL EFCEF(VEFP,MI,MXBFEFP,MXBFEFP,NAT(JM),NAT(JM),
+     *                 NGAUSS(JM),NSHELL(JM),EX(1,JM),CS(1,JM),
+     *                 CP(1,JM),CD(1,JM),CF(1,JM),CG(1,JM),KSTART(1,JM),
+     *                 KATOM(1,JM),KTYPE(1,JM),KNG(1,JM),KLOC(1,JM),
+     *                 KMIN(1,JM),KMAX(1,JM),NGAUSS(JM),NSHELL(JM),
+     *                 EX(1,JM),CS(1,JM),CP(1,JM),CD(1,JM),CF(1,JM),
+     *                 CG(1,JM),KSTART(1,JM),KATOM(1,JM),KTYPE(1,JM),
+     *                 KNG(1,JM),KLOC(1,JM),KMIN(1,JM),KMAX(1,JM),
+     *                 PRCORD(1,JNAT),PRCORD(1,JNAT),IDOIT)
+            CALL EFDEF(VEFP,MI,MXBFEFP,MXBFEFP,NAT(JM),NAT(JM),
+     *                 NGAUSS(JM),NSHELL(JM),EX(1,JM),CS(1,JM),
+     *                 CP(1,JM),CD(1,JM),CF(1,JM),CG(1,JM),KSTART(1,JM),
+     *                 KATOM(1,JM),KTYPE(1,JM),KNG(1,JM),KLOC(1,JM),
+     *                 KMIN(1,JM),KMAX(1,JM),NGAUSS(JM),NSHELL(JM),
+     *                 EX(1,JM),CS(1,JM),CP(1,JM),CD(1,JM),CF(1,JM),
+     *                 CG(1,JM),KSTART(1,JM),KATOM(1,JM),KTYPE(1,JM),
+     *                 KNG(1,JM),KLOC(1,JM),KMIN(1,JM),KMAX(1,JM),
+     *                 PRCORD(1,JNAT),PRCORD(1,JNAT),IDOIT)
+            CALL EFQEF(VEFP,MI,MXBFEFP,MXBFEFP,NAT(JM),NAT(JM),
+     *                 NGAUSS(JM),NSHELL(JM),EX(1,JM),CS(1,JM),
+     *                 CP(1,JM),CD(1,JM),CF(1,JM),CG(1,JM),KSTART(1,JM),
+     *                 KATOM(1,JM),KTYPE(1,JM),KNG(1,JM),KLOC(1,JM),
+     *                 KMIN(1,JM),KMAX(1,JM),NGAUSS(JM),NSHELL(JM),
+     *                 EX(1,JM),CS(1,JM),CP(1,JM),CD(1,JM),CF(1,JM),
+     *                 CG(1,JM),KSTART(1,JM),KATOM(1,JM),KTYPE(1,JM),
+     *                 KNG(1,JM),KLOC(1,JM),KMIN(1,JM),KMAX(1,JM),
+     *                 PRCORD(1,JNAT),PRCORD(1,JNAT),IDOIT,QUAD)
+            CALL VCLR(VAAEFB(1,1),1,MXAOEFP*MXAOEFP)
+            CALL TFSQP(VAAEFB(1,1),VEFP,CANVEC(1,JMO),
+     *                 CANVEC(1,JMO),WRK,
+     *                 MXBFEFP,MXBFEFP,NAO(JM),NAO(JM),
+     *                 MXAOEFP,MXAOEFP,.FALSE.)
+C
+C           -- DAAEFB --
+C
+            CALL VCLR(DVEFP,1,MXBFEFP*MXBFEFP*6)
+            CALL DEFCEF(1,MJ,DVEFP,MI,MXBFEFP,MXBFEFP,NAT(JM),NAT(JM),
+     *                 NGAUSS(JM),NSHELL(JM),EX(1,JM),CS(1,JM),
+     *                 CP(1,JM),CD(1,JM),CF(1,JM),KSTART(1,JM),
+     *                 KATOM(1,JM),KTYPE(1,JM),KNG(1,JM),KLOC(1,JM),
+     *                 KMIN(1,JM),KMAX(1,JM),NGAUSS(JM),NSHELL(JM),
+     *                 EX(1,JM),CS(1,JM),CP(1,JM),CD(1,JM),CF(1,JM),
+     *                 KSTART(1,JM),KATOM(1,JM),KTYPE(1,JM),
+     *                 KNG(1,JM),KLOC(1,JM),KMIN(1,JM),KMAX(1,JM),
+     *                 PRCORD(1,JNAT),PRCORD(1,JNAT),IDOIT)
+            CALL DEFDEF(1,MJ,DVEFP,MI,MXBFEFP,MXBFEFP,NAT(JM),NAT(JM),
+     *                 NGAUSS(JM),NSHELL(JM),EX(1,JM),CS(1,JM),
+     *                 CP(1,JM),CD(1,JM),CF(1,JM),KSTART(1,JM),
+     *                 KATOM(1,JM),KTYPE(1,JM),KNG(1,JM),KLOC(1,JM),
+     *                 KMIN(1,JM),KMAX(1,JM),NGAUSS(JM),NSHELL(JM),
+     *                 EX(1,JM),CS(1,JM),CP(1,JM),CD(1,JM),CF(1,JM),
+     *                 KSTART(1,JM),KATOM(1,JM),KTYPE(1,JM),
+     *                 KNG(1,JM),KLOC(1,JM),KMIN(1,JM),KMAX(1,JM),
+     *                 PRCORD(1,JNAT),PRCORD(1,JNAT),IDOIT)
+            CALL DEFQEF(1,MJ,DVEFP,MI,MXBFEFP,MXBFEFP,NAT(JM),NAT(JM),
+     *                 NGAUSS(JM),NSHELL(JM),EX(1,JM),CS(1,JM),
+     *                 CP(1,JM),CD(1,JM),CF(1,JM),KSTART(1,JM),
+     *                 KATOM(1,JM),KTYPE(1,JM),KNG(1,JM),KLOC(1,JM),
+     *                 KMIN(1,JM),KMAX(1,JM),NGAUSS(JM),NSHELL(JM),
+     *                 EX(1,JM),CS(1,JM),CP(1,JM),CD(1,JM),CF(1,JM),
+     *                 KSTART(1,JM),KATOM(1,JM),KTYPE(1,JM),
+     *                 KNG(1,JM),KLOC(1,JM),KMIN(1,JM),KMAX(1,JM),
+     *                 PRCORD(1,JNAT),PRCORD(1,JNAT),IDOIT,QUAD)
+            CALL VCLR(DAAEFB,1,MXAOEFP*MXAOEFP*6)
+            DO ICRD=1,6
+            CALL TFSQP(DAAEFB(1,1,ICRD),DVEFP(1,1,ICRD),
+     *                 CANVEC(1,JMO),CANVEC(1,JMO),WRK,
+     *                 MXBFEFP,MXBFEFP,NAO(JM),NAO(JM),
+     *                 MXAOEFP,MXAOEFP,.FALSE.)
+            END DO
+            DO ICRD=1,3
+               CALL VCLR(WRK2,1,MXAOEFP*MXAOEFP)
+               CALL TFSQP(WRK2,VEFP,DCVEC(1,JMO,ICRD),CANVEC(1,JMO),
+     *                    WRK,MXBFEFP,MXBFEFP,NAO(JM),NAO(JM),
+     *                    MXAOEFP,MXAOEFP,.FALSE.)
+               DO II=1,MXAOEFP
+               DO JJ=1,MXAOEFP
+                  DAAEFB(JJ,II,ICRD+3)=DAAEFB(JJ,II,ICRD+3)+WRK2(JJ,II)
+               END DO
+               END DO
+               CALL VCLR(WRK2,1,MXAOEFP*MXAOEFP)
+               CALL TFSQP(WRK2,VEFP,CANVEC(1,JMO),DCVEC(1,JMO,ICRD),
+     *                    WRK,MXBFEFP,MXBFEFP,NAO(JM),NAO(JM),
+     *                    MXAOEFP,MXAOEFP,.FALSE.)
+               DO II=1,MXAOEFP
+               DO JJ=1,MXAOEFP
+                  DAAEFB(JJ,II,ICRD+3)=DAAEFB(JJ,II,ICRD+3)+WRK2(JJ,II)
+               END DO
+               END DO
+            END DO
+C
+C           -- VBBEFA --
+C
+            CALL VCLR(VEFP,1,MXBFEFP*MXBFEFP)
+            CALL EFCEF(VEFP,MJ,MXBFEFP,MXBFEFP,NAT(IM),NAT(IM),
+     *                 NGAUSS(IM),NSHELL(IM),EX(1,IM),CS(1,IM),
+     *                 CP(1,IM),CD(1,IM),CF(1,IM),CG(1,IM),KSTART(1,IM),
+     *                 KATOM(1,IM),KTYPE(1,IM),KNG(1,IM),KLOC(1,IM),
+     *                 KMIN(1,IM),KMAX(1,IM),NGAUSS(IM),NSHELL(IM),
+     *                 EX(1,IM),CS(1,IM),CP(1,IM),CD(1,IM),CF(1,IM),
+     *                 CG(1,IM),KSTART(1,IM),KATOM(1,IM),KTYPE(1,IM),
+     *                 KNG(1,IM),KLOC(1,IM),KMIN(1,IM),KMAX(1,IM),
+     *                 PRCORD(1,INAT),PRCORD(1,INAT),IDOIT)
+            CALL EFDEF(VEFP,MJ,MXBFEFP,MXBFEFP,NAT(IM),NAT(IM),
+     *                 NGAUSS(IM),NSHELL(IM),EX(1,IM),CS(1,IM),
+     *                 CP(1,IM),CD(1,IM),CF(1,IM),CG(1,IM),KSTART(1,IM),
+     *                 KATOM(1,IM),KTYPE(1,IM),KNG(1,IM),KLOC(1,IM),
+     *                 KMIN(1,IM),KMAX(1,IM),NGAUSS(IM),NSHELL(IM),
+     *                 EX(1,IM),CS(1,IM),CP(1,IM),CD(1,IM),CF(1,IM),
+     *                 CG(1,IM),KSTART(1,IM),KATOM(1,IM),KTYPE(1,IM),
+     *                 KNG(1,IM),KLOC(1,IM),KMIN(1,IM),KMAX(1,IM),
+     *                 PRCORD(1,INAT),PRCORD(1,INAT),IDOIT)
+            CALL EFQEF(VEFP,MJ,MXBFEFP,MXBFEFP,NAT(IM),NAT(IM),
+     *                 NGAUSS(IM),NSHELL(IM),EX(1,IM),CS(1,IM),
+     *                 CP(1,IM),CD(1,IM),CF(1,IM),CG(1,IM),KSTART(1,IM),
+     *                 KATOM(1,IM),KTYPE(1,IM),KNG(1,IM),KLOC(1,IM),
+     *                 KMIN(1,IM),KMAX(1,IM),NGAUSS(IM),NSHELL(IM),
+     *                 EX(1,IM),CS(1,IM),CP(1,IM),CD(1,IM),CF(1,IM),
+     *                 CG(1,IM),KSTART(1,IM),KATOM(1,IM),KTYPE(1,IM),
+     *                 KNG(1,IM),KLOC(1,IM),KMIN(1,IM),KMAX(1,IM),
+     *                 PRCORD(1,INAT),PRCORD(1,INAT),IDOIT,QUAD)
+            CALL VCLR(VBBEFA(1,1),1,MXAOEFP*MXAOEFP)
+            CALL TFSQP(VBBEFA(1,1),VEFP,CANVEC(1,IMO),
+     *                 CANVEC(1,IMO),WRK,
+     *                 MXBFEFP,MXBFEFP,NAO(IM),NAO(IM),
+     *                 MXAOEFP,MXAOEFP,.FALSE.)
+C
+C           -- DBBEFA --
+C
+            CALL VCLR(DVEFP,1,MXBFEFP*MXBFEFP*6)
+            CALL DEFCEF(21,MJ,DVEFP,MJ,MXBFEFP,MXBFEFP,NAT(IM),NAT(IM),
+     *                 NGAUSS(IM),NSHELL(IM),EX(1,IM),CS(1,IM),
+     *                 CP(1,IM),CD(1,IM),CF(1,IM),KSTART(1,IM),
+     *                 KATOM(1,IM),KTYPE(1,IM),KNG(1,IM),KLOC(1,IM),
+     *                 KMIN(1,IM),KMAX(1,IM),NGAUSS(IM),NSHELL(IM),
+     *                 EX(1,IM),CS(1,IM),CP(1,IM),CD(1,IM),CF(1,IM),
+     *                 KSTART(1,IM),KATOM(1,IM),KTYPE(1,IM),
+     *                 KNG(1,IM),KLOC(1,IM),KMIN(1,IM),KMAX(1,IM),
+     *                 PRCORD(1,INAT),PRCORD(1,INAT),IDOIT)
+            CALL DEFDEF(21,MJ,DVEFP,MJ,MXBFEFP,MXBFEFP,NAT(IM),NAT(IM),
+     *                 NGAUSS(IM),NSHELL(IM),EX(1,IM),CS(1,IM),
+     *                 CP(1,IM),CD(1,IM),CF(1,IM),KSTART(1,IM),
+     *                 KATOM(1,IM),KTYPE(1,IM),KNG(1,IM),KLOC(1,IM),
+     *                 KMIN(1,IM),KMAX(1,IM),NGAUSS(IM),NSHELL(IM),
+     *                 EX(1,IM),CS(1,IM),CP(1,IM),CD(1,IM),CF(1,IM),
+     *                 KSTART(1,IM),KATOM(1,IM),KTYPE(1,IM),
+     *                 KNG(1,IM),KLOC(1,IM),KMIN(1,IM),KMAX(1,IM),
+     *                 PRCORD(1,INAT),PRCORD(1,INAT),IDOIT)
+            CALL DEFQEF(21,MJ,DVEFP,MJ,MXBFEFP,MXBFEFP,NAT(IM),NAT(IM),
+     *                 NGAUSS(IM),NSHELL(IM),EX(1,IM),CS(1,IM),
+     *                 CP(1,IM),CD(1,IM),CF(1,IM),KSTART(1,IM),
+     *                 KATOM(1,IM),KTYPE(1,IM),KNG(1,IM),KLOC(1,IM),
+     *                 KMIN(1,IM),KMAX(1,IM),NGAUSS(IM),NSHELL(IM),
+     *                 EX(1,IM),CS(1,IM),CP(1,IM),CD(1,IM),CF(1,IM),
+     *                 KSTART(1,IM),KATOM(1,IM),KTYPE(1,IM),
+     *                 KNG(1,IM),KLOC(1,IM),KMIN(1,IM),KMAX(1,IM),
+     *                 PRCORD(1,INAT),PRCORD(1,INAT),IDOIT,QUAD)
+            CALL VCLR(DBBEFA,1,MXAOEFP*MXAOEFP*6)
+            DO ICRD=1,6
+            CALL TFSQP(DBBEFA(1,1,ICRD),DVEFP(1,1,ICRD),
+     *                 CANVEC(1,IMO),CANVEC(1,IMO),WRK,
+     *                 MXBFEFP,MXBFEFP,NAO(IM),NAO(IM),
+     *                 MXAOEFP,MXAOEFP,.FALSE.)
+            END DO
+            DO ICRD=1,3
+               CALL VCLR(WRK2,1,MXAOEFP*MXAOEFP)
+               CALL TFSQP(WRK2,VEFP,CANVEC(1,IMO),DCVEC(1,IMO,ICRD),
+     *                    WRK,MXBFEFP,MXBFEFP,NAO(IM),NAO(IM),
+     *                    MXAOEFP,MXAOEFP,.FALSE.)
+               DO II=1,MXAOEFP
+               DO JJ=1,MXAOEFP
+                  DBBEFA(JJ,II,ICRD+3)=DBBEFA(JJ,II,ICRD+3)-WRK2(JJ,II)
+               END DO
+               END DO
+               CALL VCLR(WRK2,1,MXAOEFP*MXAOEFP)
+               CALL TFSQP(WRK2,VEFP,DCVEC(1,IMO,ICRD),CANVEC(1,IMO),
+     *                    WRK,MXBFEFP,MXBFEFP,NAO(IM),NAO(IM),
+     *                    MXAOEFP,MXAOEFP,.FALSE.)
+               DO II=1,MXAOEFP
+               DO JJ=1,MXAOEFP
+                  DBBEFA(JJ,II,ICRD+3)=DBBEFA(JJ,II,ICRD+3)-WRK2(JJ,II)
+               END DO
+               END DO
+            END DO
+C
+C           -- VABEFA --
+C
+            CALL VCLR(VEFP,1,MXBFEFP*MXBFEFP)
+            CALL EFCEF(VEFP,MJ,MXBFEFP,MXBFEFP,NAT(IM),NAT(JM),
+     *                 NGAUSS(IM),NSHELL(IM),EX(1,IM),CS(1,IM),
+     *                 CP(1,IM),CD(1,IM),CF(1,IM),CG(1,IM),KSTART(1,IM),
+     *                 KATOM(1,IM),KTYPE(1,IM),KNG(1,IM),KLOC(1,IM),
+     *                 KMIN(1,IM),KMAX(1,IM),NGAUSS(JM),NSHELL(JM),
+     *                 EX(1,JM),CS(1,JM),CP(1,JM),CD(1,JM),CF(1,JM),
+     *                 CG(1,JM),KSTART(1,JM),KATOM(1,JM),KTYPE(1,JM),
+     *                 KNG(1,JM),KLOC(1,JM),KMIN(1,JM),KMAX(1,JM),
+     *                 PRCORD(1,INAT),PRCORD(1,JNAT),IDOIT)
+            CALL EFDEF(VEFP,MJ,MXBFEFP,MXBFEFP,NAT(IM),NAT(JM),
+     *                 NGAUSS(IM),NSHELL(IM),EX(1,IM),CS(1,IM),
+     *                 CP(1,IM),CD(1,IM),CF(1,IM),CG(1,IM),KSTART(1,IM),
+     *                 KATOM(1,IM),KTYPE(1,IM),KNG(1,IM),KLOC(1,IM),
+     *                 KMIN(1,IM),KMAX(1,IM),NGAUSS(JM),NSHELL(JM),
+     *                 EX(1,JM),CS(1,JM),CP(1,JM),CD(1,JM),CF(1,JM),
+     *                 CG(1,JM),KSTART(1,JM),KATOM(1,JM),KTYPE(1,JM),
+     *                 KNG(1,JM),KLOC(1,JM),KMIN(1,JM),KMAX(1,JM),
+     *                 PRCORD(1,INAT),PRCORD(1,JNAT),IDOIT)
+            CALL EFQEF(VEFP,MJ,MXBFEFP,MXBFEFP,NAT(IM),NAT(JM),
+     *                 NGAUSS(IM),NSHELL(IM),EX(1,IM),CS(1,IM),
+     *                 CP(1,IM),CD(1,IM),CF(1,IM),CG(1,IM),KSTART(1,IM),
+     *                 KATOM(1,IM),KTYPE(1,IM),KNG(1,IM),KLOC(1,IM),
+     *                 KMIN(1,IM),KMAX(1,IM),NGAUSS(JM),NSHELL(JM),
+     *                 EX(1,JM),CS(1,JM),CP(1,JM),CD(1,JM),CF(1,JM),
+     *                 CG(1,JM),KSTART(1,JM),KATOM(1,JM),KTYPE(1,JM),
+     *                 KNG(1,JM),KLOC(1,JM),KMIN(1,JM),KMAX(1,JM),
+     *                 PRCORD(1,INAT),PRCORD(1,JNAT),IDOIT,QUAD)
+            CALL VCLR(VABEFA,1,MXAOEFP*MXAOEFP)
+            CALL TFSQP(VABEFA,VEFP,CANVEC(1,JMO),CANVEC(1,IMO),WRK,
+     *                 MXBFEFP,MXBFEFP,NAO(JM),NAO(IM),
+     *                 MXAOEFP,MXAOEFP,.FALSE.)
+C
+C           -- DABEFA --
+C
+            CALL VCLR(DVEFP,1,MXBFEFP*MXBFEFP*6)
+            CALL DEFCEF(22,MJ,DVEFP,MJ,MXBFEFP,MXBFEFP,NAT(JM),NAT(IM),
+     *                 NGAUSS(JM),NSHELL(JM),EX(1,JM),CS(1,JM),
+     *                 CP(1,JM),CD(1,JM),CF(1,JM),KSTART(1,JM),
+     *                 KATOM(1,JM),KTYPE(1,JM),KNG(1,JM),KLOC(1,JM),
+     *                 KMIN(1,JM),KMAX(1,JM),NGAUSS(IM),NSHELL(IM),
+     *                 EX(1,IM),CS(1,IM),CP(1,IM),CD(1,IM),CF(1,IM),
+     *                 KSTART(1,IM),KATOM(1,IM),KTYPE(1,IM),
+     *                 KNG(1,IM),KLOC(1,IM),KMIN(1,IM),KMAX(1,IM),
+     *                 PRCORD(1,JNAT),PRCORD(1,INAT),IDOIT)
+            CALL DEFDEF(22,MJ,DVEFP,MJ,MXBFEFP,MXBFEFP,NAT(JM),NAT(IM),
+     *                 NGAUSS(JM),NSHELL(JM),EX(1,JM),CS(1,JM),
+     *                 CP(1,JM),CD(1,JM),CF(1,JM),KSTART(1,JM),
+     *                 KATOM(1,JM),KTYPE(1,JM),KNG(1,JM),KLOC(1,JM),
+     *                 KMIN(1,JM),KMAX(1,JM),NGAUSS(IM),NSHELL(IM),
+     *                 EX(1,IM),CS(1,IM),CP(1,IM),CD(1,IM),CF(1,IM),
+     *                 KSTART(1,IM),KATOM(1,IM),KTYPE(1,IM),
+     *                 KNG(1,IM),KLOC(1,IM),KMIN(1,IM),KMAX(1,IM),
+     *                 PRCORD(1,JNAT),PRCORD(1,INAT),IDOIT)
+            CALL DEFQEF(22,MJ,DVEFP,MJ,MXBFEFP,MXBFEFP,NAT(JM),NAT(IM),
+     *                 NGAUSS(JM),NSHELL(JM),EX(1,JM),CS(1,JM),
+     *                 CP(1,JM),CD(1,JM),CF(1,JM),KSTART(1,JM),
+     *                 KATOM(1,JM),KTYPE(1,JM),KNG(1,JM),KLOC(1,JM),
+     *                 KMIN(1,JM),KMAX(1,JM),NGAUSS(IM),NSHELL(IM),
+     *                 EX(1,IM),CS(1,IM),CP(1,IM),CD(1,IM),CF(1,IM),
+     *                 KSTART(1,IM),KATOM(1,IM),KTYPE(1,IM),
+     *                 KNG(1,IM),KLOC(1,IM),KMIN(1,IM),KMAX(1,IM),
+     *                 PRCORD(1,JNAT),PRCORD(1,INAT),IDOIT,QUAD)
+            CALL VCLR(DABEFA,1,MXAOEFP*MXAOEFP*6)
+            DO ICRD=1,6
+            CALL TFSQP(DABEFA(1,1,ICRD),DVEFP(1,1,ICRD),
+     *                 CANVEC(1,JMO),CANVEC(1,IMO),WRK,
+     *                 MXBFEFP,MXBFEFP,NAO(JM),NAO(IM),
+     *                 MXAOEFP,MXAOEFP,.FALSE.)
+            END DO
+            DO ICRD=1,3
+               CALL VCLR(WRK2,1,MXAOEFP*MXAOEFP)
+               CALL TFSQP(WRK2,VEFP,CANVEC(1,JMO),DCVEC(1,IMO,ICRD),
+     *                    WRK,MXBFEFP,MXBFEFP,NAO(JM),NAO(IM),
+     *                    MXAOEFP,MXAOEFP,.FALSE.)
+               DO II=1,MXAOEFP
+               DO JJ=1,MXAOEFP
+                  DABEFA(JJ,II,ICRD+3)=DABEFA(JJ,II,ICRD+3)-WRK2(JJ,II)
+               END DO
+               END DO
+            END DO
+C
+C           -- VABEFB --
+C
+            CALL VCLR(VEFP,1,MXBFEFP*MXBFEFP)
+            CALL EFCEF(VEFP,MI,MXBFEFP,MXBFEFP,NAT(IM),NAT(JM),
+     *                 NGAUSS(IM),NSHELL(IM),EX(1,IM),CS(1,IM),
+     *                 CP(1,IM),CD(1,IM),CF(1,IM),CG(1,IM),KSTART(1,IM),
+     *                 KATOM(1,IM),KTYPE(1,IM),KNG(1,IM),KLOC(1,IM),
+     *                 KMIN(1,IM),KMAX(1,IM),NGAUSS(JM),NSHELL(JM),
+     *                 EX(1,JM),CS(1,JM),CP(1,JM),CD(1,JM),CF(1,JM),
+     *                 CG(1,JM),KSTART(1,JM),KATOM(1,JM),KTYPE(1,JM),
+     *                 KNG(1,JM),KLOC(1,JM),KMIN(1,JM),KMAX(1,JM),
+     *                 PRCORD(1,INAT),PRCORD(1,JNAT),IDOIT)
+            CALL EFDEF(VEFP,MI,MXBFEFP,MXBFEFP,NAT(IM),NAT(JM),
+     *                 NGAUSS(IM),NSHELL(IM),EX(1,IM),CS(1,IM),
+     *                 CP(1,IM),CD(1,IM),CF(1,IM),CG(1,IM),KSTART(1,IM),
+     *                 KATOM(1,IM),KTYPE(1,IM),KNG(1,IM),KLOC(1,IM),
+     *                 KMIN(1,IM),KMAX(1,IM),NGAUSS(JM),NSHELL(JM),
+     *                 EX(1,JM),CS(1,JM),CP(1,JM),CD(1,JM),CF(1,JM),
+     *                 CG(1,JM),KSTART(1,JM),KATOM(1,JM),KTYPE(1,JM),
+     *                 KNG(1,JM),KLOC(1,JM),KMIN(1,JM),KMAX(1,JM),
+     *                 PRCORD(1,INAT),PRCORD(1,JNAT),IDOIT)
+            CALL EFQEF(VEFP,MI,MXBFEFP,MXBFEFP,NAT(IM),NAT(JM),
+     *                 NGAUSS(IM),NSHELL(IM),EX(1,IM),CS(1,IM),
+     *                 CP(1,IM),CD(1,IM),CF(1,IM),CG(1,IM),KSTART(1,IM),
+     *                 KATOM(1,IM),KTYPE(1,IM),KNG(1,IM),KLOC(1,IM),
+     *                 KMIN(1,IM),KMAX(1,IM),NGAUSS(JM),NSHELL(JM),
+     *                 EX(1,JM),CS(1,JM),CP(1,JM),CD(1,JM),CF(1,JM),
+     *                 CG(1,JM),KSTART(1,JM),KATOM(1,JM),KTYPE(1,JM),
+     *                 KNG(1,JM),KLOC(1,JM),KMIN(1,JM),KMAX(1,JM),
+     *                 PRCORD(1,INAT),PRCORD(1,JNAT),IDOIT,QUAD)
+            CALL VCLR(VABEFB,1,MXAOEFP*MXAOEFP)
+            CALL TFSQP(VABEFB,VEFP,CANVEC(1,JMO),CANVEC(1,IMO),WRK,
+     *                 MXBFEFP,MXBFEFP,NAO(JM),NAO(IM),
+     *                 MXAOEFP,MXAOEFP,.FALSE.)
+C
+C           -- DABEFB --
+C
+            CALL VCLR(DVEFP,1,MXBFEFP*MXBFEFP*6)
+            CALL DEFCEF(2,MJ,DVEFP,MI,MXBFEFP,MXBFEFP,NAT(IM),NAT(JM),
+     *                 NGAUSS(IM),NSHELL(IM),EX(1,IM),CS(1,IM),
+     *                 CP(1,IM),CD(1,IM),CF(1,IM),KSTART(1,IM),
+     *                 KATOM(1,IM),KTYPE(1,IM),KNG(1,IM),KLOC(1,IM),
+     *                 KMIN(1,IM),KMAX(1,IM),NGAUSS(JM),NSHELL(JM),
+     *                 EX(1,JM),CS(1,JM),CP(1,JM),CD(1,JM),CF(1,JM),
+     *                 KSTART(1,JM),KATOM(1,JM),KTYPE(1,JM),
+     *                 KNG(1,JM),KLOC(1,JM),KMIN(1,JM),KMAX(1,JM),
+     *                 PRCORD(1,INAT),PRCORD(1,JNAT),IDOIT)
+            CALL DEFDEF(2,MJ,DVEFP,MI,MXBFEFP,MXBFEFP,NAT(IM),NAT(JM),
+     *                 NGAUSS(IM),NSHELL(IM),EX(1,IM),CS(1,IM),
+     *                 CP(1,IM),CD(1,IM),CF(1,IM),KSTART(1,IM),
+     *                 KATOM(1,IM),KTYPE(1,IM),KNG(1,IM),KLOC(1,IM),
+     *                 KMIN(1,IM),KMAX(1,IM),NGAUSS(JM),NSHELL(JM),
+     *                 EX(1,JM),CS(1,JM),CP(1,JM),CD(1,JM),CF(1,JM),
+     *                 KSTART(1,JM),KATOM(1,JM),KTYPE(1,JM),
+     *                 KNG(1,JM),KLOC(1,JM),KMIN(1,JM),KMAX(1,JM),
+     *                 PRCORD(1,INAT),PRCORD(1,JNAT),IDOIT)
+            CALL DEFQEF(2,MJ,DVEFP,MI,MXBFEFP,MXBFEFP,NAT(IM),NAT(JM),
+     *                 NGAUSS(IM),NSHELL(IM),EX(1,IM),CS(1,IM),
+     *                 CP(1,IM),CD(1,IM),CF(1,IM),KSTART(1,IM),
+     *                 KATOM(1,IM),KTYPE(1,IM),KNG(1,IM),KLOC(1,IM),
+     *                 KMIN(1,IM),KMAX(1,IM),NGAUSS(JM),NSHELL(JM),
+     *                 EX(1,JM),CS(1,JM),CP(1,JM),CD(1,JM),CF(1,JM),
+     *                 KSTART(1,JM),KATOM(1,JM),KTYPE(1,JM),
+     *                 KNG(1,JM),KLOC(1,JM),KMIN(1,JM),KMAX(1,JM),
+     *                 PRCORD(1,INAT),PRCORD(1,JNAT),IDOIT,QUAD)
+            CALL VCLR(DABEFB,1,MXAOEFP*MXAOEFP*6)
+            DO ICRD=1,6
+            CALL TFSQP(DABEFB(1,1,ICRD),DVEFP(1,1,ICRD),
+     *                 CANVEC(1,JMO),CANVEC(1,IMO),WRK,
+     *                 MXBFEFP,MXBFEFP,NAO(JM),NAO(IM),
+     *                 MXAOEFP,MXAOEFP,.FALSE.)
+            END DO
+            DO ICRD=1,3
+               CALL VCLR(WRK2,1,MXAOEFP*MXAOEFP)
+               CALL TFSQP(WRK2,VEFP,DCVEC(1,JMO,ICRD),CANVEC(1,IMO),
+     *                    WRK,MXBFEFP,MXBFEFP,NAO(JM),NAO(IM),
+     *                    MXAOEFP,MXAOEFP,.FALSE.)
+               DO II=1,MXAOEFP
+               DO JJ=1,MXAOEFP
+                  DABEFB(JJ,II,ICRD+3)=DABEFB(JJ,II,ICRD+3)+WRK2(JJ,II)
+               END DO
+               END DO
+            END DO
+C
+C           COMPUTE G(CT)
+C
+            CALL GCHTR(MJ,MI,SAB,TAB,TFRG(1,JM),TFRG(1,IM),
+     *          VABEFB,VABEFA,VAAEFB,VBBEFA,
+     *          CANFOK(1,JM),CANFOK(1,IM),
+     *          CTA,CTB,DSAB,DTAB,DABEFB,DABEFA,
+     *          DAAEFB,DBBEFA,GCTFRG,
+     *          NOCC(JM),NVIR(JM),NOCC(IM),NVIR(IM),MXAOEFP)
+            ECT = ECT + SWF*(CTA+CTB)
+C
+C           -- APPLY SWITCHING FUNCTIONS
+C
+C              - ALL GRADIENTS ARE MULTIPLIED BY SWF
+C
+            DO KK = 1, 6
+               GCTFRG(KK,MI,MJ) = SWF*GCTFRG(KK,MI,MJ)
+               GCTFRG(KK,MJ,MI) = SWF*GCTFRG(KK,MJ,MI)
+            ENDDO
+C
+C              - ADDITIONAL GRADIENTS FROM THE ENERGY AND DERIVATIVES OF
+C                THE SWF
+C
+            CTAB = CTA + CTB
+            GCTFRG(1,MI,MJ) = GCTFRG(1,MI,MJ) - SWFDX*CTAB
+            GCTFRG(2,MI,MJ) = GCTFRG(2,MI,MJ) - SWFDY*CTAB
+            GCTFRG(3,MI,MJ) = GCTFRG(3,MI,MJ) - SWFDZ*CTAB
+C
+            GCTFRG(1,MJ,MI) = GCTFRG(1,MJ,MI) + SWFDX*CTAB
+            GCTFRG(2,MJ,MI) = GCTFRG(2,MJ,MI) + SWFDY*CTAB
+            GCTFRG(3,MJ,MI) = GCTFRG(3,MJ,MI) + SWFDZ*CTAB
+C
+C
+            EFCENT(1,MI) = EFCENT(1,MI) - PBCX
+            EFCENT(2,MI) = EFCENT(2,MI) - PBCY
+            EFCENT(3,MI) = EFCENT(3,MI) - PBCZ
+            DO NATIM=1,NAT(IM)
+            PRCORD(1,INAT+NATIM-1) = PRCORD(1,INAT+NATIM-1) - PBCX
+            PRCORD(2,INAT+NATIM-1) = PRCORD(2,INAT+NATIM-1) - PBCY
+            PRCORD(3,INAT+NATIM-1) = PRCORD(3,INAT+NATIM-1) - PBCZ
+            ENDDO
+            DO NPTIM=1,NMPTS(MI)
+            EFC(1,IEFPT+NPTIM-1) = EFC(1,IEFPT+NPTIM-1) - PBCX
+            EFC(2,IEFPT+NPTIM-1) = EFC(2,IEFPT+NPTIM-1) - PBCY
+            EFC(3,IEFPT+NPTIM-1) = EFC(3,IEFPT+NPTIM-1) - PBCZ
+            ENDDO
+C
+C
+ 500        CONTINUE
+            IEFPT = IEFPT + NMPTS(MI)
+            IMO = IMO + NAO(IM)
+            INAT = INAT + NAT(IM)
+         END DO
+         JMO = JMO + NAO(JM)
+         JNAT = JNAT + NAT(JM)
+      END DO
+C     - SUM UP
+      IF(GOPARR) THEN
+         CALL DDI_GSUMF(1512,ECT,1)
+         CALL DDI_GSUMF(1513,GCTFRG,6*NFRG*NFRG)
+      END IF
+C
+C     DO IFRG = 1, NFRG
+C     DO JFRG = 1, NFRG
+C     IF(IFRG.NE.JFRG)THEN
+C     DO ICRD = 1, 6
+C           WRITE(*,*)'GCTFRG',ICRD,JFRG,IFRG,'=',GCTFRG(ICRD,JFRG,IFRG)
+C     END DO
+C     END IF
+C     END DO
+C     END DO
+C
+      DO IFRG = 1, NFRG
+      DO ICRD = 1, 6
+      DO JFRG = 1, NFRG
+            DCTFRG(ICRD,IFRG)=DCTFRG(ICRD,IFRG)+GCTFRG(ICRD,JFRG,IFRG)
+      END DO
+      END DO
+      END DO
+C
+      RETURN
+      END
+C*MODULE EFCHTR  *DECK GCHTR
+      SUBROUTINE GCHTR(MJ,MI,SAB,TAB,TAA,TBB,
+     *            VABEFB,VABEFA,VAAEFB,VBBEFA,
+     *            FA,FB,CTA,CTB,DSAB,DTAB,DABEFB,
+     *            DABEFA,DAAEFB,DBBEFA,GCTFRG,
+     *            NOCCA,NVIRA,NOCCB,NVIRB,MXAO)
+C
+      IMPLICIT DOUBLE PRECISION (A-H, O-Z)
+C
+      PARAMETER (MXFRG=1050, MXFGPT=12000,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00, TWO=2.0D+00)
+C
+      COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
+     *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
+     *                ATORQ(3,MXFRG)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+C
+      DIMENSION SAB(MXAO,MXAO), TAB(MXAO,MXAO),
+     *          TAA(MXAO,MXAO), TBB(MXAO,MXAO),
+     *          VABEFB(MXAO,MXAO), VABEFA(MXAO,MXAO),
+     *          VAAEFB(MXAO,MXAO), VBBEFA(MXAO,MXAO),
+     *          FA(MXAO), FB(MXAO), DSAB(MXAO,MXAO,6),
+     *          DTAB(MXAO,MXAO,6), DABEFB(MXAO,MXAO,6),
+     *          DABEFA(MXAO,MXAO,6), DBBEFA(MXAO,MXAO,6),
+     *          DAAEFB(MXAO,MXAO,6), GCTFRG(6,NFRG,NFRG)
+C
+      CT=ZERO
+      G11=ZERO
+      G12=ZERO
+      G13=ZERO
+      G14=ZERO
+      G15=ZERO
+      G16=ZERO
+      G21=ZERO
+      G22=ZERO
+      G23=ZERO
+      G24=ZERO
+      G25=ZERO
+      G26=ZERO
+      G31=ZERO
+      G32=ZERO
+      G33=ZERO
+      G34=ZERO
+      G35=ZERO
+      G36=ZERO
+      DO 200 I = 1, NOCCA
+         DO 300 N = NOCCB+1, NOCCB+NVIRB
+            SAB2  = ZERO
+            SNMVIM= ZERO
+            SDS1  = ZERO
+            SDS2  = ZERO
+            SDS3  = ZERO
+            SDS4  = ZERO
+            SDS5  = ZERO
+            SDS6  = ZERO
+            DSV1  = ZERO
+            DSV2  = ZERO
+            DSV3  = ZERO
+            DSV4  = ZERO
+            DSV5  = ZERO
+            DSV6  = ZERO
+            DO M = 1, NOCCA+NVIRA
+               SMN=SAB(M,N)
+               SAB2=SAB2+SMN*SMN
+               SDS1=SDS1+SMN*DSAB(M,N,1)
+               SDS2=SDS2+SMN*DSAB(M,N,2)
+               SDS3=SDS3+SMN*DSAB(M,N,3)
+               SDS4=SDS4+SMN*DSAB(M,N,4)
+               SDS5=SDS5+SMN*DSAB(M,N,5)
+               SDS6=SDS6+SMN*DSAB(M,N,6)
+               VIM=VAAEFB(I,M)
+               SNMVIM=SNMVIM+SMN*VIM
+               DSV1=DSV1+DSAB(M,N,1)*VIM+SMN*DAAEFB(I,M,1)
+               DSV2=DSV2+DSAB(M,N,2)*VIM+SMN*DAAEFB(I,M,2)
+               DSV3=DSV3+DSAB(M,N,3)*VIM+SMN*DAAEFB(I,M,3)
+               DSV4=DSV4+DSAB(M,N,4)*VIM+SMN*DAAEFB(I,M,4)
+               DSV5=DSV5+DSAB(M,N,5)*VIM+SMN*DAAEFB(I,M,5)
+               DSV6=DSV6+DSAB(M,N,6)*VIM+SMN*DAAEFB(I,M,6)
+            END DO
+            STIN  = ZERO
+            DSTIN1= ZERO
+            DSTIN2= ZERO
+            DSTIN3= ZERO
+            DSTIN4= ZERO
+            DSTIN5= ZERO
+            DSTIN6= ZERO
+            DO J = 1, NOCCB
+               SNMTJM=ZERO
+               DSTNJ1=ZERO
+               DSTNJ2=ZERO
+               DSTNJ3=ZERO
+               DSTNJ4=ZERO
+               DSTNJ5=ZERO
+               DSTNJ6=ZERO
+               DO M = 1, NOCCA+NVIRA
+                  SMN=SAB(M,N)
+                  TMJ=TAB(M,J)
+                  SNMTJM=SNMTJM+SMN*TMJ
+                  DSTNJ1=DSTNJ1+DSAB(M,N,1)*TMJ+SMN*DTAB(M,J,1)
+                  DSTNJ2=DSTNJ2+DSAB(M,N,2)*TMJ+SMN*DTAB(M,J,2)
+                  DSTNJ3=DSTNJ3+DSAB(M,N,3)*TMJ+SMN*DTAB(M,J,3)
+                  DSTNJ4=DSTNJ4+DSAB(M,N,4)*TMJ+SMN*DTAB(M,J,4)
+                  DSTNJ5=DSTNJ5+DSAB(M,N,5)*TMJ+SMN*DTAB(M,J,5)
+                  DSTNJ6=DSTNJ6+DSAB(M,N,6)*TMJ+SMN*DTAB(M,J,6)
+               END DO
+               DUM=(TBB(N,J)-SNMTJM)
+               SIJ=SAB(I,J)
+               STIN  = STIN +SIJ*DUM
+               DSTIN1=DSTIN1+DSAB(I,J,1)*DUM-DSTNJ1*SIJ
+               DSTIN2=DSTIN2+DSAB(I,J,2)*DUM-DSTNJ2*SIJ
+               DSTIN3=DSTIN3+DSAB(I,J,3)*DUM-DSTNJ3*SIJ
+               DSTIN4=DSTIN4+DSAB(I,J,4)*DUM-DSTNJ4*SIJ
+               DSTIN5=DSTIN5+DSAB(I,J,5)*DUM-DSTNJ5*SIJ
+               DSTIN6=DSTIN6+DSAB(I,J,6)*DUM-DSTNJ6*SIJ
+            END DO
+            T10=ONE/(ONE-SAB2)
+            T20=(VABEFB(I,N)-SNMVIM)/(FA(I)-TBB(N,N))
+            T30=VABEFB(I,N)-SNMVIM+STIN
+            CT = CT + T10*T20*T30
+            DUM=TWO*T10*T10*T20*T30
+            G11=G11+SDS1*DUM
+            G12=G12+SDS2*DUM
+            G13=G13+SDS3*DUM
+            G14=G14+SDS4*DUM
+            G15=G15+SDS5*DUM
+            G16=G16+SDS6*DUM
+            DUM=T10*T30/(FA(I)-TBB(N,N))
+            G21=G21+(DABEFB(I,N,1)-DSV1)*DUM
+            G22=G22+(DABEFB(I,N,2)-DSV2)*DUM
+            G23=G23+(DABEFB(I,N,3)-DSV3)*DUM
+            G24=G24+(DABEFB(I,N,4)-DSV4)*DUM
+            G25=G25+(DABEFB(I,N,5)-DSV5)*DUM
+            G26=G26+(DABEFB(I,N,6)-DSV6)*DUM
+            DUM=T10*T20
+            G31=G31+DUM*(DABEFB(I,N,1)-DSV1+DSTIN1)
+            G32=G32+DUM*(DABEFB(I,N,2)-DSV2+DSTIN2)
+            G33=G33+DUM*(DABEFB(I,N,3)-DSV3+DSTIN3)
+            G34=G34+DUM*(DABEFB(I,N,4)-DSV4+DSTIN4)
+            G35=G35+DUM*(DABEFB(I,N,5)-DSV5+DSTIN5)
+            G36=G36+DUM*(DABEFB(I,N,6)-DSV6+DSTIN6)
+ 300     CONTINUE
+ 200  CONTINUE
+      CTA = CT + CT
+C
+      CT=ZERO
+      DO 400 I = 1, NOCCB
+         DO 500 N = NOCCA+1, NOCCA+NVIRA
+            SAB2  = ZERO
+            SNMVIM= ZERO
+            SDS1  = ZERO
+            SDS2  = ZERO
+            SDS3  = ZERO
+            SDS4  = ZERO
+            SDS5  = ZERO
+            SDS6  = ZERO
+            DSV1  = ZERO
+            DSV2  = ZERO
+            DSV3  = ZERO
+            DSV4  = ZERO
+            DSV5  = ZERO
+            DSV6  = ZERO
+            DO M = 1, NOCCB+NVIRB
+               SNM=SAB(N,M)
+               SAB2=SAB2+SNM*SNM
+               SDS1=SDS1+SNM*DSAB(N,M,1)
+               SDS2=SDS2+SNM*DSAB(N,M,2)
+               SDS3=SDS3+SNM*DSAB(N,M,3)
+               SDS4=SDS4+SNM*DSAB(N,M,4)
+               SDS5=SDS5+SNM*DSAB(N,M,5)
+               SDS6=SDS6+SNM*DSAB(N,M,6)
+               VMI=VBBEFA(M,I)
+               SNMVIM=SNMVIM+SNM*VMI
+               DSV1=DSV1+DSAB(N,M,1)*VMI+SNM*DBBEFA(M,I,1)
+               DSV2=DSV2+DSAB(N,M,2)*VMI+SNM*DBBEFA(M,I,2)
+               DSV3=DSV3+DSAB(N,M,3)*VMI+SNM*DBBEFA(M,I,3)
+               DSV4=DSV4+DSAB(N,M,4)*VMI+SNM*DBBEFA(M,I,4)
+               DSV5=DSV5+DSAB(N,M,5)*VMI+SNM*DBBEFA(M,I,5)
+               DSV6=DSV6+DSAB(N,M,6)*VMI+SNM*DBBEFA(M,I,6)
+            END DO
+            STIN  = ZERO
+            DSTIN1= ZERO
+            DSTIN2= ZERO
+            DSTIN3= ZERO
+            DSTIN4= ZERO
+            DSTIN5= ZERO
+            DSTIN6= ZERO
+            DO J = 1, NOCCA
+               SNMTJM=ZERO
+               DSTNJ1=ZERO
+               DSTNJ2=ZERO
+               DSTNJ3=ZERO
+               DSTNJ4=ZERO
+               DSTNJ5=ZERO
+               DSTNJ6=ZERO
+               DO M = 1, NOCCB+NVIRB
+                  SNM=SAB(N,M)
+                  TJM=TAB(J,M)
+                  SNMTJM=SNMTJM+SNM*TJM
+                  DSTNJ1=DSTNJ1+DSAB(N,M,1)*TJM+SNM*DTAB(J,M,1)
+                  DSTNJ2=DSTNJ2+DSAB(N,M,2)*TJM+SNM*DTAB(J,M,2)
+                  DSTNJ3=DSTNJ3+DSAB(N,M,3)*TJM+SNM*DTAB(J,M,3)
+                  DSTNJ4=DSTNJ4+DSAB(N,M,4)*TJM+SNM*DTAB(J,M,4)
+                  DSTNJ5=DSTNJ5+DSAB(N,M,5)*TJM+SNM*DTAB(J,M,5)
+                  DSTNJ6=DSTNJ6+DSAB(N,M,6)*TJM+SNM*DTAB(J,M,6)
+               END DO
+               DUM=(TAA(J,N)-SNMTJM)
+               SJI=SAB(J,I)
+               STIN  = STIN +SJI*DUM
+               DSTIN1=DSTIN1+DSAB(J,I,1)*DUM-DSTNJ1*SJI
+               DSTIN2=DSTIN2+DSAB(J,I,2)*DUM-DSTNJ2*SJI
+               DSTIN3=DSTIN3+DSAB(J,I,3)*DUM-DSTNJ3*SJI
+               DSTIN4=DSTIN4+DSAB(J,I,4)*DUM-DSTNJ4*SJI
+               DSTIN5=DSTIN5+DSAB(J,I,5)*DUM-DSTNJ5*SJI
+               DSTIN6=DSTIN6+DSAB(J,I,6)*DUM-DSTNJ6*SJI
+            END DO
+            T10=ONE/(ONE-SAB2)
+            T20=(VABEFA(N,I)-SNMVIM)/(FB(I)-TAA(N,N))
+            T30=VABEFA(N,I)-SNMVIM+STIN
+            CT = CT + T10*T20*T30
+            DUM=TWO*T10*T10*T20*T30
+            G11=G11+SDS1*DUM
+            G12=G12+SDS2*DUM
+            G13=G13+SDS3*DUM
+            G14=G14+SDS4*DUM
+            G15=G15+SDS5*DUM
+            G16=G16+SDS6*DUM
+            DUM=T10*T30/(FB(I)-TAA(N,N))
+            G21=G21+(DABEFA(N,I,1)-DSV1)*DUM
+            G22=G22+(DABEFA(N,I,2)-DSV2)*DUM
+            G23=G23+(DABEFA(N,I,3)-DSV3)*DUM
+            G24=G24+(DABEFA(N,I,4)-DSV4)*DUM
+            G25=G25+(DABEFA(N,I,5)-DSV5)*DUM
+            G26=G26+(DABEFA(N,I,6)-DSV6)*DUM
+            DUM=T10*T20
+            G31=G31+DUM*(DABEFA(N,I,1)-DSV1+DSTIN1)
+            G32=G32+DUM*(DABEFA(N,I,2)-DSV2+DSTIN2)
+            G33=G33+DUM*(DABEFA(N,I,3)-DSV3+DSTIN3)
+            G34=G34+DUM*(DABEFA(N,I,4)-DSV4+DSTIN4)
+            G35=G35+DUM*(DABEFA(N,I,5)-DSV5+DSTIN5)
+            G36=G36+DUM*(DABEFA(N,I,6)-DSV6+DSTIN6)
+ 500     CONTINUE
+ 400  CONTINUE
+      CTB = CT + CT
+C
+      GCTFRG(1,MI,MJ) = G11+G21+G31+G11+G21+G31
+      GCTFRG(2,MI,MJ) = G12+G22+G32+G12+G22+G32
+      GCTFRG(3,MI,MJ) = G13+G23+G33+G13+G23+G33
+      GCTFRG(4,MI,MJ) = G14+G24+G34+G14+G24+G34
+      GCTFRG(5,MI,MJ) = G15+G25+G35+G15+G25+G35
+      GCTFRG(6,MI,MJ) = G16+G26+G36+G16+G26+G36
+C
+      GCTFRG(4,MI,MJ) = -GCTFRG(4,MI,MJ)
+      GCTFRG(5,MI,MJ) = -GCTFRG(5,MI,MJ)
+      GCTFRG(6,MI,MJ) = -GCTFRG(6,MI,MJ)
+C
+      GCTFRG(1,MJ,MI) = -GCTFRG(1,MI,MJ)
+      GCTFRG(2,MJ,MI) = -GCTFRG(2,MI,MJ)
+      GCTFRG(3,MJ,MI) = -GCTFRG(3,MI,MJ)
+      GCTFRG(4,MJ,MI) = -GCTFRG(4,MI,MJ) -
+     *           GCTFRG(2,MI,MJ)*(EFCENT(3,MI)-EFCENT(3,MJ)) +
+     *           GCTFRG(3,MI,MJ)*(EFCENT(2,MI)-EFCENT(2,MJ))
+      GCTFRG(5,MJ,MI) = -GCTFRG(5,MI,MJ) -
+     *           GCTFRG(3,MI,MJ)*(EFCENT(1,MI)-EFCENT(1,MJ)) +
+     *           GCTFRG(1,MI,MJ)*(EFCENT(3,MI)-EFCENT(3,MJ))
+      GCTFRG(6,MJ,MI) = -GCTFRG(6,MI,MJ) -
+     *           GCTFRG(1,MI,MJ)*(EFCENT(2,MI)-EFCENT(2,MJ)) +
+     *           GCTFRG(2,MI,MJ)*(EFCENT(1,MI)-EFCENT(1,MJ))
+C
+      RETURN
+      END
+C*MODULE EFCHTR  *DECK DERVEC
+      SUBROUTINE DERVEC(MODE,DVEC,VEC,MXBF,MO)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      PARAMETER (MXAO=8192, MXSHEF=1000, MXGEFP=4000,
+     *           MXFRG=1050, MXFGPT=12000,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12) 
+      PARAMETER (TWO=2.0D+00, THREE=3.0D+00, FOUR=4.0D+00,
+     *           SQRT3=1.73205080756888D+00,
+     *           SQRT5=2.23606797749979D+00, SQRT7=2.64575131106459D+00)
+C
+      COMMON /EFPBAS/ EX(MXGEFP,MXDFG),CS(MXGEFP,MXDFG),
+     *                CP(MXGEFP,MXDFG),CD(MXGEFP,MXDFG),
+     *                CF(MXGEFP,MXDFG),CG(MXGEFP,MXDFG),
+     *                PRNAME(MXFGPT),PRCORD(3,MXFGPT),EFZNUC(MXFGPT),
+     *                KSTART(MXSHEF,MXDFG),KATOM(MXSHEF,MXDFG),
+     *                KTYPE(MXSHEF,MXDFG),KNG(MXSHEF,MXDFG),
+     *                KLOC(MXSHEF,MXDFG),KMIN(MXSHEF,MXDFG),
+     *                KMAX(MXSHEF,MXDFG),NSHELL(MXDFG),NGAUSS(MXDFG),
+     *                NAT(MXDFG),NUM(MXDFG),NTPATM
+      COMMON /EFPCMO/ NOCC(MXDFG),NVIR(MXDFG),NAO(MXDFG),NTAO,
+     *                CANFOK(MXAO,MXDFG)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /FRGTYP/ NDFRG,ISET(MXFRG),NAMIDX(MXDFG)
+      COMMON /PAULMO/ CENTNM(MXFGPT),CENTCD(3,MXFGPT),NORB(MXFRG),
+     *                NPBF(MXFRG),NTMO
+C
+      DIMENSION VEC(MXBF,MO),DVEC(MXBF,MO,3)
+C
+C     CALCULATE THE ROTATIONAL DERIVATIVES OF THE EFP MO COEFFICIENTS
+C     P, D, F, G TYPE FUNCTIONS ARE IMPLEMENTED. HOWEVER,
+C     G TYPE FUNCTIONS HAVE NOT BEEN TESTED.
+C
+C     HUI LI, 02/09/2005, AMES
+C
+      CALL VCLR(DVEC,1,MXBF*MO*3)
+C
+      IAO=0
+      DO 200 IFRG=1,NFRG
+      DO 300 NSHL = 1,NSHELL(ISET(IFRG))
+         ITYP=KMAX(NSHL,ISET(IFRG))-KMIN(NSHL,ISET(IFRG))+1
+         LOC = KLOC(NSHL,ISET(IFRG))
+         IF(MODE.EQ.1)NIII=NORB(IFRG)
+         IF(MODE.EQ.2)NIII=NAO(ISET(IFRG))
+         IF(ITYP.EQ.3) THEN
+            DO  III=1,NIII
+C             DVEC(LOC  ,IAO+III,1)= ZERO
+              DVEC(LOC+1,IAO+III,1)= VEC(LOC+2,IAO+III)
+              DVEC(LOC+2,IAO+III,1)=-VEC(LOC+1,IAO+III)
+C
+              DVEC(LOC  ,IAO+III,2)=-VEC(LOC+2,IAO+III)
+C             DVEC(LOC+1,IAO+III,2)= ZERO
+              DVEC(LOC+2,IAO+III,2)= VEC(LOC  ,IAO+III)
+C
+              DVEC(LOC  ,IAO+III,3)= VEC(LOC+1,IAO+III)
+              DVEC(LOC+1,IAO+III,3)=-VEC(LOC  ,IAO+III)
+C             DVEC(LOC+2,IAO+III,3)= ZERO
+            END DO
+         END IF
+         IF(ITYP.EQ.4) THEN
+            DO  III=1,NIII
+C             DVEC(LOC+1,IAO+III,1)= ZERO
+              DVEC(LOC+2,IAO+III,1)= VEC(LOC+3,IAO+III)
+              DVEC(LOC+3,IAO+III,1)=-VEC(LOC+2,IAO+III)
+C
+              DVEC(LOC+1,IAO+III,2)=-VEC(LOC+3,IAO+III)
+C             DVEC(LOC+2,IAO+III,2)= ZERO
+              DVEC(LOC+3,IAO+III,2)= VEC(LOC+1,IAO+III)
+C
+              DVEC(LOC+1,IAO+III,3)= VEC(LOC+2,IAO+III)
+              DVEC(LOC+2,IAO+III,3)=-VEC(LOC+1,IAO+III)
+C             DVEC(LOC+3,IAO+III,3)= ZERO
+            END DO
+         END IF
+         IF(ITYP.EQ.6) THEN
+            DO  III=1,NIII
+C             DVEC(LOC  ,IAO+III,1)= ZERO
+              DVEC(LOC+1,IAO+III,1)= VEC(LOC+5,IAO+III)*SQRT3
+              DVEC(LOC+2,IAO+III,1)=-VEC(LOC+5,IAO+III)*SQRT3
+              DVEC(LOC+3,IAO+III,1)= VEC(LOC+4,IAO+III)
+              DVEC(LOC+4,IAO+III,1)=-VEC(LOC+3,IAO+III)
+              DVEC(LOC+5,IAO+III,1)=(2.0D+00*VEC(LOC+2,IAO+III)
+     *                        -2.0D+00*VEC(LOC+1,IAO+III))/SQRT3
+C
+              DVEC(LOC  ,IAO+III,2)=-VEC(LOC+4,IAO+III)*SQRT3
+C             DVEC(LOC+1,IAO+III,2)= ZERO
+              DVEC(LOC+2,IAO+III,2)= VEC(LOC+4,IAO+III)*SQRT3
+              DVEC(LOC+3,IAO+III,2)=-VEC(LOC+5,IAO+III)
+              DVEC(LOC+4,IAO+III,2)=(2.0D+00*VEC(LOC  ,IAO+III)
+     *                        -2.0D+00*VEC(LOC+2,IAO+III))/SQRT3
+              DVEC(LOC+5,IAO+III,2)= VEC(LOC+3,IAO+III)
+C
+              DVEC(LOC  ,IAO+III,3)= VEC(LOC+3,IAO+III)*SQRT3
+              DVEC(LOC+1,IAO+III,3)=-VEC(LOC+3,IAO+III)*SQRT3
+C             DVEC(LOC+2,IAO+III,3)= ZERO
+              DVEC(LOC+3,IAO+III,3)=(2.0D+00*VEC(LOC+1,IAO+III)
+     *                        -2.0D+00*VEC(LOC  ,IAO+III))/SQRT3
+              DVEC(LOC+4,IAO+III,3)= VEC(LOC+5,IAO+III)
+              DVEC(LOC+5,IAO+III,3)=-VEC(LOC+4,IAO+III)
+              END DO
+            END IF
+            IF(ITYP.EQ.10) THEN
+              DO  III=1,NIII
+C             DVEC(LOC  ,IAO+III,1)= ZERO
+              DVEC(LOC+1,IAO+III,1)= VEC(LOC+6,IAO+III)*SQRT5
+              DVEC(LOC+2,IAO+III,1)=-VEC(LOC+8,IAO+III)*SQRT5
+              DVEC(LOC+3,IAO+III,1)= VEC(LOC+4,IAO+III)
+              DVEC(LOC+4,IAO+III,1)=-VEC(LOC+3,IAO+III)
+              DVEC(LOC+5,IAO+III,1)= VEC(LOC+9,IAO+III)*SQRT3
+              DVEC(LOC+6,IAO+III,1)=-THREE*VEC(LOC+1,IAO+III)
+     *                                /SQRT5
+     *                               +TWO*VEC(LOC+8,IAO+III)
+              DVEC(LOC+7,IAO+III,1)=-VEC(LOC+9,IAO+III)*SQRT3
+              DVEC(LOC+8,IAO+III,1)= THREE*VEC(LOC+2,IAO+III)
+     *                                /SQRT5
+     *                               -TWO*VEC(LOC+6,IAO+III)
+              DVEC(LOC+9,IAO+III,1)= TWO*(VEC(LOC+7,IAO+III)
+     *                              -VEC(LOC+5,IAO+III))/SQRT3
+C
+              DVEC(LOC  ,IAO+III,2)=-VEC(LOC+4,IAO+III)*SQRT5
+C             DVEC(LOC+1,IAO+III,2)= ZERO
+              DVEC(LOC+2,IAO+III,2)= VEC(LOC+7,IAO+III)*SQRT5
+              DVEC(LOC+3,IAO+III,2)=-VEC(LOC+9,IAO+III)*SQRT3
+              DVEC(LOC+4,IAO+III,2)= THREE*VEC(LOC  ,IAO+III)
+     *                                /SQRT5
+     *                               -TWO*VEC(LOC+7,IAO+III)
+              DVEC(LOC+5,IAO+III,2)=-VEC(LOC+6,IAO+III)
+              DVEC(LOC+6,IAO+III,2)= VEC(LOC+5,IAO+III)
+              DVEC(LOC+7,IAO+III,2)=-THREE*VEC(LOC+2,IAO+III)
+     *                                /SQRT5
+     *                               +TWO*VEC(LOC+4,IAO+III)
+              DVEC(LOC+8,IAO+III,2)= VEC(LOC+9,IAO+III)*SQRT3
+              DVEC(LOC+9,IAO+III,2)= TWO*(VEC(LOC+3,IAO+III)
+     *                              -VEC(LOC+8,IAO+III))/SQRT3
+C
+              DVEC(LOC  ,IAO+III,3)= VEC(LOC+3,IAO+III)*SQRT5
+              DVEC(LOC+1,IAO+III,3)=-VEC(LOC+5,IAO+III)*SQRT5
+C             DVEC(LOC+2,IAO+III,3)= ZERO
+              DVEC(LOC+3,IAO+III,3)=-THREE*VEC(LOC  ,IAO+III)
+     *                                /SQRT5
+     *                               +TWO*VEC(LOC+5,IAO+III)
+              DVEC(LOC+4,IAO+III,3)= VEC(LOC+9,IAO+III)*SQRT3
+              DVEC(LOC+5,IAO+III,3)= THREE*VEC(LOC+1,IAO+III)
+     *                                /SQRT5
+     *                               -TWO*VEC(LOC+3,IAO+III)
+              DVEC(LOC+6,IAO+III,3)=-VEC(LOC+9,IAO+III)*SQRT3
+              DVEC(LOC+7,IAO+III,3)= VEC(LOC+8,IAO+III)
+              DVEC(LOC+8,IAO+III,3)=-VEC(LOC+7,IAO+III)
+              DVEC(LOC+9,IAO+III,3)= TWO*(VEC(LOC+6,IAO+III)
+     *                              -VEC(LOC+4,IAO+III))/SQRT3
+              END DO
+            END IF
+            IF(ITYP.EQ.15) THEN
+C             NOTE: ITYP=15 HAS NOT BEEN TESTED
+              DO  III=1,NIII
+C             DVEC(LOC  ,IAO+III,1)=  ZERO
+              DVEC(LOC+1,IAO+III,1)=  VEC(LOC+6,IAO+III)*SQRT7
+              DVEC(LOC+2,IAO+III,1)= -VEC(LOC+8,IAO+III)*SQRT7
+              DVEC(LOC+3,IAO+III,1)=  VEC(LOC+4,IAO+III)
+              DVEC(LOC+4,IAO+III,1)= -VEC(LOC+3,IAO+III)
+              DVEC(LOC+5,IAO+III,1)=  VEC(LOC+13,IAO+III)*SQRT5
+              DVEC(LOC+6,IAO+III,1)=  TWO*VEC(LOC+11,IAO+III)
+     *                                 *SQRT5/SQRT3
+     *                                -FOUR*VEC(LOC+1,IAO+III)
+     *                                 /SQRT7
+              DVEC(LOC+7,IAO+III,1)= -VEC(LOC+14,IAO+III)*SQRT5
+              DVEC(LOC+8,IAO+III,1)=  FOUR*VEC(LOC+2,IAO+III)
+     *                                 /SQRT7
+     *                                -TWO*VEC(LOC+11,IAO+III)
+     *                                 *SQRT5/SQRT3
+              DVEC(LOC+9,IAO+III,1)=  VEC(LOC+12,IAO+III)/SQRT3
+              DVEC(LOC+10,IAO+III,1)=-VEC(LOC+12,IAO+III)/SQRT3
+              DVEC(LOC+11,IAO+III,1)= THREE*(VEC(LOC+8,IAO+III)
+     *                                -VEC(LOC+6,IAO+III))
+     *                                 *SQRT3/SQRT5
+              DVEC(LOC+12,IAO+III,1)= TWO*(VEC(LOC+10,IAO+III)
+     *                                -VEC(LOC+9,IAO+III))/SQRT3
+              DVEC(LOC+13,IAO+III,1)= TWO*VEC(LOC+14,IAO+III)
+     *                                -THREE*VEC(LOC+5,IAO+III)
+     *                                 /SQRT5
+              DVEC(LOC+14,IAO+III,1)= THREE*VEC(LOC+7,IAO+III)
+     *                                 /SQRT5
+     *                                -TWO*VEC(LOC+13,IAO+III)
+C
+              DVEC(LOC  ,IAO+III,2)= -VEC(LOC+4,IAO+III)*SQRT7
+C             DVEC(LOC+1,IAO+III,2)=  ZERO
+              DVEC(LOC+2,IAO+III,2)=  VEC(LOC+7,IAO+III)*SQRT7
+              DVEC(LOC+3,IAO+III,2)= -VEC(LOC+12,IAO+III)*SQRT5
+              DVEC(LOC+4,IAO+III,2)=  FOUR*VEC(LOC  ,IAO+III)
+     *                                 /SQRT7
+     *                                -TWO*VEC(LOC+10,IAO+III)
+     *                                 *SQRT5/SQRT3
+              DVEC(LOC+5,IAO+III,2)= -VEC(LOC+6,IAO+III)
+              DVEC(LOC+6,IAO+III,2)=  VEC(LOC+5,IAO+III)
+              DVEC(LOC+7,IAO+III,2)=  TWO*VEC(LOC+10,IAO+III)
+     *                                 *SQRT5/SQRT3
+     *                                -FOUR*VEC(LOC+2,IAO+III)
+     *                                 /SQRT7
+              DVEC(LOC+8,IAO+III,2)=  VEC(LOC+14,IAO+III)*SQRT5
+              DVEC(LOC+9,IAO+III,2)= -VEC(LOC+13,IAO+III)*SQRT3
+              DVEC(LOC+10,IAO+III,2)= THREE*(VEC(LOC+4,IAO+III)
+     *                                -VEC(LOC+7,IAO+III))
+     *                                 *SQRT3/SQRT5
+              DVEC(LOC+11,IAO+III,2)= VEC(LOC+13,IAO+III)*SQRT3
+              DVEC(LOC+12,IAO+III,2)= THREE*VEC(LOC+3,IAO+III)
+     *                                 /SQRT5
+     *                                -TWO*VEC(LOC+14,IAO+III)
+              DVEC(LOC+13,IAO+III,2)= TWO*(VEC(LOC+9,IAO+III)
+     *                                -VEC(LOC+11,IAO+III))/SQRT3
+              DVEC(LOC+14,IAO+III,2)= TWO*VEC(LOC+12,IAO+III)
+     *                                -THREE*VEC(LOC+8,IAO+III)
+     *                                 /SQRT5
+C
+              DVEC(LOC  ,IAO+III,3)=  VEC(LOC+3,IAO+III)*SQRT7
+              DVEC(LOC+1,IAO+III,3)= -VEC(LOC+1,IAO+III)*SQRT7
+C             DVEC(LOC+2,IAO+III,3)=  ZERO
+              DVEC(LOC+3,IAO+III,3)=  TWO*VEC(LOC+9,IAO+III)
+     *                                 *SQRT5/SQRT3
+     *                                -FOUR*VEC(LOC  ,IAO+III)
+     *                                 /SQRT7
+              DVEC(LOC+4,IAO+III,3)=  VEC(LOC+12,IAO+III)*SQRT5
+              DVEC(LOC+5,IAO+III,3)=  FOUR*VEC(LOC+1,IAO+III)
+     *                                 /SQRT7
+     *                                -TWO*VEC(LOC+9,IAO+III)
+     *                                 *SQRT5/SQRT3
+              DVEC(LOC+6,IAO+III,3)= -VEC(LOC+13,IAO+III)*SQRT5
+              DVEC(LOC+7,IAO+III,3)=  VEC(LOC+8,IAO+III)
+              DVEC(LOC+8,IAO+III,3)= -VEC(LOC+7,IAO+III)
+              DVEC(LOC+9,IAO+III,3)=  THREE*(VEC(LOC+5,IAO+III)
+     *                                -VEC(LOC+3,IAO+III))
+     *                                 *SQRT3/SQRT5
+              DVEC(LOC+10,IAO+III,3)= VEC(LOC+14,IAO+III)*SQRT3
+              DVEC(LOC+11,IAO+III,3)=-VEC(LOC+14,IAO+III)*SQRT3
+              DVEC(LOC+12,IAO+III,3)= TWO*VEC(LOC+13,IAO+III)
+     *                                -THREE*VEC(LOC+4,IAO+III)
+     *                                 /SQRT5
+              DVEC(LOC+13,IAO+III,3)= THREE*VEC(LOC+6,IAO+III)
+     *                                 /SQRT5
+     *                                -TWO*VEC(LOC+12,IAO+III)
+              DVEC(LOC+14,IAO+III,3)= TWO*(VEC(LOC+11,IAO+III)
+     *                                -VEC(LOC+10,IAO+III))/SQRT3
+              END DO
+            END IF
+ 300  CONTINUE
+      IF(MODE.EQ.1)IAO=IAO+NORB(IFRG)
+      IF(MODE.EQ.2)IAO=IAO+NAO(ISET(IFRG))
+ 200  CONTINUE
+C
+      RETURN
+      END
+C*MODULE EFCHTR  *DECK DEFCEF
+      SUBROUTINE DEFCEF(MODE,JFRG,DVEFP,KEFP,L1,L1CO,NATM,NATMCO,
+     *                  NGAU,NSHL,EX,CS,CP,CD,CF,
+     *                  KSTART,KATOM,KTYPE,KNG,KLOC,KMIN,KMAX,
+     *                  NGAUCO,NSHLCO,EXCO,CSCO,CPCO,CDCO,CFCO,
+     *                  KSTRCO,KATMCO,KTYPCO,KNGCO,KLOCCO,KMINCO,
+     *                  KMAXCO,C,CCO,IDOIT)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      CHARACTER*8 FRGNME
+C
+      LOGICAL ISKIP,NORM
+C
+      PARAMETER (MXFRG=1050, MXFGPT=12000,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      DIMENSION EX(NGAU),CS(NGAU),CP(NGAU),CD(NGAU),
+     *          CF(NGAU),KSTART(NSHL),KATOM(NSHL),
+     *          KTYPE(NSHL),KNG(NSHL),KLOC(NSHL),KMIN(NSHL),KMAX(NSHL),
+     *          EXCO(NGAUCO),CSCO(NGAUCO),CPCO(NGAUCO),CDCO(NGAUCO),
+     *          CFCO(NGAUCO),KSTRCO(NSHLCO),KATMCO(NSHLCO),
+     *          KTYPCO(NSHLCO),KNGCO(NSHLCO),KLOCCO(NSHLCO),
+     *          KMINCO(NSHLCO),KMAXCO(NSHLCO),
+     *          C(3,NATM),CCO(3,NATMCO),
+     *          DVEFP(L1CO,L1,6),IDOIT(*)
+      DIMENSION ISKIP(35),INDX(70),
+     *          IX(35),IY(35),IZ(35),JX(20),JY(20),JZ(20),
+     *          IJG(210),IJX(210),IJY(210),IJZ(210),
+     *          XIN(200),YIN(200),ZIN(200),G(210),DIJ(210),
+     *          FIJ(210),GIJ(210)
+C
+      COMMON /DSTV  / XINT,YINT,ZINT,T,X0,Y0,Z0,XI,YI,ZI,
+     *                XJ,YJ,ZJ,NI,NJ,CX,CY,CZ
+      COMMON /EFMULT/ EFC(3,MXFGPT),EFCHG(2,MXFGPT),EFATRM(MXFGPT),
+     *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
+     *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
+     *                EFOCT(10,MXFGPT),FRGNME(MXFGPT)
+      COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
+     *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
+     *                ATORQ(3,MXFRG)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /ROOT  / XX,U(13),W(13),NROOTS
+C
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00)
+      PARAMETER (RLN10=2.30258D+00)
+      PARAMETER (PI212=1.1283791670955D+00)
+      PARAMETER (SQRT3=1.73205080756888D+00)
+      PARAMETER (SQRT5=2.23606797749979D+00)
+C
+      DATA INDX / 1, 2, 3, 4, 5, 6, 7, 8, 9,10,
+     1           11,12,13,14,15,16,17,18,19,20,
+     2           -0,-0,-0,-0,-0,-0,-0,-0,-0,-0,
+     3           -0,-0,-0,-0,-0,
+     4           -0, 1, 2, 3, 1, 2, 3, 4, 5, 6,
+     5            4, 5, 6, 7, 8, 9,10,11,12,13,
+     6            7, 8, 9,10,11,12,13,14,15,16,
+     7           17,18,19,20,21/
+      DATA JX / 0, 1, 0, 0, 2, 0, 0, 1, 1, 0,
+     1          3, 0, 0, 2, 2, 1, 0, 1, 0, 1/
+      DATA IX / 1, 5, 1, 1, 9, 1, 1, 5, 5, 1,
+     1         13, 1, 1, 9, 9, 5, 1, 5, 1, 5,
+     2         17, 1, 1,13,13, 5, 1, 5, 1, 9,
+     3          9, 1, 9, 5, 5/
+      DATA JY / 0, 0, 1, 0, 0, 2, 0, 1, 0, 1,
+     1          0, 3, 0, 1, 0, 2, 2, 0, 1, 1/
+      DATA IY / 1, 1, 5, 1, 1, 9, 1, 5, 1, 5,
+     1          1,13, 1, 5, 1, 9, 9, 1, 5, 5,
+     2          1,17, 1, 5, 1,13,13, 1, 5, 9,
+     3          1, 9, 5, 9, 5/
+      DATA JZ / 0, 0, 0, 1, 0, 0, 2, 0, 1, 1,
+     1          0, 0, 3, 0, 1, 0, 1, 2, 2, 1/
+      DATA IZ / 1, 1, 1, 5, 1, 1, 9, 1, 5, 5,
+     1          1, 1,13, 1, 5, 1, 5, 9, 9, 5,
+     2          1, 1,17, 1, 5, 1, 5,13,13, 1,
+     3          9, 9, 5, 5, 9/
+      DATA QLIM/1.0D-08/
+C
+C     GRADIENT CONTRIBUTION FROM EFFECTIVE POINT CHARGES
+C     MODE = 1 : ONE BASIS SET
+C     MODE = 2 : TWO BASIS SETS
+C     MODE =21 : ONE BASIS SET, SWITCH DERIVATIVES
+C     MODE =22 : TWO BASIS SET, SWITCH DERIVATIVES
+C
+C     IF KEFP < 0, DO INTEGRALS EXCEPT FOR KEFP
+C     IF KEFP = 0, DO INTEGRALS FOR ALL EFP'S
+C     IF KEFP > 0, DO INTEGRALS ONLY FOR KEFP
+C
+      NEFC = NMTTPT
+      NEND=0
+      IF(ABS(KEFP).GT.1)THEN
+         DO KFRG=1,ABS(KEFP)-1
+            NEND=NEND+NMPTS(KFRG)
+         END DO
+      END IF
+      DO IC = 1,NEFC
+         IDOIT(IC)=1
+         IF(KEFP.NE.0)THEN
+            IDO=0
+            DO IPTS = NEND+1, NEND+NMPTS(ABS(KEFP))
+               IF(IPTS.EQ.IC.AND.KEFP.LT.0) IDOIT(IC)=0
+               IF(IPTS.EQ.IC.AND.KEFP.GT.0) IDO=1
+            END DO
+            IF(KEFP.GT.0.AND.IDO.EQ.0) IDOIT(IC)=0
+         END IF
+      ENDDO
+      TOL = RLN10*ITOL
+      NORM = NORMF .NE. 1 .OR. NORMP .NE. 1
+      MI = JFRG
+C
+C     ----- I SHELL
+C
+      DO 1060 II = 1,NSHLCO
+C
+      IAT = KATMCO(II)
+      XI = CCO(1,IAT)
+      YI = CCO(2,IAT)
+      ZI = CCO(3,IAT)
+      I1 = KSTRCO(II)
+      I2 = I1+KNGCO(II)-1
+      LIT = KTYPCO(II)+1
+      MINI = KMINCO(II)
+      MAXI = KMAXCO(II)
+      LOCI = KLOCCO(II)-MINI
+      DO 100 I=1,35
+ 100  ISKIP(I)=.TRUE.
+      DO 260 I=MINI,MAXI
+      GO TO (110,140,260,260,180,260,260,260,260,260,
+     1       220,260,260,260,260,260,260,260,260,260),I
+ 110  DO 120 K=2,4
+ 120  ISKIP(K)=.FALSE.
+      GO TO 260
+ 140  DO 160 K=5,10
+ 160  ISKIP(K)=.FALSE.
+      ISKIP(1)=.FALSE.
+      GO TO 260
+ 180  DO 200 K=2,4
+ 200  ISKIP(K)=.FALSE.
+      DO 210 K=11,20
+ 210  ISKIP(K)=.FALSE.
+      GO TO 260
+ 220  DO 240 K=5,10
+ 240  ISKIP(K)=.FALSE.
+      DO 250 K=21,35
+ 250  ISKIP(K)=.FALSE.
+ 260  CONTINUE
+C
+C     ----- J SHELL
+C
+      DO 1040 JJ = 1,NSHL
+C
+      JAT = KATOM(JJ)
+      XJ = C(1,JAT)
+      YJ = C(2,JAT)
+      ZJ = C(3,JAT)
+      J1 = KSTART(JJ)
+      J2 = J1+KNG(JJ)-1
+      LJT = KTYPE(JJ)
+      MINJ = KMIN(JJ)
+      MAXJ = KMAX(JJ)
+      LOCJ = KLOC(JJ)-MINJ
+      NROOTS = (LIT+LJT+1-2)/2 + 1
+      RR = (XI-XJ)**2+(YI-YJ)**2+(ZI-ZJ)**2
+C
+C     ----- PREPARE INDICES FOR PAIRS OF (I,J) FUNCTIONS
+C
+      N0 = 0
+      IF (LIT .GE. 4) N0 = 35
+      IJ = 0
+      DO 340 I = 1,35
+      IF (ISKIP(I)) GO TO 340
+      IN = INDX(I+N0)
+      NX = IX(I)
+      NY = IY(I)
+      NZ = IZ(I)
+      DO 320 J = MINJ,MAXJ
+      IJ = IJ+1
+      IJX(IJ) = NX+JX(J)
+      IJY(IJ) = NY+JY(J)
+      IJZ(IJ) = NZ+JZ(J)
+      IJG(IJ) = IN+21*(J-MINJ)
+  320 CONTINUE
+  340 CONTINUE
+      DO 360 I = 1,IJ
+      N = IJG(I)
+  360 G(N) = ZERO
+C
+C     ----- I PRIMITIVE
+C
+      DO 840 IG = I1,I2
+      AI = EXCO(IG)
+      ARRI = AI*RR
+      AXI = AI*XI
+      AYI = AI*YI
+      AZI = AI*ZI
+      DUM = AI+AI
+      CSI = CPCO(IG)
+      CPI = CSCO(IG)*DUM
+      IF (LIT .EQ. 4) CPI = CDCO(IG)
+      CDI = CPCO(IG)*DUM
+      IF (LIT .EQ. 5) CDI = CFCO(IG)
+      CFI = CDCO(IG)*DUM
+      CGI = CFCO(IG)*DUM
+C
+C     ----- J PRIMITIVE
+C
+      DO 820 JG = J1,J2
+      AJ = EX(JG)
+      AA = AI+AJ
+      AA1 = ONE/AA
+      DUM = AJ*ARRI*AA1
+      IF (DUM .GT. TOL) GO TO 820
+      FAC = EXP(-DUM)
+      CSJ = CS(JG)
+      CPJ = CP(JG)
+      CDJ = CD(JG)
+      CFJ = CF(JG)
+      AX = (AXI+AJ*XJ)*AA1
+      AY = (AYI+AJ*YJ)*AA1
+      AZ = (AZI+AJ*ZJ)*AA1
+C
+C     ----- DENSITY FACTOR
+C
+      NN = 0
+      DUM1 = ZERO
+      DUM2 = DUM1
+      DO 600 I=1,35
+      IF(ISKIP(I)) GO TO 600
+      GO TO (370,380,420,420,390,420,420,420,420,420,
+     1       400,420,420,420,420,420,420,420,420,420,
+     2       410,420,420,420,420,420,420,420,420,420,
+     3       420,420,420,420,420),I
+ 370  DUM1=CSI*FAC
+      GO TO 420
+ 380  DUM1=CPI*FAC
+      GO TO 420
+ 390  DUM1=CDI*FAC
+      GO TO 420
+ 400  DUM1=CFI*FAC
+      GO TO 420
+ 410  DUM1 = CGI*FAC
+ 420  CONTINUE
+      DO 580 J=MINJ,MAXJ
+      GO TO (430,440,560,560,460,560,560,480,560,560,
+     1       500,560,560,520,560,560,560,560,560,540),J
+  430 DUM2=DUM1*CSJ
+      GO TO 560
+  440 DUM2=DUM1*CPJ
+      GO TO 560
+  460 DUM2=DUM1*CDJ
+      GO TO 560
+  480 IF(NORM) DUM2=DUM2*SQRT3
+      GO TO 560
+  500 DUM2 = DUM1 * CFJ
+      GO TO 560
+  520 DUM2 = DUM2 *SQRT5
+      GO TO 560
+  540 DUM2 = DUM2 * SQRT3
+  560 NN=NN+1
+  580 DIJ(NN)=DUM2
+  600 CONTINUE
+C
+C     ....BASIC CHARGE TERM
+C
+      DUM = PI212*AA1
+      DO 700 I=1,IJ
+ 700  FIJ(I)=DIJ(I)*DUM
+      AAX=AA*AX
+      AAY=AA*AY
+      AAZ=AA*AZ
+      DO 818 IC=1,NEFC
+      IF(IDOIT(IC).EQ.0) GO TO 818
+      ZNUC=-(EFCHG(1,IC)+EFCHG(2,IC))
+      CX=EFC(1,IC)
+      CY=EFC(2,IC)
+      CZ=EFC(3,IC)
+      XX=AA*((AX-CX)**2+(AY-CY)**2+(AZ-CZ)**2)
+C     CALL RT123
+      IF(NROOTS.LE.3)CALL RT123
+      IF(NROOTS.EQ.4)CALL ROOT4
+      IF(NROOTS.EQ.5)CALL ROOT5
+      MM=0
+      DO 806 K=1,NROOTS
+      UU=AA*U(K)
+      WW=W(K)*ZNUC
+      TT=ONE/(AA+UU)
+      T= SQRT(TT)
+      X0=(AAX+UU*CX)*TT
+      Y0=(AAY+UU*CY)*TT
+      Z0=(AAZ+UU*CZ)*TT
+      IN=-4+MM
+      DO 804 I=1,LIT
+      IN=IN+4
+      NI=I
+      DO 804 J=1,LJT
+      JN=IN+J
+      NJ=J
+      CALL VINT
+      XIN(JN)=XINT
+      YIN(JN)=YINT
+      ZIN(JN)=ZINT*WW
+ 804  CONTINUE
+ 806  MM=MM+20
+      DO 810 I=1,IJ
+      N=IJG(I)
+      NX=IJX(I)
+      NY=IJY(I)
+      NZ=IJZ(I)
+      DUM=ZERO
+      MM=0
+      DO 808 K=1,NROOTS
+      DUM=DUM+XIN(NX+MM)*YIN(NY+MM)*ZIN(NZ+MM)
+ 808  MM=MM+20
+ 810  G(N)=G(N)+DUM*FIJ(I)
+C     SUBTRACT DAMPING FUNCTION TERM.
+      ALFA = EFATRM(IC)
+      BETA = EFBTRM(IC)
+C            DEACTIVATE SCREENING...
+                     ALFA = 0.0D+00
+                     BETA = 0.0D+00
+      IF (ABS(ALFA).LE.QLIM ) GO TO 818
+      DUM=PI212/(AA + ALFA)
+      DO 811 I=1,IJ
+ 811  GIJ(I)=DIJ(I)*DUM
+      ZNUC = -EFCHG(1,IC)
+      PCSQ = (AX-CX)**2+(AY-CY)**2+(AZ-CZ)**2
+      XX=AA*AA*PCSQ/(AA+ALFA)
+      PREI = EXP(-AA*ALFA*PCSQ/(AA+ALFA))
+C     CALL RT123
+      IF(NROOTS.LE.3)CALL RT123
+      IF(NROOTS.EQ.4)CALL ROOT4
+      IF(NROOTS.EQ.5)CALL ROOT5
+      MM=0
+      DO 814 K=1,NROOTS
+      UU=(ALFA+AA)*U(K)
+      WW=W(K)*ZNUC
+      TT=ONE/(AA+UU+ALFA)
+      T= SQRT(TT)
+      X0=(AAX+(UU+ALFA)*CX)*TT
+      Y0=(AAY+(UU+ALFA)*CY)*TT
+      Z0=(AAZ+(UU+ALFA)*CZ)*TT
+      IN=-4+MM
+      DO 812 I=1,LIT
+      IN=IN+4
+      NI=I
+      DO 812 J=1,LJT
+      JN=IN+J
+      NJ=J
+      CALL VINT
+      XIN(JN)=XINT
+      YIN(JN)=YINT
+      ZIN(JN)=ZINT*WW
+ 812  CONTINUE
+ 814  MM=MM+20
+      DO 817 I=1,IJ
+      N=IJG(I)
+      NX=IJX(I)
+      NY=IJY(I)
+      NZ=IJZ(I)
+      DUM=ZERO
+      MM=0
+      DO 816 K=1,NROOTS
+      DUM=DUM+XIN(NX+MM)*YIN(NY+MM)*ZIN(NZ+MM)
+ 816  MM=MM+20
+      DAMPT = -GIJ(I) * PREI * BETA *DUM
+ 817  G(N)=G(N) + DAMPT
+ 818  CONTINUE
+C
+C     ----- END OF PRIMITIVE LOOPS -----
+C
+  820 CONTINUE
+  840 CONTINUE
+C
+C     ----- FORM INTEGRALS OVER DERIVATIVES -----
+C
+      NN = 0
+      N = 1
+      DO 900 J = MINJ,MAXJ
+      IF (MINI .GT. 1) GO TO 860
+      NN = NN+1
+      XIN(NN) = G(N+ 1)
+      YIN(NN) = G(N+ 2)
+      ZIN(NN) = G(N+ 3)
+      IF (MAXI .EQ. 1) GO TO 900
+  860 IF (MINI .GT. 2) GO TO 880
+      NN = NN+1
+      XIN(NN) = (G(N+ 4)-G(N ))
+      YIN(NN) = G(N+ 7)
+      ZIN(NN) = G(N+ 8)
+      NN = NN+1
+      XIN(NN) = G(N+ 7)
+      YIN(NN) = (G(N+ 5)-G(N ))
+      ZIN(NN) = G(N+ 9)
+      NN = NN+1
+      XIN(NN) = G(N+ 8)
+      YIN(NN) = G(N+ 9)
+      ZIN(NN) = (G(N+ 6)-G(N ))
+      IF (MAXI .EQ. 4) GO TO 900
+  880 CONTINUE
+      IF (MINI .GT. 5) GO TO 890
+      NN = NN+1
+      XIN(NN) = (G(N+ 3)-G(N )-G(N ))
+      YIN(NN) = G(N+ 6)
+      ZIN(NN) = G(N+ 7)
+      NN = NN+1
+      XIN(NN) = G(N+ 8)
+      YIN(NN) = (G(N+ 4)-G(N+ 1)-G(N+ 1))
+      ZIN(NN) = G(N+ 9)
+      NN = NN+1
+      XIN(NN) = G(N+10)
+      YIN(NN) = G(N+11)
+      ZIN(NN) = (G(N+ 5)-G(N+ 2)-G(N+ 2))
+      NN = NN+1
+      DUM = ONE
+      IF (NORM) DUM = SQRT3
+      XIN(NN) = DUM*(G(N+ 6)-G(N+ 1))
+      YIN(NN) = DUM*(G(N+ 8)-G(N ))
+      ZIN(NN) = DUM* G(N+12)
+      NN = NN+1
+      XIN(NN) = DUM*(G(N+ 7)-G(N+ 2))
+      YIN(NN) = DUM* G(N+12)
+      ZIN(NN) = DUM*(G(N+10)-G(N ))
+      NN = NN+1
+      XIN(NN) = DUM* G(N+12)
+      YIN(NN) = DUM*(G(N+ 9)-G(N+ 2))
+      ZIN(NN) = DUM*(G(N+11)-G(N+ 1))
+      IF(MAXI.EQ.10) GO TO 900
+ 890  CONTINUE
+      NN=NN+1
+      XIN(NN)=(G(N+ 6)-G(N   )-G(N   )-G(N   ))
+      YIN(NN)= G(N+ 9)
+      ZIN(NN)= G(N+10)
+      NN=NN+1
+      XIN(NN)= G(N+11)
+      YIN(NN)=(G(N+ 7)-G(N+ 1)-G(N+ 1)-G(N+ 1))
+      ZIN(NN)= G(N+12)
+      NN=NN+1
+      XIN(NN)= G(N+13)
+      YIN(NN)= G(N+14)
+      ZIN(NN)=(G(N+ 8)-G(N+ 2)-G(N+ 2)-G(N+ 2))
+      NN=NN+1
+      DUM=ONE
+      IF(NORM) DUM=SQRT5
+      XIN(NN)=DUM* (G(N+ 9)-G(N+ 3)-G(N+ 3))
+      YIN(NN)=DUM* (G(N+15)-G(N  ))
+      ZIN(NN)=DUM* G(N+18)
+      NN=NN+1
+      XIN(NN)=DUM* (G(N+10)-G(N+ 4)-G(N+ 4))
+      YIN(NN)=DUM* G(N+18)
+      ZIN(NN)=DUM* (G(N+16)-G(N  ))
+      NN=NN+1
+      XIN(NN)=DUM* (G(N+15)-G(N+ 1))
+      YIN(NN)=DUM* (G(N+11)-G(N+ 3)-G(N+ 3))
+      ZIN(NN)=DUM*  G(N+19)
+      NN=NN+1
+      XIN(NN)=DUM* G(N+19)
+      YIN(NN)=DUM* (G(N+12)-G(N+ 5)-G(N+ 5))
+      ZIN(NN)=DUM* (G(N+17)-G(N+ 1))
+      NN=NN+1
+      XIN(NN)=DUM* (G(N+16)-G(N+ 2))
+      YIN(NN)=DUM*  G(N+20)
+      ZIN(NN)=DUM* (G(N+13)-G(N+ 4)-G(N+ 4))
+      NN=NN+1
+      XIN(NN)=DUM*  G(N+20)
+      YIN(NN)=DUM* (G(N+17)-G(N+ 2))
+      ZIN(NN)=DUM* (G(N+14)-G(N+ 5)-G(N+ 5))
+      NN=NN+1
+      IF(NORM) DUM=DUM*SQRT3
+      XIN(NN)=DUM* (G(N+18)-G(N+ 5))
+      YIN(NN)=DUM* (G(N+19)-G(N+ 4))
+      ZIN(NN)=DUM* (G(N+20)-G(N+ 3))
+  900 N = N+21
+C
+C     ----- CALCULATE CONTRIBUTION TO GRADIENT -----
+C
+      KK = 0
+      DO 980 J = MINJ,MAXJ
+      JN = LOCJ+J
+      DO 980 I = MINI,MAXI
+      IN = LOCI+I
+      KK = KK+1
+      IF(MODE.EQ.1)THEN
+        DVEFP(IN,JN,1) = DVEFP(IN,JN,1)+XIN(KK)
+        DVEFP(IN,JN,2) = DVEFP(IN,JN,2)+YIN(KK)
+        DVEFP(IN,JN,3) = DVEFP(IN,JN,3)+ZIN(KK)
+        DVEFP(IN,JN,4) = DVEFP(IN,JN,4)
+     *                  +YIN(KK)*(ZI-EFCENT(3,MI))
+     *                  -ZIN(KK)*(YI-EFCENT(2,MI))
+        DVEFP(IN,JN,5) = DVEFP(IN,JN,5)
+     *                  +ZIN(KK)*(XI-EFCENT(1,MI))
+     *                  -XIN(KK)*(ZI-EFCENT(3,MI))
+        DVEFP(IN,JN,6) = DVEFP(IN,JN,6)
+     *                  +XIN(KK)*(YI-EFCENT(2,MI))
+     *                  -YIN(KK)*(XI-EFCENT(1,MI))
+        DVEFP(JN,IN,1) = DVEFP(JN,IN,1)+XIN(KK)
+        DVEFP(JN,IN,2) = DVEFP(JN,IN,2)+YIN(KK)
+        DVEFP(JN,IN,3) = DVEFP(JN,IN,3)+ZIN(KK)
+        DVEFP(JN,IN,4) = DVEFP(JN,IN,4)
+     *                  +YIN(KK)*(ZI-EFCENT(3,MI))
+     *                  -ZIN(KK)*(YI-EFCENT(2,MI))
+        DVEFP(JN,IN,5) = DVEFP(JN,IN,5)
+     *                  +ZIN(KK)*(XI-EFCENT(1,MI))
+     *                  -XIN(KK)*(ZI-EFCENT(3,MI))
+        DVEFP(JN,IN,6) = DVEFP(JN,IN,6)
+     *                  +XIN(KK)*(YI-EFCENT(2,MI))
+     *                  -YIN(KK)*(XI-EFCENT(1,MI))
+      ELSE IF(MODE.EQ.2)THEN
+        DVEFP(IN,JN,1) = DVEFP(IN,JN,1)+XIN(KK)
+        DVEFP(IN,JN,2) = DVEFP(IN,JN,2)+YIN(KK)
+        DVEFP(IN,JN,3) = DVEFP(IN,JN,3)+ZIN(KK)
+        DVEFP(IN,JN,4) = DVEFP(IN,JN,4)
+     *                  +YIN(KK)*(ZI-EFCENT(3,MI))
+     *                  -ZIN(KK)*(YI-EFCENT(2,MI))
+        DVEFP(IN,JN,5) = DVEFP(IN,JN,5)
+     *                  +ZIN(KK)*(XI-EFCENT(1,MI))
+     *                  -XIN(KK)*(ZI-EFCENT(3,MI))
+        DVEFP(IN,JN,6) = DVEFP(IN,JN,6)
+     *                  +XIN(KK)*(YI-EFCENT(2,MI))
+     *                  -YIN(KK)*(XI-EFCENT(1,MI))
+      ELSE IF(MODE.EQ.21)THEN
+        DVEFP(JN,IN,1) = DVEFP(JN,IN,1)-XIN(KK)
+        DVEFP(JN,IN,2) = DVEFP(JN,IN,2)-YIN(KK)
+        DVEFP(JN,IN,3) = DVEFP(JN,IN,3)-ZIN(KK)
+        DVEFP(JN,IN,4) = DVEFP(JN,IN,4)
+     *                  -YIN(KK)*(ZI-EFCENT(3,MI))
+     *                  +ZIN(KK)*(YI-EFCENT(2,MI))
+        DVEFP(JN,IN,5) = DVEFP(JN,IN,5)
+     *                  -ZIN(KK)*(XI-EFCENT(1,MI))
+     *                  +XIN(KK)*(ZI-EFCENT(3,MI))
+        DVEFP(JN,IN,6) = DVEFP(JN,IN,6)
+     *                  -XIN(KK)*(YI-EFCENT(2,MI))
+     *                  +YIN(KK)*(XI-EFCENT(1,MI))
+        DVEFP(IN,JN,1) = DVEFP(IN,JN,1)-XIN(KK)
+        DVEFP(IN,JN,2) = DVEFP(IN,JN,2)-YIN(KK)
+        DVEFP(IN,JN,3) = DVEFP(IN,JN,3)-ZIN(KK)
+        DVEFP(IN,JN,4) = DVEFP(IN,JN,4)
+     *                  -YIN(KK)*(ZI-EFCENT(3,MI))
+     *                  +ZIN(KK)*(YI-EFCENT(2,MI))
+        DVEFP(IN,JN,5) = DVEFP(IN,JN,5)
+     *                  -ZIN(KK)*(XI-EFCENT(1,MI))
+     *                  +XIN(KK)*(ZI-EFCENT(3,MI))
+        DVEFP(IN,JN,6) = DVEFP(IN,JN,6)
+     *                  -XIN(KK)*(YI-EFCENT(2,MI))
+     *                  +YIN(KK)*(XI-EFCENT(1,MI))
+      ELSE IF(MODE.EQ.22)THEN
+        DVEFP(JN,IN,1) = DVEFP(JN,IN,1)-XIN(KK)
+        DVEFP(JN,IN,2) = DVEFP(JN,IN,2)-YIN(KK)
+        DVEFP(JN,IN,3) = DVEFP(JN,IN,3)-ZIN(KK)
+        DVEFP(JN,IN,4) = DVEFP(JN,IN,4)
+     *                  -YIN(KK)*(ZI-EFCENT(3,MI))
+     *                  +ZIN(KK)*(YI-EFCENT(2,MI))
+        DVEFP(JN,IN,5) = DVEFP(JN,IN,5)
+     *                  -ZIN(KK)*(XI-EFCENT(1,MI))
+     *                  +XIN(KK)*(ZI-EFCENT(3,MI))
+        DVEFP(JN,IN,6) = DVEFP(JN,IN,6)
+     *                  -XIN(KK)*(YI-EFCENT(2,MI))
+     *                  +YIN(KK)*(XI-EFCENT(1,MI))
+      END IF
+  980 CONTINUE
+ 1040 CONTINUE
+ 1060 CONTINUE
+C
+C     ----- END OF SHELL LOOPS -----
+C
+      RETURN
+      END
+C*MODULE EFCHTR  *DECK DEFDEF
+      SUBROUTINE DEFDEF(MODE,JFRG,DVEFP,KEFP,L1,L1CO,NATM,NATMCO,
+     *                  NGAU,NSHL,EX,CS,CP,CD,CF,
+     *                  KSTART,KATOM,KTYPE,KNG,KLOC,KMIN,KMAX,
+     *                  NGAUCO,NSHLCO,EXCO,CSCO,CPCO,CDCO,CFCO,
+     *                  KSTRCO,KATMCO,KTYPCO,KNGCO,KLOCCO,KMINCO,
+     *                  KMAXCO,C,CCO,IDOIT)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      CHARACTER*8 FRGNME
+C
+      LOGICAL ISKIP,NORM
+C
+      PARAMETER (MXFRG=1050, MXFGPT=12000,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      DIMENSION EX(NGAU),CS(NGAU),CP(NGAU),CD(NGAU),
+     *          CF(NGAU),KSTART(NSHL),KATOM(NSHL),
+     *          KTYPE(NSHL),KNG(NSHL),KLOC(NSHL),KMIN(NSHL),KMAX(NSHL),
+     *          EXCO(NGAUCO),CSCO(NGAUCO),CPCO(NGAUCO),CDCO(NGAUCO),
+     *          CFCO(NGAUCO),KSTRCO(NSHLCO),KATMCO(NSHLCO),
+     *          KTYPCO(NSHLCO),KNGCO(NSHLCO),KLOCCO(NSHLCO),
+     *          KMINCO(NSHLCO),KMAXCO(NSHLCO),
+     *          C(3,NATM),CCO(3,NATMCO),
+     *          DVEFP(L1CO,L1,6),IDOIT(*)
+      DIMENSION ISKIP(35),INDX(70),
+     *          IX(35),IY(35),IZ(35),JX(20),JY(20),JZ(20),
+     *          IJG(210),IJX(210),IJY(210),IJZ(210),
+     *          XIN(200),YIN(200),ZIN(200),G(210),DIJ(210),
+     *          FIJ(210),GIJ(210)
+C
+      COMMON /DSTV  / XINT,YINT,ZINT,T,X0,Y0,Z0,XI,YI,ZI,
+     *                XJ,YJ,ZJ,NI,NJ,CX,CY,CZ
+      COMMON /EFMULT/ EFC(3,MXFGPT),EFCHG(2,MXFGPT),EFATRM(MXFGPT),
+     *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
+     *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
+     *                EFOCT(10,MXFGPT),FRGNME(MXFGPT)
+      COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
+     *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
+     *                ATORQ(3,MXFRG)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /ROOT  / XX,U(13),W(13),NROOTS
+C
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00)
+      PARAMETER (RLN10=2.30258D+00)
+      PARAMETER (PI212=1.1283791670955D+00)
+      PARAMETER (SQRT3=1.73205080756888D+00)
+      PARAMETER (SQRT5=2.23606797749979D+00)
+C
+      DATA INDX / 1, 2, 3, 4, 5, 6, 7, 8, 9,10,
+     1           11,12,13,14,15,16,17,18,19,20,
+     2           -0,-0,-0,-0,-0,-0,-0,-0,-0,-0,
+     3           -0,-0,-0,-0,-0,
+     4           -0, 1, 2, 3, 1, 2, 3, 4, 5, 6,
+     5            4, 5, 6, 7, 8, 9,10,11,12,13,
+     6            7, 8, 9,10,11,12,13,14,15,16,
+     7           17,18,19,20,21/
+      DATA JX / 0, 1, 0, 0, 2, 0, 0, 1, 1, 0,
+     1          3, 0, 0, 2, 2, 1, 0, 1, 0, 1/
+      DATA IX / 1, 5, 1, 1, 9, 1, 1, 5, 5, 1,
+     1         13, 1, 1, 9, 9, 5, 1, 5, 1, 5,
+     2         17, 1, 1,13,13, 5, 1, 5, 1, 9,
+     3          9, 1, 9, 5, 5/
+      DATA JY / 0, 0, 1, 0, 0, 2, 0, 1, 0, 1,
+     1          0, 3, 0, 1, 0, 2, 2, 0, 1, 1/
+      DATA IY / 1, 1, 5, 1, 1, 9, 1, 5, 1, 5,
+     1          1,13, 1, 5, 1, 9, 9, 1, 5, 5,
+     2          1,17, 1, 5, 1,13,13, 1, 5, 9,
+     3          1, 9, 5, 9, 5/
+      DATA JZ / 0, 0, 0, 1, 0, 0, 2, 0, 1, 1,
+     1          0, 0, 3, 0, 1, 0, 1, 2, 2, 1/
+      DATA IZ / 1, 1, 1, 5, 1, 1, 9, 1, 5, 5,
+     1          1, 1,13, 1, 5, 1, 5, 9, 9, 5,
+     2          1, 1,17, 1, 5, 1, 5,13,13, 1,
+     3          9, 9, 5, 5, 9/
+      DATA QLIM/1.0D-08/
+C
+C     GRADIENT CONTRIBUTION FROM EFFECTIVE POINT DIPOLES
+C     MODE = 1 : ONE BASIS SET
+C     MODE = 2 : TWO BASIS SETS
+C     MODE =21 : ONE BASIS SET, SWITCH DERIVATIVES
+C     MODE =22 : TWO BASIS SET, SWITCH DERIVATIVES
+C
+C     IF KEFP < 0, DO INTEGRALS EXCEPT FOR KEFP
+C     IF KEFP = 0, DO INTEGRALS FOR ALL EFP'S
+C     IF KEFP > 0, DO INTEGRALS ONLY FOR KEFP
+C
+      NEFD = NMTTPT
+      NEND=0
+      IF(ABS(KEFP).GT.1)THEN
+         DO KFRG=1,ABS(KEFP)-1
+            NEND=NEND+NMPTS(KFRG)
+         END DO
+      END IF
+      DO IC = 1,NEFD
+         IDOIT(IC)=1
+         IF(KEFP.NE.0)THEN
+            IDO=0
+            DO IPTS = NEND+1, NEND+NMPTS(ABS(KEFP))
+               IF(IPTS.EQ.IC.AND.KEFP.LT.0) IDOIT(IC)=0
+               IF(IPTS.EQ.IC.AND.KEFP.GT.0) IDO=1
+            END DO
+            IF(KEFP.GT.0.AND.IDO.EQ.0) IDOIT(IC)=0
+         END IF
+      ENDDO
+      TOL = RLN10*ITOL
+      NORM = NORMF .NE. 1 .OR. NORMP .NE. 1
+      MI = JFRG
+C
+C     ----- I SHELL
+C
+      DO 1060 II = 1,NSHLCO
+C
+      IAT = KATMCO(II)
+      XI = CCO(1,IAT)
+      YI = CCO(2,IAT)
+      ZI = CCO(3,IAT)
+      I1 = KSTRCO(II)
+      I2 = I1+KNGCO(II)-1
+      LIT = KTYPCO(II)+1
+      MINI = KMINCO(II)
+      MAXI = KMAXCO(II)
+      LOCI = KLOCCO(II)-MINI
+      DO 100 I=1,35
+ 100  ISKIP(I)=.TRUE.
+      DO 260 I=MINI,MAXI
+      GO TO (110,140,260,260,180,260,260,260,260,260,
+     1       220,260,260,260,260,260,260,260,260,260),I
+ 110  DO 120 K=2,4
+ 120  ISKIP(K)=.FALSE.
+      GO TO 260
+ 140  DO 160 K=5,10
+ 160  ISKIP(K)=.FALSE.
+      ISKIP(1)=.FALSE.
+      GO TO 260
+ 180  DO 200 K=2,4
+ 200  ISKIP(K)=.FALSE.
+      DO 210 K=11,20
+ 210  ISKIP(K)=.FALSE.
+      GO TO 260
+ 220  DO 240 K=5,10
+ 240  ISKIP(K)=.FALSE.
+      DO 250 K=21,35
+ 250  ISKIP(K)=.FALSE.
+ 260  CONTINUE
+C
+C     ----- J SHELL
+C
+      DO 1040 JJ = 1,NSHL
+C
+      JAT = KATOM(JJ)
+      XJ = C(1,JAT)
+      YJ = C(2,JAT)
+      ZJ = C(3,JAT)
+      J1 = KSTART(JJ)
+      J2 = J1+KNG(JJ)-1
+      LJT = KTYPE(JJ)
+      MINJ = KMIN(JJ)
+      MAXJ = KMAX(JJ)
+      LOCJ = KLOC(JJ)-MINJ
+      NROOTS = (LIT+LJT+1-2)/2 + 1
+      RR = (XI-XJ)**2+(YI-YJ)**2+(ZI-ZJ)**2
+C
+C     ----- PREPARE INDICES FOR PAIRS OF (I,J) FUNCTIONS
+C
+      N0 = 0
+      IF (LIT .GE. 4) N0 = 35
+      IJ = 0
+      DO 340 I = 1,35
+      IF (ISKIP(I)) GO TO 340
+      IN = INDX(I+N0)
+      NX = IX(I)
+      NY = IY(I)
+      NZ = IZ(I)
+      DO 320 J = MINJ,MAXJ
+      IJ = IJ+1
+      IJX(IJ) = NX+JX(J)
+      IJY(IJ) = NY+JY(J)
+      IJZ(IJ) = NZ+JZ(J)
+      IJG(IJ) = IN+21*(J-MINJ)
+  320 CONTINUE
+  340 CONTINUE
+      DO 360 I = 1,IJ
+      N = IJG(I)
+  360 G(N) = ZERO
+C
+C     ----- I PRIMITIVE
+C
+      DO 840 IG = I1,I2
+      AI = EXCO(IG)
+      ARRI = AI*RR
+      AXI = AI*XI
+      AYI = AI*YI
+      AZI = AI*ZI
+      DUM = AI+AI
+      CSI = CPCO(IG)
+      CPI = CSCO(IG)*DUM
+      IF (LIT .EQ. 4) CPI = CDCO(IG)
+      CDI = CPCO(IG)*DUM
+      IF (LIT .EQ. 5) CDI = CFCO(IG)
+      CFI = CDCO(IG)*DUM
+      CGI = CFCO(IG)*DUM
+C
+C     ----- J PRIMITIVE
+C
+      DO 820 JG = J1,J2
+      AJ = EX(JG)
+      AA = AI+AJ
+      AA1 = ONE/AA
+      DUM = AJ*ARRI*AA1
+      IF (DUM .GT. TOL) GO TO 820
+      FAC = EXP(-DUM)
+      CSJ = CS(JG)
+      CPJ = CP(JG)
+      CDJ = CD(JG)
+      CFJ = CF(JG)
+      AX = (AXI+AJ*XJ)*AA1
+      AY = (AYI+AJ*YJ)*AA1
+      AZ = (AZI+AJ*ZJ)*AA1
+C
+C     ----- DENSITY FACTOR
+C
+      NN = 0
+      DUM1 = ZERO
+      DUM2 = DUM1
+      DO 600 I=1,35
+      IF(ISKIP(I)) GO TO 600
+      GO TO (370,380,420,420,390,420,420,420,420,420,
+     1       400,420,420,420,420,420,420,420,420,420,
+     2       410,420,420,420,420,420,420,420,420,420,
+     3       420,420,420,420,420),I
+ 370  DUM1=CSI*FAC
+      GO TO 420
+ 380  DUM1=CPI*FAC
+      GO TO 420
+ 390  DUM1=CDI*FAC
+      GO TO 420
+ 400  DUM1=CFI*FAC
+      GO TO 420
+ 410  DUM1 = CGI*FAC
+ 420  CONTINUE
+      DO 580 J=MINJ,MAXJ
+      GO TO (430,440,560,560,460,560,560,480,560,560,
+     1       500,560,560,520,560,560,560,560,560,540),J
+  430 DUM2=DUM1*CSJ
+      GO TO 560
+  440 DUM2=DUM1*CPJ
+      GO TO 560
+  460 DUM2=DUM1*CDJ
+      GO TO 560
+  480 IF(NORM) DUM2=DUM2*SQRT3
+      GO TO 560
+  500 DUM2 = DUM1 * CFJ
+      GO TO 560
+  520 DUM2 = DUM2 *SQRT5
+      GO TO 560
+  540 DUM2 = DUM2 * SQRT3
+  560 NN=NN+1
+  580 DIJ(NN)=DUM2
+  600 CONTINUE
+C
+C     ..... BASIC DIPOLE TERM
+C
+      DUM = 2*PI212*AA1
+      DO 700 I = 1,IJ
+  700 FIJ(I) = DIJ(I)*DUM
+      AAX = AA*AX
+      AAY = AA*AY
+      AAZ = AA*AZ
+      DO 819 IC = 1,NEFD
+      IF(IDOIT(IC).EQ.0) GO TO 819
+      ALFA = EFATRM(IC)
+      BETA = EFBTRM(IC)
+C            DEACTIVATE SCREENING...
+                     ALFA = 0.0D+00
+                     BETA = 0.0D+00
+      CX = EFC(1,IC)
+      CY = EFC(2,IC)
+      CZ = EFC(3,IC)
+      XMU = EFDIP(1,IC)
+      YMU = EFDIP(2,IC)
+      ZMU = EFDIP(3,IC)
+      DUMA = 2*PI212/(AA+ALFA)
+      DO 710 I=1,IJ
+      GIJ(I) = DIJ(I)*DUMA
+ 710  CONTINUE
+      XX = AA*((AX-CX)**2+(AY-CY)**2+(AZ-CZ)**2)
+C     CALL RT123
+      IF(NROOTS.LE.3)CALL RT123
+      IF(NROOTS.EQ.4)CALL ROOT4
+      IF(NROOTS.EQ.5)CALL ROOT5
+      MM = 0
+      DO 740 K = 1,NROOTS
+      UU = AA*U(K)
+      WW = W(K)
+      WW = WW*UU
+      TT = ONE/(AA+UU)
+      T = SQRT(TT)
+      X0 = (AAX+UU*CX)*TT
+      Y0 = (AAY+UU*CY)*TT
+      Z0 = (AAZ+UU*CZ)*TT
+      IN = -4+MM
+      DO 720 I = 1,LIT
+      IN = IN+4
+      NI = I
+      DO 720 J = 1,LJT
+      JN = IN+J
+      NJ = J
+      CALL VINT
+      XIN(JN) = XINT
+      YIN(JN) = YINT
+      ZIN(JN) = ZINT*WW
+      CALL PDXYZ
+      XIN(JN+100) = XINT
+      YIN(JN+100) = YINT
+      ZIN(JN+100) = ZINT*WW
+  720 CONTINUE
+  740 MM = MM+20
+      DO 780 I = 1,IJ
+      N = IJG(I)
+      NX = IJX(I)
+      NY = IJY(I)
+      NZ = IJZ(I)
+      DUMX = ZERO
+      DUMY = ZERO
+      DUMZ = ZERO
+      MM = 0
+      DO 760 K = 1,NROOTS
+      DUMX = DUMX+XIN(NX+MM+100)*YIN(NY+MM    )*ZIN(NZ+MM    )
+      DUMY = DUMY+XIN(NX+MM    )*YIN(NY+MM+100)*ZIN(NZ+MM    )
+      DUMZ = DUMZ+XIN(NX+MM    )*YIN(NY+MM    )*ZIN(NZ+MM+100)
+  760 MM = MM+20
+      DUM = FIJ(I)
+  780 G(N) = G(N)-DUM*(DUMX*XMU+DUMY*YMU+DUMZ*ZMU)
+C     SUBTRACT DAMPING FUNCTION TERM.
+      IF (ABS(ALFA).LE.QLIM ) GO TO 818
+      PCSQ = (AX-CX)**2+(AY-CY)**2+(AZ-CZ)**2
+      XX=AA*AA*PCSQ/(AA+ALFA)
+      PREI = EXP(-AA*ALFA*PCSQ/(AA+ALFA))
+C     CALL RT123
+      IF(NROOTS.LE.3)CALL RT123
+      IF(NROOTS.EQ.4)CALL ROOT4
+      IF(NROOTS.EQ.5)CALL ROOT5
+      MM=0
+      DO 814 K=1,NROOTS
+      UU=(ALFA+AA)*U(K)
+      WW=W(K)
+      WW=WW*UU
+      TT=ONE/(AA+UU+ALFA)
+      T= SQRT(TT)
+      X0=(AAX+(UU+ALFA)*CX)*TT
+      Y0=(AAY+(UU+ALFA)*CY)*TT
+      Z0=(AAZ+(UU+ALFA)*CZ)*TT
+      IN=-4+MM
+      DO 812 I=1,LIT
+      IN=IN+4
+      NI=I
+      DO 812 J=1,LJT
+      JN=IN+J
+      NJ=J
+      CALL VINT
+      XIN(JN)=XINT
+      YIN(JN)=YINT
+      ZIN(JN)=ZINT*WW
+      CALL PDXYZ
+      XIN(JN+100)=XINT
+      YIN(JN+100)=YINT
+      ZIN(JN+100)=ZINT*WW
+ 812  CONTINUE
+ 814  MM=MM+20
+      DO 817 I=1,IJ
+      N=IJG(I)
+      NX=IJX(I)
+      NY=IJY(I)
+      NZ=IJZ(I)
+      DUMX = ZERO
+      DUMY = ZERO
+      DUMZ = ZERO
+      MM=0
+      DO 816 K=1,NROOTS
+      DUMX = DUMX+XIN(NX+MM+100)*YIN(NY+MM    )*ZIN(NZ+MM    )
+      DUMY = DUMY+XIN(NX+MM    )*YIN(NY+MM+100)*ZIN(NZ+MM    )
+      DUMZ = DUMZ+XIN(NX+MM    )*YIN(NY+MM    )*ZIN(NZ+MM+100)
+ 816  MM=MM+20
+      DAMPT = -GIJ(I) * PREI * BETA
+ 817  G(N)=G(N) - DAMPT*(DUMX*XMU+DUMY*YMU+DUMZ*ZMU)
+ 818  CONTINUE
+ 819  CONTINUE
+C
+C     ----- END OF PRIMITIVE LOOPS -----
+C
+  820 CONTINUE
+  840 CONTINUE
+C
+C     ----- FORM INTEGRALS OVER DERIVATIVES -----
+C
+      NN = 0
+      N = 1
+      DO 900 J = MINJ,MAXJ
+      IF (MINI .GT. 1) GO TO 860
+      NN = NN+1
+      XIN(NN) = G(N+ 1)
+      YIN(NN) = G(N+ 2)
+      ZIN(NN) = G(N+ 3)
+      IF (MAXI .EQ. 1) GO TO 900
+  860 IF (MINI .GT. 2) GO TO 880
+      NN = NN+1
+      XIN(NN) = (G(N+ 4)-G(N ))
+      YIN(NN) = G(N+ 7)
+      ZIN(NN) = G(N+ 8)
+      NN = NN+1
+      XIN(NN) = G(N+ 7)
+      YIN(NN) = (G(N+ 5)-G(N ))
+      ZIN(NN) = G(N+ 9)
+      NN = NN+1
+      XIN(NN) = G(N+ 8)
+      YIN(NN) = G(N+ 9)
+      ZIN(NN) = (G(N+ 6)-G(N ))
+      IF (MAXI .EQ. 4) GO TO 900
+  880 CONTINUE
+      IF (MINI .GT. 5) GO TO 890
+      NN = NN+1
+      XIN(NN) = (G(N+ 3)-G(N )-G(N ))
+      YIN(NN) = G(N+ 6)
+      ZIN(NN) = G(N+ 7)
+      NN = NN+1
+      XIN(NN) = G(N+ 8)
+      YIN(NN) = (G(N+ 4)-G(N+ 1)-G(N+ 1))
+      ZIN(NN) = G(N+ 9)
+      NN = NN+1
+      XIN(NN) = G(N+10)
+      YIN(NN) = G(N+11)
+      ZIN(NN) = (G(N+ 5)-G(N+ 2)-G(N+ 2))
+      NN = NN+1
+      DUM = ONE
+      IF (NORM) DUM = SQRT3
+      XIN(NN) = DUM*(G(N+ 6)-G(N+ 1))
+      YIN(NN) = DUM*(G(N+ 8)-G(N ))
+      ZIN(NN) = DUM* G(N+12)
+      NN = NN+1
+      XIN(NN) = DUM*(G(N+ 7)-G(N+ 2))
+      YIN(NN) = DUM* G(N+12)
+      ZIN(NN) = DUM*(G(N+10)-G(N ))
+      NN = NN+1
+      XIN(NN) = DUM* G(N+12)
+      YIN(NN) = DUM*(G(N+ 9)-G(N+ 2))
+      ZIN(NN) = DUM*(G(N+11)-G(N+ 1))
+      IF(MAXI.EQ.10) GO TO 900
+ 890  CONTINUE
+      NN=NN+1
+      XIN(NN)=(G(N+ 6)-G(N   )-G(N   )-G(N   ))
+      YIN(NN)= G(N+ 9)
+      ZIN(NN)= G(N+10)
+      NN=NN+1
+      XIN(NN)= G(N+11)
+      YIN(NN)=(G(N+ 7)-G(N+ 1)-G(N+ 1)-G(N+ 1))
+      ZIN(NN)= G(N+12)
+      NN=NN+1
+      XIN(NN)= G(N+13)
+      YIN(NN)= G(N+14)
+      ZIN(NN)=(G(N+ 8)-G(N+ 2)-G(N+ 2)-G(N+ 2))
+      NN=NN+1
+      DUM=ONE
+      IF(NORM) DUM=SQRT5
+      XIN(NN)=DUM* (G(N+ 9)-G(N+ 3)-G(N+ 3))
+      YIN(NN)=DUM* (G(N+15)-G(N  ))
+      ZIN(NN)=DUM* G(N+18)
+      NN=NN+1
+      XIN(NN)=DUM* (G(N+10)-G(N+ 4)-G(N+ 4))
+      YIN(NN)=DUM* G(N+18)
+      ZIN(NN)=DUM* (G(N+16)-G(N  ))
+      NN=NN+1
+      XIN(NN)=DUM* (G(N+15)-G(N+ 1))
+      YIN(NN)=DUM* (G(N+11)-G(N+ 3)-G(N+ 3))
+      ZIN(NN)=DUM*  G(N+19)
+      NN=NN+1
+      XIN(NN)=DUM* G(N+19)
+      YIN(NN)=DUM* (G(N+12)-G(N+ 5)-G(N+ 5))
+      ZIN(NN)=DUM* (G(N+17)-G(N+ 1))
+      NN=NN+1
+      XIN(NN)=DUM* (G(N+16)-G(N+ 2))
+      YIN(NN)=DUM*  G(N+20)
+      ZIN(NN)=DUM* (G(N+13)-G(N+ 4)-G(N+ 4))
+      NN=NN+1
+      XIN(NN)=DUM*  G(N+20)
+      YIN(NN)=DUM* (G(N+17)-G(N+ 2))
+      ZIN(NN)=DUM* (G(N+14)-G(N+ 5)-G(N+ 5))
+      NN=NN+1
+      IF(NORM) DUM=DUM*SQRT3
+      XIN(NN)=DUM* (G(N+18)-G(N+ 5))
+      YIN(NN)=DUM* (G(N+19)-G(N+ 4))
+      ZIN(NN)=DUM* (G(N+20)-G(N+ 3))
+  900 N = N+21
+C
+C     ----- CALCULATE CONTRIBUTION TO GRADIENT -----
+C
+      KK = 0
+      DO 980 J = MINJ,MAXJ
+      JN = LOCJ+J
+      DO 980 I = MINI,MAXI
+      IN = LOCI+I
+      KK = KK+1
+      IF(MODE.EQ.1)THEN
+        DVEFP(IN,JN,1) = DVEFP(IN,JN,1)+XIN(KK)
+        DVEFP(IN,JN,2) = DVEFP(IN,JN,2)+YIN(KK)
+        DVEFP(IN,JN,3) = DVEFP(IN,JN,3)+ZIN(KK)
+        DVEFP(IN,JN,4) = DVEFP(IN,JN,4)
+     *                  +YIN(KK)*(ZI-EFCENT(3,MI))
+     *                  -ZIN(KK)*(YI-EFCENT(2,MI))
+        DVEFP(IN,JN,5) = DVEFP(IN,JN,5)
+     *                  +ZIN(KK)*(XI-EFCENT(1,MI))
+     *                  -XIN(KK)*(ZI-EFCENT(3,MI))
+        DVEFP(IN,JN,6) = DVEFP(IN,JN,6)
+     *                  +XIN(KK)*(YI-EFCENT(2,MI))
+     *                  -YIN(KK)*(XI-EFCENT(1,MI))
+        DVEFP(JN,IN,1) = DVEFP(JN,IN,1)+XIN(KK)
+        DVEFP(JN,IN,2) = DVEFP(JN,IN,2)+YIN(KK)
+        DVEFP(JN,IN,3) = DVEFP(JN,IN,3)+ZIN(KK)
+        DVEFP(JN,IN,4) = DVEFP(JN,IN,4)
+     *                  +YIN(KK)*(ZI-EFCENT(3,MI))
+     *                  -ZIN(KK)*(YI-EFCENT(2,MI))
+        DVEFP(JN,IN,5) = DVEFP(JN,IN,5)
+     *                  +ZIN(KK)*(XI-EFCENT(1,MI))
+     *                  -XIN(KK)*(ZI-EFCENT(3,MI))
+        DVEFP(JN,IN,6) = DVEFP(JN,IN,6)
+     *                  +XIN(KK)*(YI-EFCENT(2,MI))
+     *                  -YIN(KK)*(XI-EFCENT(1,MI))
+      ELSE IF(MODE.EQ.2)THEN
+        DVEFP(IN,JN,1) = DVEFP(IN,JN,1)+XIN(KK)
+        DVEFP(IN,JN,2) = DVEFP(IN,JN,2)+YIN(KK)
+        DVEFP(IN,JN,3) = DVEFP(IN,JN,3)+ZIN(KK)
+        DVEFP(IN,JN,4) = DVEFP(IN,JN,4)
+     *                  +YIN(KK)*(ZI-EFCENT(3,MI))
+     *                  -ZIN(KK)*(YI-EFCENT(2,MI))
+        DVEFP(IN,JN,5) = DVEFP(IN,JN,5)
+     *                  +ZIN(KK)*(XI-EFCENT(1,MI))
+     *                  -XIN(KK)*(ZI-EFCENT(3,MI))
+        DVEFP(IN,JN,6) = DVEFP(IN,JN,6)
+     *                  +XIN(KK)*(YI-EFCENT(2,MI))
+     *                  -YIN(KK)*(XI-EFCENT(1,MI))
+      ELSE IF(MODE.EQ.21)THEN
+        DVEFP(JN,IN,1) = DVEFP(JN,IN,1)-XIN(KK)
+        DVEFP(JN,IN,2) = DVEFP(JN,IN,2)-YIN(KK)
+        DVEFP(JN,IN,3) = DVEFP(JN,IN,3)-ZIN(KK)
+        DVEFP(JN,IN,4) = DVEFP(JN,IN,4)
+     *                  -YIN(KK)*(ZI-EFCENT(3,MI))
+     *                  +ZIN(KK)*(YI-EFCENT(2,MI))
+        DVEFP(JN,IN,5) = DVEFP(JN,IN,5)
+     *                  -ZIN(KK)*(XI-EFCENT(1,MI))
+     *                  +XIN(KK)*(ZI-EFCENT(3,MI))
+        DVEFP(JN,IN,6) = DVEFP(JN,IN,6)
+     *                  -XIN(KK)*(YI-EFCENT(2,MI))
+     *                  +YIN(KK)*(XI-EFCENT(1,MI))
+        DVEFP(IN,JN,1) = DVEFP(IN,JN,1)-XIN(KK)
+        DVEFP(IN,JN,2) = DVEFP(IN,JN,2)-YIN(KK)
+        DVEFP(IN,JN,3) = DVEFP(IN,JN,3)-ZIN(KK)
+        DVEFP(IN,JN,4) = DVEFP(IN,JN,4)
+     *                  -YIN(KK)*(ZI-EFCENT(3,MI))
+     *                  +ZIN(KK)*(YI-EFCENT(2,MI))
+        DVEFP(IN,JN,5) = DVEFP(IN,JN,5)
+     *                  -ZIN(KK)*(XI-EFCENT(1,MI))
+     *                  +XIN(KK)*(ZI-EFCENT(3,MI))
+        DVEFP(IN,JN,6) = DVEFP(IN,JN,6)
+     *                  -XIN(KK)*(YI-EFCENT(2,MI))
+     *                  +YIN(KK)*(XI-EFCENT(1,MI))
+      ELSE IF(MODE.EQ.22)THEN
+        DVEFP(JN,IN,1) = DVEFP(JN,IN,1)-XIN(KK)
+        DVEFP(JN,IN,2) = DVEFP(JN,IN,2)-YIN(KK)
+        DVEFP(JN,IN,3) = DVEFP(JN,IN,3)-ZIN(KK)
+        DVEFP(JN,IN,4) = DVEFP(JN,IN,4)
+     *                  -YIN(KK)*(ZI-EFCENT(3,MI))
+     *                  +ZIN(KK)*(YI-EFCENT(2,MI))
+        DVEFP(JN,IN,5) = DVEFP(JN,IN,5)
+     *                  -ZIN(KK)*(XI-EFCENT(1,MI))
+     *                  +XIN(KK)*(ZI-EFCENT(3,MI))
+        DVEFP(JN,IN,6) = DVEFP(JN,IN,6)
+     *                  -XIN(KK)*(YI-EFCENT(2,MI))
+     *                  +YIN(KK)*(XI-EFCENT(1,MI))
+      END IF
+  980 CONTINUE
+ 1040 CONTINUE
+ 1060 CONTINUE
+C
+C     ----- END OF SHELL LOOPS -----
+C
+      RETURN
+      END
+C*MODULE EFCHTR  *DECK DEFQEF
+      SUBROUTINE DEFQEF(MODE,JFRG,DVEFP,KEFP,L1,L1CO,NATM,NATMCO,
+     *                  NGAU,NSHL,EX,CS,CP,CD,CF,
+     *                  KSTART,KATOM,KTYPE,KNG,KLOC,KMIN,KMAX,
+     *                  NGAUCO,NSHLCO,EXCO,CSCO,CPCO,CDCO,CFCO,
+     *                  KSTRCO,KATMCO,KTYPCO,KNGCO,KLOCCO,KMINCO,
+     *                  KMAXCO,C,CCO,IDOIT,QUAD)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      CHARACTER*8 FRGNME
+C
+      LOGICAL ISKIP,NORM
+C
+      PARAMETER (MXFRG=1050, MXFGPT=12000,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      DIMENSION EX(NGAU),CS(NGAU),CP(NGAU),CD(NGAU),
+     *          CF(NGAU),KSTART(NSHL),KATOM(NSHL),
+     *          KTYPE(NSHL),KNG(NSHL),KLOC(NSHL),KMIN(NSHL),KMAX(NSHL),
+     *          EXCO(NGAUCO),CSCO(NGAUCO),CPCO(NGAUCO),CDCO(NGAUCO),
+     *          CFCO(NGAUCO),KSTRCO(NSHLCO),KATMCO(NSHLCO),
+     *          KTYPCO(NSHLCO),KNGCO(NSHLCO),KLOCCO(NSHLCO),
+     *          KMINCO(NSHLCO),KMAXCO(NSHLCO),
+     *          C(3,NATM),CCO(3,NATMCO),
+     *          DVEFP(L1CO,L1,6),IDOIT(*),QUAD(6,*)
+      DIMENSION W2(9),W4(9),
+     *          ISKIP(35),INDX(70),
+     *          IX(35),IY(35),IZ(35),JX(20),JY(20),JZ(20),
+     *          IJG(210),IJX(210),IJY(210),IJZ(210),
+     *          XIN(300),YIN(300),ZIN(300),G(210),DIJ(210),
+     *          FIJ(210),GIJ(210)
+C
+      COMMON /DSTV  / XINT,YINT,ZINT,T,X0,Y0,Z0,XI,YI,ZI,
+     *                XJ,YJ,ZJ,NI,NJ,CX,CY,CZ
+      COMMON /EFMULT/ EFC(3,MXFGPT),EFCHG(2,MXFGPT),EFATRM(MXFGPT),
+     *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
+     *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
+     *                EFOCT(10,MXFGPT),FRGNME(MXFGPT)
+      COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
+     *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
+     *                ATORQ(3,MXFRG)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /ROOT  / XX,U(13),W(13),NROOTS
+C
+      PARAMETER (ZERO=0.0D+00,ONE=1.0D+00,TWO=2.0D+00,FOUR=4.0D+00)
+      PARAMETER (THREE=3.0D+00)
+      PARAMETER (RLN10=2.30258D+00)
+      PARAMETER (PT5=0.5D+00,ONEPT5=1.5D+00)
+      PARAMETER (PI212=1.1283791670955D+00)
+      PARAMETER (SQRT3=1.73205080756888D+00)
+      PARAMETER (SQRT5=2.23606797749979D+00)
+C
+      DATA INDX / 1, 2, 3, 4, 5, 6, 7, 8, 9,10,
+     1           11,12,13,14,15,16,17,18,19,20,
+     2           -0,-0,-0,-0,-0,-0,-0,-0,-0,-0,
+     3           -0,-0,-0,-0,-0,
+     4           -0, 1, 2, 3, 1, 2, 3, 4, 5, 6,
+     5            4, 5, 6, 7, 8, 9,10,11,12,13,
+     6            7, 8, 9,10,11,12,13,14,15,16,
+     7           17,18,19,20,21/
+      DATA JX / 0, 1, 0, 0, 2, 0, 0, 1, 1, 0,
+     1          3, 0, 0, 2, 2, 1, 0, 1, 0, 1/
+      DATA IX / 1, 5, 1, 1, 9, 1, 1, 5, 5, 1,
+     1         13, 1, 1, 9, 9, 5, 1, 5, 1, 5,
+     2         17, 1, 1,13,13, 5, 1, 5, 1, 9,
+     3          9, 1, 9, 5, 5/
+      DATA JY / 0, 0, 1, 0, 0, 2, 0, 1, 0, 1,
+     1          0, 3, 0, 1, 0, 2, 2, 0, 1, 1/
+      DATA IY / 1, 1, 5, 1, 1, 9, 1, 5, 1, 5,
+     1          1,13, 1, 5, 1, 9, 9, 1, 5, 5,
+     2          1,17, 1, 5, 1,13,13, 1, 5, 9,
+     3          1, 9, 5, 9, 5/
+      DATA JZ / 0, 0, 0, 1, 0, 0, 2, 0, 1, 1,
+     1          0, 0, 3, 0, 1, 0, 1, 2, 2, 1/
+      DATA IZ / 1, 1, 1, 5, 1, 1, 9, 1, 5, 5,
+     1          1, 1,13, 1, 5, 1, 5, 9, 9, 5,
+     2          1, 1,17, 1, 5, 1, 5,13,13, 1,
+     3          9, 9, 5, 5, 9/
+      DATA QLIM/1.0D-08/
+C
+C     GRADIENT CONTRIBUTION FROM EFFECTIVE POINT QUADRUPOLES
+C     MODE = 1 : ONE BASIS SET
+C     MODE = 2 : TWO BASIS SETS
+C     MODE =21 : ONE BASIS SET, SWITCH DERIVATIVES
+C     MODE =22 : TWO BASIS SET, SWITCH DERIVATIVES
+C
+C     IF KEFP < 0, DO INTEGRALS EXCEPT FOR KEFP
+C     IF KEFP = 0, DO INTEGRALS FOR ALL EFP'S
+C     IF KEFP > 0, DO INTEGRALS ONLY FOR KEFP
+C
+      NEFQ = NMTTPT
+      NEND=0
+      IF(ABS(KEFP).GT.1)THEN
+         DO KFRG=1,ABS(KEFP)-1
+            NEND=NEND+NMPTS(KFRG)
+         END DO
+      END IF
+      DO IC = 1,NEFQ
+         IDOIT(IC)=1
+         IF(KEFP.NE.0)THEN
+            IDO=0
+            DO IPTS = NEND+1, NEND+NMPTS(ABS(KEFP))
+               IF(IPTS.EQ.IC.AND.KEFP.LT.0) IDOIT(IC)=0
+               IF(IPTS.EQ.IC.AND.KEFP.GT.0) IDO=1
+            END DO
+            IF(KEFP.GT.0.AND.IDO.EQ.0) IDOIT(IC)=0
+         END IF
+      ENDDO
+      TOL = RLN10*ITOL
+      NORM = NORMF .NE. 1 .OR. NORMP .NE. 1
+      MI = JFRG
+C
+C  REPLACE SECOND MOMENTS IN ARRAY SM WITH ELECTRIC QUADRUPOLE TENSORS
+C
+      DO 80 I=1,NEFQ
+      XX =  EFQAD(1,I)
+      YY =  EFQAD(2,I)
+      ZZ =  EFQAD(3,I)
+      XY =  EFQAD(4,I)
+      XZ =  EFQAD(5,I)
+      YZ =  EFQAD(6,I)
+      DUM = XX + YY + ZZ
+      QUAD(1,I) = (THREE * XX - DUM) * PT5
+      QUAD(2,I) = (THREE * YY - DUM) * PT5
+      QUAD(3,I) = (THREE * ZZ - DUM) * PT5
+      QUAD(4,I) = ONEPT5 * XY
+      QUAD(5,I) = ONEPT5 * XZ
+      QUAD(6,I) = ONEPT5 * YZ
+ 80   CONTINUE
+C
+C     ----- I SHELL
+C
+      DO 1060 II = 1,NSHLCO
+C
+      IAT = KATMCO(II)
+      XI = CCO(1,IAT)
+      YI = CCO(2,IAT)
+      ZI = CCO(3,IAT)
+      I1 = KSTRCO(II)
+      I2 = I1+KNGCO(II)-1
+      LIT = KTYPCO(II)+1
+      MINI = KMINCO(II)
+      MAXI = KMAXCO(II)
+      LOCI = KLOCCO(II)-MINI
+      DO 100 I=1,35
+ 100  ISKIP(I)=.TRUE.
+      DO 260 I=MINI,MAXI
+      GO TO (110,140,260,260,180,260,260,260,260,260,
+     1       220,260,260,260,260,260,260,260,260,260),I
+ 110  DO 120 K=2,4
+ 120  ISKIP(K)=.FALSE.
+      GO TO 260
+ 140  DO 160 K=5,10
+ 160  ISKIP(K)=.FALSE.
+      ISKIP(1)=.FALSE.
+      GO TO 260
+ 180  DO 200 K=2,4
+ 200  ISKIP(K)=.FALSE.
+      DO 210 K=11,20
+ 210  ISKIP(K)=.FALSE.
+      GO TO 260
+ 220  DO 240 K=5,10
+ 240  ISKIP(K)=.FALSE.
+      DO 250 K=21,35
+ 250  ISKIP(K)=.FALSE.
+ 260  CONTINUE
+C
+C     ----- J SHELL
+C
+      DO 1040 JJ = 1,NSHL
+C
+      JAT = KATOM(JJ)
+      XJ = C(1,JAT)
+      YJ = C(2,JAT)
+      ZJ = C(3,JAT)
+      J1 = KSTART(JJ)
+      J2 = J1+KNG(JJ)-1
+      LJT = KTYPE(JJ)
+      MINJ = KMIN(JJ)
+      MAXJ = KMAX(JJ)
+      LOCJ = KLOC(JJ)-MINJ
+      NROOTS = (LIT+LJT+2-2)/2 + 1
+      RR = (XI-XJ)**2+(YI-YJ)**2+(ZI-ZJ)**2
+C
+C     ----- PREPARE INDICES FOR PAIRS OF (I,J) FUNCTIONS
+C
+      N0 = 0
+      IF (LIT .GE. 4) N0 = 35
+      IJ = 0
+      DO 340 I = 1,35
+      IF (ISKIP(I)) GO TO 340
+      IN = INDX(I+N0)
+      NX = IX(I)
+      NY = IY(I)
+      NZ = IZ(I)
+      DO 320 J = MINJ,MAXJ
+      IJ = IJ+1
+      IJX(IJ) = NX+JX(J)
+      IJY(IJ) = NY+JY(J)
+      IJZ(IJ) = NZ+JZ(J)
+      IJG(IJ) = IN+21*(J-MINJ)
+  320 CONTINUE
+  340 CONTINUE
+      DO 360 I = 1,IJ
+      N = IJG(I)
+  360 G(N) = ZERO
+C
+C     ----- I PRIMITIVE
+C
+      DO 840 IG = I1,I2
+      AI = EXCO(IG)
+      ARRI = AI*RR
+      AXI = AI*XI
+      AYI = AI*YI
+      AZI = AI*ZI
+      DUM = AI+AI
+      CSI = CPCO(IG)
+      CPI = CSCO(IG)*DUM
+      IF (LIT .EQ. 4) CPI = CDCO(IG)
+      CDI = CPCO(IG)*DUM
+      IF (LIT .EQ. 5) CDI = CFCO(IG)
+      CFI = CDCO(IG)*DUM
+      CGI = CFCO(IG)*DUM
+C
+C     ----- J PRIMITIVE
+C
+      DO 820 JG = J1,J2
+      AJ = EX(JG)
+      AA = AI+AJ
+      AA1 = ONE/AA
+      DUM = AJ*ARRI*AA1
+      IF (DUM .GT. TOL) GO TO 820
+      FAC = EXP(-DUM)
+      CSJ = CS(JG)
+      CPJ = CP(JG)
+      CDJ = CD(JG)
+      CFJ = CF(JG)
+      AX = (AXI+AJ*XJ)*AA1
+      AY = (AYI+AJ*YJ)*AA1
+      AZ = (AZI+AJ*ZJ)*AA1
+C
+C     ----- DENSITY FACTOR
+C
+      NN = 0
+      DUM1 = ZERO
+      DUM2 = DUM1
+      DO 600 I=1,35
+      IF(ISKIP(I)) GO TO 600
+      GO TO (370,380,420,420,390,420,420,420,420,420,
+     1       400,420,420,420,420,420,420,420,420,420,
+     2       410,420,420,420,420,420,420,420,420,420,
+     3       420,420,420,420,420),I
+ 370  DUM1=CSI*FAC
+      GO TO 420
+ 380  DUM1=CPI*FAC
+      GO TO 420
+ 390  DUM1=CDI*FAC
+      GO TO 420
+ 400  DUM1=CFI*FAC
+      GO TO 420
+ 410  DUM1 = CGI*FAC
+ 420  CONTINUE
+      DO 580 J=MINJ,MAXJ
+      GO TO (430,440,560,560,460,560,560,480,560,560,
+     1       500,560,560,520,560,560,560,560,560,540),J
+  430 DUM2=DUM1*CSJ
+      GO TO 560
+  440 DUM2=DUM1*CPJ
+      GO TO 560
+  460 DUM2=DUM1*CDJ
+      GO TO 560
+  480 IF(NORM) DUM2=DUM2*SQRT3
+      GO TO 560
+  500 DUM2 = DUM1 * CFJ
+      GO TO 560
+  520 DUM2 = DUM2 *SQRT5
+      GO TO 560
+  540 DUM2 = DUM2 * SQRT3
+  560 NN=NN+1
+  580 DIJ(NN)=DUM2
+  600 CONTINUE
+C
+C     ..... BASIC DIPOLE TERM
+C
+      DUM = PI212*AA1/THREE
+      DO 700 I = 1,IJ
+  700 FIJ(I) = DIJ(I)*DUM
+      AAX = AA*AX
+      AAY = AA*AY
+      AAZ = AA*AZ
+      DO 819 IC = 1,NEFQ
+      IF(IDOIT(IC).EQ.0) GO TO 819
+      ALFA = EFATRM(IC)
+      BETA = EFBTRM(IC)
+C            DEACTIVATE SCREENING...
+                     ALFA = 0.0D+00
+                     BETA = 0.0D+00
+      CX = EFC(1,IC)
+      CY = EFC(2,IC)
+      CZ = EFC(3,IC)
+      DUMA = PI212/(THREE*(AA+ALFA))
+      DO 710 I=1,IJ
+      GIJ(I) = DIJ(I)*DUMA
+ 710  CONTINUE
+      XX = AA*((AX-CX)**2+(AY-CY)**2+(AZ-CZ)**2)
+C     CALL RT123
+      IF(NROOTS.LE.3)CALL RT123
+      IF(NROOTS.EQ.4)CALL ROOT4
+      IF(NROOTS.EQ.5)CALL ROOT5
+      MM = 0
+      DO 740 K = 1,NROOTS
+      U2 = AA*U(K)
+      U4 = U2*U2
+      WW = W(K)
+      W2(K) = TWO *WW*U2
+      W4(K) = FOUR*WW*U4
+      TT = ONE/(AA+U2)
+      T = SQRT(TT)
+      X0 = (AAX+U2*CX)*TT
+      Y0 = (AAY+U2*CY)*TT
+      Z0 = (AAZ+U2*CZ)*TT
+      IN = -4+MM
+      DO 720 I = 1,LIT
+      IN = IN+4
+      NI = I
+      DO 720 J = 1,LJT
+      JN = IN+J
+      NJ = J
+      CALL VINT
+      XIN(JN) = XINT
+      YIN(JN) = YINT
+      ZIN(JN) = ZINT
+      CALL PDXYZ
+      XIN(JN+100) = XINT
+      YIN(JN+100) = YINT
+      ZIN(JN+100) = ZINT
+      CALL QDXYZ
+      XIN(JN+200) = XINT
+      YIN(JN+200) = YINT
+      ZIN(JN+200) = ZINT
+  720 CONTINUE
+  740 MM = MM+20
+      DO 780 I = 1,IJ
+      N = IJG(I)
+      NX = IJX(I)
+      NY = IJY(I)
+      NZ = IJZ(I)
+      DUMXX = ZERO
+      DUMYY = ZERO
+      DUMZZ = ZERO
+      DUMXY = ZERO
+      DUMXZ = ZERO
+      DUMYZ = ZERO
+      MM = 0
+      DO 760 K = 1,NROOTS
+      DUMXX= DUMXX-XIN(NX+MM    )*YIN(NY+MM    )*ZIN(NZ+MM    )*W2(K)
+     1            +XIN(NX+MM+200)*YIN(NY+MM    )*ZIN(NZ+MM    )*W4(K)
+      DUMYY= DUMYY-XIN(NX+MM    )*YIN(NY+MM    )*ZIN(NZ+MM    )*W2(K)
+     1            +XIN(NX+MM    )*YIN(NY+MM+200)*ZIN(NZ+MM    )*W4(K)
+      DUMZZ= DUMZZ-XIN(NX+MM    )*YIN(NY+MM    )*ZIN(NZ+MM    )*W2(K)
+     1            +XIN(NX+MM    )*YIN(NY+MM    )*ZIN(NZ+MM+200)*W4(K)
+      DUMXY= DUMXY+XIN(NX+MM+100)*YIN(NY+MM+100)*ZIN(NZ+MM    )*W4(K)
+      DUMXZ= DUMXZ+XIN(NX+MM+100)*YIN(NY+MM    )*ZIN(NZ+MM+100)*W4(K)
+      DUMYZ= DUMYZ+XIN(NX+MM    )*YIN(NY+MM+100)*ZIN(NZ+MM+100)*W4(K)
+  760 MM = MM+20
+      DUM = FIJ(I)
+      G(N) = G(N)-
+     1 DUM * ( DUMXX * QUAD(1,IC)
+     2       + DUMYY * QUAD(2,IC)
+     3       + DUMZZ * QUAD(3,IC)
+     4 +TWO* ( DUMXY * QUAD(4,IC)
+     5       + DUMXZ * QUAD(5,IC)
+     6       + DUMYZ * QUAD(6,IC) ) )
+ 780  CONTINUE
+C     SUBTRACT DAMPING FUNCTION TERM.
+      IF (ABS(ALFA).LE.QLIM ) GO TO 818
+      PCSQ = (AX-CX)**2+(AY-CY)**2+(AZ-CZ)**2
+      XX=AA*AA*PCSQ/(AA+ALFA)
+      PREI = EXP(-AA*ALFA*PCSQ/(AA+ALFA))
+C     CALL RT123
+      IF(NROOTS.LE.3)CALL RT123
+      IF(NROOTS.EQ.4)CALL ROOT4
+      IF(NROOTS.EQ.5)CALL ROOT5
+      MM=0
+      DO 814 K=1,NROOTS
+      U2=(ALFA+AA)*U(K)
+      U4 = U2*U2
+      WW = W(K)
+      W2(K) = TWO *WW*U2
+      W4(K) = FOUR*WW*U4
+      TT=ONE/(AA+U2+ALFA)
+      T= SQRT(TT)
+      X0=(AAX+(U2+ALFA)*CX)*TT
+      Y0=(AAY+(U2+ALFA)*CY)*TT
+      Z0=(AAZ+(U2+ALFA)*CZ)*TT
+      IN=-4+MM
+      DO 812 I=1,LIT
+      IN=IN+4
+      NI=I
+      DO 812 J=1,LJT
+      JN=IN+J
+      NJ=J
+      CALL VINT
+      XIN(JN)=XINT
+      YIN(JN)=YINT
+      ZIN(JN)=ZINT
+      CALL PDXYZ
+      XIN(JN+100)=XINT
+      YIN(JN+100)=YINT
+      ZIN(JN+100)=ZINT
+      CALL QDXYZ
+      XIN(JN+200)=XINT
+      YIN(JN+200)=YINT
+      ZIN(JN+200)=ZINT
+ 812  CONTINUE
+ 814  MM=MM+20
+      DO 817 I=1,IJ
+      N=IJG(I)
+      NX=IJX(I)
+      NY=IJY(I)
+      NZ=IJZ(I)
+      DUMXX = ZERO
+      DUMYY = ZERO
+      DUMZZ = ZERO
+      DUMXY = ZERO
+      DUMXZ = ZERO
+      DUMYZ = ZERO
+      MM=0
+      DO 816 K=1,NROOTS
+      DUMXX= DUMXX-XIN(NX+MM    )*YIN(NY+MM    )*ZIN(NZ+MM    )*W2(K)
+     1            +XIN(NX+MM+200)*YIN(NY+MM    )*ZIN(NZ+MM    )*W4(K)
+      DUMYY= DUMYY-XIN(NX+MM    )*YIN(NY+MM    )*ZIN(NZ+MM    )*W2(K)
+     1            +XIN(NX+MM    )*YIN(NY+MM+200)*ZIN(NZ+MM    )*W4(K)
+      DUMZZ= DUMZZ-XIN(NX+MM    )*YIN(NY+MM    )*ZIN(NZ+MM    )*W2(K)
+     1            +XIN(NX+MM    )*YIN(NY+MM    )*ZIN(NZ+MM+200)*W4(K)
+      DUMXY= DUMXY+XIN(NX+MM+100)*YIN(NY+MM+100)*ZIN(NZ+MM    )*W4(K)
+      DUMXZ= DUMXZ+XIN(NX+MM+100)*YIN(NY+MM    )*ZIN(NZ+MM+100)*W4(K)
+      DUMYZ= DUMYZ+XIN(NX+MM    )*YIN(NY+MM+100)*ZIN(NZ+MM+100)*W4(K)
+ 816  MM=MM+20
+      DUM = -GIJ(I) * PREI * BETA
+      G(N)=G(N) -
+     1 DUM * ( DUMXX * QUAD(1,IC)
+     2       + DUMYY * QUAD(2,IC)
+     3       + DUMZZ * QUAD(3,IC)
+     4 +TWO* ( DUMXY * QUAD(4,IC)
+     5       + DUMXZ * QUAD(5,IC)
+     6       + DUMYZ * QUAD(6,IC) ) )
+ 817  CONTINUE
+ 818  CONTINUE
+ 819  CONTINUE
+C
+C     ----- END OF PRIMITIVE LOOPS -----
+C
+  820 CONTINUE
+  840 CONTINUE
+C
+C     ----- FORM INTEGRALS OVER DERIVATIVES -----
+C
+      NN = 0
+      N = 1
+      DO 900 J = MINJ,MAXJ
+      IF (MINI .GT. 1) GO TO 860
+      NN = NN+1
+      XIN(NN) = G(N+ 1)
+      YIN(NN) = G(N+ 2)
+      ZIN(NN) = G(N+ 3)
+      IF (MAXI .EQ. 1) GO TO 900
+  860 IF (MINI .GT. 2) GO TO 880
+      NN = NN+1
+      XIN(NN) = (G(N+ 4)-G(N ))
+      YIN(NN) = G(N+ 7)
+      ZIN(NN) = G(N+ 8)
+      NN = NN+1
+      XIN(NN) = G(N+ 7)
+      YIN(NN) = (G(N+ 5)-G(N ))
+      ZIN(NN) = G(N+ 9)
+      NN = NN+1
+      XIN(NN) = G(N+ 8)
+      YIN(NN) = G(N+ 9)
+      ZIN(NN) = (G(N+ 6)-G(N ))
+      IF (MAXI .EQ. 4) GO TO 900
+  880 CONTINUE
+      IF (MINI .GT. 5) GO TO 890
+      NN = NN+1
+      XIN(NN) = (G(N+ 3)-G(N )-G(N ))
+      YIN(NN) = G(N+ 6)
+      ZIN(NN) = G(N+ 7)
+      NN = NN+1
+      XIN(NN) = G(N+ 8)
+      YIN(NN) = (G(N+ 4)-G(N+ 1)-G(N+ 1))
+      ZIN(NN) = G(N+ 9)
+      NN = NN+1
+      XIN(NN) = G(N+10)
+      YIN(NN) = G(N+11)
+      ZIN(NN) = (G(N+ 5)-G(N+ 2)-G(N+ 2))
+      NN = NN+1
+      DUM = ONE
+      IF (NORM) DUM = SQRT3
+      XIN(NN) = DUM*(G(N+ 6)-G(N+ 1))
+      YIN(NN) = DUM*(G(N+ 8)-G(N ))
+      ZIN(NN) = DUM* G(N+12)
+      NN = NN+1
+      XIN(NN) = DUM*(G(N+ 7)-G(N+ 2))
+      YIN(NN) = DUM* G(N+12)
+      ZIN(NN) = DUM*(G(N+10)-G(N ))
+      NN = NN+1
+      XIN(NN) = DUM* G(N+12)
+      YIN(NN) = DUM*(G(N+ 9)-G(N+ 2))
+      ZIN(NN) = DUM*(G(N+11)-G(N+ 1))
+      IF(MAXI.EQ.10) GO TO 900
+ 890  CONTINUE
+      NN=NN+1
+      XIN(NN)=(G(N+ 6)-G(N   )-G(N   )-G(N   ))
+      YIN(NN)= G(N+ 9)
+      ZIN(NN)= G(N+10)
+      NN=NN+1
+      XIN(NN)= G(N+11)
+      YIN(NN)=(G(N+ 7)-G(N+ 1)-G(N+ 1)-G(N+ 1))
+      ZIN(NN)= G(N+12)
+      NN=NN+1
+      XIN(NN)= G(N+13)
+      YIN(NN)= G(N+14)
+      ZIN(NN)=(G(N+ 8)-G(N+ 2)-G(N+ 2)-G(N+ 2))
+      NN=NN+1
+      DUM=ONE
+      IF(NORM) DUM=SQRT5
+      XIN(NN)=DUM* (G(N+ 9)-G(N+ 3)-G(N+ 3))
+      YIN(NN)=DUM* (G(N+15)-G(N  ))
+      ZIN(NN)=DUM* G(N+18)
+      NN=NN+1
+      XIN(NN)=DUM* (G(N+10)-G(N+ 4)-G(N+ 4))
+      YIN(NN)=DUM* G(N+18)
+      ZIN(NN)=DUM* (G(N+16)-G(N  ))
+      NN=NN+1
+      XIN(NN)=DUM* (G(N+15)-G(N+ 1))
+      YIN(NN)=DUM* (G(N+11)-G(N+ 3)-G(N+ 3))
+      ZIN(NN)=DUM*  G(N+19)
+      NN=NN+1
+      XIN(NN)=DUM* G(N+19)
+      YIN(NN)=DUM* (G(N+12)-G(N+ 5)-G(N+ 5))
+      ZIN(NN)=DUM* (G(N+17)-G(N+ 1))
+      NN=NN+1
+      XIN(NN)=DUM* (G(N+16)-G(N+ 2))
+      YIN(NN)=DUM*  G(N+20)
+      ZIN(NN)=DUM* (G(N+13)-G(N+ 4)-G(N+ 4))
+      NN=NN+1
+      XIN(NN)=DUM*  G(N+20)
+      YIN(NN)=DUM* (G(N+17)-G(N+ 2))
+      ZIN(NN)=DUM* (G(N+14)-G(N+ 5)-G(N+ 5))
+      NN=NN+1
+      IF(NORM) DUM=DUM*SQRT3
+      XIN(NN)=DUM* (G(N+18)-G(N+ 5))
+      YIN(NN)=DUM* (G(N+19)-G(N+ 4))
+      ZIN(NN)=DUM* (G(N+20)-G(N+ 3))
+  900 N = N+21
+C
+C     ----- CALCULATE CONTRIBUTION TO GRADIENT -----
+C
+      KK = 0
+      DO 980 J = MINJ,MAXJ
+      JN = LOCJ+J
+      DO 980 I = MINI,MAXI
+      IN = LOCI+I
+      KK = KK+1
+      IF(MODE.EQ.1)THEN
+        DVEFP(IN,JN,1) = DVEFP(IN,JN,1)+XIN(KK)
+        DVEFP(IN,JN,2) = DVEFP(IN,JN,2)+YIN(KK)
+        DVEFP(IN,JN,3) = DVEFP(IN,JN,3)+ZIN(KK)
+        DVEFP(IN,JN,4) = DVEFP(IN,JN,4)
+     *                  +YIN(KK)*(ZI-EFCENT(3,MI))
+     *                  -ZIN(KK)*(YI-EFCENT(2,MI))
+        DVEFP(IN,JN,5) = DVEFP(IN,JN,5)
+     *                  +ZIN(KK)*(XI-EFCENT(1,MI))
+     *                  -XIN(KK)*(ZI-EFCENT(3,MI))
+        DVEFP(IN,JN,6) = DVEFP(IN,JN,6)
+     *                  +XIN(KK)*(YI-EFCENT(2,MI))
+     *                  -YIN(KK)*(XI-EFCENT(1,MI))
+        DVEFP(JN,IN,1) = DVEFP(JN,IN,1)+XIN(KK)
+        DVEFP(JN,IN,2) = DVEFP(JN,IN,2)+YIN(KK)
+        DVEFP(JN,IN,3) = DVEFP(JN,IN,3)+ZIN(KK)
+        DVEFP(JN,IN,4) = DVEFP(JN,IN,4)
+     *                  +YIN(KK)*(ZI-EFCENT(3,MI))
+     *                  -ZIN(KK)*(YI-EFCENT(2,MI))
+        DVEFP(JN,IN,5) = DVEFP(JN,IN,5)
+     *                  +ZIN(KK)*(XI-EFCENT(1,MI))
+     *                  -XIN(KK)*(ZI-EFCENT(3,MI))
+        DVEFP(JN,IN,6) = DVEFP(JN,IN,6)
+     *                  +XIN(KK)*(YI-EFCENT(2,MI))
+     *                  -YIN(KK)*(XI-EFCENT(1,MI))
+      ELSE IF(MODE.EQ.2)THEN
+        DVEFP(IN,JN,1) = DVEFP(IN,JN,1)+XIN(KK)
+        DVEFP(IN,JN,2) = DVEFP(IN,JN,2)+YIN(KK)
+        DVEFP(IN,JN,3) = DVEFP(IN,JN,3)+ZIN(KK)
+        DVEFP(IN,JN,4) = DVEFP(IN,JN,4)
+     *                  +YIN(KK)*(ZI-EFCENT(3,MI))
+     *                  -ZIN(KK)*(YI-EFCENT(2,MI))
+        DVEFP(IN,JN,5) = DVEFP(IN,JN,5)
+     *                  +ZIN(KK)*(XI-EFCENT(1,MI))
+     *                  -XIN(KK)*(ZI-EFCENT(3,MI))
+        DVEFP(IN,JN,6) = DVEFP(IN,JN,6)
+     *                  +XIN(KK)*(YI-EFCENT(2,MI))
+     *                  -YIN(KK)*(XI-EFCENT(1,MI))
+      ELSE IF(MODE.EQ.21)THEN
+        DVEFP(JN,IN,1) = DVEFP(JN,IN,1)-XIN(KK)
+        DVEFP(JN,IN,2) = DVEFP(JN,IN,2)-YIN(KK)
+        DVEFP(JN,IN,3) = DVEFP(JN,IN,3)-ZIN(KK)
+        DVEFP(JN,IN,4) = DVEFP(JN,IN,4)
+     *                  -YIN(KK)*(ZI-EFCENT(3,MI))
+     *                  +ZIN(KK)*(YI-EFCENT(2,MI))
+        DVEFP(JN,IN,5) = DVEFP(JN,IN,5)
+     *                  -ZIN(KK)*(XI-EFCENT(1,MI))
+     *                  +XIN(KK)*(ZI-EFCENT(3,MI))
+        DVEFP(JN,IN,6) = DVEFP(JN,IN,6)
+     *                  -XIN(KK)*(YI-EFCENT(2,MI))
+     *                  +YIN(KK)*(XI-EFCENT(1,MI))
+        DVEFP(IN,JN,1) = DVEFP(IN,JN,1)-XIN(KK)
+        DVEFP(IN,JN,2) = DVEFP(IN,JN,2)-YIN(KK)
+        DVEFP(IN,JN,3) = DVEFP(IN,JN,3)-ZIN(KK)
+        DVEFP(IN,JN,4) = DVEFP(IN,JN,4)
+     *                  -YIN(KK)*(ZI-EFCENT(3,MI))
+     *                  +ZIN(KK)*(YI-EFCENT(2,MI))
+        DVEFP(IN,JN,5) = DVEFP(IN,JN,5)
+     *                  -ZIN(KK)*(XI-EFCENT(1,MI))
+     *                  +XIN(KK)*(ZI-EFCENT(3,MI))
+        DVEFP(IN,JN,6) = DVEFP(IN,JN,6)
+     *                  -XIN(KK)*(YI-EFCENT(2,MI))
+     *                  +YIN(KK)*(XI-EFCENT(1,MI))
+      ELSE IF(MODE.EQ.22)THEN
+        DVEFP(JN,IN,1) = DVEFP(JN,IN,1)-XIN(KK)
+        DVEFP(JN,IN,2) = DVEFP(JN,IN,2)-YIN(KK)
+        DVEFP(JN,IN,3) = DVEFP(JN,IN,3)-ZIN(KK)
+        DVEFP(JN,IN,4) = DVEFP(JN,IN,4)
+     *                  -YIN(KK)*(ZI-EFCENT(3,MI))
+     *                  +ZIN(KK)*(YI-EFCENT(2,MI))
+        DVEFP(JN,IN,5) = DVEFP(JN,IN,5)
+     *                  -ZIN(KK)*(XI-EFCENT(1,MI))
+     *                  +XIN(KK)*(ZI-EFCENT(3,MI))
+        DVEFP(JN,IN,6) = DVEFP(JN,IN,6)
+     *                  -XIN(KK)*(YI-EFCENT(2,MI))
+     *                  +YIN(KK)*(XI-EFCENT(1,MI))
+      END IF
+  980 CONTINUE
+ 1040 CONTINUE
+ 1060 CONTINUE
+C
+C     ----- END OF SHELL LOOPS -----
+C
+      RETURN
+      END

@@ -1,0 +1,4099 @@
+C  7 Apr 06 - OQ  - changes to allow spherical harmonics
+C 19 Sep 05 - MWS - adjustment for h or i function runs
+C  5 Jul 05 - MWS - SELECT NEW ATOM,BASIS,EFP,PCM,DAF DIMENSIONS
+C 13 feb 05 - MWS - pad common block NSHEL
+C  5 Feb 05 - OQ  - Iterative procedures for extended TDHF properties
+C
+C*MODULE TDXITR  *DECK CompUsum
+      subroutine CompUsum(Usum,Ux,Uy,Ty,nocc,nmos,mult)
+      implicit none
+C     Arguments
+      integer nocc,nmos
+      double precision mult
+      double precision Usum(nmos*nmos)
+      double precision Ux(nmos*nmos)
+      double precision Uy(nmos*nmos)
+      character*1 Ty
+C     Variables
+      double precision dummy
+      double precision ONE
+      parameter (ONE=1.0D+00)
+      character*1 sN,sT,sY
+      parameter (sN='N',sT='T')
+C     Body of the subprogram
+      if(Ty.eq.'a') then
+         dummy = mult
+         sY = sT
+      else if(Ty.eq.'f') then
+         dummy = -mult
+         sY = sN
+      else if(Ty.eq.'o') then
+         dummy = mult
+         sY = sN
+      else
+         write(*,*) 'Wrong type for Ty [',Ty,'] in CompUsum'
+         call abrtx("COMPUSUM")
+      end if
+      call DGEMM(sN,sY,nmos,nmos,nocc,
+     &           dummy,Ux,nmos,Uy,nmos,ONE,Usum,nmos)
+      end
+C
+C*MODULE TDXITR  *DECK CompDDterm
+      subroutine CompDDterm(DD,C0,nmos,naos,nparams)
+      implicit none
+C     Arguments
+      integer nmos,naos,nparams
+      double precision DD(naos*naos,nparams)
+      double precision C0(naos*nmos)
+C     Used common block
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables
+      integer lWork
+      integer iparam
+      double precision ZERO,ONE,TWO
+      parameter (ZERO=0.0D+00,ONE=1.0D+00,TWO=2.0D+00)
+      character*1 sN,sT
+      parameter (sN='N',sT='T')
+C     Body of the subprogram
+      call NEWMEM(lWork,naos*nmos)
+      do iparam=1,nparams
+         call DGEMM(sN,sN,naos,nmos,nmos,
+     &              ONE,C0,naos,DD(1,iparam),nmos,ZERO,XX(lWork),naos)
+         call DGEMM(sN,sT,naos,naos,nmos,
+     &              TWO,XX(lWork),naos,C0,naos,ZERO,DD(1,iparam),naos)
+      end do
+      call DELETEMEM(lWork,naos*nmos)
+      end
+C
+C*MODULE TDXITR  *DECK CompQterm
+      subroutine CompQterm(Q,Gx,Ux,Tx,Uy,Ey,nmos,mult)
+      implicit none
+C     Arguments
+      integer nmos
+      double precision mult
+      double precision Q(nmos*nmos)
+      double precision Gx(nmos*nmos),Ux(nmos*nmos)
+      double precision Uy(nmos*nmos),Ey(nmos*nmos)
+      character*1 Tx
+C     Variables and constants
+      double precision dummy
+      double precision ONE
+      parameter (ONE=1.0D+00)
+      character*1 sT,sN,sX
+      parameter (sT='T',sN='N')
+C     Body of the subprogram
+      dummy = mult
+      call DGEMM(sN,sN,nmos,nmos,nmos,
+     &           dummy,Gx,nmos,Uy,nmos,ONE,Q,nmos)
+      if(Tx.eq.'a') then
+         dummy = mult
+         sX = sT
+      else if(Tx.eq.'o') then
+         dummy = -mult
+         sX = sN
+      else
+         write(*,*) 'Wrong type for Tx [',Tx,'] in CompQterm'
+         call abrtx("COMPQTERM")
+      end if
+      call DGEMM(sX,sN,nmos,nmos,nmos,dummy,Ux,nmos,Ey,nmos,ONE,Q,nmos)
+      end
+C
+C*MODULE TDXITR  *DECK CompQterm2
+      subroutine CompQterm2(U,w,E0,nmos)
+      implicit none
+C     Arguments
+      integer nmos
+      double precision w
+      double precision U(nmos,nmos),E0(nmos)
+C     Variables
+      integer j
+      double precision dummy
+C     Body of the subprogram
+      do j=1,nmos
+         dummy = w-E0(j)
+         call DSCAL(nmos,dummy,U(1,j),1)
+      end do
+      end
+C
+C*MODULE TDXITR  *DECK CompleteGUXE
+      subroutine CompleteGUXE(C0,E0,omega,G,U,X,E,nocc,nmos,naos,nxyz)
+      implicit none
+C     Arguments
+      integer nocc,nmos,naos,nxyz
+      double precision omega
+      double precision G(*)
+      double precision U(*)
+      double precision X(*)
+      double precision E(*)
+      double precision C0(naos,nmos)
+      double precision E0(nmos)
+C     Variables and constants
+      logical bX,bF,bQ
+      double precision ONE
+      parameter (ONE=1.0D+00)
+C     Called subprogram
+      logical LoadFQX
+C     Body of the subprogram
+      call CheckFQX(bF,bQ,bX)
+      if(bF) then
+         if(.not.LoadFQX(U,.true.,U,.false.,U,.false.,
+     &                   nmos,naos,nxyz)) then
+            call abrtx("CompleteGUXE: not loadfqx:1")
+         end if
+c         call PrintMM(U,naos,nxyz,"OLIX:loadfqx:FF")
+         call DAXPY(naos*naos*nxyz,ONE,U,1,G,1)
+      end if
+c      call PrintMM(G,naos,nxyz,"OLIX:F")
+      call MakeGij(G,C0,G,nmos,naos,nxyz)
+c      call PrintMM(G,nmos,nxyz,"OLIX:G")
+      if(bQ) then
+         if(.not.LoadFQX(U,.false.,U,.true.,U,.false.,
+     &                   nmos,naos,nxyz)) then
+            call abrtx("CompleteGUXE: not loadfqx:2")
+         end if
+c         call PrintMM(U,nmos,nxyz,"OLIX:loadfqx:Q")
+         call DAXPY(nmos*nmos*nxyz,ONE,G,1,U,1)
+      else
+         call DCOPY(nmos*nmos*nxyz,G,1,U,1)
+      end if
+      call MakeEStep1(E,U,nocc,nmos,nxyz)
+      call MakeUStep1(U,E0,omega,U,nocc,nmos,nxyz)
+      if(bX) then
+         if(.not.LoadFQX(X,.false.,X,.false.,X,.true.,
+     &                   nmos,naos,nxyz)) then
+            call abrtx("CompleteGUXE: not loadfqx:3")
+         end if
+c         call PrintMM(X,nmos,nxyz,"OLIX:loadfqx:X")
+      end if
+      call MakeUStep2(U,X,bX,nocc,nmos,nxyz)
+      call MakeEStep2(E,X,bX,E0,omega,nocc,nmos,nxyz)
+C
+C      call PrintMM(G,norb,nxyz,'G')
+C      call PrintMM(U,norb,nxyz,'U')
+C      if(bX) call PrintMM(X,norb,nxyz,'X')
+C      call PrintMM(E,norb,nxyz,'E')
+      end
+C
+C*MODULE TDXITR  *DECK MakeGij
+      SUBROUTINE MakeGij(G,C,F,nmos,naos,nxyz)
+      IMPLICIT NONE
+C     Arguments
+      integer nmos,naos,nxyz
+      DOUBLE PRECISION G(nmos*nmos,nxyz),F(naos*naos,nxyz)
+      DOUBLE PRECISION C(naos*nmos)
+C     Used common block
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables and constants
+      integer ixyz,ialloc
+      double precision ZERO,ONE
+      parameter (ZERO=0.0D+00,ONE=1.0D+00)
+      character*1 sT,sN
+      parameter (sT='T',sN='N')
+C     Body of the subprogram
+      call NEWMEM(ialloc,nmos*naos)
+      do ixyz=1,nxyz
+         call DGEMM(sT,sN,nmos,naos,naos,
+     &              ONE,C,naos,F(1,ixyz),naos,ZERO,XX(ialloc),nmos)
+         call DGEMM(sN,sN,nmos,nmos,naos,
+     &              ONE,XX(ialloc),nmos,C,naos,ZERO,G(1,ixyz),nmos)
+      end do
+      call DELETEMEM(ialloc,nmos*naos)
+      END
+C
+C*MODULE TDXITR  *DECK MakeUStep1
+      subroutine MakeUStep1(U,E0,omega,G,nocc,nmos,nxyz)
+      implicit none
+C     Arguments
+      integer nocc,nmos,nxyz
+      double precision omega
+      double precision U(nmos,nmos,nxyz),G(nmos,nmos,nxyz)
+      double precision E0(nmos)
+C     Variables
+      integer i,j,ixyz
+      double precision dummy
+C     Body of the subprogram
+      do ixyz = 1,nxyz
+         do j=1,nocc
+            do i=nocc+1,nmos
+               dummy = G(i,j,ixyz)/(E0(j)-E0(i)-omega)
+               U(i,j,ixyz)=dummy
+            end do
+         end do
+         do j=nocc+1,nmos
+            do i=1,nocc
+               dummy = G(i,j,ixyz)/(E0(j)-E0(i)-omega)
+               U(i,j,ixyz)=dummy
+            end do
+         end do
+      end do
+      end
+C
+C*MODULE TDXITR  *DECK MakeUStep2
+      subroutine MakeUStep2(U,X,bX,nocc,nmos,nxyz)
+      implicit none
+C     Arguments
+      integer nocc,nmos,nxyz
+      logical bX
+      double precision U(nmos,nmos,nxyz),X(nmos,nmos,nxyz)
+C     Variables and constants
+      integer i,j,ixyz
+      double precision ZERO,HALF
+      parameter (ZERO=0.0D+00,HALF = 0.5D+00)
+C     Body of the subprogram
+      if(bX) then
+         do ixyz = 1,nxyz
+            do j=1,nocc
+               do i=1,nocc
+                  U(i,j,ixyz)=X(i,j,ixyz)*HALF
+               end do
+            end do
+            do j=nocc+1,nmos
+               do i=nocc+1,nmos
+                  U(i,j,ixyz)=X(i,j,ixyz)*HALF
+               end do
+            end do
+         end do
+      else
+         do ixyz = 1,nxyz
+            do j=1,nocc
+               do i=1,nocc
+                  U(i,j,ixyz)=ZERO
+               end do
+            end do
+            do j=nocc+1,nmos
+               do i=nocc+1,nmos
+                  U(i,j,ixyz)=ZERO
+               end do
+            end do
+         end do
+      end if
+      end
+C
+C*MODULE TDXITR  *DECK MakeEStep1
+      subroutine MakeEStep1(E,G,nocc,nmos,nxyz)
+      implicit none
+C     Arguments
+      integer nocc,nmos,nxyz
+      double precision E(nmos,nmos,nxyz)
+      double precision G(nmos,nmos,nxyz)
+C     Variables and constants
+      integer ixyz,i,j
+      double precision ZERO
+      parameter (ZERO=0.0D+00)
+C     Body of the subprogram
+      do ixyz = 1,nxyz
+         do j = 1,nocc
+            do i = 1,nocc
+               E(i,j,ixyz) = G(i,j,ixyz)
+            end do
+            do i = nocc+1,nmos
+               E(i,j,ixyz) = ZERO
+            end do
+         end do
+         do j = nocc+1,nmos
+            do i = 1,nocc
+               E(i,j,ixyz) = ZERO
+            end do
+            do i = nocc+1,nmos
+               E(i,j,ixyz) = G(i,j,ixyz)
+            end do
+         end do
+      end do
+      end
+C
+C*MODULE TDXITR  *DECK MakeEStep2
+      subroutine MakeEStep2(E,X,bX,E0,omega,nocc,nmos,nxyz)
+      implicit none
+C     Arguments
+      integer nocc,nmos,nxyz
+      logical bX
+      double precision omega
+      double precision E(nmos,nmos,nxyz)
+      double precision X(nmos,nmos,nxyz)
+      double precision E0(nmos)
+C     Variables and constants
+      integer i,j,ixyz
+      double precision dummy
+      double precision HALF
+      parameter (HALF=0.5D+00)
+C     Body of the subprogram
+      if(bX) then
+         do ixyz = 1,nxyz
+            do j=1,nocc
+               do i=1,nocc
+                  dummy=X(i,j,ixyz)*(E0(i)-E0(j)+omega)
+                  E(i,j,ixyz)=E(i,j,ixyz)+HALF*dummy
+               end do
+            end do
+            do j=nocc+1,nmos
+               do i=nocc+1,nmos
+                  dummy=X(i,j,ixyz)*(E0(i)-E0(j)+omega)
+                  E(i,j,ixyz)=E(i,j,ixyz)+HALF*dummy
+               end do
+            end do
+         end do
+      end if
+      end
+C
+C*MODULE TDXITR  *DECK MakeDDStep0
+      subroutine MakeDDStep0
+      implicit none
+      call FreeFQX
+      end
+C
+C*MODULE TDXITR  *DECK MakeDDStep1
+      subroutine MakeDDStep1(DD,C0,E0,omega,F,bF,
+     &                       nocc,nvir,nmos,naos,nxyz)
+      implicit none
+C     Arguments
+      integer nocc,nvir,nmos,naos,nxyz
+      logical bF
+      double precision omega
+      double precision F(naos,naos,nxyz)
+      double precision DD(naos,naos,nxyz)
+      double precision C0(naos,nmos)
+      double precision E0(nmos)
+C     Used common block
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables
+      integer ialloc
+      double precision conv(1)
+C     Body of the subprogram
+C
+      conv(1) = 1.0d+00  ! suppresses FTNCHEK warning
+C
+      if(bF) then
+         call SaveFQX(F,.true.,F,.false.,F,.false.,nmos,naos,nxyz)
+c         call PrintMM(F,naos,nxyz,"OLIX:savefqx:FF")
+         call NEWMEM(ialloc,2*nvir*nocc*nxyz)
+         call cycMakeCdFC(C0,F,xx(ialloc),conv,.false.,
+     &                    nocc,nvir,nmos,naos,nxyz)
+         call cycMakeU(E0,omega,xx(ialloc),conv,.false.,
+     &                 nocc,nvir,nmos,nxyz)
+c         write(*,*) "MakeDDStep1:U"
+c         call PrintU(xx(ialloc),nocc,nvir,nxyz)
+C         call SetU1(xx(ialloc),norb,nocc,nvir,nxyz)
+         call cycMakeD(DD,C0,xx(ialloc),nocc,nvir,nmos,naos,nxyz)
+         call DELETEMEM(ialloc,2*nvir*nocc*nxyz)
+C      else
+C         call NEWMEM(ialloc,2*nvir*nocc*nxyz)
+C         call VCLR(XX(ialloc),1,2*nvir*nocc*nxyz)
+C         call SetU1(xx(ialloc),norb,nocc,nvir,nxyz)
+C         call DELETEMEM(ialloc,2*nvir*nocc*nxyz)
+      end if
+      end
+C
+C*MODULE TDXITR  *DECK MakeDDStep2
+      subroutine MakeDDStep2(DD,C0,E0,omega,Q,bQ,
+     &                       nocc,nvir,nmos,naos,nxyz)
+      implicit none
+C     Arguments
+      integer nocc,nvir,nmos,naos,nxyz
+      logical bQ
+      double precision omega
+      double precision Q(nmos,nmos,nxyz)
+      double precision DD(naos*naos,nxyz)
+      double precision C0(naos,nmos)
+      double precision E0(nmos)
+C     Used common block
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables
+      integer ixyz,i,j,ij,ialloc,iwork
+C     Body of the subprogram
+      if(bQ) then
+         call SaveFQX(Q,.false.,Q,.true.,Q,.false.,nmos,naos,nxyz)
+c         call PrintMM(Q,nmos,nxyz,"OLIX:savefqx:Q")
+         call NEWMEM(ialloc,nocc*nvir*2)
+         call NEWMEM(iwork,nmos*nmos)
+         do ixyz=1,nxyz
+            ij = 0
+            do j=nocc+1,nmos
+               do i=1,nocc
+                  XX(ialloc+ij) = Q(i,j,ixyz)
+                  ij=ij+1
+               end do
+            end do
+            do i=nocc+1,nmos
+               do j=1,nocc
+                  XX(ialloc+ij) = Q(i,j,ixyz)
+                  ij=ij+1
+               end do
+            end do
+            call cycMakeUx(E0,omega,XX(ialloc),nocc,nvir,nmos)
+C            call SetU2(xx(ialloc),ixyz,norb,nocc,nvir,nxyz)
+            call cycMakeDx(DD(1,ixyz),XX(iwork),C0,XX(ialloc),
+     &                     nocc,nvir,nmos,naos)
+         end do
+         call DELETEMEM(iwork,nmos*nmos)
+         call DELETEMEM(ialloc,nocc*nvir*2)
+      end if
+      end
+C
+C*MODULE TDXITR  *DECK MakeDDStep3
+      subroutine MakeDDStep3(DD,C0,X,bX,nocc,nmos,naos,nxyz)
+      implicit none
+C     Arguments
+      integer nocc,nmos,naos,nxyz
+      logical bX
+      double precision X(nmos*nmos,nxyz)
+      double precision DD(naos*naos,nxyz)
+      double precision C0(naos*nmos)
+C     Used common block
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables and constants
+      integer ixyz,ialloc
+      double precision ZERO,ONE,TWO
+      parameter (ZERO=0.0D+00,ONE=1.0D+00,TWO=2.0D+00)
+      character*1 sT,sN
+      parameter (sT='T',sN='N')
+C     Body of the subprogram
+      if(bX) then
+         call SaveFQX(X,.false.,X,.false.,X,.true.,nmos,naos,nxyz)
+c         call PrintMM(X,nmos,nxyz,"OLIX:savefqx:X")
+         call NEWMEM(ialloc,naos*nmos)
+         do ixyz=1,nxyz
+            call DGEMM(sN,sN,naos,nmos,nocc,
+     &                 ONE,C0(1),naos,X(1,ixyz),nmos,
+     &                 ZERO,XX(ialloc),naos)
+            call DGEMM(sN,sT,naos,naos,nmos,
+     &                 TWO,XX(ialloc),naos,C0,naos,
+     &                 ONE,DD(1,ixyz),naos)
+         end do
+         call DELETEMEM(ialloc,naos*nmos)
+      end if
+      end
+C
+C*MODULE TDXITR  *DECK cycMakeCdFC
+      subroutine cycMakeCdFC(C0,F,G,conv,bc,nocc,nvir,nmos,naos,nxyz)
+      implicit none
+C     Arguments
+      integer nocc,nvir,nmos,naos,nxyz
+      logical bc
+      double precision C0(naos,nmos)
+      double precision F(naos*naos,nxyz)
+      double precision G(nocc*nvir,2,nxyz)
+      double precision conv(nxyz)
+C     Used common block
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables and constants
+      logical test
+      integer ixyz,ialloc
+      double precision ZERO,ONE
+      parameter (ZERO=0.0D+00,ONE=1.0D+00)
+      character*1 sT,sN
+      parameter (sT='T',sN='N')
+C     Body of the subprogram
+      call NEWMEM(ialloc,nocc*naos)
+      do ixyz = 1,nxyz
+C-----        how not to touch CONV during initialization pass
+C-----   if((.not.bc).or.(conv(ixyz).ne.ZERO)) then
+         test = .not.bc
+         if(.not.test) test = conv(ixyz).ne.ZERO
+         if(test) then
+            call DGEMM(sT,sN,nocc,naos,naos,
+     &                 ONE,C0,naos,F(1,ixyz),naos,
+     &                 ZERO,XX(ialloc),nocc)
+            call DGEMM(sN,sN,nocc,nvir,naos,
+     &                 ONE,XX(ialloc),nocc,C0(1,nocc+1),naos,
+     &                 ZERO,G(1,1,ixyz),nocc)
+C
+            call DGEMM(sT,sT,nocc,naos,naos,
+     &                 ONE,C0,naos,F(1,ixyz),naos,
+     &                 ZERO,XX(ialloc),nocc)
+            call DGEMM(sN,sN,nocc,nvir,naos,
+     &                 ONE,XX(ialloc),nocc,C0(1,nocc+1),naos,
+     &                 ZERO,G(1,2,ixyz),nocc)
+         end if
+      end do
+      call DELETEMEM(ialloc,nocc*naos)
+      end
+C
+C*MODULE TDXITR  *DECK cycMakeU
+      subroutine cycMakeU(E0,omega,U,conv,bc,nocc,nvir,nmos,nxyz)
+      implicit none
+C     Arguments
+      integer nocc,nvir,nmos,nxyz
+      logical bc
+      double precision omega
+      double precision E0(nmos)
+      double precision U(nocc*nvir*2,nxyz)
+      double precision conv(nxyz)
+C     Variables and constants
+      logical test
+      integer ixyz
+      double precision ZERO
+      parameter (ZERO=0.0D+00)
+C     Body of the subprogram
+      do ixyz=1,nxyz
+C-----        how not to touch CONV during initialization pass
+C-----   if((.not.bc).or.(conv(ixyz).ne.ZERO)) then
+         test = .not.bc
+         if(.not.test) test = conv(ixyz).ne.ZERO
+         if(test) then
+            call cycMakeUx(E0,omega,U(1,ixyz),nocc,nvir,nmos)
+         end if
+      end do
+      end
+C
+C*MODULE TDXITR  *DECK cycMakeUx
+      subroutine cycMakeUx(E0,omega,U,nocc,nvir,nmos)
+      implicit none
+C     Arguments
+      integer nocc,nvir,nmos
+      double precision omega
+      double precision E0(nmos)
+      double precision U(nocc,nvir,2)
+C     Variables and constants
+      integer i,j
+C     Body of the subprogram
+      do j=1,nvir
+         do i=1,nocc
+            U(i,j,1)=U(i,j,1)/(E0(nocc+j)-E0(i)-omega)
+         end do
+      end do
+      do j=1,nvir
+         do i=1,nocc
+            U(i,j,2)=U(i,j,2)/(E0(i)-E0(nocc+j)-omega)
+         end do
+      end do
+      end
+C
+C*MODULE TDXITR  *DECK cycMakeD
+      subroutine cycMakeD(D,C0,U,nocc,nvir,nmos,naos,nxyz)
+      implicit none
+C     Arguments
+      integer nocc,nvir,nmos,naos,nxyz
+      double precision U(nocc*nvir*2,nxyz)
+      double precision D(naos*naos,nxyz)
+      double precision C0(naos,nmos)
+C     Used common block
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables and constants
+      integer ixyz,ialloc,isize
+C     Body of the subprogram
+      isize=max(nocc,nvir)
+      call NEWMEM(ialloc,naos*isize)
+      do ixyz=1,nxyz
+         call cycMakeDx(D(1,ixyz),XX(ialloc),C0,U(1,ixyz),
+     &                  nocc,nvir,nmos,naos)
+      end do
+      call DELETEMEM(ialloc,naos*isize)
+      end
+C
+C*MODULE TDXITR  *DECK cycMakeDx
+      subroutine cycMakeDx(D,work,C0,U,nocc,nvir,nmos,naos)
+      implicit none
+C     Arguments
+      integer nocc,nvir,nmos,naos
+      double precision U(nocc*nvir,2)
+      double precision D(naos*naos),work(*)
+      double precision C0(naos,nmos)
+C     Variables and constants
+      double precision ZERO,ONE,TWO,MINUSTWO
+      parameter (ZERO=0.0D+00,ONE=1.0D+00,TWO=2.0D+00,MINUSTWO=-2.0D+00)
+      character*1 sT,sN
+      parameter (sT='T',sN='N')
+C     Body of the subprogram
+      call DGEMM(sN,sT,naos,nocc,nvir,
+     &           ONE,C0(1,nocc+1),naos,U(1,2),nocc,ZERO,work,naos)
+      call DGEMM(sN,sT,naos,naos,nocc,
+     &           TWO,work,naos,C0,naos,ONE,D,naos)
+      call DGEMM(sN,sN,naos,nvir,nocc,
+     &           ONE,C0,naos,U(1,1),nocc,ZERO,work,naos)
+      call DGEMM(sN,sT,naos,naos,nvir,
+     &           MINUSTWO,work,naos,C0(1,nocc+1),naos,ONE,D,naos)
+      end
+C
+C*MODULE TDXITR  *DECK cycCopyU
+      subroutine cycCopyU(U,Unew,conv,nocc,nvir,nxyz)
+      implicit none
+C     Arguments
+      integer nocc,nvir,nxyz
+      double precision U(nocc,nvir,2,nxyz)
+      double precision Unew(nocc,nvir,2,nxyz)
+      double precision conv(nxyz)
+C     Variables and constants
+      integer i,j,ixyz
+      double precision temp,dum,diff
+      double precision ZERO,SIGMA
+      parameter (ZERO=0.0D+00,SIGMA=-1.0D+00)
+C     Called subprogram
+      double precision ABS
+C     intrinsic ABS
+C     Body of the subprogram
+      do ixyz = 1,nxyz
+         if(conv(ixyz).ne.ZERO) then
+            diff = 0.0d+00
+            do j = 1,nvir
+               do i = 1,nocc
+                  temp = Unew(i,j,1,ixyz)-U(i,j,1,ixyz)
+                  dum = ABS(temp)
+                  if(dum.gt.diff) diff=dum
+                  U(i,j,1,ixyz) = Unew(i,j,1,ixyz)
+               end do
+            end do
+            do i = 1,nvir
+               do j = 1,nocc
+                  temp = Unew(j,i,2,ixyz)-U(j,i,2,ixyz)
+                  dum = ABS(temp)
+                  if(dum.gt.diff) diff=dum
+                  U(j,i,2,ixyz) = Unew(j,i,2,ixyz)
+               end do
+            end do
+            if(diff.eq.ZERO) diff = SIGMA
+            conv(ixyz) = diff
+         end if
+      end do
+      end
+C
+C*MODULE TDXITR  *DECK cycInitU
+      subroutine cycInitU(U,X,bX,nocc,nvir,nmos,nxyz)
+      implicit none
+C     Arguments
+      integer nocc,nvir,nmos,nxyz
+      logical bX
+      double precision U(nocc,nvir,2,nxyz)
+      double precision X(nmos,nmos,nxyz)
+C     Variables
+      integer ixyz,i,j
+      double precision HALF
+      parameter (HALF=0.5D+00)
+C     Body of the subprogram
+      if(bX) then
+C         call PrintMM(X,norb,nxyz,'X')
+         do ixyz=1,nxyz
+            do j=1,nvir
+               do i=1,nocc
+                  U(i,j,1,ixyz) = X(i,nocc+j,ixyz)*HALF
+               end do
+            end do
+            do j=1,nvir
+               do i=1,nocc
+                  U(i,j,2,ixyz) = X(nocc+j,i,ixyz)*HALF
+               end do
+            end do
+         end do
+      else
+         call vclr(U,1,nocc*nvir*2*nxyz)
+      end if
+C      call SetU3(U,norb,nocc,nvir,nxyz)
+      end
+C
+C*MODULE TDXITR  *DECK TDHFCycle
+      subroutine TDHFCycle(subGetDJK,subPrintConvergedParam,
+     &                     C0,E0,omega,D,DD,nocc,nvir,nmos,naos,nxyz)
+      implicit none
+C     Arguments
+      external subGetDJK,subPrintConvergedParam
+      double precision omega
+      integer nocc,nvir,nmos,naos,nxyz
+      double precision C0(naos*nmos)
+      double precision E0(nmos)
+      double precision D(naos*naos,nxyz)
+      double precision DD(naos*naos,nxyz)
+C     Used common blocks
+      integer IR, IW, IP, IS,IPK,IDAF,NAV,IODA
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      character*8 method
+      integer itermax
+      double precision convergence
+      common/OLI_CYCLE/convergence,method,itermax
+C     Variables and constants
+      external NoAccel,DIISAccel
+      character*8 sNONE,sDIIS
+      parameter (sNONE='NONE',sDIIS='DIIS')
+C     Body of the subprogram
+C     Fortran 90 solution
+C      select case(method)
+C      case (sNONE)
+C     Ugly fortran 77 solution
+      if(method.eq.sNONE) then
+         call TDHFCycleX(convergence,itermax,sNONE,
+     &                   subGetDJK,NoAccel,subPrintConvergedParam,
+     &                   C0,E0,omega,D,DD,nocc,nvir,nmos,naos,nxyz)
+C     Fortran 90 solution
+C      case (sDIIS)
+C     Ugly fortran 77 solution
+      else if(method.eq.sDIIS) then
+         call TDHFCycleX(convergence,itermax,sDIIS,
+     &                   subGetDJK,DIISAccel,subPrintConvergedParam,
+     &                   C0,E0,omega,D,DD,nocc,nvir,nmos,naos,nxyz)
+C     Fortran 90 solution
+C      case default
+C     Ugly fortran 77 solution
+      else
+         write(iw,*) 'Wrong KEYWORD [',method,'] in TDHFCycle'
+C     Fortran 90 solution
+C      end select
+C     Ugly fortran 77 solution
+      end if
+      end
+C
+C
+C*MODULE TDXITR  *DECK TDHFCycleX
+      subroutine TDHFCycleX(atol,maxit,method,
+     &                      subGetDJK,subAccel,subPrintConvergedParam,
+     &                      C0,E0,omega,D,DD,nocc,nvir,nmos,naos,nxyz)
+      implicit none
+C     Arguments
+      external subGetDJK,subAccel,subPrintConvergedParam
+      character*(*) method
+      double precision atol,omega
+      integer maxit,nocc,nvir,nmos,naos,nxyz
+      double precision C0(naos*nmos)
+      double precision E0(nmos)
+      double precision D(naos*naos,nxyz)
+      double precision DD(naos*naos,nxyz)
+C     Used common blocks
+      integer IR, IW, IP, IS,IPK,IDAF,NAV,IODA
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C      double precision SOGTOL,ETHRSH
+C      integer MAXDII,IRAF
+C      COMMON /DIISSO/ SOGTOL,ETHRSH,MAXDII,IRAF
+C     Variables and constants
+      logical bF,bQ,bX
+      logical converged
+      integer ixyz,iresponses,icycle,nrot
+      integer lUnew,lU,lF,lCONV
+      double precision maxerr
+      double precision ZERO,ONE
+      parameter (ZERO=0.0D+00,ONE=1.0D+00)
+      character*8 sCREATE,sITER,sDELETE
+      parameter (sCREATE="CREATE",sITER="ITER",sDELETE="DELETE")
+C     Called subprogram
+      logical LoadFQX
+C     Body of the subprogram
+      icycle    = 0
+      converged = .false.
+      nrot      = 2*nocc*nvir
+      write(iw,3000) maxit,atol,method,nxyz,nrot,omega
+C     Allocation of memory for the Fock Matrices
+      call NEWMEM(lF,naos*naos*nxyz)
+      call NEWMEM(lU,nrot*nxyz)
+      call NEWMEM(lUnew,nrot*nxyz)
+      call VCLR(XX(lU),1,nrot*nxyz)
+C     Allocation and initialization of memory for the Convergence List
+      call NEWMEM(lCONV,nxyz)
+      do ixyz=1,nxyz
+         xx(lCONV+ixyz-1) = ONE
+      end do
+C     Initialize Acceleration stuff
+      call  subAccel(sCREATE,XX(lUnew),XX(lU),XX(lCONV),maxit,nrot,
+     &               nocc,nvir,nxyz)
+C
+C     ---------
+C     prepare D
+C     ---------
+      call CheckFQX(bF,bQ,bX)
+      if(bX) bX = LoadFQX(xx(lF),.false.,xx(lF),.false.,xx(lF),.true.,
+     &                    nmos,naos,nxyz)
+      call cycInitU(XX(lU),XX(lF),bX,nocc,nvir,nmos,nxyz)
+      call DCOPY(naos*naos*nxyz,DD,1,D,1)
+      call cycMakeD(D,C0,XX(lU),nocc,nvir,nmos,naos,nxyz)
+C     ------
+C     Step 1
+C     ------
+C     Fortran 90 solution
+C      do while((.not.converged).and.(icycle.lt.maxit))
+C     Ugly Fortran 77 solution
+ 1    continue
+      icycle=icycle+1
+      call subGetDJK(D,XX(lF),naos,nxyz)
+c      call PrintMM(D,naos,nxyz,'OLIX:CYCLE:D')
+c      call PrintMM(XX(lF),naos,nxyz,'OLIX:CYCLE:DJK')
+C     ------
+C     Step 2
+C     ------
+      call cycMakeCdFC(C0,XX(lF),XX(lUnew),XX(lCONV),.true.,
+     &                 nocc,nvir,nmos,naos,nxyz)
+C     ------
+C     Step 3
+C     ------
+      call cycMakeU(E0,omega,XX(lUnew),XX(lCONV),.true.,
+     &              nocc,nvir,nmos,nxyz)
+      call subAccel(sITER,XX(lUnew),XX(lU),XX(lCONV),maxit,nrot,
+     &              nocc,nvir,nxyz)
+      iresponses=0
+      maxerr=ZERO
+      do ixyz=1,nxyz
+         if(XX(lCONV+ixyz-1).gt.maxerr) maxerr=XX(lCONV+ixyz-1)
+         if(XX(lCONV+ixyz-1).gt.atol) then
+            iresponses=iresponses+1
+         else
+            if(XX(lCONV+ixyz-1).ne.ZERO) then
+               if(XX(lCONV+ixyz-1).le.ZERO) XX(lCONV+ixyz-1)=ZERO
+               call subPrintConvergedParam(iw,ixyz,XX(lCONV+ixyz-1))
+            end if
+            XX(lCONV+ixyz-1)=ZERO
+         end if
+      end do
+      converged=(iresponses.eq.0)
+C     ------
+C     Step 4
+C     ------
+      call DCOPY(naos*naos*nxyz,DD,1,D,1)
+      call cycMakeD(D,C0,XX(lU),nocc,nvir,nmos,naos,nxyz)
+c      call PrintMM(XX(lU),nmos,nxyz,'OLIX:CYCLE:U')
+C     ------
+C     Step 5
+C     ------
+c      call PrintU(XX(lU),nocc,nvir,nxyz)
+      write(iw,1001) icycle,iresponses,maxerr
+C     Fortran 90 solution
+C      end do
+C     Ugly Fortran 77 solution
+      if((.not.converged).and.(icycle.lt.maxit)) goto 1
+C     ---------
+C     Converged
+C     ---------
+C     Copy D[2J-K] into DD
+      call DCOPY(naos*naos*nxyz,xx(lf),1,DD,1)
+C     Clean up Acceleration stuff
+      call subAccel(sDELETE,XX(lUnew),XX(lU),XX(lCONV),maxit,nrot,
+     &              nocc,nvir,nxyz)
+C     Deallocation of memory for the Convergence List
+      call DELETEMEM(lCONV,nxyz)
+C     Deallocation of memory for the Fock Matrices
+      call DELETEMEM(lUnew,nrot*nxyz)
+      call DELETEMEM(lU,nrot*nxyz)
+      call DELETEMEM(lF,naos*naos*nxyz)
+      return
+C     Format
+ 1001 FORMAT('OLIX ITER',I3,':',I4,' RESPONSES NOT CONVERGED, ',
+     &       'MAXIMUM RESPONSE ERROR=',E13.6)
+ 3000 FORMAT(/,2X,'OLIX:TDHFCycleX',
+     &       /,
+     &       /,4X,'MAXITER=',I4,
+     &       /,4X,'TOLERANCE=',E13.6,
+     &       /,4X,'ACCELERATION METHOD=',A,
+     &       /,4X,I4,' parameters to solve of size ',I10,
+     &       /,4X,'OMEGA=',E13.6,
+     &       /)
+      end
+C
+C*MODULE TDXITR  *DECK NoAccel
+      subroutine NoAccel(sStep,U,Uold,conv,maxit,nrot,
+     &                   nocc,nvir,nxyz)
+      implicit none
+C     Arguments
+      character*8 sStep
+      integer maxit,nrot,nocc,nvir,nxyz
+      double precision U(nrot,nxyz),Uold(nrot,nxyz),conv(nxyz)
+C     Used common blocks
+      integer IR, IW, IP, IS,IPK,IDAF,NAV,IODA
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+C     Variables and constants
+      character*8 sCREATE,sITER,sDELETE
+      parameter (sCREATE="CREATE",sITER="ITER",sDELETE="DELETE")
+C     Body of the subprogram
+C
+C     Fortran 90 solution
+C      select case(sStep)
+C      case (sITER)
+C     Ugly fortran 77 solution
+      if(sStep.eq.sITER) then
+         call cycCopyU(Uold,U,conv,nocc,nvir,nxyz)
+C     Fortran 90 solution
+C      case (sCREATE)
+C     Ugly fortran 77 solution
+      else if(sStep.eq.sCREATE) then
+C     Fortran 90 solution
+C      case (sDELETE)
+C     Ugly fortran 77 solution
+      else if(sStep.eq.sDELETE) then
+C     Fortran 90 solution
+C      case default
+C     Ugly fortran 77 solution
+      else
+         write(iw,*) 'Wrong KEYWORD in NoAccel [',sSTEP,']',maxit
+         call abrtx("NOACCEL")
+C     Fortran 90 solution
+C      end select
+C     Ugly fortran 77 solution
+      end if
+      end
+C
+C--c*MODULE TDXITR  *DECK PrintConvergedParam
+C--      logical function PrintConvergedParam(iw,ixyz,conv)
+C--      implicit none
+C--c     Arguments
+C--      integer iw,ixyz
+C--      double precision conv
+C--c     Body of the subprogram
+C--      write(iw,1001) ixyz,conv
+C--      PrintConvergedParam = .true.
+C--c     Format
+C-- 1001 FORMAT('  Parameter ',I4,' converged within ',E13.6)
+C--      end
+C
+C
+C*MODULE TDXITR  *DECK GetDJK
+      subroutine GetDJK(D,DJK,naos,nxyz)
+      implicit none
+C     Arguments
+      integer naos,nxyz
+      double precision D(naos*naos,nxyz)
+      double precision DJK(naos*naos,nxyz)
+C     Used common blocks
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+      integer NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      integer MXGTOT,MXSH,MXGSH,MXAO
+      PARAMETER (MXGTOT=20000,MXSH=5000,MXAO=8192,MXGSH=30)
+      double precision EX,CS,CP,CD,CF,CG,ch,ci
+      integer KSTART,KATOM,KTYPE,KNG,KLOC,KMIN,KMAX
+      integer NSHELL
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     &                CF(MXGTOT),CG(MXGTOT),ch(mxgtot),ci(mxgtot),
+     &                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     &                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      logical DIRSCF,FDIFF
+      COMMON /OPTSCF/ DIRSCF,FDIFF
+      integer NINTMX,NHEX,NTUPL,inttyp,igrdtyp
+      logical PACK2E
+      COMMON /INTFIL/ NINTMX,NHEX,NTUPL,PACK2E,INTtyp,igrdtyp
+      integer IA
+      COMMON /IJPAIR/ IA(MXAO)
+C     Variables and constants
+      logical SCHWRZ
+      integer NSCHWZ,NINT,NSQR,L2,NSH2,LMAX,NANGM,MAXG
+      integer iDUMMY
+      double precision DUMMY
+      integer LCLINT,LGHOND,LDDIJ,LDSH
+      integer LBUF,LIBUF
+      DOUBLE PRECISION RHF
+      DATA RHF/8HRHF     /
+C     Body of the subprogram
+C
+      NSCHWZ = 0
+      SCHWRZ = .FALSE.
+      NINT = 0
+      NSQR = NAOS*NAOS
+      L2   = (NAOS*NAOS + NAOS)/2
+      NSH2 = (NSHELL*NSHELL + NSHELL)/2
+C
+      CALL BASCHK(LMAX)
+                    NANGM =  4
+      IF(LMAX.EQ.2) NANGM =  6
+      IF(LMAX.EQ.3) NANGM = 10
+      IF(LMAX.EQ.4) NANGM = 15
+      IF(LMAX.EQ.5) NANGM = 21
+      IF(LMAX.EQ.6) NANGM = 28
+      MAXG = NANGM**4
+C
+      call VCLR(DJK,1,nsqr*nxyz)
+C
+      IF (DIRSCF) THEN
+         call NEWMEM(LCLINT,NSH2)
+         call NEWMEM(LGHOND,MAXG)
+         call NEWMEM(LDDIJ,49*MXGSH*MXGSH)
+         call NEWMEM(LDSH,NSH2)
+         call TWOEI(RHF,.FALSE.,.TRUE.,.FALSE.,.false.,
+     &        inttyp,SCHWRZ,NINT,NSCHWZ,naos,L2,
+     &        DUMMY,DUMMY,IDUMMY,1,
+     &        XX(LCLINT),NSH2,XX(LGHOND),MAXG,XX(LDDIJ),
+     &        IA,DUMMY,DUMMY,DUMMY,DUMMY,XX(LDSH),
+     &        D,DJK,nxyz)
+         call DELETEMEM(LDSH,NSH2)
+         call DELETEMEM(LDDIJ,49*MXGSH*MXGSH)
+         call DELETEMEM(LGHOND,MAXG)
+         call DELETEMEM(LCLINT,NSH2)
+      ELSE
+         call NEWMEM(LBUF,NINTMX)
+         call NEWMEM(LIBUF,NINTMX)
+         CALL F2NONS(D,DJK,XX(LBUF),XX(LIBUF),NINTMX,NOPK,nxyz)
+         call DELETEMEM(LIBUF,NINTMX)
+         call DELETEMEM(LBUF,NINTMX)
+      END IF
+      end
+C
+C*MODULE TDXITR  *DECK DIISAccel
+      subroutine DIISAccel(sStep,U,Uold,conv,maxit,nrot,
+     &                     nocc,nvir,nxyz)
+      implicit none
+C     Arguments
+      character*8 sStep
+      integer maxit,nrot,nocc,nvir,nxyz
+      double precision U(nrot,nxyz),Uold(nrot,nxyz),conv(nxyz)
+C     Used common blocks
+      integer IR, IW, IP, IS,IPK,IDAF,NAV,IODA
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables and constants
+      integer itdiis
+      double precision errdiis
+      integer lERR,lISIZES,lIODIIS,lA,lX,lB
+      save itdiis,lERR,lISIZES,lIODIIS,lA,lX,lB
+      double precision ZERO
+      parameter (ZERO=0.0D+00)
+      character*8 sCREATE,sITER,sDELETE
+      parameter (sCREATE="CREATE",sITER="ITER",sDELETE="DELETE")
+      integer IRAF,MAXIO
+      parameter (IRAF=20,MAXIO=20)
+C
+C     Body of the subprogram
+C
+C     Fortran 90 solution
+C      select case(sStep)
+C      case (sCREATE)
+C     Ugly fortran 77 solution
+      if(sStep.eq.sCREATE) then
+C     ----------------------------
+C     Initialization of DIIS stuff
+C     ----------------------------
+         errdiis = ZERO
+         itdiis = 1
+         call NEWMEM(lERR,nrot*nxyz)
+         call NEWMEM(lISIZES,nxyz)
+         call NEWMEM(lIODIIS,MAXIO*2)
+         call NEWMEM(lA,MAXIO*MAXIO)
+         call NEWMEM(lX,MAXIO*nxyz)
+         call NEWMEM(lB,(maxit*maxit+maxit)/2*nxyz)
+         CALL RAOPEN(IRAF,XX(lIODIIS),0,2*MAXIO,nrot*nxyz,-5)
+         CALL VCLR(XX(lISIZES),1,nxyz)
+         CALL VCLR(XX(lB),1,(maxit*maxit+maxit)/2*nxyz)
+C     Fortran 90 solution
+C      case (sITER)
+C     Ugly fortran 77 solution
+      else if(sStep.eq.sITER) then
+C     -------
+C     Iterate
+C     -------
+         call VSUB(Uold,1,U,1,XX(lERR),1,nrot*nxyz)
+         call OLIXDIIS(IRAF,IW,itdiis,U,XX(lERR),conv,
+     &        XX(lA),XX(lX),XX(lB),XX(lIODIIS),XX(lISIZES),
+     &        maxit,MAXIO,errdiis,nrot,nxyz)
+         call cycCopyU(Uold,U,conv,nocc,nvir,nxyz)
+C     Fortran 90 solution
+C      case (sDELETE)
+C     Ugly fortran 77 solution
+      else if(sStep.eq.sDELETE) then
+C     ----------------------
+C     Cleaning up DIIS stuff
+C     ----------------------
+         call RACLOS(IRAF,'DELETE')
+         call DELETEMEM(lB,(maxit*maxit+maxit)/2*nxyz)
+         call DELETEMEM(lX,MAXIO*nxyz)
+         call DELETEMEM(lA,MAXIO*MAXIO)
+         call DELETEMEM(lIODIIS,MAXIO*2)
+         call DELETEMEM(lISIZES,nxyz)
+         call DELETEMEM(lERR,nrot*nxyz)
+C     Fortran 90 solution
+C      case default
+C     Ugly fortran 77 solution
+      else
+         write(iw,*) 'Wrong KEYWORD [',sSTEP,'] in DIISAccel'
+         call abrtx("DIISACCEL")
+C     Fortran 90 solution
+C      end select
+C     Ugly fortran 77 solution
+      end if
+      end
+C
+C*MODULE TDXITR  *DECK OLIXDIIS
+      SUBROUTINE OLIXDIIS(IRAF,IW,ITDIIS,VEC,ERR,conv,A,X,B,
+     &                    IODIIS,ISIZES,MAXIT,MAXIO,ERDIIS,
+     &                    NROT,NXYZ)
+      implicit none
+C     Arguments
+      integer IRAF,IW,ITDIIS,MAXIT,MAXIO,NROT,NXYZ
+      double precision ERDIIS
+      double precision VEC(nrot,nxyz)
+      double precision ERR(nrot,nxyz)
+      double precision conv(nxyz)
+      double precision A(MAXIO*MAXIO)
+      double precision X(MAXIO,nxyz)
+      double precision B((maxit*maxit+maxit)/2,nxyz)
+      integer ISIZES(NXYZ),IODIIS(MAXIO*2)
+C     Uas common blocks
+      integer ME,MASTER,NPROC,IBTYP,IPTIM
+      logical GOPARR,DSKWRK,MASWRK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C     variables and constants
+      integer LRAFERR,LRAFVEC,LERR,LVEC,nax
+      integer IX,IJ,NA,NAMAX,IERR,ixyz,iBsize
+      double precision BIJ,BJJ
+      logical GPSAVE,DSKSAV
+      double precision ZERO,ONE
+      PARAMETER (ZERO=0.0D+00,ONE=1.0D+00)
+C     Called subprograms
+C     intrinsic ABS,MOD,MIN
+      integer MIN,MOD
+      double precision DDOT
+C     Body of the subprogram
+C
+C     DIIS DATA IS SAVED ON DIRECT FILE -IRAF- IN CYCLIC ORDER,
+C                1,2,3,...,MAXIO = LAST MAXIT ERROR MATRICES
+C        MAXIO + 1,2,3,...,MAXIO = LAST MAXIT CPHF SOLUTIONS
+      LRAFERR = 0
+      LRAFVEC= MAXIO
+      DSKSAV = DSKWRK
+      DSKWRK = .FALSE.
+C     -----------------
+C     COMPUTE MAX ERROR
+C     -----------------
+      erdiis=ZERO
+      do ixyz=1,nxyz
+         if(conv(ixyz).gt.erdiis) erdiis = conv(ixyz)
+      end do
+C     ------------------------------
+C     SAVE THE CURRENT CPHF SOLUTION
+C     ------------------------------
+      LVEC = LRAFVEC + MOD(ITDIIS-1,MAXIO) + 1
+      CALL RAWRIT(IRAF,IODIIS,VEC,NROT*NXYZ,LVEC,0)
+C     -----------------------------
+C     SAVE THE CURRENT ERROR MATRIX
+C     -----------------------------
+      LERR = LRAFERR + MOD(ITDIIS-1,MAXIO) + 1
+      CALL RAWRIT(IRAF,IODIIS,ERR,NROT*NXYZ,LERR,0)
+C     ----------------------------------------------
+C     SETUP INVERSION SPACE SIZE FOR EACH PARAMETERS
+C     ----------------------------------------------
+      ITDIIS=ITDIIS+1
+      NAMAX=MIN(ITDIIS,MAXIO)
+      iBsize = (ITDIIS*ITDIIS+ITDIIS)/2
+      do ixyz=1,nxyz
+         if(conv(ixyz).eq.ZERO) then
+            isizes(ixyz) = 0
+         else
+            isizes(ixyz) = NAMAX
+         endif
+      end do
+      IF (ITDIIS.EQ.2.AND.MASWRK) WRITE(IW,3000)
+C        WHEN RUNNING IN PARALLEL, THE O(N**2) COMMUNICATIONS
+C        COSTS IN -RAREAD- BELOW ARE THE SAME MAGNITUDE AS
+C        THE COMPUTATION IN -TRAREC- AND -DAXPY-.
+C        IT SEEMS WISEST JUST TO LET THE MASTER DO THIS I/O,
+C        THEN BROADCAST THE INTERPOLATION RESULTS AT THE END.
+      GPSAVE = GOPARR
+      GOPARR = .FALSE.
+C     -------------------------------------------------
+C     FORM LAST ROW (ROW ITDIIS) OF TRIANGULAR MATRIX B
+C     -------------------------------------------------
+C     ---------------------------------------------------------
+C     FIRST DOING THE DIAGONAL AND THE FIRST ELEMENT OF THE ROW
+C     ---------------------------------------------------------
+      do 101 ixyz=1,nxyz
+         if (ISIZES(ixyz).eq.0) go to 101
+         BJJ=DDOT(nrot,ERR(1,ixyz),1,ERR(1,ixyz),1)
+         B(iBsize-ITDIIS+1,ixyz)= -ONE
+         B(iBsize         ,ixyz)= BJJ
+  101 continue
+      if(ITDIIS.EQ.2) then
+         GOPARR = GPSAVE
+         DSKWRK = DSKSAV
+         RETURN
+      end if
+C     --------------------------
+C     THEN THE REST OF THE BIJ'S
+C     --------------------------
+C     NOTE THAT WE ONLY COMPUTE THE NAMAX-2 VALUES NEXT TO THE
+C     DIAGONAL, SO THAT THE OTHER ELEMENTS (EXCEPT THE FIRST
+C     COLUMN) ARE RANDOM VALUES.
+      IJ=iBsize-NAMAX+1
+      do IX=2,NAMAX-1
+         IJ=IJ+1
+         LERR = LRAFERR + MOD(ITDIIS-NAMAX+IX-2,MAXIO) + 1
+         CALL RAREAD(IRAF,IODIIS,VEC,nrot*nxyz,LERR,0)
+         do 102 ixyz=1,nxyz
+            if (ISIZES(ixyz).eq.0) go to 102
+            BIJ=DDOT(nrot,ERR(1,ixyz),1,VEC(1,ixyz),1)
+            B(IJ,IXYZ)=BIJ
+  102    continue
+      end do
+C     -------------------------------------------------
+C     SET UP AND SOLVE THE SET OF DIIS LINEAR EQUATIONS
+C     -------------------------------------------------
+      do 1011 ixyz=1,nxyz
+         if(ISIZES(ixyz).EQ.0) go to 1011
+         do NA=ISIZES(ixyz),1,-1
+            CALL DIISEQ(A,NA,B(1,ixyz),iBsize,ITDIIS)
+C            A(1) = B(1,ixyz)
+C            IX=2
+C            do j=ITDIIS-NA+2,ITDIIS
+C               IJ    = (j*(j-1))/2
+C               A(IX) = B(IJ+1,ixyz)
+C               IX=IX+1
+C               do i=ITDIIS-NA+2,j
+C                  A(IX) = B(IJ+i,ixyz)
+C                  IX=IX+1
+C               end do
+C            end do
+C
+            CALL VCLR(X(1,ixyz),1,ISIZES(ixyz))
+            X(1,ixyz)=-ONE
+            IERR=0
+            nax = NA
+            CALL SLVLEQsvd(A,X(1,ixyz),nax,nax,IERR)
+C            ipvt would be a work array of dimension NA
+C            call DSPTRF('U',NA,A,IPVT,IERR)
+            if(IERR.EQ.0) then
+C               call DSPTRS('U',NA,1,A,IPVT,X,NA,IERR)
+               ISIZES(ixyz)=NA
+               go to 1001
+            end if
+            IF (MASWRK) WRITE(IW,3001) ixyz,NA
+            if(NA.eq.1) then
+               IF (MASWRK) WRITE(IW,3002) ixyz
+               CALL ABRTX("OLIXDIIS")
+            end if
+         end do
+ 1001    continue
+ 1011 continue
+C     -----------------------------------
+C     FORM THE INTERPOLATED CPHF SOLUTION
+C     -----------------------------------
+      CALL VCLR(VEC,1,NROT*NXYZ)
+      do IX=2,NAMAX
+         LVEC = LRAFVEC + MOD(ITDIIS-NAMAX+IX-2,MAXIO) + 1
+         CALL RAREAD(IRAF,IODIIS,ERR,NROT*NXYZ,LVEC,0)
+         do 103 ixyz=1,nxyz
+            if(ISIZES(IXYZ).EQ.0) go to 103
+            if(X(IX,IXYZ).EQ.ZERO) go to 103
+            CALL DAXPY(NROT,X(IX,IXYZ),ERR(1,ixyz),1,VEC(1,ixyz),1)
+  103    continue
+      end do
+      GOPARR=GPSAVE
+      DSKWRK = DSKSAV
+      IF(GOPARR) THEN
+         CALL DDI_BCAST(1005,'F',VEC,NXYZ*NROT,MASTER)
+      END IF
+      RETURN
+C     Formats
+ 3000 FORMAT(' ..... INITIATING DIIS PROCEDURE .....')
+ 3001 FORMAT('TRUNCATING RESPONSE VECTOR ',I4,
+     &       ' TO SOLVE DIIS EQUATIONS (SIZE=',I4,')')
+ 3002 FORMAT('ERROR: RESPONSE VECTOR ',I4,
+     &       ' : DIIS EQUATIONS ARE SINGULAR')
+      END
+C
+C*MODULE TDXITR  *DECK MakeAlpha
+      subroutine MakeAlpha(w1)
+      implicit none
+C     Argument
+      double precision w1
+C     Used common blocks
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      integer IR, IW, IP, IS,IPK,IDAF,NAV,IODA
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables and constants
+      double precision alpha(9)
+      double precision w(2)
+      integer lE0,lC0
+      double precision dummy(1)
+C     Called subprograms
+      logical GetHf
+C     Body of the subprogram
+      call VCLR(alpha,1,9)
+C
+      w(1) = -w1
+      w(2) =  w1
+C
+      dummy(1) = 0.0d+00
+      if(.not.GetHf(dummy,.false.)) call MakeHf()
+C
+      call NEWMEM(lE0,nmos)
+      call NEWMEM(lC0,naos*nmos)
+      call GetEnergy(XX(lE0),nmos)
+      call GetLCAO(XX(lC0),nmos,naos)
+C
+      call CompAlpha(alpha,w1,XX(lE0),XX(lC0),
+     &               nocc,nvir,nmos,naos,ibfld,nfld)
+C
+      call DELETEMEM(lC0,naos*nmos)
+      call DELETEMEM(lE0,nmos)
+C
+      call SetAlpha(w1,alpha)
+      call PrintAlphaX(iw,alpha,w,'Alpha tensor [in au]')
+      CALL TIMIT(1)
+      end
+C
+C*MODULE TDXITR  *DECK CompAlpha
+      subroutine CompAlpha(alpha,w,E0,C0,
+     &                     nocc,nvir,nmos,naos,ibfld,nfld)
+      implicit none
+C     Arguments
+      integer nocc,nvir,nmos,naos,ibfld,nfld
+      double precision w
+      double precision alpha(9)
+      double precision E0(nmos),C0(naos,nmos)
+C     Used common blocks
+      integer IR, IW, IP, IS,IPK,IDAF,NAV,IODA
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables
+      integer nparams
+      integer lD,lDD,lHf,lG,lU,lE
+      double precision dummyX(1),dummyQ(1)
+C     Called subprogram
+      logical GetHf
+C     External subprogram
+      external GetDJK,PrintAlphaConvergedParam
+C     Body of the subprogram
+      nparams = nfld
+      write(iw,3000) -w,w
+C     ----------
+C     prepare DD
+C     ----------
+      call NEWMEM(lDD,naos*naos*nparams)
+      call VCLR(XX(lDD),1,naos*naos*nparams)
+      call MakeDDStep0
+      call NEWMEM(lHf,naos*naos*nparams)
+      if(.not.GetHf(XX(lHf),.true.)) then
+         call abrtx("CompAlpha: not GetHF")
+      end if
+      call MakeDDStep1(XX(lDD),C0,E0,w,XX(lHf),.true.,
+     &                 nocc,nvir,nmos,naos,nparams)
+      call DELETEMEM(lHf,naos*naos*nparams)
+      call MakeDDStep2(XX(lDD),C0,E0,w,dummyQ,.false.,
+     &                 nocc,nvir,nmos,naos,nparams)
+      call MakeDDStep3(XX(lDD),C0,dummyX,.false.,
+     &                 nocc,nmos,naos,nparams)
+C     -----
+C     Solve
+C     -----
+      call NEWMEM(lD,naos*naos*nparams)
+      call TDHFCycle(GetDJK,PrintAlphaConvergedParam,
+     &               C0,E0,w,XX(lD),XX(lDD),
+     &               nocc,nvir,nmos,naos,nparams)
+C     -----------
+C     complete GU
+C     -----------
+      lG = lDD
+      call NEWMEM(lU,naos*naos*nparams)
+      call NEWMEM(lE,nmos*nmos*nparams)
+      call CompleteGUXE(C0,E0,w,XX(lG),XX(lU),dummyX,XX(lE),
+     &                  nocc,nmos,naos,nparams)
+c      call PrintMM(XX(lG),nmos,nfld,'OLIX:Gf')
+c      call PrintMM(XX(lU),nmos,nfld,'OLIX:Uf')
+c      call PrintMM(XX(lD),naos,nfld,'OLIX:Df')
+c      call PrintMM(XX(lE),nmos,nfld,'OLIX:Ef')
+      call FreeGUDEf(w)
+      call SetGUDEf(w,XX(lG),XX(lU),XX(lD),XX(lE),nmos,naos,nfld)
+      call DELETEMEM(lE,nmos*nmos*nparams)
+      call DELETEMEM(lU,naos*naos*nparams)
+C     --------------------
+C     compute alpha tensor
+C     --------------------
+      lHf = lDD
+      if(.not.GetHf(XX(lHF),.true.)) then
+         call abrtx("CompAlpha: not getHF")
+      end if
+      call CompAlphaTensor(alpha,XX(lHf),XX(lD),naos,ibfld,nfld)
+C     ----------
+C     deallocate
+C     ----------
+      call DELETEMEM(lD,naos*naos*nparams)
+      call DELETEMEM(lDD,naos*naos*nparams)
+C     Format
+ 3000 FORMAT('Iterative procedure to compute Alpha(',
+     &       F13.6,';',F13.6,')')
+      end
+C
+C*MODULE TDXITR  *DECK CompAlphaTensor
+      subroutine CompAlphaTensor(alpha,Hf,Dg,naos,ibfld,nfld)
+      implicit none
+C     Arguments
+      integer naos,ibfld,nfld
+      double precision alpha(9)
+      double precision Hf(naos*naos,nfld),Dg(naos*naos,nfld)
+C     Used common block
+      integer NELEMA,IELEMA,INDEXA
+      common/NLO_ALPHA/NELEMA,IELEMA(2,9),INDEXA(3,3)
+C     Variables
+      integer i,idummy,ifld(2),icomp
+C     Called subprograms
+      double precision dtrace
+C     Body of the subprogram
+      do i = 1,NELEMA
+         do icomp=1,2
+            idummy = IELEMA(icomp,i)-ibfld+1
+            if((idummy.lt.1).or.(idummy.gt.nfld)) go to 1001
+            ifld(icomp) = idummy
+            if(icomp.eq.2) alpha(i)=-dtrace('S','N',Hf(1,ifld(1)),naos,
+     &                                     Dg(1,ifld(2)),naos,naos,naos)
+         end do
+ 1001    continue
+      end do
+C
+      return
+      end
+C
+C*MODULE TDXITR  *DECK PrintAlphaConvergedParam
+      subroutine PrintAlphaConvergedParam(iw,ixyz,conv)
+      implicit none
+C     Arguments
+      integer iw,ixyz
+      double precision conv
+C     Used common block
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+C     Variables and constants
+      integer ifld
+      character*1 FIELDDIR(3)
+C     Body of the subprogram
+      DATA FIELDDIR /'x','y','z'/
+      ifld = ixyz+ibfld-1
+      write(iw,1001) FIELDDIR(ifld),conv
+C     Format
+ 1001 FORMAT('  Field direction ',A1,' converged within ',E13.6)
+      end
+C
+C*MODULE TDXITR  *DECK MakeBeta
+      subroutine MakeBeta(w1,w2)
+      implicit none
+C     Argument
+      double precision w1,w2
+C     Used common blocks
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      integer IR, IW, IP, IS,IPK,IDAF,NAV,IODA
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables and constants
+      double precision mu(3)
+      double precision beta(27)
+      double precision w(3),lw(2)
+      integer lE0,lC0
+      double precision dummy(1)
+C     Called subprograms
+      logical GetHf,GotDip,GetGUDEf
+C     Body of the subprogram
+      call VCLR(beta,1,27)
+C
+      w(1)=-w1-w2
+      w(2)=w1
+      w(3)=w2
+      lw(1)=w1
+      lw(2)=w2
+C
+      dummy(1) = 0.0d+00
+      if(.not.GetHf(dummy,.false.)) call MakeHf()
+      call GetDipole(dummy,.false.,GotDip)
+      if(.not.GotDip) call MakeDipole()
+      if(.not.GetGUDEf(w1,dummy,.false.,dummy,.false.,dummy,.false.,
+     &     dummy,.false.,nmos,naos,nfld)) call MakeAlpha(w1)
+      if(.not.GetGUDEf(w2,dummy,.false.,dummy,.false.,dummy,.false.,
+     &     dummy,.false.,nmos,naos,nfld)) call MakeAlpha(w2)
+C
+      call NEWMEM(lE0,nmos)
+      call NEWMEM(lC0,naos*nmos)
+      call GetEnergy(XX(lE0),nmos)
+      call GetLCAO(XX(lC0),nmos,naos)
+C
+      call CompBeta(beta,lw,XX(lE0),XX(lC0),
+     &              nocc,nvir,nmos,naos,ibfld,nfld)
+C
+      call DELETEMEM(lC0,naos*nmos)
+      call DELETEMEM(lE0,nmos)
+C
+      call SetBeta(w1,w2,beta)
+      call GetDipole(mu,.true.,GotDip)
+      if(.not.GotDip) then
+         call abrtx("Make Beta:not GotDip")
+      end if
+      call PrintBetaX(iw,beta,mu,w,'Beta tensor [in au]')
+      CALL TIMIT(1)
+      end
+C
+C*MODULE TDXITR  *DECK CompBeta
+      subroutine CompBeta(beta,w,E0,C0,
+     &                    nocc,nvir,nmos,naos,ibfld,nfld)
+      implicit none
+C     Arguments
+      integer nocc,nvir,nmos,naos,ibfld,nfld
+      double precision w(2)
+      double precision beta(27)
+      double precision E0(nmos),C0(naos,nmos)
+C     Used common blocks
+      integer IR, IW, IP, IS,IPK,IDAF,NAV,IODA
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables
+      integer nparams
+      double precision ws
+      integer lD,lDD,lHf,lG,lU,lE,lX,lQ
+      double precision dummyF(1)
+C     Called subprogram
+      logical GetHf
+C     External subprogram
+      external GetDJK,PrintBetaConvergedParam
+C     Body of the subprogram
+      nparams = nfld*nfld
+      ws=w(1)+w(2)
+      write(iw,3000) (-ws),w(1),w(2)
+C     ----------
+C     prepare DD
+C     ----------
+      call NEWMEM(lDD,naos*naos*nparams)
+      call MakeDDfg(XX(lDD),w,C0,nocc,nmos,naos,nfld)
+      call MakeDDStep0
+      call MakeDDStep1(XX(lDD),C0,E0,ws,dummyF,.false.,
+     &                 nocc,nvir,nmos,naos,nparams)
+      call NEWMEM(lQ,nmos*nmos*nparams)
+      call MakeQfg(XX(lQ),w,nmos,naos,nfld)
+      call MakeDDStep2(XX(lDD),C0,E0,ws,XX(lQ),.true.,
+     &                 nocc,nvir,nmos,naos,nparams)
+C      call PrintMM(XX(lDD),norb,nparams,'DDfg')
+      call DELETEMEM(lQ,nmos*nmos*nparams)
+      call NEWMEM(lX,nmos*nmos*nparams)
+      call MakeXfg(XX(lX),w,nmos,naos,nfld)
+      call MakeDDStep3(XX(lDD),C0,XX(lX),.true.,
+     &                 nocc,nmos,naos,nparams)
+C      call PrintMM(XX(lDD),norb,nparams,'DDfg')
+      call DELETEMEM(lX,nmos*nmos*nparams)
+C      call PrintMM(XX(lDD),norb,nparams,'DDfg')
+C     -----
+C     Solve
+C     -----
+      call NEWMEM(lD,naos*naos*nparams)
+      call TDHFCycle(GetDJK,PrintBetaConvergedParam,
+     &               C0,E0,ws,XX(lD),XX(lDD),
+     &               nocc,nvir,nmos,naos,nparams)
+C     -----------
+C     complete GU
+C     -----------
+      lG = lDD
+      call NEWMEM(lU,naos*naos*nparams)
+      call NEWMEM(lE,nmos*nmos*nparams)
+      call NEWMEM(lX,nmos*nmos*nparams)
+      call CompleteGUXE(C0,E0,ws,XX(lG),XX(lU),XX(lX),XX(lE),
+     &                  nocc,nmos,naos,nparams)
+      call FreeGUXDEfg(w(1),w(2))
+      call SetGUXDEfg(w(1),w(2),XX(lG),XX(lU),XX(lX),XX(lD),XX(lE),
+     &                nmos,naos,nfld)
+      call DELETEMEM(lX,nmos*nmos*nparams)
+      call DELETEMEM(lE,nmos*nmos*nparams)
+      call DELETEMEM(lU,naos*naos*nparams)
+C     --------------------
+C     compute beta tensor
+C     --------------------
+      lHf = lDD
+      if(.not.GetHf(XX(lHF),.true.)) then
+         call abrtx("CompBeta: not GetHF")
+      end if
+      call CompBetaTensor(beta,XX(lHf),XX(lD),naos,ibfld,nfld)
+C     ----------
+C     deallocate
+C     ----------
+      call DELETEMEM(lD,naos*naos*nparams)
+      call DELETEMEM(lDD,naos*naos*nparams)
+C     Format
+ 3000 FORMAT('Iterative procedure to compute Beta(',
+     &       F13.6,';',F13.6,',',F13.6,')')
+      end
+C
+C*MODULE TDXITR  *DECK CompBetaTensor
+      subroutine CompBetaTensor(beta,Hf,Dgh,naos,ibfld,nfld)
+      implicit none
+C     Arguments
+      integer naos,ibfld,nfld
+      double precision beta(27)
+      double precision Hf(naos*naos,nfld),Dgh(naos*naos,nfld,nfld)
+C     Used common block
+      integer NELEMB,IELEMB,INDEXB
+      common/NLO_BETA/NELEMB,IELEMB(3,27),INDEXB(3,3,3)
+C     Variables
+      integer i,idummy,ifld(3),icomp
+C     Called subprograms
+      double precision DTrace
+C     Body of the subprogram
+      do i = 1,NELEMB
+         do icomp=1,3
+            idummy = IELEMB(icomp,i)-ibfld+1
+            if((idummy.lt.1).or.(idummy.gt.nfld)) go to 1001
+            ifld(icomp) = idummy
+            if(icomp.eq.3) beta(i)=-DTrace('S','N',Hf(1,ifld(1)),naos,
+     &                                     Dgh(1,ifld(2),ifld(3)),naos,
+     &                                     naos,naos)
+         end do
+ 1001    continue
+      end do
+C
+      return
+      end
+C
+C*MODULE TDXITR  *DECK PrintBetaConvergedParam
+      subroutine PrintBetaConvergedParam(iw,ixyz,conv)
+      implicit none
+C     Arguments
+      integer iw,ixyz
+      double precision conv
+C     Used common block
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+C     Variables and constants
+      integer ifld,jfld
+      character*1 FIELDDIR(3)
+C     Body of the subprogram
+      DATA FIELDDIR /'x','y','z'/
+      ifld = (ixyz-1)/nfld
+      jfld = (ixyz-1-ifld*nfld)
+      ifld = ifld+ibfld
+      jfld = jfld+ibfld
+      write(iw,1001) FIELDDIR(ifld),FIELDDIR(jfld),conv
+C     Format
+ 1001 FORMAT('  Field directions ',A1,A1,' converged within ',E13.6)
+      end
+C
+C*MODULE TDXITR  *DECK MakeBetaPerms
+      subroutine MakeBetaPerms(w,nfld,nterms,iflds,mults)
+      implicit none
+C     Arguments
+      double precision w(2)
+      integer nfld
+      integer nterms(2)
+      integer iflds(4,*)
+      double precision mults(*)
+C     Variables and constants
+      logical bw12,b12
+      integer iterm,ifld,jfld,iifld,jjfld
+      double precision mult,ONE,TWO
+      parameter (ONE=1.0D+00,TWO=2.0D+00)
+      integer iperm,nperm
+      parameter (nperm=2)
+C     Body of the subprogram
+C     ------------------
+C     Smart permutations
+C     ------------------
+      bw12=w(1).eq.w(2)
+      iterm = 0
+      do iperm=1,nperm
+         do jjfld=1,nfld
+            do 1011 iifld=1,nfld
+               b12=(iifld.eq.jjfld).and.bw12
+               if(iperm.eq.1) then
+                  ifld = iifld
+                  jfld = jjfld
+                  if(b12) then
+                     mult = TWO
+                  else
+                     mult = ONE
+                  end if
+               else if(iperm.eq.2) then
+                  if(b12) go to 1011
+                  ifld = jjfld
+                  jfld = iifld
+                  mult = ONE
+               end if
+               iterm=iterm+1
+               iflds(1,iterm) = ifld
+               iflds(2,iterm) = jfld
+               iflds(3,iterm) = iifld
+               iflds(4,iterm) = jjfld
+               mults(iterm)   = mult
+ 1011       continue
+         end do
+         nterms(iperm) = iterm
+      end do
+      end
+C
+C*MODULE TDXITR  *DECK MakeQfg
+      subroutine MakeQfg(Qfg,w,nmos,naos,nfld)
+      implicit none
+C     Arguments
+      integer nmos,naos,nfld
+      double precision w(2)
+      double precision Qfg(nmos*nmos,nfld,nfld)
+C     Used common block
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables
+      logical b12
+      integer lGf,lUf,lEf,lGg,lUg,lEg
+      double precision dummy
+C     Called subprogram
+      logical GetGUDEf
+C     Body of the subprogram
+      b12 = w(1).eq.w(2)
+      call NEWMEM(lGf,nmos*nmos*nfld)
+      call NEWMEM(lUf,nmos*nmos*nfld)
+      call NEWMEM(lEf,nmos*nmos*nfld)
+      dummy = 0.0d+00
+      if(.not.GetGUDEf(w(1),XX(lGf),.true.,XX(lUf),.true.,
+     &     dummy,.false.,XX(lEf),.true.,nmos,naos,nfld)) then
+         call abrtx("MakeQfg: not GetGUDEf:1")
+      end if
+      if(.not.b12) then
+         call NEWMEM(lGg,nmos*nmos*nfld)
+         call NEWMEM(lUg,nmos*nmos*nfld)
+         call NEWMEM(lEg,nmos*nmos*nfld)
+         if(.not.GetGUDEf(w(2),XX(lGg),.true.,XX(lUg),.true.,
+     &        dummy,.false.,XX(lEg),.true.,nmos,naos,nfld)) then
+            call abrtx("MakeQfg: not GetGUDEf:2")
+         end if
+      else
+         lGg = lGf
+         lUg = lUf
+         lEg = lEf
+      end if
+      call CompQfg(w,Qfg,XX(lGf),XX(lUf),XX(lEf),
+     &             XX(lGg),XX(lUg),XX(lEg),
+     &             nmos,nfld)
+      if(.not.b12) then
+         call DELETEMEM(lEg,nmos*nmos*nfld)
+         call DELETEMEM(lUg,nmos*nmos*nfld)
+         call DELETEMEM(lGg,nmos*nmos*nfld)
+      end if
+      call DELETEMEM(lEf,nmos*nmos*nfld)
+      call DELETEMEM(lUf,nmos*nmos*nfld)
+      call DELETEMEM(lGf,nmos*nmos*nfld)
+      end
+C
+C*MODULE TDXITR  *DECK CompQfg
+      subroutine CompQfg(w,Qfg,Gf,Uf,Ef,Gg,Ug,Eg,nmos,nfld)
+      implicit none
+C     Arguments
+      double precision w(2)
+      integer nmos,nfld
+      double precision Qfg(nmos*nmos,nfld,nfld)
+      double precision Gf(nmos*nmos,nfld)
+      double precision Uf(nmos*nmos,nfld)
+      double precision Ef(nmos*nmos,nfld)
+      double precision Gg(nmos*nmos,nfld)
+      double precision Ug(nmos*nmos,nfld)
+      double precision Eg(nmos*nmos,nfld)
+C     Variables
+      integer iterm,ifld,jfld,iifld,jjfld
+      double precision mult
+      integer nterms(2)
+      integer iflds(4,2*9)
+      double precision mults(2*9)
+C     Body of the subprogram
+      call MakeBetaPerms(w,nfld,nterms,iflds,mults)
+      call VCLR(Qfg,1,nmos*nmos*nfld*nfld)
+      do iterm=1,nterms(1)
+         ifld = iflds(1,iterm)
+         jfld = iflds(2,iterm)
+         iifld = iflds(3,iterm)
+         jjfld = iflds(4,iterm)
+         mult = mults(iterm)
+         call CompQterm(Qfg(1,iifld,jjfld),
+     &                  Gf(1,ifld),Uf(1,ifld),'o',
+     &                  Ug(1,jfld),Eg(1,jfld),
+     &                  nmos,mult)
+      end do
+      do iterm=nterms(1)+1,nterms(2)
+         ifld = iflds(1,iterm)
+         jfld = iflds(2,iterm)
+         iifld = iflds(3,iterm)
+         jjfld = iflds(4,iterm)
+         mult = mults(iterm)
+         call CompQterm(Qfg(1,iifld,jjfld),
+     &                  Gg(1,ifld),Ug(1,ifld),'o',
+     &                  Uf(1,jfld),Ef(1,jfld),
+     &                  nmos,mult)
+      end do
+      end
+C
+C*MODULE TDXITR  *DECK MakeXfg
+      subroutine MakeXfg(Xfg,w,nmos,naos,nfld)
+      implicit none
+C     Arguments
+      integer nmos,naos,nfld
+      double precision w(2)
+      double precision Xfg(nmos*nmos,nfld,nfld)
+C     Used common block
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables
+      logical b12
+      integer lUf,lUg
+      double precision dummy
+C     Called subprogram
+      logical GetGUDEf
+C     Body of the subprogram
+      b12 = w(1).eq.w(2)
+      call NEWMEM(lUf,nmos*nmos*nfld)
+      dummy = 0.0d+00
+      if(.not.GetGUDEf(w(1),dummy,.false.,XX(lUf),.true.,dummy,.false.,
+     &                    dummy,.false.,nmos,naos,nfld)) then
+         call abrtx("MakeXfg: not GetGUDEf:1")
+      end if
+      if(.not.b12) then
+         call NEWMEM(lUg,nmos*nmos*nfld)
+         if(.not.GetGUDEf(w(2),dummy,.false.,XX(lUg),.true.,
+     &        dummy,.false.,dummy,.false.,nmos,naos,nfld)) then
+            call abrtx("MakeXfg: not GetGUDEf:2")
+         end if
+      else
+         lUg = lUf
+      end if
+      call CompXfg(w,Xfg,XX(lUf),XX(lUg),nmos,nfld)
+      if(.not.b12) call DELETEMEM(lUg,nmos*nmos*nfld)
+      call DELETEMEM(lUf,nmos*nmos*nfld)
+C
+C      call PrintMM(Xfg,norb,nfld*nfld,"TDX:Xfg")
+      end
+C
+C*MODULE TDXITR  *DECK CompXfg
+      subroutine CompXfg(w,Xfg,Uf,Ug,nmos,nfld)
+      implicit none
+C     Arguments
+      double precision w(2)
+      integer nmos,nfld
+      double precision Xfg(nmos*nmos,nfld,nfld)
+      double precision Uf(nmos*nmos,nfld)
+      double precision Ug(nmos*nmos,nfld)
+C     Variables
+      integer iterm,ifld,jfld,iifld,jjfld
+      double precision mult
+      integer nterms(2)
+      integer iflds(4,2*9)
+      double precision mults(2*9)
+      double precision ONE
+      parameter (ONE=1.0D+00)
+      character*1 sN
+      parameter (sN='N')
+C     Body of the subprogram
+      call MakeBetaPerms(w,nfld,nterms,iflds,mults)
+      call VCLR(Xfg,1,nmos*nmos*nfld*nfld)
+      do iterm=1,nterms(1)
+         ifld = iflds(1,iterm)
+         jfld = iflds(2,iterm)
+         iifld = iflds(3,iterm)
+         jjfld = iflds(4,iterm)
+         mult = mults(iterm)
+         call DGEMM(sN,sN,nmos,nmos,nmos,
+     &              mult,Uf(1,ifld),nmos,Ug(1,jfld),nmos,
+     &              ONE,Xfg(1,iifld,jjfld),nmos)
+      end do
+      do iterm=nterms(1)+1,nterms(2)
+         ifld = iflds(1,iterm)
+         jfld = iflds(2,iterm)
+         iifld = iflds(3,iterm)
+         jjfld = iflds(4,iterm)
+         mult = mults(iterm)
+         call DGEMM(sN,sN,nmos,nmos,nmos,
+     &              mult,Ug(1,ifld),nmos,Uf(1,jfld),nmos,
+     &              ONE,Xfg(1,iifld,jjfld),nmos)
+      end do
+      end
+C
+C*MODULE TDXITR  *DECK MakeDDfg
+      subroutine MakeDDfg(DDfg,w,C0,nocc,nmos,naos,nfld)
+      implicit none
+C     Arguments
+      integer nocc,nmos,naos,nfld
+      double precision w(2)
+      double precision DDfg(naos*naos,nfld,nfld)
+      double precision C0(naos*nmos)
+C     Used common block
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables
+      logical b12
+      integer lUf,lUg
+      double precision dummy
+C     Called subprogram
+      logical GetGUDEf
+C     Body of the subprogram
+      b12 = w(1).eq.w(2)
+      call NEWMEM(lUf,nmos*nmos*nfld)
+      dummy = 0.0d+00
+      if(.not.GetGUDEf(w(1),dummy,.false.,XX(lUf),.true.,dummy,.false.,
+     &                 dummy,.false.,nmos,naos,nfld)) then
+         call abrtx("MakeDDfg: not GetGUDEf:1")
+      end if
+      if(.not.b12) then
+         call NEWMEM(lUg,nmos*nmos*nfld)
+         if(.not.GetGUDEf(w(2),dummy,.false.,XX(lUg),.true.,
+     &        dummy,.false.,dummy,.false.,nmos,naos,nfld)) then
+            call abrtx("MakeDDfg: not GetGUDEf:1")
+         end if
+      else
+         lUg = lUf
+      end if
+
+c      call PrintMM(XX(lUf),nmos,nfld,'OLIX:Uf:test')
+
+      call CompDDfg(w,DDfg,XX(lUf),XX(lUg),C0,nocc,nmos,naos,nfld)
+
+c      call PrintMM(DDfg,naos,nfld*nfld,'OLIX:DDfg:test')
+
+      if(.not.b12) call DELETEMEM(lUg,nmos*nmos*nfld)
+      call DELETEMEM(lUf,nmos*nmos*nfld)
+      end
+C
+C*MODULE TDXITR  *DECK CompDDfg
+      subroutine CompDDfg(w,DDfg,Uf,Ug,C0,nocc,nmos,naos,nfld)
+      implicit none
+C     Arguments
+      double precision w(2)
+      integer nocc,nmos,naos,nfld
+      double precision DDfg(naos*naos,nfld,nfld)
+      double precision Uf(nmos*nmos,nfld)
+      double precision Ug(nmos*nmos,nfld)
+      double precision C0(naos*nmos)
+C     Variables
+      integer iterm,ifld,jfld,iifld,jjfld
+      double precision mult
+      integer nterms(2)
+      integer iflds(4,2*9)
+      double precision mults(2*9)
+C     Body of the subprogram
+      call MakeBetaPerms(w,nfld,nterms,iflds,mults)
+      call VCLR(DDfg,1,naos*naos*nfld*nfld)
+      do iterm=1,nterms(1)
+         ifld = iflds(1,iterm)
+         jfld = iflds(2,iterm)
+         iifld = iflds(3,iterm)
+         jjfld = iflds(4,iterm)
+         mult = mults(iterm)
+         call CompUsum(DDfg(1,iifld,jjfld),
+     &                 Uf(1,ifld),Ug(1,jfld),'f',
+     &                 nocc,nmos,mult)
+      end do
+      do iterm=nterms(1)+1,nterms(2)
+         ifld = iflds(1,iterm)
+         jfld = iflds(2,iterm)
+         iifld = iflds(3,iterm)
+         jjfld = iflds(4,iterm)
+         mult = mults(iterm)
+         call CompUsum(DDfg(1,iifld,jjfld),
+     &                 Ug(1,ifld),Uf(1,jfld),'f',
+     &                 nocc,nmos,mult)
+      end do
+
+      call CompDDterm(DDfg,C0,nmos,naos,nfld*nfld)
+      end
+C*MODULE TDXITR  *DECK MakeGamma
+      subroutine MakeGamma(w1,w2,w3)
+      implicit none
+C     Arguments
+      double precision w1,w2,w3
+C     Used common blocks
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      integer IR, IW, IP, IS,IPK,IDAF,NAV,IODA
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables and constants
+      double precision gamma(21)
+      double precision w(4),lw(3)
+      integer lE0,lC0
+      double precision dummy
+C     Called subprograms
+      logical GetHf,GetGUDEf,GetGUXDEfg
+C     Body of the subprogram
+      call VCLR(gamma,1,21)
+C
+      w(1)=-w1-w2-w3
+      w(2)=w1
+      w(3)=w2
+      w(4)=w3
+      lw(1)=w1
+      lw(2)=w2
+      lw(3)=w3
+C
+      dummy = 0.0d+00
+      if(.not.GetHf(dummy,.false.)) call MakeHf()
+      if(.not.GetGUDEf(w1,dummy,.false.,dummy,.false.,dummy,.false.,
+     &     dummy,.false.,nmos,naos,nfld)) call MakeAlpha(w1)
+      if(.not.GetGUDEf(w2,dummy,.false.,dummy,.false.,dummy,.false.,
+     &     dummy,.false.,nmos,naos,nfld)) call MakeAlpha(w2)
+      if(.not.GetGUDEf(w3,dummy,.false.,dummy,.false.,dummy,.false.,
+     &     dummy,.false.,nmos,naos,nfld)) call MakeAlpha(w3)
+      if(.not.GetGUXDEfg(w1,w2,dummy,.false.,dummy,.false.,
+     &     dummy,.false.,dummy,.false.,dummy,.false.,nmos,naos,nfld))
+     &     call MakeBeta(w1,w2)
+      if(.not.GetGUXDEfg(w1,w3,dummy,.false.,dummy,.false.,
+     &     dummy,.false.,dummy,.false.,dummy,.false.,nmos,naos,nfld))
+     &     call MakeBeta(w1,w3)
+      if(.not.GetGUXDEfg(w2,w3,dummy,.false.,dummy,.false.,
+     &     dummy,.false.,dummy,.false.,dummy,.false.,nmos,naos,nfld))
+     &     call MakeBeta(w2,w3)
+C
+      call NEWMEM(lE0,nmos)
+      call NEWMEM(lC0,naos*nmos)
+      call GetEnergy(XX(lE0),nmos)
+      call GetLCAO(XX(lC0),nmos,naos)
+C
+      call CompGamma(gamma,lw,XX(lE0),XX(lC0),
+     &               nocc,nvir,nmos,naos,ibfld,nfld)
+C
+      call DELETEMEM(lC0,naos*nmos)
+      call DELETEMEM(lE0,nmos)
+C
+      call SetGamma(w1,w2,w3,gamma)
+      call PrintGammaX(iw,gamma,w,'Gamma tensor [in au]')
+      CALL TIMIT(1)
+      end
+C
+C*MODULE TDXITR  *DECK CompGamma
+      subroutine CompGamma(gamma,w,E0,C0,
+     &                     nocc,nvir,nmos,naos,ibfld,nfld)
+      implicit none
+C     Arguments
+      integer nocc,nvir,nmos,naos,ibfld,nfld
+      double precision w(3)
+      double precision gamma(21)
+      double precision E0(nmos),C0(naos,nmos)
+C     Used common blocks
+      integer IR, IW, IP, IS,IPK,IDAF,NAV,IODA
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables
+      integer nparams
+      double precision ws
+      integer lD,lDD,lHf,lG,lU,lE,lX,lQ
+      double precision dummyF(1)
+C     Called subprogram
+      logical GetHf
+C     External subprogram
+      external GetDJK,PrintGammaConvergedParam
+C     Body of the subprogram
+      nparams = nfld*nfld*nfld
+      ws=w(1)+w(2)+w(3)
+      write(iw,3000) (-ws),w(1),w(2),w(3)
+C     ----------
+C     prepare DD
+C     ----------
+      call NEWMEM(lDD,naos*naos*nparams)
+      call MakeDDfgh(XX(lDD),w,C0,nocc,nmos,naos,nfld)
+      call MakeDDStep0
+      call MakeDDStep1(XX(lDD),C0,E0,ws,dummyF,.false.,
+     &                 nocc,nvir,nmos,naos,nparams)
+      call NEWMEM(lQ,nmos*nmos*nparams)
+      call MakeQfgh(XX(lQ),w,nmos,naos,nfld)
+      call MakeDDStep2(XX(lDD),C0,E0,ws,XX(lQ),.true.,
+     &                 nocc,nvir,nmos,naos,nparams)
+C      call PrintMM(XX(lDD),norb,nparams,'DDfgh')
+      call DELETEMEM(lQ,nmos*nmos*nparams)
+      call NEWMEM(lX,nmos*nmos*nparams)
+      call MakeXfgh(XX(lX),w,nmos,naos,nfld)
+      call MakeDDStep3(XX(lDD),C0,XX(lX),.true.,
+     &                 nocc,nmos,naos,nparams)
+C      call PrintMM(XX(lDD),norb,nparams,'DDfgh')
+      call DELETEMEM(lX,nmos*nmos*nparams)
+C      call PrintMM(XX(lDD),norb,nparams,'DDfgh')
+C     -----
+C     Solve
+C     -----
+      call NEWMEM(lD,naos*naos*nparams)
+      call TDHFCycle(GetDJK,PrintGammaConvergedParam,
+     &               C0,E0,ws,XX(lD),XX(lDD),
+     &               nocc,nvir,nmos,naos,nparams)
+C     -----------
+C     complete GU
+C     -----------
+      lG = lDD
+      call NEWMEM(lU,naos*naos*nparams)
+      call NEWMEM(lE,nmos*nmos*nparams)
+      call NEWMEM(lX,nmos*nmos*nparams)
+      call CompleteGUXE(C0,E0,ws,XX(lG),XX(lU),XX(lX),XX(lE),
+     &                  nocc,nmos,naos,nparams)
+      call FreeGUXDEfgh(w(1),w(2),w(3))
+      call SetGUXDEfgh(w(1),w(2),w(3),
+     &                 XX(lG),XX(lU),XX(lX),XX(lD),XX(lE),
+     &                 nmos,naos,nfld)
+      call DELETEMEM(lX,nmos*nmos*nparams)
+      call DELETEMEM(lE,nmos*nmos*nparams)
+      call DELETEMEM(lU,naos*naos*nparams)
+C     --------------------
+C     compute gamma tensor
+C     --------------------
+      lHf = lDD
+      if(.not.GetHf(XX(lHF),.true.)) then
+         call abrtx("CompGamma: not GetHF")
+      end if
+      call CompGammaTensor(gamma,XX(lHf),XX(lD),naos,ibfld,nfld)
+C     ----------
+C     deallocate
+C     ----------
+      call DELETEMEM(lD,naos*naos*nparams)
+      call DELETEMEM(lDD,naos*naos*nparams)
+C     Format
+ 3000 FORMAT('Iterative procedure to compute Gamma(',
+     &       F13.6,';',F13.6,',',F13.6,',',F13.6,')')
+      end
+C
+C*MODULE TDXITR  *DECK CompGammaTensor
+      subroutine CompGammaTensor(gamma,Hf,Dghi,naos,ibfld,nfld)
+      implicit none
+C     Arguments
+      integer naos,ibfld,nfld
+      double precision gamma(21)
+      double precision Hf(naos*naos,nfld),Dghi(naos*naos,nfld,nfld,nfld)
+C     Used common block
+      integer NELEMG,IELEMG,INDEXG
+      common/NLO_GAMMA/NELEMG,IELEMG(4,21),INDEXG(3,3,3,3)
+C     Variables
+      integer i,idummy,ifld(4),icomp
+C     Called subprograms
+      double precision DTrace
+C     Body of the subprogram
+      do i = 1,NELEMG
+         do icomp=1,4
+            idummy = IELEMG(icomp,i)-ibfld+1
+            if((idummy.lt.1).or.(idummy.gt.nfld)) go to 1001
+            ifld(icomp) = idummy
+            if(icomp.eq.4)
+     &           gamma(i)=-DTrace('S','N',Hf(1,ifld(1)),naos,
+     &                            Dghi(1,ifld(2),ifld(3),ifld(4)),naos,
+     &                            naos,naos)
+         end do
+ 1001    continue
+      end do
+      end
+C
+C*MODULE TDXITR  *DECK PrintGammaConvergedParam
+      subroutine PrintGammaConvergedParam(iw,ixyz,conv)
+      implicit none
+C     Arguments
+      integer iw,ixyz
+      double precision conv
+C     Used common block
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+C     Variables and constants
+      integer ifld,jfld,kfld
+      character*1 FIELDDIR(3)
+C     Body of the subprogram
+      DATA FIELDDIR /'x','y','z'/
+      ifld = (ixyz-1)/(nfld*nfld)
+      jfld = (ixyz-1-ifld*nfld*nfld)/nfld
+      kfld = (ixyz-1-ifld*nfld*nfld-jfld*nfld)
+      ifld = ifld+ibfld
+      jfld = jfld+ibfld
+      kfld = kfld+ibfld
+      write(iw,1001) FIELDDIR(ifld),FIELDDIR(jfld),FIELDDIR(kfld),conv
+C     Format
+ 1001 FORMAT('  Field directions ',3A1,' converged within ',E13.6)
+      end
+C
+C*MODULE TDXITR  *DECK MakeGammaPerms
+      subroutine MakeGammaPerms(w,nfld,nterms,iflds,mults,ws,bgws)
+      implicit none
+C     Arguments
+      double precision w(3)
+      integer nfld
+      integer nterms(3)
+      integer iflds(6,*)
+      double precision mults(*)
+      double precision ws(3,3)
+      logical bgws(3,3)
+C     Variables and constants
+C--      logical bw12,bw13,bw23,b12,b13,b23
+C--      double precision mult,TWO,THREE
+C--      parameter (TWO=2.0D+00,THREE=3.0D+00)
+C--      integer i,permlist(3)
+      integer iterm,ifld,jfld,kfld,iifld,jjfld,kkfld
+      double precision ONE
+      integer iperm,nperm
+      parameter (ONE=1.0D+00)
+      parameter (nperm=3)
+C     Body of the subprogram
+      if(.true.) then
+         ws(1,1) = w(1)
+         ws(2,1) = w(2)
+         ws(3,1) = w(3)
+         ws(1,2) = w(2)
+         ws(2,2) = w(1)
+         ws(3,2) = w(3)
+         ws(1,3) = w(3)
+         ws(2,3) = w(1)
+         ws(3,3) = w(2)
+         bgws(1,1) = .true.
+         bgws(2,1) = .true.
+         bgws(3,1) = .true.
+         bgws(1,2) = .true.
+         bgws(2,2) = .true.
+         bgws(3,2) = .true.
+         bgws(1,3) = .true.
+         bgws(2,3) = .true.
+         bgws(3,3) = .true.
+         iterm=0
+         do iperm=1,nperm
+            do kkfld=1,nfld
+               do jjfld=1,nfld
+                  do iifld=1,nfld
+                     iterm=iterm+1
+                     mults(iterm) = ONE
+                     if(iperm.eq.1) then
+                        ifld = iifld
+                        jfld = jjfld
+                        kfld = kkfld
+                     else if(iperm.eq.2) then
+                        ifld = jjfld
+                        jfld = iifld
+                        kfld = kkfld
+                     else if(iperm.eq.3) then
+                        ifld = kkfld
+                        jfld = iifld
+                        kfld = jjfld
+                     end if
+                     iflds(1,iterm) = ifld
+                     iflds(2,iterm) = jfld
+                     iflds(3,iterm) = kfld
+                     iflds(4,iterm) = iifld
+                     iflds(5,iterm) = jjfld
+                     iflds(6,iterm) = kkfld
+                  end do
+               end do
+            end do
+            nterms(iperm)=iterm
+         end do
+         return
+      end if
+C--c     ------------------
+C--c     Smart permutations
+C--c     ------------------
+C--      bw12=w(1).eq.w(2)
+C--      bw13=w(1).eq.w(3)
+C--      bw23=w(2).eq.w(3)
+C--      permlist(1) = 1
+C--      permlist(2) = 2
+C--      permlist(3) = 3
+C--      iterm = 0
+C--      do i=1,nperm
+C--         iperm = permlist(i)
+C--         if(iperm.eq.1) then
+C--            ws(1,i) = w(1)
+C--            ws(2,i) = w(2)
+C--            ws(3,i) = w(3)
+C--         else if(iperm.eq.2) then
+C--            ws(1,i) = w(2)
+C--            ws(2,i) = w(1)
+C--            ws(3,i) = w(3)
+C--         else if(iperm.eq.3) then
+C--            ws(1,i) = w(3)
+C--            ws(2,i) = w(1)
+C--            ws(3,i) = w(2)
+C--         end if
+C--         do kkfld=1,nfld
+C--            do jjfld=1,nfld
+C--               do 1011 iifld=1,nfld
+C--                  b12=(iifld.eq.jjfld).and.bw12
+C--                  b13=(iifld.eq.kkfld).and.bw13
+C--                  b23=(jjfld.eq.kkfld).and.bw23
+C--c
+C--                  if(iperm.eq.1) then
+C--                     ifld = iifld
+C--                     jfld = jjfld
+C--                     kfld = kkfld
+C--                     if(b12.and.b13) then
+C--                        mult = THREE
+C--                     else if(b12) then
+C--                        mult = TWO
+C--                     else
+C--                        mult = ONE
+C--                     end if
+C--                  else if(iperm.eq.2) then
+C--                     if((b12.and.b13).or.b12) go to 1011
+C--                     ifld = jjfld
+C--                     jfld = iifld
+C--                     kfld = kkfld
+C--                     if(b23) then
+C--                        mult = TWO
+C--                     else
+C--                        mult = ONE
+C--                     end if
+C--                  else if(iperm.eq.3) then
+C--                     if((b12.and.b13).or.b23) go to 1011
+C--                     ifld = kkfld
+C--                     jfld = iifld
+C--                     kfld = jjfld
+C--                     mult = ONE
+C--                  end if
+C--                  iterm=iterm+1
+C--                  iflds(1,iterm) = ifld
+C--                  iflds(2,iterm) = jfld
+C--                  iflds(3,iterm) = kfld
+C--                  iflds(4,iterm) = iifld
+C--                  iflds(5,iterm) = jjfld
+C--                  iflds(6,iterm) = kkfld
+C--                  mults(iterm)   = mult
+C-- 1011          continue
+C--            end do
+C--         end do
+C--         nterms(i) = iterm
+C--      end do
+C--      do i = 1,3
+C--         bgws(i,1) = .true.
+C--         bgws(i,2) = ws(i,1).ne.ws(i,2)
+C--         bgws(i,3) = ws(i,2).ne.ws(i,3)
+C--      end do
+      end
+C
+C*MODULE TDXITR  *DECK MakeQfgh
+      subroutine MakeQfgh(Qfgh,w,nmos,naos,nfld)
+      implicit none
+C     Arguments
+      integer nmos,naos,nfld
+      double precision w(3)
+      double precision Qfgh(nmos*nmos,nfld,nfld,nfld)
+C     Used common block
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables
+      integer lGf,lUf,lEf,lGgh,lUgh,lEgh
+C     Body of the subprogram
+      call NEWMEM(lGf,nmos*nmos*nfld)
+      call NEWMEM(lUf,nmos*nmos*nfld)
+      call NEWMEM(lEf,nmos*nmos*nfld)
+      call NEWMEM(lGgh,nmos*nmos*nfld*nfld)
+      call NEWMEM(lUgh,nmos*nmos*nfld*nfld)
+      call NEWMEM(lEgh,nmos*nmos*nfld*nfld)
+      call CompQfgh(w,Qfgh,XX(lGf),XX(lUf),XX(lEf),
+     &              XX(lGgh),XX(lUgh),XX(lEgh),
+     &              nmos,naos,nfld)
+      call DELETEMEM(lEgh,nmos*nmos*nfld*nfld)
+      call DELETEMEM(lUgh,nmos*nmos*nfld*nfld)
+      call DELETEMEM(lGgh,nmos*nmos*nfld*nfld)
+      call DELETEMEM(lEf,nmos*nmos*nfld)
+      call DELETEMEM(lUf,nmos*nmos*nfld)
+      call DELETEMEM(lGf,nmos*nmos*nfld)
+      end
+C
+C*MODULE TDXITR  *DECK CompQfgh
+      subroutine CompQfgh(w,Qfgh,Gf,Uf,Ef,Ggh,Ugh,Egh,
+     &                    nmos,naos,nfld)
+      implicit none
+C     Arguments
+      double precision w(3)
+      integer nmos,naos,nfld
+      double precision Qfgh(nmos*nmos,nfld,nfld,nfld)
+      double precision Gf(nmos*nmos,nfld)
+      double precision Uf(nmos*nmos,nfld)
+      double precision Ef(nmos*nmos,nfld)
+      double precision Ggh(nmos*nmos,nfld,nfld)
+      double precision Ugh(nmos*nmos,nfld,nfld)
+      double precision Egh(nmos*nmos,nfld,nfld)
+C     Variables
+      integer iterm,ibterm,ieterm,ifld,jfld,kfld,iifld,jjfld,kkfld
+      double precision mult,dummy
+      integer iperm,nperm
+      parameter (nperm=3)
+      integer nterms(nperm)
+      integer iflds(6,nperm*27)
+      double precision mults(nperm*27)
+      double precision ws(3,nperm)
+      logical bgws(3,nperm)
+C     Called subprogram
+      logical GetGUDEf,GetGUXDEfg
+C     Body of the subprogram
+      call VCLR(Qfgh,1,nmos*nmos*nfld*nfld*nfld)
+      call MakeGammaPerms(w,nfld,nterms,iflds,mults,ws,bgws)
+C
+      ieterm = 0
+      dummy = 0.0d+00
+      do iperm = 1,nperm
+         if(bgws(1,iperm)) then
+            if(.not.GetGUDEf(ws(1,iperm),
+     &                       Gf,.true.,Uf,.true.,
+     &                       dummy,.false.,Ef,.true.,
+     &                       nmos,naos,nfld)) then
+               call abrtx("CompQfgh: not GetGUDEf:1")
+            end if
+         end if
+         if(bgws(2,iperm).or.bgws(3,iperm)) then
+            if(.not.GetGUXDEfg(ws(2,iperm),ws(3,iperm),
+     &                         Ggh,.true.,Ugh,.true.,dummy,.false.,
+     &                         dummy,.false.,Egh,.true.,
+     &                         nmos,naos,nfld)) then
+               call abrtx("CompQfgh: not GetGUDEf:2")
+            end if
+         end if
+         ibterm=ieterm+1
+         ieterm=nterms(iperm)
+         do iterm = ibterm,ieterm
+            ifld = iflds(1,iterm)
+            jfld = iflds(2,iterm)
+            kfld = iflds(3,iterm)
+            iifld = iflds(4,iterm)
+            jjfld = iflds(5,iterm)
+            kkfld = iflds(6,iterm)
+            mult = mults(iterm)
+            call CompQterm(Qfgh(1,iifld,jjfld,kkfld),
+     &                     Gf(1,ifld),Uf(1,ifld),'o',
+     &                     Ugh(1,jfld,kfld),Egh(1,jfld,kfld),
+     &                     nmos,mult)
+            call CompQterm(Qfgh(1,iifld,jjfld,kkfld),
+     &                     Ggh(1,jfld,kfld),Ugh(1,jfld,kfld),'o',
+     &                     Uf(1,ifld),Ef(1,ifld),
+     &                     nmos,mult)
+         end do
+      end do
+      end
+C
+C*MODULE TDXITR  *DECK MakeXfgh
+      subroutine MakeXfgh(Xfgh,w,nmos,naos,nfld)
+      implicit none
+C     Arguments
+      integer nmos,naos,nfld
+      double precision w(3)
+      double precision Xfgh(nmos*nmos,nfld,nfld,nfld)
+C     Used common block
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables
+      integer lUf,lUgh,lXgh
+C     Body of the subprogram
+      call NEWMEM(lUf,nmos*nmos*nfld)
+      call NEWMEM(lUgh,nmos*nmos*nfld*nfld)
+      call NEWMEM(lXgh,nmos*nmos*nfld*nfld)
+      call CompXfgh(w,Xfgh,XX(lUf),XX(lUgh),XX(lXgh),nmos,naos,nfld)
+      call DELETEMEM(lXgh,nmos*nmos*nfld*nfld)
+      call DELETEMEM(lUgh,nmos*nmos*nfld*nfld)
+      call DELETEMEM(lUf,nmos*nmos*nfld)
+      end
+C
+C*MODULE TDXITR  *DECK CompXfgh
+      subroutine CompXfgh(w,Xfgh,Uf,Ugh,Udgh,nmos,naos,nfld)
+      implicit none
+C     Arguments
+      double precision w(3)
+      integer nmos,naos,nfld
+      double precision Xfgh(nmos*nmos,nfld,nfld,nfld)
+      double precision Uf(nmos*nmos,nfld)
+      double precision Ugh(nmos*nmos,nfld,nfld)
+      double precision Udgh(nmos*nmos,nfld,nfld)
+C     Variables
+      integer iterm,ibterm,ieterm,ifld,jfld,kfld,iifld,jjfld,kkfld
+      double precision mult,dummy
+      integer iperm,nperm
+      parameter (nperm=3)
+      integer nterms(nperm)
+      integer iflds(6,nperm*27)
+      double precision mults(nperm*27)
+      double precision ws(3,nperm)
+      logical bgws(3,nperm)
+      double precision ONE,MINUSONE
+      parameter (ONE=1.0D+00,MINUSONE=-1.0D+00)
+      character*1 sN
+      parameter (sN='N')
+C     Called subprogram
+      logical GetGUDEf,GetGUXDEfg
+C     Body of the subprogram
+      call VCLR(Xfgh,1,nmos*nmos*nfld*nfld*nfld)
+      call MakeGammaPerms(w,nfld,nterms,iflds,mults,ws,bgws)
+C
+      ieterm = 0
+      dummy = 0.0d+00
+      do iperm = 1,nperm
+         if(bgws(1,iperm)) then
+            if(.not.GetGUDEf(ws(1,iperm),
+     &                       dummy,.false.,Uf,.true.,
+     &                       dummy,.false.,dummy,.false.,
+     &                       nmos,naos,nfld)) then
+               call abrtx("CompXfgh: not GetGUDEf:1")
+            end if
+         end if
+         if(bgws(2,iperm).or.bgws(3,iperm)) then
+            if(.not.GetGUXDEfg(ws(2,iperm),ws(3,iperm),
+     &                         dummy,.false.,Ugh,.true.,Udgh,.true.,
+     &                         dummy,.false.,dummy,.false.,
+     &                         nmos,naos,nfld)) then
+               call abrtx("CompXfgh: not GetGUDEf:2")
+            end if
+C           form Udagger(-w2,-w3)=X(w2,w3)-U(w2,w3)
+C            call VSUB(Ugh,1,Udgh,1,Udgh,1,norb*norb*nfld*nfld)
+            call DAXPY(nmos*nmos*nfld*nfld,MINUSONE,Ugh,1,Udgh,1)
+         end if
+         ibterm=ieterm+1
+         ieterm=nterms(iperm)
+         do iterm = ibterm,ieterm
+            ifld = iflds(1,iterm)
+            jfld = iflds(2,iterm)
+            kfld = iflds(3,iterm)
+            iifld = iflds(4,iterm)
+            jjfld = iflds(5,iterm)
+            kkfld = iflds(6,iterm)
+            mult = mults(iterm)
+            call DGEMM(sN,sN,nmos,nmos,nmos,
+     &                 mult,Uf(1,ifld),nmos,Ugh(1,jfld,kfld),nmos,
+     &                 ONE,Xfgh(1,iifld,jjfld,kkfld),nmos)
+            call DGEMM(sN,sN,nmos,nmos,nmos,
+     &                 -mult,Udgh(1,jfld,kfld),nmos,Uf(1,ifld),nmos,
+     &                 ONE,Xfgh(1,iifld,jjfld,kkfld),nmos)
+         end do
+      end do
+      end
+C
+C*MODULE TDXITR  *DECK MakeDDfgh
+      subroutine MakeDDfgh(DDfgh,w,C0,nocc,nmos,naos,nfld)
+      implicit none
+C     Arguments
+      integer nocc,nmos,naos,nfld
+      double precision w(3)
+      double precision DDfgh(naos*naos,nfld,nfld,nfld)
+      double precision C0(naos*nmos)
+C     Used common block
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables
+      integer lUf,lUgh,lXgh
+C     Body of the subprogram
+      call NEWMEM(lUf,nmos*nmos*nfld)
+      call NEWMEM(lUgh,nmos*nmos*nfld*nfld)
+      call NEWMEM(lXgh,nmos*nmos*nfld*nfld)
+      call CompDDfgh(w,DDfgh,XX(lUf),XX(lUgh),XX(lXgh),
+     &               C0,nocc,nmos,naos,nfld)
+      call DELETEMEM(lXgh,nmos*nmos*nfld*nfld)
+      call DELETEMEM(lUgh,nmos*nmos*nfld*nfld)
+      call DELETEMEM(lUf,nmos*nmos*nfld)
+      end
+C
+C*MODULE TDXITR  *DECK CompDDfgh
+      subroutine CompDDfgh(w,DDfgh,Uf,Ugh,Udgh,C0,
+     &                     nocc,nmos,naos,nfld)
+      implicit none
+C     Arguments
+      double precision w(3)
+      integer nocc,nmos,naos,nfld
+      double precision DDfgh(naos*naos,nfld,nfld,nfld)
+      double precision Uf(nmos*nmos,nfld)
+      double precision Ugh(nmos*nmos,nfld,nfld)
+      double precision Udgh(nmos*nmos,nfld,nfld)
+      double precision C0(naos*nmos)
+C     Variables and constants
+      integer iterm,ibterm,ieterm,ifld,jfld,kfld,iifld,jjfld,kkfld
+      double precision mult,dummy
+      integer iperm,nperm
+      parameter (nperm=3)
+      integer nterms(nperm)
+      integer iflds(6,nperm*27)
+      double precision mults(nperm*27)
+      double precision ws(3,nperm)
+      logical bgws(3,nperm)
+      double precision MINUSONE
+      parameter (MINUSONE=-1.0D+00)
+C     Called subprogram
+      logical GetGUDEf,GetGUXDEfg
+C     Body of the subprogram
+      call VCLR(DDfgh,1,naos*naos*nfld*nfld*nfld)
+      call MakeGammaPerms(w,nfld,nterms,iflds,mults,ws,bgws)
+C
+      ieterm = 0
+      dummy = 0.0d+00
+      do iperm = 1,nperm
+         if(bgws(1,iperm)) then
+            if(.not.GetGUDEf(ws(1,iperm),
+     &                       dummy,.false.,Uf,.true.,
+     &                       dummy,.false.,dummy,.false.,
+     &                       nmos,naos,nfld)) then
+               call abrtx("CompDDfgh: not GetGUDEf:1")
+            end if
+         end if
+         if(bgws(2,iperm).or.bgws(3,iperm)) then
+            if(.not.GetGUXDEfg(ws(2,iperm),ws(3,iperm),
+     &                         dummy,.false.,Ugh,.true.,Udgh,.true.,
+     &                         dummy,.false.,dummy,.false.,
+     &                         nmos,naos,nfld)) then
+               call abrtx("CompDDfgh: not GetGUDEf:2")
+            end if
+C           form Udagger(-w2,-w3)=X(w2,w3)-U(w2,w3)
+C            call VSUB(Ugh,1,Udgh,1,Udgh,1,norb*norb*nfld*nfld)
+            call DAXPY(nmos*nmos*nfld*nfld,MINUSONE,Ugh,1,Udgh,1)
+         end if
+         ibterm=ieterm+1
+         ieterm=nterms(iperm)
+         do iterm = ibterm,ieterm
+            ifld = iflds(1,iterm)
+            jfld = iflds(2,iterm)
+            kfld = iflds(3,iterm)
+            iifld = iflds(4,iterm)
+            jjfld = iflds(5,iterm)
+            kkfld = iflds(6,iterm)
+            mult = mults(iterm)
+            call CompUsum(DDfgh(1,iifld,jjfld,kkfld),
+     &                    Uf(1,ifld),Udgh(1,jfld,kfld),'o',
+     &                    nocc,nmos,mult)
+            call CompUsum(DDfgh(1,iifld,jjfld,kkfld),
+     &                    Ugh(1,jfld,kfld),Uf(1,ifld),'f',
+     &                    nocc,nmos,mult)
+         end do
+      end do
+      call CompDDterm(DDfgh,C0,nmos,naos,nfld*nfld*nfld)
+      end
+C*MODULE TDXITR  *DECK MakedAlphadX
+      subroutine MakedAlphadX(w1)
+      implicit none
+C     Arguments
+      double precision w1
+C     Used common blocks
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables and constants
+      integer lE0,lC0,ldAdX
+      double precision w(2)
+      double precision dummy(1)
+C     Called subprograms
+      logical GetHf,GetGUIDEa,GetGUDEf,GetHfa,GetFFfa
+C     Body of the subprogram
+      w(1)=-w1
+      w(2)=w1
+C
+      dummy(1) = 0.0d+00
+      if(.not.GetGUIDEa(dummy,.false.,dummy,.false.,dummy,.false.,
+     &     dummy,.false.,dummy,.false.,nmos,naos,ngeom)) then
+         call abrtx("MakedAlphadX: not GetGUIDEa")
+      end if
+      if(.not.GetGUDEf(w1,dummy,.false.,dummy,.false.,dummy,.false.,
+     &                 dummy,.false.,nmos,naos,nfld)) call MakeAlpha(w1)
+      if(.not.GetHf(dummy,.false.)) call MakeHf()
+      if(.not.GetHfa(dummy,.false.)) call MakeHfa()
+      if(.not.GetFFfa(w1,dummy,.false.)) call MakeFFfa(w1)
+C
+      call NEWMEM(ldAdX,9*ngeom)
+      call VCLR(XX(ldAdX),1,9*ngeom)
+C
+      call NEWMEM(lE0,nmos)
+      call NEWMEM(lC0,naos*nmos)
+      call GetEnergy(XX(lE0),nmos)
+      call GetLCAO(XX(lC0),nmos,naos)
+C
+      call CompdAlphadX(XX(ldAdX),w1,XX(lE0),XX(lC0),
+     &                  nocc,nvir,nmos,naos,ibfld,nfld,ngeom)
+C
+      call DELETEMEM(lC0,naos*nmos)
+      call DELETEMEM(lE0,nmos)
+C
+      call PostdAlphadX(w,XX(ldAdX))
+C
+      call DELETEMEM(ldAdX,9*ngeom)
+      CALL TIMIT(1)
+C
+      end
+C
+C*MODULE TDXITR  *DECK CompdAlphadX
+      subroutine CompdAlphadX(dAdX,w,E0,C0,
+     &                        nocc,nvir,nmos,naos,ibfld,nfld,ngeom)
+      implicit none
+C     Arguments
+      integer nocc,nvir,nmos,naos,ibfld,nfld,ngeom
+      double precision w
+      double precision dAdX(9,ngeom)
+      double precision E0(nmos),C0(naos,nmos)
+C     Used common blocks
+      integer IR, IW, IP, IS,IPK,IDAF,NAV,IODA
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables
+      double precision dummy
+      integer nparams
+      integer lD,lDD,lFF,lG,lU,lX,lE,lQ,lHf,lHfa,lDg
+C     Called subprograms
+      logical GetFFfa,GetHf,GetHfa,GetGUDEf
+C     External subprogram
+      external GetDJK,PrintdAlphadXConvergedParam
+C     Body of the subprogram
+      nparams = nfld*ngeom
+      write(iw,3000) -w,w
+C     ----------
+C     prepare DD
+C     ----------
+      call NEWMEM(lDD,naos*naos*nparams)
+      call MakeDDfa(XX(lDD),w,C0,nocc,nmos,naos,nfld,ngeom)
+      call MakeDDStep0
+      call NEWMEM(lFF,naos*naos*nparams)
+      if(.not.GetFFfa(w,XX(lFF),.true.)) then
+         call abrtx("CompdAlphadX: not GetFFfa")
+      end if
+      call MakeDDStep1(XX(lDD),C0,E0,w,XX(lFF),.true.,
+     &                 nocc,nvir,nmos,naos,nparams)
+      call DELETEMEM(lFF,naos*naos*nparams)
+      call NEWMEM(lQ,nmos*nmos*nparams)
+      call MakeQfa(XX(lQ),w,E0,nmos,naos,nfld,ngeom)
+      call MakeDDStep2(XX(lDD),C0,E0,w,XX(lQ),.true.,
+     &                 nocc,nvir,nmos,naos,nparams)
+      call DELETEMEM(lQ,nmos*nmos*nparams)
+      call NEWMEM(lX,nmos*nmos*nparams)
+      call MakeXfa(XX(lX),w,nmos,naos,nfld,ngeom)
+      call MakeDDStep3(XX(lDD),C0,XX(lX),.true.,
+     &                 nocc,nmos,naos,nparams)
+      call DELETEMEM(lX,nmos*nmos*nparams)
+C     -----
+C     Solve
+C     -----
+      call NEWMEM(lD,naos*naos*nparams)
+      call TDHFCycle(GetDJK,PrintdAlphadXConvergedParam,
+     &               C0,E0,w,XX(lD),XX(lDD),
+     &               nocc,nvir,nmos,naos,nparams)
+C     -----------
+C     complete GU
+C     -----------
+      lG = lDD
+      call NEWMEM(lU,naos*naos*nparams)
+      call NEWMEM(lE,nmos*nmos*nparams)
+      call NEWMEM(lX,nmos*nmos*nparams)
+      call CompleteGUXE(C0,E0,w,XX(lG),XX(lU),XX(lX),XX(lE),
+     &                  nocc,nmos,naos,nparams)
+C      call PrintMM(XX(lG),norb,nparams,'OLIX:Gfa')
+C      call PrintMM(XX(lU),norb,nparams,'OLIX:Ufa')
+C      call PrintMM(XX(lX),norb,nparams,'OLIX:Xfa')
+C      call PrintMM(XX(lD),norb,nparams,'OLIX:Dfa')
+C      call PrintMM(XX(lE),norb,nparams,'OLIX:Efa')
+      call FreeGUXDEfa(w)
+      call SetGUXDEfa(w,XX(lG),XX(lU),XX(lX),XX(lD),XX(lE),
+     &                nmos,naos,nfld,ngeom)
+      call DELETEMEM(lX,nmos*nmos*nparams)
+      call DELETEMEM(lE,nmos*nmos*nparams)
+      call DELETEMEM(lU,naos*naos*nparams)
+C     --------------------
+C     compute alpha tensor
+C     --------------------
+      lHf = lDD
+      if(.not.GetHf(XX(lHF),.true.)) then
+         call abrtx("CompdAlphadX: not GetHf")
+      end if
+      call NEWMEM(lHfa,naos*naos*nparams)
+      if(.not.GetHfa(XX(lHfa),.true.)) then
+         call abrtx("CompdAlphadX: not GetHfa")
+      end if
+      call NEWMEM(lDg,naos*naos*nfld)
+      dummy = 0.0d+00
+      if(.not.GetGUDEf(w,dummy,.false.,dummy,.false.,XX(lDg),.true.,
+     &                 dummy,.false.,nmos,naos,nfld)) then
+         call abrtx("CompdAlphadX: not GetGUDEf")
+      end if
+      call CompdAlphadXTensor(dadx,XX(lHf),XX(lD),XX(lHfa),XX(lDg),
+     &                        naos,ibfld,nfld,ngeom)
+      call DELETEMEM(lDg,naos*naos*nfld)
+      call DELETEMEM(lHfa,naos*naos*nparams)
+C     ----------
+C     deallocate
+C     ----------
+      call DELETEMEM(lD,naos*naos*nparams)
+      call DELETEMEM(lDD,naos*naos*nparams)
+C     Format
+ 3000 FORMAT('Iterative procedure to compute dAlphadX(',
+     &       F13.6,';',F13.6,')')
+      end
+C
+C*MODULE TDXITR  *DECK CompdAlphadXTensor
+      subroutine CompdAlphadXTensor(dadx,Hf,Dga,Hfa,Dg,
+     &                              naos,ibfld,nfld,ngeom)
+      implicit none
+C     Arguments
+      integer naos,ibfld,nfld,ngeom
+      double precision dadx(9,ngeom)
+      double precision Hf(naos*naos,nfld),Dga(naos*naos,nfld,ngeom)
+      double precision Hfa(naos*naos,nfld,ngeom),Dg(naos*naos,nfld)
+C     Used common block
+      integer NELEMA,IELEMA,INDEXA
+      common/NLO_ALPHA/NELEMA,IELEMA(2,9),INDEXA(3,3)
+C     Variables
+      integer igeom,index,idummy,ifld(2),icomp
+C     Called subprograms
+      double precision dTrace
+C     Body of the subprogram
+      do index = 1,NELEMA
+         do icomp=1,2
+            idummy = IELEMA(icomp,index)-ibfld+1
+            if((idummy.lt.1).or.(idummy.gt.nfld)) go to 1001
+            ifld(icomp) = idummy
+            if(icomp.eq.2) then
+               do igeom=1,ngeom
+                  dadx(index,igeom)=
+     &                 -dTrace('S','N',Hf(1,ifld(1)),naos,
+     &                         Dga(1,ifld(2),igeom),naos,naos,naos)
+     &                 -dTrace('S','N',Hfa(1,ifld(1),igeom),naos,
+     &                         Dg(1,ifld(2)),naos,naos,naos)
+               end do
+            end if
+         end do
+ 1001    continue
+      end do
+      end
+C
+C*MODULE TDXITR  *DECK PrintdAlphadXConvergedParam
+      subroutine PrintdAlphadXConvergedParam(iw,ixyz,conv)
+      implicit none
+C     Arguments
+      integer iw,ixyz
+      double precision conv
+C     Used common block
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+C     Variables and constants
+      integer ifld,ipar,iat,icoord
+      character*1 DIR(3)
+      logical bUseQ
+C     Called subprogram
+      integer IGetOLI
+C     Body of the subprogram
+      DATA DIR /'x','y','z'/
+C
+      bUseQ = IGetOLI(4).ne.0
+C
+      ipar = (ixyz-1)/nfld
+      ifld = (ixyz-1-ipar*nfld)
+      ipar = ipar+1
+      ifld = ifld+ibfld
+      if(bUseQ) then
+         write(iw,1001) DIR(ifld),ipar,conv
+      else
+         iat = (ipar-1)/3
+         icoord = (ipar-iat*3)
+         iat = iat+1
+         write(iw,1002) DIR(ifld),iat,DIR(icoord),conv
+      end if
+C     Format
+ 1001 FORMAT('  Field direction ',A1,' mode ',I4,
+     &       ' converged within ',  E13.6)
+ 1002 FORMAT('  Field direction ',A1,' coord. ',I3,A1,
+     &       ' converged within ',  E13.6)
+      end
+C
+C*MODULE TDXITR  *DECK MakeQfa
+      subroutine MakeQfa(Q,w,E0,nmos,naos,nfld,ngeom)
+      implicit none
+C     Arguments
+      integer nmos,naos,nfld,ngeom
+      double precision w
+      double precision Q(nmos*nmos,nfld,ngeom),E0(nmos)
+C     Used common block
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables
+      integer lUa,lGa,lEa,lIa,lUf,lGf,lEf
+      double precision dummy
+C     Called subprogram
+      logical GetGUDEf,GetGUIDEa
+C     Body of the subprogram
+      call NEWMEM(lUa,nmos*nmos*ngeom)
+      call NEWMEM(lGa,nmos*nmos*ngeom)
+      call NEWMEM(lEa,nmos*nmos*ngeom)
+      call NEWMEM(lIa,nmos*nmos*ngeom)
+      call NEWMEM(lUf,nmos*nmos*nfld)
+      call NEWMEM(lGf,nmos*nmos*nfld)
+      call NEWMEM(lEf,nmos*nmos*nfld)
+      dummy = 0.0d+00
+      if(.not.GetGUDEf(w,XX(lGf),.true.,XX(lUf),.true.,dummy,.false.,
+     &                 XX(lEf),.true.,nmos,naos,nfld)) then
+         call abrtx("MakeQfa: not GetGUDEf")
+      end if
+      if(.not.GetGUIDEa(XX(lGa),.true.,XX(lUa),.true.,XX(lIa),.true.,
+     &     dummy,.false.,XX(lEa),.true.,nmos,naos,ngeom)) then
+         call abrtx("MakeQfa: not GetGUIDEa")
+      end if
+      call CompQfa(Q,w,E0,XX(lUa),XX(lIa),XX(lGa),XX(lEa),
+     &             XX(lUf),XX(lGf),XX(lEf),nmos,nfld,ngeom)
+      call DELETEMEM(lEf,nmos*nmos*nfld)
+      call DELETEMEM(lGf,nmos*nmos*nfld)
+      call DELETEMEM(lUf,nmos*nmos*nfld)
+      call DELETEMEM(lIa,nmos*nmos*ngeom)
+      call DELETEMEM(lEa,nmos*nmos*ngeom)
+      call DELETEMEM(lGa,nmos*nmos*ngeom)
+      call DELETEMEM(lUa,nmos*nmos*ngeom)
+      end
+C
+C*MODULE TDXITR  *DECK CompQfa
+      subroutine CompQfa(Q,w,E0,Ua,Ia,Ga,Ea,Uf,Gf,Ef,nmos,nfld,ngeom)
+      implicit none
+C     Arguments
+      integer nmos,nfld,ngeom
+      double precision w
+      double precision Q(nmos*nmos,nfld,ngeom),E0(nmos)
+      double precision Ua(nmos*nmos,ngeom),Ia(nmos*nmos,ngeom)
+      double precision Ga(nmos*nmos,ngeom),Ea(nmos*nmos,ngeom)
+      double precision Uf(nmos*nmos,nfld),Gf(nmos*nmos,nfld)
+      double precision Ef(nmos*nmos,nfld)
+C     Variables and constants
+      integer ifld,igeom
+      double precision ONE
+      parameter (ONE=1.0D+00)
+      character*1 sN
+      parameter (sN='N')
+C     Body of the subprogram
+      call VCLR(Q,1,nmos*nmos*nfld*ngeom)
+      do igeom=1,ngeom
+         do ifld=1,nfld
+            call CompQterm(Q(1,ifld,igeom),Gf(1,ifld),Uf(1,ifld),'o',
+     &                     Ua(1,igeom),Ea(1,igeom),nmos,ONE)
+            call CompQterm(Q(1,ifld,igeom),Ga(1,igeom),Ua(1,igeom),'a',
+     &                     Uf(1,ifld),Ef(1,ifld),nmos,ONE)
+        end do
+      end do
+      do ifld=1,nfld
+         call CompQterm2(Uf(1,ifld),w,E0,nmos)
+         do igeom=1,ngeom
+            call DGEMM(sN,sN,nmos,nmos,nmos,ONE,Ia(1,igeom),nmos,
+     &                 Uf(1,ifld),nmos,ONE,Q(1,ifld,igeom),nmos)
+         end do
+      end do
+      end
+C
+C*MODULE TDXITR  *DECK MakeXfa
+      subroutine MakeXfa(X,w,nmos,naos,nfld,ngeom)
+      implicit none
+C     Arguments
+      integer nmos,naos,nfld,ngeom
+      double precision w
+      double precision X(nmos*nmos,nfld,ngeom)
+C     Used common block
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables
+      integer lUa,lUf
+      double precision dummy
+C     Called subprogram
+      logical GetGUDEf,GetGUIDEa
+C     Body of the subprogram
+      call NEWMEM(lUa,nmos*nmos*ngeom)
+      call NEWMEM(lUf,nmos*nmos*nfld)
+      dummy = 0.0d+00
+      if(.not.GetGUDEf(w,dummy,.false.,XX(lUf),.true.,dummy,.false.,
+     &                 dummy,.false.,nmos,naos,nfld)) then
+         call abrtx("MakeXfa: not GetGUDEf")
+      end if
+      if(.not.GetGUIDEa(dummy,.false.,XX(lUa),.true.,dummy,.false.,
+     &     dummy,.false.,dummy,.false.,nmos,naos,ngeom)) then
+         call abrtx("MakeXfa: not GetGUIDEa")
+      end if
+      call CompXfa(X,XX(lUa),XX(lUf),nmos,nfld,ngeom)
+      call DELETEMEM(lUf,nmos*nmos*nfld)
+      call DELETEMEM(lUa,nmos*nmos*ngeom)
+      end
+C
+C*MODULE TDXITR  *DECK CompXfa
+      subroutine CompXfa(X,Ua,Uf,nmos,nfld,ngeom)
+      implicit none
+C     Arguments
+      integer nmos,nfld,ngeom
+      double precision X(nmos*nmos,nfld,ngeom)
+      double precision Ua(nmos*nmos,ngeom),Uf(nmos*nmos,nfld)
+C     Variables
+      integer ifld,igeom
+      double precision ZERO,ONE,MINUSONE
+      parameter (ZERO=0.0D+00,ONE=1.0D+00,MINUSONE=-1.0D+00)
+      character*1 sN,sT
+      parameter (sN='N',sT='T')
+C     Body of the subprogram
+      do igeom=1,ngeom
+         do ifld=1,nfld
+            call DGEMM(sN,sN,nmos,nmos,nmos,
+     &                 ONE,Ua(1,igeom),nmos,Uf(1,ifld),nmos,
+     &                 ZERO,X(1,ifld,igeom),nmos)
+            call DGEMM(sN,sT,nmos,nmos,nmos,
+     &                 MINUSONE,Uf(1,ifld),nmos,Ua(1,igeom),nmos,
+     &                 ONE,X(1,ifld,igeom),nmos)
+         end do
+      end do
+      end
+C
+C*MODULE TDXITR  *DECK MakeDDfa
+      subroutine MakeDDfa(DD,w,C0,nocc,nmos,naos,nfld,ngeom)
+      implicit none
+C     Arguments
+      integer nocc,nmos,naos,nfld,ngeom
+      double precision w
+      double precision DD(naos*naos,nfld,ngeom),C0(naos*nmos)
+C     Used common block
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables
+      integer lUa,lUf
+      double precision dummy
+C     Called subprogram
+      logical GetGUDEf,GetGUIDEa
+C     Body of the subprogram
+      call NEWMEM(lUa,nmos*nmos*ngeom)
+      call NEWMEM(lUf,nmos*nmos*nfld)
+      dummy = 0.0d+00
+      dummy = 0.0d+00
+      if(.not.GetGUDEf(w,dummy,.false.,XX(lUf),.true.,dummy,.false.,
+     &                 dummy,.false.,nmos,naos,nfld)) then
+         call abrtx("MakeDDfa: not GetGUDEf")
+      end if
+      if(.not.GetGUIDEa(dummy,.false.,XX(lUa),.true.,dummy,.false.,
+     &     dummy,.false.,dummy,.false.,nmos,naos,ngeom)) then
+         call abrtx("MakeDDfa: not GetGUIDEa")
+      end if
+      call CompDDfa(DD,C0,XX(lUa),XX(lUf),nocc,nmos,naos,nfld,ngeom)
+      call DELETEMEM(lUf,nmos*nmos*nfld)
+      call DELETEMEM(lUa,nmos*nmos*ngeom)
+      end
+C
+C*MODULE TDXITR  *DECK CompDDfa
+      subroutine CompDDfa(DD,C0,Ua,Uf,nocc,nmos,naos,nfld,ngeom)
+      implicit none
+C     Arguments
+      integer nocc,nmos,naos,nfld,ngeom
+      double precision DD(naos*naos,nfld,ngeom)
+      double precision C0(naos*nmos)
+      double precision Ua(nmos*nmos,ngeom),Uf(nmos*nmos,nfld)
+C     Variables and constant
+      integer ifld,igeom
+      double precision ONE
+      parameter (ONE=1.0D+00)
+C     Body of the subprogram
+      call VCLR(DD,1,naos*naos*nfld*ngeom)
+      do igeom=1,ngeom
+         do ifld=1,nfld
+            call CompUsum(DD(1,ifld,igeom),
+     &                    Uf(1,ifld),Ua(1,igeom),'a',
+     &                    nocc,nmos,ONE)
+            call CompUsum(DD(1,ifld,igeom),
+     &                    Ua(1,igeom),Uf(1,ifld),'f',
+     &                    nocc,nmos,ONE)
+         end do
+      end do
+      call CompDDterm(DD,C0,nmos,naos,nfld*ngeom)
+      end
+C*MODULE TDXITR  *DECK MakedBetadX
+      subroutine MakedBetadX(w1,w2)
+      implicit none
+C     Arguments
+      double precision w1,w2
+C     Used common blocks
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables and constants
+      integer lE0,lC0,ldBdX
+      double precision w(3),ww(2)
+      double precision dummy(1)
+C     Called subprograms
+      logical GetHf,GetGUIDEa,GetGUDEf,GetGUXDEfg,GetHfa
+      logical GetGUXDEfa
+C     Body of the subprogram
+      w(1)=-w1-w2
+      w(2)=w1
+      w(3)=w2
+      ww(1)=w1
+      ww(2)=w2
+C
+      dummy(1) = 0.0d+00
+      if(.not.GetGUIDEa(dummy,.false.,dummy,.false.,dummy,.false.,
+     &     dummy,.false.,dummy,.false.,nmos,naos,ngeom)) then
+         call abrtx("MakedBetadX: not GetGUIDEa")
+      end if
+      if(.not.GetGUDEf(w1,dummy,.false.,dummy,.false.,dummy,.false.,
+     &                 dummy,.false.,nmos,naos,nfld)) call MakeAlpha(w1)
+      if(.not.GetGUDEf(w2,dummy,.false.,dummy,.false.,dummy,.false.,
+     &                 dummy,.false.,nmos,naos,nfld)) call MakeAlpha(w2)
+      if(.not.GetGUXDEfg(w1,w2,dummy,.false.,dummy,.false.,dummy,
+     &                   .false.,dummy,.false.,dummy,.false.,
+     &                   nmos,naos,nfld)) call MakeBeta(w1,w2)
+      if(.not.GetHf(dummy,.false.)) call MakeHf()
+      if(.not.GetHfa(dummy,.false.)) call MakeHfa()
+      if(.not.GetGUXDEfa(w1,dummy,.false.,dummy,.false.,dummy,.false.,
+     &                   dummy,.false.,dummy,.false.,
+     &                   nmos,naos,nfld,ngeom)) call MakedAlphadX(w1)
+      if(.not.GetGUXDEfa(w2,dummy,.false.,dummy,.false.,dummy,.false.,
+     &                   dummy,.false.,dummy,.false.,
+     &                   nmos,naos,nfld,ngeom)) call MakedAlphadX(w2)
+C
+      call NEWMEM(ldBdX,27*ngeom)
+      call VCLR(XX(ldBdX),1,27*ngeom)
+C
+      call NEWMEM(lE0,nmos)
+      call NEWMEM(lC0,naos*nmos)
+      call GetEnergy(XX(lE0),nmos)
+      call GetLCAO(XX(lC0),nmos,naos)
+C
+      call CompdBetadX(XX(ldBdX),ww,XX(lE0),XX(lC0),
+     &                 nocc,nvir,nmos,naos,ibfld,nfld,ngeom)
+C
+      call DELETEMEM(lC0,naos*nmos)
+      call DELETEMEM(lE0,nmos)
+C
+      call PostdBetadX(w,XX(ldBdX))
+C
+      call DELETEMEM(ldBdX,27*ngeom)
+      CALL TIMIT(1)
+C
+      end
+C
+C*MODULE TDXITR  *DECK CompdBetadX
+      subroutine CompdBetadX(dBdX,w,E0,C0,
+     &                       nocc,nvir,nmos,naos,ibfld,nfld,ngeom)
+      implicit none
+C     Arguments
+      integer nocc,nvir,nmos,naos,ibfld,nfld,ngeom
+      double precision w(2)
+      double precision dBdX(27,ngeom)
+      double precision E0(nmos),C0(naos,nmos)
+C     Used common blocks
+      integer IR, IW, IP, IS,IPK,IDAF,NAV,IODA
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables
+      double precision ws,dummy
+      integer nparams
+      integer lD,lDD,lFF,lG,lU,lX,lE,lQ,lHf,lHfa,lDgh
+C     Called subprograms
+      logical GetHf,GetHfa,GetGUXDEfg
+C     External subprogram
+      external GetDJK,PrintdBetadXConvergedParam
+C     Body of the subprogram
+      nparams = nfld*nfld*ngeom
+      ws=w(1)+w(2)
+      write(iw,3000) (-ws),w(1),w(2)
+C     ----------
+C     prepare DD
+C     ----------
+      call NEWMEM(lDD,naos*naos*nparams)
+      call MakeDDfga(XX(lDD),w,C0,nocc,nmos,naos,nfld,ngeom)
+c      call PrintMM(XX(lDD),naos,nparams,'OLIX:DDfga(0)')
+      call MakeDDStep0
+      call NEWMEM(lFF,naos*naos*nparams)
+      call MakeFFfga(XX(lFF),w,nmos,naos,nfld,ngeom)
+c      call PrintMM(XX(lFF),naos,nparams,'OLIX:MakeFFfga')
+      call MakeDDStep1(XX(lDD),C0,E0,ws,XX(lFF),.true.,
+     &                 nocc,nvir,nmos,naos,nparams)
+c      call PrintMM(XX(lDD),naos,nparams,'OLIX:DDfga(1)')
+      call DELETEMEM(lFF,naos*naos*nparams)
+      call NEWMEM(lQ,nmos*nmos*nparams)
+      call MakeQfga(XX(lQ),w,E0,nmos,naos,nfld,ngeom)
+c      call PrintMM(XX(lQ),nmos,nparams,'OLIX:MakeQfga')
+      call MakeDDStep2(XX(lDD),C0,E0,ws,XX(lQ),.true.,
+     &                 nocc,nvir,nmos,naos,nparams)
+c      call PrintMM(XX(lDD),naos,nparams,'OLIX:DDfga(2)')
+      call DELETEMEM(lQ,nmos*nmos*nparams)
+      call NEWMEM(lX,nmos*nmos*nparams)
+      call MakeXfga(XX(lX),w,nmos,naos,nfld,ngeom)
+c      call PrintMM(XX(lX),nmos,nparams,'OLIX:MakeXfga')
+      call MakeDDStep3(XX(lDD),C0,XX(lX),.true.,
+     &                 nocc,nmos,naos,nparams)
+c      call PrintMM(XX(lDD),naos,nparams,'OLIX:DDfga(3)')
+      call DELETEMEM(lX,nmos*nmos*nparams)
+C     -----
+C     Solve
+C     -----
+      call NEWMEM(lD,naos*naos*nparams)
+      call TDHFCycle(GetDJK,PrintdBetadXConvergedParam,
+     &               C0,E0,ws,XX(lD),XX(lDD),
+     &               nocc,nvir,nmos,naos,nparams)
+C     -----------
+C     complete GU
+C     -----------
+      lG = lDD
+      call NEWMEM(lU,naos*naos*nparams)
+      call NEWMEM(lE,nmos*nmos*nparams)
+      call NEWMEM(lX,nmos*nmos*nparams)
+      call CompleteGUXE(C0,E0,ws,XX(lG),XX(lU),XX(lX),XX(lE),
+     &                  nocc,nmos,naos,nparams)
+c      call PrintMM(XX(lG),nmos,nparams,'OLIX:Gfha')
+c      call PrintMM(XX(lU),nmos,nparams,'OLIX:Ufha')
+c      call PrintMM(XX(lX),nmos,nparams,'OLIX:Xfha')
+c      call PrintMM(XX(lD),naos,nparams,'OLIX:Dfha')
+c      call PrintMM(XX(lE),nmos,nparams,'OLIX:Efha')
+      call FreeGUXDEfga(w(1),w(2))
+      call SetGUXDEfga(w(1),w(2),XX(lG),XX(lU),XX(lX),XX(lD),XX(lE),
+     &                 nmos,naos,nfld,ngeom)
+      call DELETEMEM(lX,nmos*nmos*nparams)
+      call DELETEMEM(lE,nmos*nmos*nparams)
+      call DELETEMEM(lU,naos*naos*nparams)
+C     -------------------
+C     compute beta tensor
+C     -------------------
+      lHfa = lDD
+      if(.not.GetHfa(XX(lHfa),.true.)) then
+         call abrtx("CompdBetadX: not GetHfa")
+      end if
+      call NEWMEM(lHf,naos*naos*nfld)
+      if(.not.GetHf(XX(lHf),.true.)) then
+         call abrtx("CompdBetadX: not GetHf")
+      end if
+      call NEWMEM(lDgh,naos*naos*nfld*nfld)
+      dummy = 0.0d+00
+      if(.not.GetGUXDEfg(w(1),w(2),dummy,.false.,dummy,.false.,
+     &                   dummy,.false.,XX(lDgh),.true.,dummy,.false.,
+     &                   nmos,naos,nfld)) then
+         call abrtx("CompdBetadX: not GetGUXDEfg")
+      end if
+      call CompdBetadXTensor(dbdx,XX(lHf),XX(lD),XX(lHfa),XX(lDgh),
+     &                       naos,ibfld,nfld,ngeom)
+      call DELETEMEM(lDgh,naos*naos*nfld*nfld)
+      call DELETEMEM(lHf,naos*naos*nfld)
+C     ----------
+C     deallocate
+C     ----------
+      call DELETEMEM(lD,naos*naos*nparams)
+      call DELETEMEM(lDD,naos*naos*nparams)
+C     Format
+ 3000 FORMAT('Iterative procedure to compute dBetadX(',
+     &       F13.6,';',F13.6,',',F13.6,')')
+      end
+C
+C*MODULE TDXITR  *DECK CompdBetadXTensor
+      subroutine CompdBetadXTensor(dbdx,Hf,Dgha,Hfa,Dgh,
+     &                             naos,ibfld,nfld,ngeom)
+      implicit none
+C     Arguments
+      integer naos,ibfld,nfld,ngeom
+      double precision dbdx(27,ngeom)
+      double precision Hf(naos*naos,nfld)
+      double precision Dgha(naos*naos,nfld,nfld,ngeom)
+      double precision Hfa(naos*naos,nfld,ngeom)
+      double precision Dgh(naos*naos,nfld,nfld)
+C     Used common block
+      integer NELEMB,IELEMB,INDEXB
+      common/NLO_BETA/NELEMB,IELEMB(3,27),INDEXB(3,3,3)
+C     Variables
+      integer igeom,index,idummy,ifld(3),icomp
+C     Called subprograms
+      double precision dTrace
+C     Body of the subprogram
+      do index = 1,NELEMB
+         do icomp=1,3
+            idummy = IELEMB(icomp,index)-ibfld+1
+            if((idummy.lt.1).or.(idummy.gt.nfld)) go to 1001
+            ifld(icomp) = idummy
+            if(icomp.eq.3) then
+               do igeom=1,ngeom
+                  dbdx(index,igeom)=
+     &                 -dTrace('S','N',Hf(1,ifld(1)),naos,
+     &                         Dgha(1,ifld(2),ifld(3),igeom),naos,
+     &                         naos,naos)
+     &                 -dTrace('S','N',Hfa(1,ifld(1),igeom),naos,
+     &                         Dgh(1,ifld(2),ifld(3)),naos,naos,naos)
+               end do
+            end if
+         end do
+ 1001    continue
+      end do
+      end
+C
+C*MODULE TDXITR  *DECK PrintdBetadXConvergedParam
+      subroutine PrintdBetadXConvergedParam(iw,ixyz,conv)
+      implicit none
+C     Arguments
+      integer iw,ixyz
+      double precision conv
+C     Used common block
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+C     Variables and constants
+      integer ifld,jfld,ipar,iat,icoord
+      character*1 DIR(3)
+      logical bUseQ
+C     Called subprogram
+      integer IGetOLI
+C     Body of the subprogram
+      DATA DIR /'x','y','z'/
+C
+      bUseQ = IGetOLI(4).ne.0
+C
+      ipar = (ixyz-1)/(nfld*nfld)
+      ifld = (ixyz-1-ipar*nfld*nfld)/nfld
+      jfld = (ixyz-1-ipar*nfld*nfld-ifld*nfld)
+      ipar = ipar+1
+      ifld = ifld+ibfld
+      jfld = jfld+ibfld
+      if(bUseQ) then
+         write(iw,1001) DIR(ifld),DIR(jfld),ipar,conv
+      else
+         iat = (ipar-1)/3
+         icoord = (ipar-iat*3)
+         iat = iat+1
+         write(iw,1002) DIR(ifld),DIR(jfld),iat,DIR(icoord),conv
+      end if
+C     Format
+ 1001 FORMAT('  Field directions ',A1,A1,' mode ',I4,
+     &       ' converged within ',  E13.6)
+ 1002 FORMAT('  Field directions ',A1,A1,' coord. ',I3,A1,
+     &       ' converged within ',  E13.6)
+      end
+C
+C*MODULE TDXITR  *DECK MakeFFfga
+      subroutine MakeFFfga(FF,w,nmos,naos,nfld,ngeom)
+      implicit none
+C     Arguments
+      integer nmos,naos,nfld,ngeom
+      double precision w(2)
+      double precision FF(naos*naos,nfld,nfld,ngeom)
+C     Used common block
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables
+      integer lDfg
+      double precision dummy
+C     Called subprogram
+      logical GetGUXDEfg
+C     Body of the subprogram
+      call NEWMEM(lDfg,naos*naos*nfld*nfld)
+      dummy = 0.0d+00
+      if(.not.GetGUXDEfg(w(1),w(2),dummy,.false.,dummy,.false.,
+     &                   dummy,.false.,XX(lDfg),.true.,dummy,.false.,
+     &                   nmos,naos,nfld)) then
+         write(*,*) 'Could not find Ufg(',w(1),',',w(2),')'
+         call abrtx("MakeFFfga: not GetGUXDEfg")
+      end if
+      call GetDJKa(XX(lDfg),FF,nfld*nfld)
+      call DELETEMEM(lDfg,naos*naos*nfld*nfld)
+      end
+C
+C*MODULE TDXITR  *DECK MakedBetadXPerms
+      subroutine MakedBetadXPerms(w,nfld,nterms,iflds,mults,ws,bgws)
+      implicit none
+C     Arguments
+      double precision w(2)
+      integer nfld
+      integer nterms(2)
+      integer iflds(4,*)
+      double precision mults(*)
+      double precision ws(2,2)
+      logical bgws(2,2)
+C     Variables and constants
+      logical bw12,b12
+      integer iterm,ifld,jfld,iifld,jjfld
+      double precision mult,ONE,TWO
+      parameter (ONE=1.0D+00,TWO=2.0D+00)
+      integer i,iperm,nperm
+      parameter (nperm=2)
+C     Body of the subprogram
+C     ------------------
+C     Smart permutations
+C     ------------------
+      bw12=w(1).eq.w(2)
+      ws(1,1) = w(1)
+      ws(2,1) = w(2)
+      ws(1,2) = w(2)
+      ws(2,2) = w(1)
+      iterm = 0
+      do iperm=1,nperm
+         do jjfld=1,nfld
+            do 1011 iifld=1,nfld
+               b12=(iifld.eq.jjfld).and.bw12
+C
+               if(iperm.eq.1) then
+                  ifld = iifld
+                  jfld = jjfld
+                  if(b12) then
+                     mult = TWO
+                  else
+                     mult = ONE
+                  end if
+               else if(iperm.eq.2) then
+                  if(b12) go to 1011
+                  ifld = jjfld
+                  jfld = iifld
+                  mult = ONE
+               end if
+               iterm=iterm+1
+               iflds(1,iterm) = ifld
+               iflds(2,iterm) = jfld
+               iflds(3,iterm) = iifld
+               iflds(4,iterm) = jjfld
+               mults(iterm)   = mult
+ 1011       continue
+         end do
+         nterms(iperm) = iterm
+      end do
+      do i = 1,2
+         bgws(i,1) = .true.
+         bgws(i,2) = ws(i,1).ne.ws(i,2)
+      end do
+      end
+C
+C*MODULE TDXITR  *DECK MakeDDfga
+      subroutine MakeDDfga(DD,w,C0,nocc,nmos,naos,nfld,ngeom)
+      implicit none
+C     Arguments
+      integer nocc,nmos,naos,nfld,ngeom
+      double precision w(2)
+      double precision C0(naos*nmos),DD(naos*naos,nfld,nfld,ngeom)
+C     Used common block
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables
+      integer lUf,lUga,lXga,lUa,lUfg,lXfg
+C     Body of the subprogram
+      call VCLR(DD,1,naos*naos*nfld*nfld*ngeom)
+      call NEWMEM(lUa,nmos*nmos*ngeom)
+      call NEWMEM(lUfg,nmos*nmos*nfld*nfld)
+      call NEWMEM(lXfg,nmos*nmos*nfld*nfld)
+      call CompDDfga1(DD,w,XX(lUa),XX(lUfg),XX(lXfg),
+     &                nocc,nmos,naos,nfld,ngeom)
+      call DELETEMEM(lXfg,nmos*nmos*nfld*nfld)
+      call DELETEMEM(lUfg,nmos*nmos*nfld*nfld)
+      call DELETEMEM(lUa,nmos*nmos*ngeom)
+      call NEWMEM(lUf,nmos*nmos*nfld)
+      call NEWMEM(lUga,nmos*nmos*nfld*ngeom)
+      call NEWMEM(lXga,nmos*nmos*nfld*ngeom)
+      call CompDDfga2(DD,w,XX(lUf),XX(lUga),XX(lXga),
+     &                nocc,nmos,naos,nfld,ngeom)
+      call DELETEMEM(lXga,nmos*nmos*nfld*ngeom)
+      call DELETEMEM(lUga,nmos*nmos*nfld*ngeom)
+      call DELETEMEM(lUf,nmos*nmos*nfld)
+      call CompDDterm(DD,C0,nmos,naos,nfld*nfld*ngeom)
+      end
+C
+C*MODULE TDXITR  *DECK CompDDfga1
+      subroutine CompDDfga1(DD,w,Ua,Ufg,Udfg,nocc,nmos,naos,nfld,ngeom)
+      implicit none
+C     Arguments
+      integer nocc,nmos,naos,nfld,ngeom
+      double precision w(2)
+      double precision DD(naos*naos,nfld,nfld,ngeom)
+      double precision Ua(nmos*nmos,ngeom)
+      double precision Ufg(nmos*nmos,nfld,nfld)
+      double precision Udfg(nmos*nmos,nfld,nfld)
+C     Variables
+      double precision dummy
+      integer ifld,jfld,igeom
+      double precision ONE,MINUSONE
+      parameter (ONE=1.0D+00,MINUSONE=-1.0D+00)
+C     Called subprogram
+      logical GetGUIDEa,GetGUXDEfg
+C     Body of the subprogram
+      dummy = 0.0d+00
+      if(.not.GetGUXDEfg(w(1),w(2),dummy,.false.,Ufg,.true.,
+     &                   Udfg,.true.,dummy,.false.,dummy,.false.,
+     &                   nmos,naos,nfld)) then
+         write(*,*) 'Could not find Ufg(',w(1),',',w(2),')'
+         call abrtx("MakeDDfga1: not GetGUXDEfg")
+      end if
+      call DAXPY(nmos*nmos*nfld*nfld,MINUSONE,Ufg,1,Udfg,1)
+      if(.not.GetGUIDEa(dummy,.false.,Ua,.true.,dummy,.false.,
+     &                  dummy,.false.,dummy,.false.,
+     &                  nmos,naos,ngeom)) then
+         write(*,*) 'Could not find Ua'
+         call abrtx("MakeDDfga1: not GetGUIDEa")
+      end if
+      do igeom=1,ngeom
+         do jfld=1,nfld
+            do ifld=1,nfld
+               call CompUsum(DD(1,ifld,jfld,igeom),
+     &                       Ufg(1,ifld,jfld),Ua(1,igeom),'a',
+     &                       nocc,nmos,ONE)
+               call CompUsum(DD(1,ifld,jfld,igeom),
+     &                       Ua(1,igeom),Udfg(1,ifld,jfld),'o',
+     &                       nocc,nmos,ONE)
+            end do
+         end do
+      end do
+      end
+C
+C*MODULE TDXITR  *DECK CompUUfga2
+      subroutine CompDDfga2(DD,w,Uf,Uga,Udga,nocc,nmos,naos,nfld,ngeom)
+      implicit none
+C     Arguments
+      integer nocc,nmos,naos,nfld,ngeom
+      double precision w(2)
+      double precision DD(naos*naos,nfld,nfld,ngeom)
+      double precision Uf(nmos*nmos,nfld)
+      double precision Uga(nmos*nmos,nfld,ngeom)
+      double precision Udga(nmos*nmos,nfld,ngeom)
+C     Variables
+      double precision dummy
+      integer iterm,ibterm,ieterm,ifld,jfld,iifld,jjfld,igeom
+      double precision mult
+      integer iperm,nperm
+      parameter (nperm=2)
+      integer nterms(nperm)
+      integer iflds(4,nperm*9)
+      double precision mults(nperm*9)
+      double precision ws(2,nperm)
+      logical bgws(2,nperm)
+      double precision MINUSONE
+      parameter (MINUSONE=-1.0D+00)
+C     Called subprogram
+      logical GetGUDEf,GetGUXDEfa
+C     Body of the subprogram
+      call MakedBetadXPerms(w,nfld,nterms,iflds,mults,ws,bgws)
+      ieterm = 0
+      dummy = 0.0d+00
+      do iperm = 1,nperm
+         if(bgws(1,iperm)) then
+            if(.not.GetGUDEf(ws(1,iperm),
+     &                       dummy,.false.,Uf,.true.,
+     &                       dummy,.false.,dummy,.false.,
+     &                       nmos,naos,nfld)) then
+               write(*,*) 'Could not find Uf(',ws(1,iperm),')'
+               call abrtx("MakeDDfga2: not GetGUDEf")
+            end if
+         end if
+         if(bgws(2,iperm)) then
+            if(.not.GetGUXDEfa(ws(2,iperm),
+     &                         dummy,.false.,Uga,.true.,Udga,.true.,
+     &                         dummy,.false.,dummy,.false.,
+     &                         nmos,naos,nfld,ngeom)) then
+               write(*,*) 'Could not find Ufa(',ws(2,iperm),')'
+               call abrtx("MakeDDfga2: not GetGUXDEfa")
+            end if
+            call DAXPY(nmos*nmos*nfld*ngeom,MINUSONE,Uga,1,Udga,1)
+         end if
+         ibterm=ieterm+1
+         ieterm=nterms(iperm)
+         do iterm = ibterm,ieterm
+            ifld = iflds(1,iterm)
+            jfld = iflds(2,iterm)
+            iifld = iflds(3,iterm)
+            jjfld = iflds(4,iterm)
+            mult = mults(iterm)
+            do igeom=1,ngeom
+               call CompUsum(DD(1,iifld,jjfld,igeom),
+     &                       Uga(1,jfld,igeom),Uf(1,ifld),'f',
+     &                       nocc,nmos,mult)
+               call CompUsum(DD(1,iifld,jjfld,igeom),
+     &                       Uf(1,ifld),Udga(1,jfld,igeom),'o',
+     &                       nocc,nmos,mult)
+            end do
+         end do
+      end do
+      end
+C
+C*MODULE TDXITR  *DECK MakeQfga
+      subroutine MakeQfga(Q,w,E0,nmos,naos,nfld,ngeom)
+      implicit none
+C     Arguments
+      integer nmos,naos,nfld,ngeom
+      double precision w(2)
+      double precision E0(nmos),Q(nmos*nmos,nfld,nfld,ngeom)
+C     Used common block
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables
+      integer lGfg,lUfg,lEfg,lGa,lUa,lIa,lEa
+      integer lGf,lUf,lEf,lGga,lUga,lEga,lUg,lEg
+C     Body of the subprogram
+      call VCLR(Q,1,nmos*nmos*nfld*nfld*ngeom)
+      call NEWMEM(lGa,nmos*nmos*ngeom)
+      call NEWMEM(lUa,nmos*nmos*ngeom)
+      call NEWMEM(lEa,nmos*nmos*ngeom)
+      call NEWMEM(lGfg,nmos*nmos*nfld*nfld)
+      call NEWMEM(lUfg,nmos*nmos*nfld*nfld)
+      call NEWMEM(lEfg,nmos*nmos*nfld*nfld)
+      call CompQfga1(Q,w,XX(lGa),XX(lUa),XX(lEa),
+     &               XX(lGfg),XX(lUfg),XX(lEfg),
+     &               nmos,naos,nfld,ngeom)
+      call DELETEMEM(lEfg,nmos*nmos*nfld*nfld)
+      call DELETEMEM(lUfg,nmos*nmos*nfld*nfld)
+      call DELETEMEM(lGfg,nmos*nmos*nfld*nfld)
+      call DELETEMEM(lEa,nmos*nmos*ngeom)
+      call DELETEMEM(lUa,nmos*nmos*ngeom)
+      call DELETEMEM(lGa,nmos*nmos*ngeom)
+      call NEWMEM(lGf,nmos*nmos*nfld)
+      call NEWMEM(lUf,nmos*nmos*nfld)
+      call NEWMEM(lEf,nmos*nmos*nfld)
+      call NEWMEM(lGga,nmos*nmos*nfld*ngeom)
+      call NEWMEM(lUga,nmos*nmos*nfld*ngeom)
+      call NEWMEM(lEga,nmos*nmos*nfld*ngeom)
+      call CompQfga2(Q,w,XX(lGf),XX(lUf),XX(lEf),
+     &               XX(lGga),XX(lUga),XX(lEga),
+     &               nmos,naos,nfld,ngeom)
+      call DELETEMEM(lEga,nmos*nmos*nfld*ngeom)
+      call DELETEMEM(lUga,nmos*nmos*nfld*ngeom)
+      call DELETEMEM(lGga,nmos*nmos*nfld*ngeom)
+      call DELETEMEM(lEf,nmos*nmos*nfld)
+      call DELETEMEM(lUf,nmos*nmos*nfld)
+      call DELETEMEM(lGf,nmos*nmos*nfld)
+      call NEWMEM(lIa,nmos*nmos*ngeom)
+      call NEWMEM(lUfg,nmos*nmos*nfld*nfld)
+      call NEWMEM(lUf,nmos*nmos*nfld)
+      call NEWMEM(lEf,nmos*nmos*nfld)
+      call NEWMEM(lUg,nmos*nmos*nfld)
+      call NEWMEM(lEg,nmos*nmos*nfld)
+      call CompQfga3(Q,w,E0,XX(lIa),
+     &               XX(lUfg),XX(lUf),XX(lEf),XX(lUg),XX(lEg),
+     &               nmos,naos,nfld,ngeom)
+      call DELETEMEM(lEg,nmos*nmos*nfld)
+      call DELETEMEM(lUg,nmos*nmos*nfld)
+      call DELETEMEM(lEf,nmos*nmos*nfld)
+      call DELETEMEM(lUf,nmos*nmos*nfld)
+      call DELETEMEM(lUfg,nmos*nmos*nfld*nfld)
+      call DELETEMEM(lIa,nmos*nmos*ngeom)
+      end
+C
+C*MODULE TDXITR  *DECK CompQfga1
+      subroutine CompQfga1(Q,w,Ga,Ua,Ea,Gfg,Ufg,Efg,
+     &                     nmos,naos,nfld,ngeom)
+      implicit none
+C     Arguments
+      integer nmos,naos,nfld,ngeom
+      double precision w(2)
+      double precision Q(nmos*nmos,nfld,nfld,ngeom)
+      double precision Ga(nmos*nmos,ngeom),Gfg(nmos*nmos,nfld,nfld)
+      double precision Ua(nmos*nmos,ngeom),Ufg(nmos*nmos,nfld,nfld)
+      double precision Ea(nmos*nmos,ngeom),Efg(nmos*nmos,nfld,nfld)
+C     Variables
+      double precision dummy
+      integer ifld,jfld,igeom
+      double precision ONE
+      parameter (ONE=1.0D+00)
+C     Called subprogram
+      logical GetGUIDEa,GetGUXDEfg
+C     Body of the subprogram
+      dummy = 0.0d+00
+      if(.not.GetGUXDEfg(w(1),w(2),Gfg,.true.,Ufg,.true.,
+     &                   dummy,.false.,dummy,.false.,Efg,.true.,
+     &                   nmos,naos,nfld)) then
+         write(*,*) 'Could not find Ufg(',w(1),',',w(2),')'
+         call abrtx("CompQfga1: not GetGUXDEfg")
+      end if
+      if(.not.GetGUIDEa(Ga,.true.,Ua,.true.,dummy,.false.,
+     &                  dummy,.false.,Ea,.true.,nmos,naos,ngeom)) then
+         write(*,*) 'Could not find Ua)'
+         call abrtx("CompQfga1: not GetGUIDEa")
+      end if
+      do igeom=1,ngeom
+         do jfld=1,nfld
+            do ifld=1,nfld
+               call CompQterm(Q(1,ifld,jfld,igeom),
+     &              Ga(1,igeom),Ua(1,igeom),'a',
+     &              Ufg(1,ifld,jfld),Efg(1,ifld,jfld),nmos,ONE)
+               call CompQterm(Q(1,ifld,jfld,igeom),
+     &              Gfg(1,ifld,jfld),Ufg(1,ifld,jfld),'o',
+     &              Ua(1,igeom),Ea(1,igeom),nmos,ONE)
+            end do
+         end do
+      end do
+      end
+C
+C*MODULE TDXITR  *DECK CompQfga2
+      subroutine CompQfga2(Q,w,Gf,Uf,Ef,Gga,Uga,Ega,
+     &                     nmos,naos,nfld,ngeom)
+      implicit none
+C     Arguments
+      integer nmos,naos,nfld,ngeom
+      double precision w(2)
+      double precision Q(nmos*nmos,nfld,nfld,ngeom)
+      double precision Gf(nmos*nmos,nfld),Gga(nmos*nmos,nfld,ngeom)
+      double precision Uf(nmos*nmos,nfld),Uga(nmos*nmos,nfld,ngeom)
+      double precision Ef(nmos*nmos,nfld),Ega(nmos*nmos,nfld,ngeom)
+C     Variables
+      double precision dummy
+      integer iterm,ibterm,ieterm,ifld,jfld,iifld,jjfld,igeom
+      double precision mult
+      integer iperm,nperm
+      parameter (nperm=2)
+      integer nterms(nperm)
+      integer iflds(4,nperm*9)
+      double precision mults(nperm*9)
+      double precision ws(2,nperm)
+      logical bgws(2,nperm)
+C     Called subprogram
+      logical GetGUDEf,GetGUXDEfa
+C     Body of the subprogram
+      call MakedBetadXPerms(w,nfld,nterms,iflds,mults,ws,bgws)
+      ieterm = 0
+      dummy = 0.0d+00
+      do iperm = 1,nperm
+         if(bgws(1,iperm)) then
+            if(.not.GetGUDEf(ws(1,iperm),
+     &                       Gf,.true.,Uf,.true.,
+     &                       dummy,.false.,Ef,.true.,
+     &                       nmos,naos,nfld)) then
+               write(*,*) 'Could not find Uf(',ws(1,iperm),')'
+               call abrtx("CompQfga2: not GetGUDEf")
+            end if
+         end if
+         if(bgws(2,iperm)) then
+            if(.not.GetGUXDEfa(ws(2,iperm),
+     &                         Gga,.true.,Uga,.true.,dummy,.false.,
+     &                         dummy,.false.,Ega,.true.,
+     &                         nmos,naos,nfld,ngeom)) then
+               write(*,*) 'Could not find Ufa(',ws(2,iperm),')'
+               call abrtx("CompQfga2: not GetGUXDEfa")
+            end if
+         end if
+         ibterm=ieterm+1
+         ieterm=nterms(iperm)
+         do iterm = ibterm,ieterm
+            ifld = iflds(1,iterm)
+            jfld = iflds(2,iterm)
+            iifld = iflds(3,iterm)
+            jjfld = iflds(4,iterm)
+            mult = mults(iterm)
+            do igeom=1,ngeom
+               call CompQterm(Q(1,iifld,jjfld,igeom),
+     &              Gf(1,ifld),Uf(1,ifld),'o',
+     &              Uga(1,jfld,igeom),Ega(1,jfld,igeom),nmos,mult)
+               call CompQterm(Q(1,iifld,jjfld,igeom),
+     &              Gga(1,jfld,igeom),Uga(1,jfld,igeom),'o',
+     &              Uf(1,ifld),Ef(1,ifld),nmos,mult)
+            end do
+         end do
+      end do
+      end
+C
+C*MODULE TDXITR  *DECK CompQfga3
+      subroutine CompQfga3(Q,w,E0,Ia,Ufg,Uf,Ef,Ug,Eg,
+     &                     nmos,naos,nfld,ngeom)
+      implicit none
+C     Arguments
+      integer nmos,naos,nfld,ngeom
+      double precision w(2)
+      double precision Q(nmos*nmos,nfld,nfld,ngeom),E0(nmos)
+      double precision Ia(nmos*nmos,ngeom),Ufg(nmos*nmos,nfld,nfld)
+      double precision Uf(nmos*nmos,nfld),Ug(nmos*nmos,nfld)
+      double precision Ef(nmos*nmos,nfld),Eg(nmos*nmos,nfld)
+C     Variables
+      double precision dummy,ws
+      integer ifld,jfld,igeom
+      double precision ONE,MINUSONE
+      parameter (ONE=1.0D+00,MINUSONE=-1.0D+00)
+      character*1 sN
+      parameter (sN='N')
+C     Called subprogram
+      logical GetGUIDEa,GetGUDEf,GetGUXDEfg
+C     Body of the subprogram
+      ws=w(1)+w(2)
+      dummy = 0.0d+00
+      if(.not.GetGUXDEfg(w(1),w(2),dummy,.false.,Ufg,.true.,
+     &                   dummy,.false.,dummy,.false.,dummy,.false.,
+     &                   nmos,naos,nfld)) then
+         write(*,*) 'Could not find Ufg(',w(1),',',w(2),')'
+         call abrtx("CompQfga3: not GetGUXDEfg")
+      end if
+      if(.not.GetGUDEf(w(1),dummy,.false.,Uf,.true.,
+     &                 dummy,.false.,Ef,.true.,nmos,naos,nfld)) then
+         write(*,*) 'Could not find Uf(',w(1),')'
+         call abrtx("CompQfga3: not GetGUDEf:1")
+      end if
+      if(.not.GetGUDEf(w(2),dummy,.false.,Ug,.true.,
+     &                 dummy,.false.,Eg,.true.,nmos,naos,nfld)) then
+         write(*,*) 'Could not find Uf(',w(2),')'
+         call abrtx("CompQfga3: not GetGUDEf:2")
+      end if
+      if(.not.GetGUIDEa(dummy,.false.,dummy,.false.,Ia,.true.,
+     &                  dummy,.false.,dummy,.false.,
+     &                  nmos,naos,ngeom)) then
+         write(*,*) 'Could not find Ua'
+         call abrtx("CompQfga3: not GetGUIDEa")
+      end if
+      do jfld=1,nfld
+         do ifld=1,nfld
+            call CompQterm2(Ufg(1,ifld,jfld),ws,E0,nmos)
+            call DGEMM(sN,sN,nmos,nmos,nmos,
+     &                 MINUSONE,Uf(1,ifld),nmos,Eg(1,jfld),nmos,
+     &                 ONE,Ufg(1,ifld,jfld),nmos)
+            call DGEMM(sN,sN,nmos,nmos,nmos,
+     &                 MINUSONE,Ug(1,jfld),nmos,Ef(1,ifld),nmos,
+     &                 ONE,Ufg(1,ifld,jfld),nmos)
+            do igeom=1,ngeom
+               call DGEMM(sN,sN,nmos,nmos,nmos,
+     &                    ONE,Ia(1,igeom),nmos,Ufg(1,ifld,jfld),nmos,
+     &                    ONE,Q(1,ifld,jfld,igeom),nmos)
+            end do
+         end do
+      end do
+      end
+C
+C*MODULE TDXITR  *DECK MakeXfga
+      subroutine MakeXfga(X,w,nmos,naos,nfld,ngeom)
+      implicit none
+C     Arguments
+      integer nmos,naos,nfld,ngeom
+      double precision w(2)
+      double precision X(nmos*nmos,nfld,nfld,ngeom)
+C     Used common block
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables
+      integer lUfg,lUa,lUf,lUg,lUga
+C     Body of the subprogram
+      call VCLR(X,1,nmos*nmos*nfld*nfld*ngeom)
+      call NEWMEM(lUa,nmos*nmos*ngeom)
+      call NEWMEM(lUfg,nmos*nmos*nfld*nfld)
+      call CompXfga1(X,w,XX(lUa),XX(lUfg),nmos,naos,nfld,ngeom)
+      call DELETEMEM(lUfg,nmos*nmos*nfld*nfld)
+      call NEWMEM(lUf,nmos*nmos*nfld)
+      call NEWMEM(lUg,nmos*nmos*nfld)
+      call CompXfga2(X,w,XX(lUa),XX(lUf),XX(lUg),nmos,naos,nfld,ngeom)
+      call DELETEMEM(lUg,nmos*nmos*nfld)
+      call DELETEMEM(lUf,nmos*nmos*nfld)
+      call DELETEMEM(lUa,nmos*nmos*ngeom)
+      call NEWMEM(lUf,nmos*nmos*nfld)
+      call NEWMEM(lUga,nmos*nmos*nfld*ngeom)
+      call CompXfga3(X,w,XX(lUf),XX(lUga),nmos,naos,nfld,ngeom)
+      call DELETEMEM(lUga,nmos*nmos*nfld*ngeom)
+      call DELETEMEM(lUf,nmos*nmos*nfld)
+      end
+C
+C*MODULE TDXITR  *DECK CompXfga1
+      subroutine CompXfga1(X,w,Ua,Ufg,nmos,naos,nfld,ngeom)
+      implicit none
+C     Arguments
+      integer nmos,naos,nfld,ngeom
+      double precision w(2)
+      double precision X(nmos*nmos,nfld,nfld,ngeom)
+      double precision Ua(nmos*nmos,ngeom),Ufg(nmos*nmos,nfld,nfld)
+C     Variables
+      double precision dummy
+      integer ifld,jfld,igeom
+      double precision ZERO,ONE,MINUSONE
+      parameter (ZERO=0.0D+00,ONE=1.0D+00,MINUSONE=-1.0D+00)
+      character*1 sN,sT
+      parameter (sN='N',sT='T')
+C     Called subprogram
+      logical GetGUIDEa,GetGUXDEfg
+C     Body of the subprogram
+      dummy = 0.0d+00
+      if(.not.GetGUXDEfg(w(1),w(2),dummy,.false.,Ufg,.true.,
+     &                   dummy,.false.,dummy,.false.,dummy,.false.,
+     &                   nmos,naos,nfld)) then
+         write(*,*) 'Could not find Ufg(',w(1),',',w(2),')'
+         call abrtx("CompXfga1: not GetGUXDEfg")
+      end if
+      if(.not.GetGUIDEa(dummy,.false.,Ua,.true.,dummy,.false.,
+     &                  dummy,.false.,dummy,.false.,
+     &                  nmos,naos,ngeom)) then
+         write(*,*) 'Could not find Ua'
+         call abrtx("CompXfga1: not GetGUIDEa")
+      end if
+      do igeom=1,ngeom
+         do jfld=1,nfld
+            do ifld=1,nfld
+               call DGEMM(sN,sN,nmos,nmos,nmos,
+     &              ONE,Ua(1,igeom),nmos,Ufg(1,ifld,jfld),nmos,
+     &              ZERO,X(1,ifld,jfld,igeom),nmos)
+               call DGEMM(sN,sT,nmos,nmos,nmos,
+     &              MINUSONE,Ufg(1,ifld,jfld),nmos,Ua(1,igeom),nmos,
+     &              ONE,X(1,ifld,jfld,igeom),nmos)
+            end do
+         end do
+      end do
+      end
+C
+C*MODULE TDXITR  *DECK CompXfga2
+      subroutine CompXfga2(X,w,Ua,Uf,Ug,nmos,naos,nfld,ngeom)
+      implicit none
+C     Arguments
+      integer nmos,naos,nfld,ngeom
+      double precision w(2)
+      double precision X(nmos*nmos,nfld,nfld,ngeom)
+      double precision Ua(nmos*nmos,ngeom)
+      double precision Uf(nmos*nmos,nfld),Ug(nmos*nmos,nfld)
+C     Used common block
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables
+      integer lWRK1,lWRK2
+      double precision dummy
+      integer iterm,ibterm,ieterm,ifld,jfld,iifld,jjfld,igeom
+      double precision mult
+      integer iperm,nperm
+      parameter (nperm=2)
+      integer nterms(nperm)
+      integer iflds(4,nperm*9)
+      double precision mults(nperm*9)
+      double precision ws(2,nperm)
+      logical bgws(2,nperm)
+      double precision ZERO,ONE,MINUSONE
+      parameter (ZERO=0.0D+00,ONE=1.0D+00,MINUSONE=-1.0D+00)
+      character*1 sN,sT
+      parameter (sN='N',sT='T')
+C     Called subprogram
+      logical GetGUDEf
+C     Body of the subprogram
+      call MakedBetadXPerms(w,nfld,nterms,iflds,mults,ws,bgws)
+C
+      call NEWMEM(lWRK1,nmos*nmos)
+      call NEWMEM(lWRK2,nmos*nmos)
+C
+      ieterm = 0
+      dummy = 0.0d+00
+      do iperm = 1,nperm
+         if(bgws(1,iperm)) then
+            if(.not.GetGUDEf(ws(1,iperm),
+     &                       dummy,.false.,Uf,.true.,
+     &                       dummy,.false.,dummy,.false.,
+     &                       nmos,naos,nfld)) then
+               write(*,*) 'Could not find Uf(',ws(1,iperm),')'
+               call abrtx("CompXfga2: not GetGUDEf:1")
+            end if
+         end if
+         if(bgws(2,iperm)) then
+            if(.not.GetGUDEf(ws(2,iperm),
+     &                       dummy,.false.,Ug,.true.,
+     &                       dummy,.false.,dummy,.false.,
+     &                       nmos,naos,nfld)) then
+               write(*,*) 'Could not find Uf(',ws(2,iperm),')'
+               call abrtx("CompXfga2: not GetGUDEf:2")
+            end if
+         end if
+         ibterm=ieterm+1
+         ieterm=nterms(iperm)
+         do iterm = ibterm,ieterm
+            ifld = iflds(1,iterm)
+            jfld = iflds(2,iterm)
+            iifld = iflds(3,iterm)
+            jjfld = iflds(4,iterm)
+            mult = mults(iterm)
+            call DGEMM(sN,sN,nmos,nmos,nmos,
+     &           mult,Uf(1,ifld),nmos,Ug(1,jfld),nmos,
+     &           ZERO,XX(lWRK1),nmos)
+            do igeom=1,ngeom
+               call DGEMM(sN,sT,nmos,nmos,nmos,
+     &              ONE,XX(lWRK1),nmos,Ua(1,igeom),nmos,
+     &              ONE,X(1,iifld,jjfld,igeom),nmos)
+               call DGEMM(sN,sN,nmos,nmos,nmos,
+     &              MINUSONE,Ua(1,igeom),nmos,XX(lWRK1),nmos,
+     &              ONE,X(1,iifld,jjfld,igeom),nmos)
+               call DGEMM(sN,sN,nmos,nmos,nmos,
+     &              mult,Ua(1,igeom),nmos,Ug(1,jfld),nmos,
+     &              ZERO,XX(lWRK2),nmos)
+               call DGEMM(sN,sN,nmos,nmos,nmos,
+     &              MINUSONE,Uf(1,ifld),nmos,XX(lWRK2),nmos,
+     &              ONE,X(1,iifld,jjfld,igeom),nmos)
+            end do
+         end do
+      end do
+C
+      call DELETEMEM(lWRK2,nmos*nmos)
+      call DELETEMEM(lWRK1,nmos*nmos)
+C
+      end
+C
+C*MODULE TDXITR  *DECK CompXfga3
+      subroutine CompXfga3(X,w,Uf,Uga,nmos,naos,nfld,ngeom)
+      implicit none
+C     Arguments
+      integer nmos,naos,nfld,ngeom
+      double precision w(2)
+      double precision X(nmos*nmos,nfld,nfld,ngeom)
+      double precision Uf(nmos*nmos,nfld),Uga(nmos*nmos,nfld,ngeom)
+C     Variables
+      double precision dummy
+      integer iterm,ibterm,ieterm,ifld,jfld,iifld,jjfld,igeom
+      double precision mult
+      integer iperm,nperm
+      parameter (nperm=2)
+      integer nterms(nperm)
+      integer iflds(4,nperm*9)
+      double precision mults(nperm*9)
+      double precision ws(2,nperm)
+      logical bgws(2,nperm)
+      double precision ONE
+      parameter (ONE=1.0D+00)
+      character*1 sN
+      parameter (sN='N')
+C     Called subprogram
+      logical GetGUDEf,GetGUXDEfa
+C     Body of the subprogram
+      call MakedBetadXPerms(w,nfld,nterms,iflds,mults,ws,bgws)
+C
+      ieterm = 0
+      dummy = 0.0d+00
+      do iperm = 1,nperm
+         if(bgws(1,iperm)) then
+            if(.not.GetGUDEf(ws(1,iperm),
+     &                       dummy,.false.,Uf,.true.,
+     &                       dummy,.false.,dummy,.false.,
+     &                       nmos,naos,nfld)) then
+               write(*,*) 'Could not find Uf(',ws(1,iperm),')'
+               call abrtx("CompXfga3: not GetGUDEf")
+            end if
+         end if
+         if(bgws(2,iperm)) then
+            if(.not.GetGUXDEfa(ws(2,iperm),
+     &                         dummy,.false.,Uga,.true.,dummy,.false.,
+     &                         dummy,.false.,dummy,.false.,
+     &                         nmos,naos,nfld,ngeom)) then
+               write(*,*) 'Could not find Ufa(',ws(2,iperm),')'
+               call abrtx("CompXfga3: not GetGUXDEfa")
+            end if
+         end if
+         ibterm=ieterm+1
+         ieterm=nterms(iperm)
+         do iterm = ibterm,ieterm
+            ifld = iflds(1,iterm)
+            jfld = iflds(2,iterm)
+            iifld = iflds(3,iterm)
+            jjfld = iflds(4,iterm)
+            mult = mults(iterm)
+            do igeom=1,ngeom
+               call DGEMM(sN,sN,nmos,nmos,nmos,
+     &              mult,Uf(1,ifld),nmos,Uga(1,jfld,igeom),nmos,
+     &              ONE,X(1,iifld,jjfld,igeom),nmos)
+               call DGEMM(sN,sN,nmos,nmos,nmos,
+     &              mult,Uga(1,jfld,igeom),nmos,Uf(1,ifld),nmos,
+     &              ONE,X(1,iifld,jjfld,igeom),nmos)
+            end do
+         end do
+      end do
+C
+      end
+C*MODULE TDXITR  *DECK SLVLEQSVD
+      subroutine SLVLEQSVD(A,X,N,LDA,IERR)
+      implicit none
+C     Arguments
+      integer N,LDA,IERR
+      double precision A(LDA,N), X(N)
+C     Used common blocks
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables and Constants
+      double precision dummy
+      integer i,lW,lwork,lU,lVT,lS
+      double precision ZERO,ONE,TOL
+      PARAMETER (ZERO=0.0D+00,ONE=1.0D+00,TOL=1D-16)
+C     body of the subroutine
+      call NEWMEM(lU,n*n)
+      call NEWMEM(lVT,n*n)
+      call NEWMEM(lS,n)
+C     Retrieve right working size
+      call dgesvd('S','S',n,n,A,LDA,XX(lS),XX(lU),n,XX(lVt),n,dummy,-1,
+     *            ierr)
+      lwork=int(dummy)
+      if(ierr.ne.0) return
+      call NEWMEM(lw,lwork)
+C     Factorize
+      call dgesvd('S','S',n,n,A,LDA,XX(lS),XX(lU),n,XX(lVt),n,xx(lW),
+     *            lwork,ierr)
+      if(ierr.ne.0) return
+      call DELETEMEM(lw,lwork)
+C     Solve
+      call NEWMEM(lw,n)
+      call dgemv('T',n,n,ONE,xx(lU),n,X,1,ZERO,xx(lW),1)
+C     Pseudo invert
+      do i=0,n-1
+         if(xx(lS+i).lt.tol) then
+            xx(lW+i) = ZERO
+         else
+            xx(lW+i) = xx(lW+i)/xx(lS+i)
+         end if
+      end do
+      call dgemv('T',n,n,ONE,XX(lVt),n,XX(lW),1,ZERO,X,1)
+C     Free memory
+      call DELETEMEM(lw,n)
+      call DELETEMEM(lS,n)
+      call DELETEMEM(lVT,n*n)
+      call DELETEMEM(lU,n*n)
+      end
+! Local Variables:
+! mode:Fortran
+! End:
+
+

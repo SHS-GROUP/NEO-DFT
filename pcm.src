@@ -1,0 +1,4540 @@
+C 25 Mar 10 - YLW,HL - Add FIXPVA grads for IDISP's dis and rep terms
+C 14 Oct 09 - DGF - synchronize ENRGMP common
+C 22 May 09 - MWS - synchronize INFOTD common
+C  1 May 09 - DGF,TS - PCMMEM2: fix FMO/PCM memory allocation
+C 12 Jan 09 - DGF - ground state PCM props for TDDFT/PCM, dynamic memory
+C 15 Dec 08 - MC,DGF - add TDDFT/PCM, synch. PCMTMP and PCMPNT commons
+C 23 Oct 08 - KRG - INPPCM: zero all memory allocated by this routine
+C 18 Jul 08 - KRG - SOLVENT: ensure NMAT is always initialized
+C  4 Mar 08 - DGF - MAKCAV: check typing of RADII keyword.
+C 28 Aug 07 - HL  - PCM dispersion and repulsion energy and gradients
+C 20 Aug 07 - DGF - decompose disp+rep energy into fragment contribs
+C 24 Mar 07 - MWS - pad FRGINF common block
+C 22 Dec 06 - DGF - synchronise FMOPNT
+C  6 Nov 06 - MWS - adjust wavefunction common block
+C  7 Apr 06 - MWS - remove ICENT/NESFF/INA/INF traces
+C 29 Mar 06 - MWS - SOLVENT: must always zero out Q_FS even if no EFP
+C  2 Feb 06 - MWS - update storage for PRCALC call
+C 17 Jan 06 - DGF - pass number of atoms to MAKCAV
+C 14 Nov 05 - HL,DGF - implement pcm+efp gradients and fmo+pcm
+C 19 Sep 05 - IA  - synchronize FRGINF common
+C  5 Jul 05 - DGF - PCMINP: forbid ICOMP=1 during iterative PCM runs
+C  1 Jun 05 - CMA - PCMINP: remove MP2 trap
+C 30 Apr 05 - DGF - synchronise OPTGRD common block
+C 14 Mar 05 - HL  - change FMASS in FRGMSS common
+C  7 Mar 05 - IA  - fix common block FRGINF
+C 13 Feb 05 - MWS - pad common block HERMIT, WERMIT, NSHEL, ROOT, FRGINF
+C  3 May 04 - MWS - print ikrep as irep, SOLPRT: edelta w/o cavitation
+C 19 May 04 - MWS - change default to C-PCM model using iterative solver
+C  7 Apr 04 - HL  - IEF-PCM/EFP for all types of wavefunction
+C  9 Dec 03 - MWS - synch common block RUNOPT
+C 16 Jun 03 - HL  - add C-PCM and new gradients for PCM
+C                   SOLPRT: print gas phase to solvent energy change
+C  7 Aug 02 - HL,CP - iterative isotropic IEF-PCM/EFP
+C                   MAKCAV: new keyword RADII and optional SUAEFP,VDWEFP
+C                   DISREP: provide default DKA(*) and RWA(*)
+C                   SOLPRT: print details of matrx inversion IEF-PCM/EFP
+C 17 Apr 02 - MWS - synch up EFMULT and FRGINF common
+C  8 Oct 01 - HL  - parallelize PCM, re-keyword ikrep for PCM
+C  6 Sep 01 - MWS - add dummy arguments to name io call
+C 25 Jun 01 - MWS - alter common block WFNOPT
+C 13 Jun 01 - HL  - SOLVNT,MAKCAV,DISREP: buffer/EFP+PCM, dynamic mem
+C 29 Dec 00 - MWS - PCMFLD: correct fix for direct scf computation
+C 26 Oct 00 - MWS - KEYWORD SPELLING CHANGED BACK TO IREP
+C 11 Oct 00 - PB,BM - interfaced EFP+PCM
+C 25 AUG 00 - BM  - added IEF solvation model
+C 21 Dec 99 - MWS - MAKE SYMMOL COMMON CONSISTENT
+C 12 Nov 98 - GDF - make symtry common consistent
+C 27 FEB 98 - MWS - PCMINP: TRAP ILLEGAL SCFTYP, CI, MP2, SEMIEMPIRICAL
+C 28 SEP 97 - BM  - SOLPRT: PRINT REPULSIVE ENERGI IF IDISK=1
+C 14 AUG 97 - MWS - PCMFLD: FIX DIRECT SCF COMPUTATIONS
+C 27 MAR 97 - MWS - PCMINP,SOLPRT: ADD CHECKING, EXPLANATORY PRINTOUT
+C 18 MAR 97 - PISA - NEW MODULE TO DRIVE PCM COMPUTATIONS
+C
+C*MODULE PCM     *DECK PCMINP
+      SUBROUTINE PCMINP
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL GOPARR,DSKWRK,MASWRK,ABEL
+C
+      CHARACTER*8 ZSOL
+C
+      PARAMETER (MXATM=2000, MXSH=5000)
+C
+      COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMABC/ AXYZ(3),BXYZ(3),CXYZ(3),NAB,NAC
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMITR/ RCUT(2),THRES,IPCMIT,IMUL,MXDIIS,NREG,MXITR1,
+     *                MXITR2,MODPAP
+      COMMON /PCMOPT/ RABI,RASC,REFPOL,THRSLS,DENSLS,WB,WA,ETA2,GD,EVAC,
+     *                RHOW,PM,AREATL,AREAKP,BONDRY,OMEGA,RET,FRO,EPSINF,
+     *                EPS,DR,RSOLV,VMOL,TCE,STEN,DSTEN,CMF,TABS,IDIRCT,
+     *                IPCDER,IDP,ICOMP,IFIELD,ICAV,IDISP,IPRINT,IRETCAV,
+     *                ICENT,IFAST,NEVAL,IEFPOL,KEEPSM,IMGABI,IMGASC,NADD
+      COMMON /PCMPAR/ IPCM,NFT26,NFT27,IKREP,IEF,IP_F,NFMOPCM
+      COMMON /PCMPLY/ STOT,VOL,CCX,CCY,CCZ,RDIF,NESF,NESFP,NESFF,I_NESF,
+     *                L_AST
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+      COMMON /SYMMOL/ GROUP,COMPLEX,IGROUP,NAXIS,ILABMO,ABEL
+      COMMON /SYMTRY/ MAPSHL(MXSH,48),MAPCTR(MXATM,48),
+     *                T(432),INVT(48),NT
+      COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
+     *                MPLEVL,MPCTYP
+C
+      PARAMETER (ZERO=0.0D+00)
+C
+C     ----- set up the NAMELIST $PCM -----
+C
+      PARAMETER (NNAM=34)
+      DIMENSION QNAM(NNAM),KQNAM(NNAM)
+      DATA PCMWD/8HPCM     /
+      DATA QNAM/8HIEF     ,8HSOLVNT  ,8HEPSINF  ,8HEPS     ,8HRSOLV   ,
+     *          8HOMEGA   ,8HRET     ,8HFRO     ,8HTABS    ,
+     *          8HVMOL    ,8HTCE     ,8HDSTEN   ,8HSTEN    ,8HCMF     ,
+     *          8HNESFP   ,8HICOMP   ,8HIFIELD  ,
+     *          8HICAV    ,8HIDISP   ,8HIREP    ,8HAXYZ    ,8HBXYZ    ,
+     *          8HCXYZ    ,8HNAB     ,8HNAC     ,8HIPRINT  ,
+     *          8HIDP     ,8HWB      ,8HWA      ,8HETA2    ,
+     *          8HIFMO    ,8HMXSP    ,8HMXTS    ,8HMODPAR  /
+      DATA KQNAM/1,5,3,3,3,   3,3,3,3,       3,3,3,3,3,
+     *           1,1,1,       1,1,1,33,33,   33,1,1,1,
+     *           1,3,3,3,     1,1,1,1/
+C
+      DATA C1/8HC1      /
+      DATA RINPUT/8HINPUT   /, RNONE/8HNONE    /
+      DATA TDHF/8HTDHF    /
+      DATA NONE/4HNONE/
+      DATA RHF/8HRHF     /
+C
+C     --- READ IN PARAMETERS TO PERFORM A PCM SOLVATION CALCULATION ---
+C     If the $PCM group is not found, PCM computation is not performed.
+C
+      IPCM = 0
+      NFMOPCM=0
+C
+C     The default solvent is assumed to be WATER at 25 C, and the
+C     cavity is built as usual, with a sphere of scaled atomic radius
+C     around each solute atom.
+C
+C       this group defines the solvent (no default)
+C
+      RZSOL = RINPUT
+      EPSI = ZERO
+      EPSINI = ZERO
+      RSOLVI = ZERO
+      VMOLI = ZERO
+      TCEI = ZERO
+      STENI = ZERO
+      DSTENI = ZERO
+      CMFI = ZERO
+C
+C       this group defines the cavity
+C
+      NESFP = 0
+C     the value of NAT is not known yet, to be replaced later
+C     IF(NFG.NE.0) NESFP=-1
+      OMEGA = 40.0D+00
+      FRO = 0.7D+00
+      RET = 100.0D+00
+C
+C       this group defines the type of PCM run done
+C
+C*********************************************
+C **  NEW INTEGRAL EQUATION FORMALISM (IEF) **
+C **       E. CANCES AND B. MENNUCCI        **
+C*********************************************
+C Option IEF:0  isotropic dielectrics with standard PCM
+C            1  anisotropic dielectrics
+C            2  ionic solutions
+C            3  isotropic dielectrics with the Integral Equation
+C               Formulation (IEF-PCM) method by Cances & Mennucci
+C               using a matrix inversion solver.
+C               (new version: more accurate and faster, default),
+C      4,5-7,8  absorption/emission processes
+C          4-5  nonequilibrium absorption
+C          7-8  nonequilibrium emission
+C           -3  ITERATIVE solver for IEF-PCM, otherwise IEF=3
+C           10  conductor-like PCM, with matrix inversion solver
+C          -10  C-PCM, with ITERATIVE solver, otherwise IEF=10
+C
+      IEF = -10
+      ICOMP = 0
+      IFIELD = 0
+      IDISP = 0
+      IKREP = 0
+      IDP = 0
+      ICAV = 0
+C
+C     PCM dimensions will be set to default values later.
+C
+      MXSP=0
+      MXTS=0
+C
+      IPCMIT=0
+      IMGABI=0
+C
+      IPRINT=0
+C
+C        data associated with ICAV=1
+C
+      TABS = 298.0D+00
+C
+C        data associated with IDP=1
+C
+      WB = 0.451D+00
+      WA = 1.10D+00
+      ETA2 = 1.75D+00
+C
+C        data associated with IFIELD=2
+C        AXYZ(3),BXYZ(3),CXYZ(3) contain the coordinates of the vertices
+C        of the planar grid where the reaction field has to be computed:
+C        A ===> higher left corner of the grid
+C        B ===> lower left corner of the grid
+C        C ===> higher right corner of the grid
+C           A ----------- C
+C           |             |
+C           |             |
+C           |             |
+C           B ------------
+C        while NAB and NAC define the vertical (A--B edge) and the
+C        orizontal (A--C edge) subdivision of the grid.
+C
+      CALL VCLR(AXYZ,1,3)
+      CALL VCLR(BXYZ,1,3)
+      CALL VCLR(CXYZ,1,3)
+      NAB = 0
+      NAC = 0
+      NFMOPCM=0
+C     Various options, bit-additive
+C     1 do not parallelise tessellation.
+C     2 do a "wet" run only (no preceeding gas phase)
+C     4 reuse ASCs during geometry optimisations and restarts
+C     (at present, FMO only; also IEF=-3 is not tested).
+C     8 calculate ES dimers in the first PCM iteration in FMO-PCM[1(2)]
+      MODPAP=0
+      IF(NFG.NE.0) MODPAP=1
+C
+      JRET=0
+      CALL NAMEIO(IR,JRET,PCMWD,NNAM,QNAM,KQNAM,
+     *            IEF, RZSOL, EPSINI, EPSI, RSOLVI, OMEGA, RET,
+     *            FRO, TABS, VMOLI, TCEI, DSTENI, STENI, CMFI,
+     *            NESFP, ICOMP, IFIELD, ICAV, IDISP, IKREP,
+     *            AXYZ, BXYZ, CXYZ, NAB, NAC, IPRINT, IDP, WB, WA,
+     *            ETA2, NFMOPCM, MXSP, MXTS, MODPAP,0,0,0,0,0,0,
+     *            0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0, 0,0,0,0)
+C
+      IF(JRET.EQ.1) RETURN
+C
+      IF(JRET.EQ.2) THEN
+         IF(MASWRK) WRITE(IW,9000) PCMWD
+         CALL ABRT
+      END IF
+C
+C        Detection of the $PCM group enables PCM computation.
+C
+      IPCM=1
+C
+C     Detection of iterative calculation
+C
+      IPCMIT=0
+      IEFPRT = IEF
+      IF (IEF.LT.0) THEN
+         IPCMIT=1
+         IEF=-IEF
+         IF (IEF.NE.3.AND.IEF.NE.10) THEN
+            IF(MASWRK) WRITE(IW,*)
+     *         'CHOOSE IEF ITERATIVE PROCEDURE ONLY FOR ISOTROPIC IEF'
+            CALL ABRT
+         ENDIF
+C
+C     READ ITERATIVE-RELATED INPUT
+C
+         CALL ITIEFIN
+      ENDIF
+C
+C        note that DFT should be OK, since PCM is in the SCF process.
+C        MP2 energy (as "PTE" type energy) does not need anything except
+C        use of PCM solvated SCF orbitals, so there's a trap on MP2
+C        gradient later, thus right here we let MP2 slide.
+C
+      NERR=0
+      IF(CCTYP.NE.RNONE) NERR=NERR+1
+      IF(CITYP.NE.RNONE) NERR=NERR+1
+      IF(MPCTYP.NE.NONE) NERR=NERR+1
+C
+      IF(NERR.GT.0) THEN
+         IF(MASWRK) WRITE(IW,9070)
+         CALL ABRT
+      END IF
+C
+      NFT26 = 26
+      NFT27 = 27
+      CALL SEQOPN(NFT26,'PCMDATA','UNKNOWN',.FALSE.,'UNFORMATTED')
+      CALL SEQOPN(NFT27,'PCMINTS','UNKNOWN',.FALSE.,'UNFORMATTED')
+C
+C        Point group symmetry must not be used, the cavity
+C        is not tesselated sufficiently symmetrically.
+C
+      NT=1
+      GROUP=C1
+      IGROUP=1
+      NAXIS=1
+C
+C        No longer an input value, DR is the distance away from the
+C        representative point of the tessera along the surface normal
+C
+      DR = 1.0D-04
+C
+C        look up numerical parameters for the solvent, default is water
+C        any values which were input should override stored values
+C
+      WRITE(UNIT=ZSOL,FMT='(A8)') RZSOL
+      IF(ZSOL.NE.'INPUT   ') THEN
+         CALL DATSOL(ZSOL,EPS,EPSINF,RSOLV,VMOL,TCE,STEN,DSTEN,CMF)
+      END IF
+      IF(EPSI  .NE.ZERO) EPS    = EPSI
+      IF(EPSINI.NE.ZERO) EPSINF = EPSINI
+      IF(RSOLVI.NE.ZERO) RSOLV  = RSOLVI
+      IF(VMOLI .NE.ZERO) VMOL   = VMOLI
+      IF(TCEI  .NE.ZERO) TCE    = TCEI
+      IF(STENI .NE.ZERO) STEN   = STENI
+      IF(DSTENI.NE.ZERO) DSTEN  = DSTENI
+      IF(CMFI  .NE.ZERO) CMF    = CMFI
+C
+C        print what we've got for input
+C
+      IF(MASWRK) THEN
+         WRITE(IW,9020) IEFPRT,ICOMP,IFIELD,ICAV,IDISP,IKREP,IDP,
+     *     ZSOL,EPS,EPSINF,VMOL,TCE,STEN,DSTEN,CMF,RSOLV,
+     *     NESFP,OMEGA,RET,FRO,
+     *     TABS,IPRINT
+         IF(IDP.EQ.1) WRITE(IW,9030) WA,WB,ETA2
+      END IF
+C        print iterative IEF-PCM input
+      IF(MASWRK.AND.IPCMIT.NE.0) THEN
+         IF(IEFPRT.EQ.-3)  WRITE(IW,9025)
+         IF(IEFPRT.EQ.-10) WRITE(IW,9026)
+         WRITE(IW,9027)
+     *    IPCMIT,MXDIIS,MXITR1,MXITR2,THRES,IMUL,
+     *    RCUT(1),RCUT(2),IDIRCT,IMGABI,RABI,IMGASC,RASC,
+     *    THRSLS,DENSLS,IEFPOL,REFPOL
+      END IF
+C
+C
+C        Check that input for booboos
+C
+      NERR=0
+      IF(ZSOL.EQ.'INPUT   ' .AND. (EPS.EQ.ZERO.OR.RSOLV.EQ.ZERO)) THEN
+         IF(MASWRK) WRITE(IW,9010)
+         IF(MASWRK) WRITE(IW,*) 'PICK SOLVNT OR RSOLV/EPS/EPSINF...'
+         NERR = NERR+1
+      END IF
+C     MXSP is not set yet. Perchance with dynamic allocation
+C     there is no need to check now?
+C     IF(NESFP.GT.MXSP) THEN
+C        IF(MASWRK) WRITE(IW,9010)
+C        IF(MASWRK) WRITE(IW,*) 'EXCESSIVE NUMBER OF RADII (>MXSP)'
+C        NERR=NERR+1
+C     END IF
+      IF(ICOMP.GT.3) THEN
+         IF(MASWRK) WRITE(IW,9010)
+         IF(MASWRK) WRITE(IW,*) 'WRONG VALUE FOR -ICOMP- (>3)'
+         NERR=NERR+1
+      END IF
+      CALL DERCHK(NDER)
+      IF(NDER.GT.0  .AND.  (ICOMP.NE.0  .AND.  ICOMP.NE.2)) THEN
+         IF(MASWRK) WRITE(IW,9010)
+         IF(MASWRK) WRITE(IW,*) 'A GRADIENT RUN REQUIRES ICOMP=0 OR 2'
+         NERR=NERR+1
+      END IF
+      IF(NDER.GT.0.AND.(IKREP+IDP.NE.0)) THEN
+         IF(MASWRK) WRITE(IW,9010)
+         IF(MASWRK) WRITE(IW,*) 'A GRADIENT RUN REQUIRES IREP=IDP=0'
+         NERR=NERR+1
+      END IF
+      IF((IKREP+IDP+IDISP).GT.0) THEN
+         IF(SCFTYP.NE.RHF  .OR.  DFTYPE.NE.RNONE) THEN
+            IF(MASWRK) WRITE(IW,9010)
+            IF(MASWRK) WRITE(IW,*)
+     *       'USE -IREP- OR -IDP- OR -IDISP- ONLY WITH SCFTYP=RHF'
+            NERR=NERR+1
+         END IF
+      END IF
+      IF(IFIELD.GT.2) THEN
+         IF(MASWRK) WRITE(IW,9010)
+         IF(MASWRK) WRITE(IW,*) 'WRONG VALUE FOR -IFIELD- (>2)'
+         NERR=NERR+1
+      END IF
+      IF(ICAV.GT.1) THEN
+         IF(MASWRK) WRITE(IW,9010)
+         IF(MASWRK) WRITE(IW,*) 'WRONG VALUE FOR -ICAV- (>1)'
+         NERR=NERR+1
+      END IF
+      IF(IDISP.GT.1) THEN
+         IF(MASWRK) WRITE(IW,9010)
+         IF(MASWRK) WRITE(IW,*) 'WRONG VALUE FOR -IDISP- (>1)'
+         NERR=NERR+1
+      END IF
+      IF(IKREP.GT.1) THEN
+         IF(MASWRK) WRITE(IW,9010)
+         IF(MASWRK) WRITE(IW,*) 'WRONG VALUE FOR -IREP- (>1)'
+         NERR=NERR+1
+      END IF
+      IF(IDP.GT.1) THEN
+         IF(MASWRK) WRITE(IW,9010)
+         IF(MASWRK) WRITE(IW,*) 'WRONG VALUE FOR -IDP- (>1)'
+         NERR=NERR+1
+      END IF
+      IF(IDISP.GT.0) THEN
+         IF((IKREP+IDP).NE.0) THEN
+          IF(MASWRK) WRITE(IW,9010)
+          IF(MASWRK) WRITE(IW,*) 'IDISP IS INCOMPATIBLE WITH IREP/IDP'
+          NERR = NERR+1
+         END IF
+      END IF
+      IF(ICOMP.EQ.1.AND.IPCMIT.EQ.1.AND.NFMOPCM.EQ.0) THEN
+         IF(MASWRK) WRITE(IW,9010)
+         IF(MASWRK) WRITE(IW,*) 'ICOMP=1 AND IEF=-3/-10 IS UNSUPPORTED.'
+         NERR = NERR+1
+      ENDIF
+      IF(ICOMP.NE.0.AND.NDER.GT.0.AND.NFMOPCM.NE.0) THEN
+         IF(MASWRK) WRITE(IW,9010)
+         IF(MASWRK) WRITE(IW,*) 'SET ICOMP=0 FOR FMO/PCM GRADIENT.'
+         NERR = NERR+1
+      ENDIF
+      IF(NFMOPCM.NE.0.AND.NFG.EQ.0) THEN
+         IF(MASWRK) WRITE(IW,9010)
+         IF(MASWRK) WRITE(IW,*) 'SET IFMO=0 FOR NON-FMO RUNS!'
+         NERR=NERR+1
+      END IF
+C
+      IF(NERR.GT.0) THEN
+         IF(MASWRK) WRITE(IW,*) 'PLEASE FIX THE ABOVE ERROR(S) IN $PCM'
+         CALL ABRT
+         STOP
+      END IF
+C
+C        read options for the IEF solver
+C
+      IF(IEF.NE.0) CALL IEFDAT
+C
+C        only IEF=3 and 10 non-TDHF runs can go in parallel,
+C        parallelism is OK for EFP+PCM and buffer links+PCM
+C
+      IF(SCFTYP.NE.RNONE.AND.(IEF.EQ.3.OR.IEF.EQ.10)
+     *                   .AND.  RUNTYP.NE.TDHF) THEN
+         CONTINUE
+      ELSE
+         IF(GOPARR) THEN
+            IF(MASWRK) WRITE(IW,9060)
+            CALL ABRT
+            STOP
+         END IF
+      END IF
+      IF(NFG.NE.0) THEN
+        IF(NFMOPCM.EQ.0) NFMOPCM=1
+        IPCM=0
+C       fare thee well.
+C
+C       check FMO-PCM options.
+C
+        IF(IEF.NE.3.AND.IEF.NE.10.OR.IPCMIT.EQ.0.OR.ICOMP.GT.2) THEN
+          IF(MASWRK) WRITE(IW,9100)
+          CALL ABRT
+        ENDIF
+      ENDIF
+C
+C     kill some dead-end options (these are no longer $PCM inputs).
+C        the old cavity option -icent- replaced by -nesfp- in 11/2005.
+C        nesff was once used as an option for efp radii, but no longer.
+C        it would be more better to take these from the common blocks.
+C        note that -ina- and -inf- are also dead variables, used
+C        as auxiliary indirect addresses under these two options.
+C
+      ICENT = 0
+      NESFF = 0
+      RETURN
+C
+ 9000 FORMAT(1X,'**** ERROR IN $',A8,' INPUT')
+ 9010 FORMAT(1X,'*** INCONSISTENCY FOUND IN $PCM INPUT GROUP ***')
+ 9020 FORMAT(/5X,35(1H-)/
+     *   5X,'INPUT FOR PCM SOLVATION CALCULATION '/5X,35(1H-)/
+     *   5X,'IEF   =',I8/
+     *   5X,'ICOMP =',I8,  5X,'IFIELD=',I8,  5X,'ICAV  =',I8/
+     *   5X,'IDISP =',I8,  5X,'IREP  =',I8,  5X,'IDP   =',I8//
+     *   5X,'SOLVNT=',A8,  5X,'EPS   =',F8.4,5X,'EPSINF=',F8.4/
+     *   5X,'VMOL  =',F8.4,5X,'TCE   =',F12.8,1X,'STEN  =',F8.4/
+     *   5X,'DSTEN =',F8.4,5X,'CMF   =',F8.4,5X,'RSOLV =',F8.4//
+     *   5X,'NESFP =',I8  /
+     *   5X,'OMEGA =',F8.4,5X,'RET   =',F8.4,5X,'FRO   =',F8.4//
+     *   5X,'TABS  =',F8.4,5X,'IPRINT=',I8)
+ 9025 FORMAT(/5X,34(1H-)/
+     *   5X,'INPUT FOR ITERATIVE IEF-PCM METHOD '/5X,34(1H-))
+ 9026 FORMAT(/5X,32(1H-)/
+     *   5X,'INPUT FOR ITERATIVE C-PCM METHOD '/5X,32(1H-))
+ 9027 FORMAT(
+     *   5X,'IPCMIT  =',I10,    5X,'MXDIIS  =',I10/
+     *   5X,'MXITR1  =',I10,    5X,'MXITR2  =',I10/
+     *   5X,'THRES   =',E10.3,  5X,'IMUL    =',I10/
+     *   5X,'RCUT(1) =',F10.4,  5X,'RCUT(2) =',F10.4//
+     *   5X,'IDIRCT  =',I10/
+     *   5X,'IMGABI  =',I10,    5X,'RABI    =',F10.4/
+     *   5X,'IMGASC  =',I10,    5X,'RASC    =',F10.4/
+     *   5X,'THRSLS  =',E10.3,  5X,'DENSLS  =',F10.4/
+     *   5X,'IEFPOL  =',I10,    5X,'REFPOL  =',F10.4)
+ 9030 FORMAT(/5X,'INPUT FOR PCM DISPERSION CALCULATION '/5X,36(1H-)/
+     *   5X,'WA    =',F8.4,5X,'WB    =',F8.4,' ETA2  =',F8.4)
+ 9060 FORMAT(1X,'*** ERROR *** THIS JOB CANNOT RUN IN PARALLEL'/
+     *       1X,'ONLY IEF=3 AND 10 CAN RUN IN PARALLEL, AND'/
+     *       1X,'THEN ONLY IF THE JOB IS NOT RUNTYP=TDHF.')
+ 9070 FORMAT(1X,'*** ERROR *** PCM COMPUTATIONS ARE NOT POSSIBLE FOR'/
+     *       6X,'CC OR CI CORRELATED METHODS, OR SEMI-EMPIRICAL RUNS.')
+ 9100 FORMAT(1X,'FMO-PCM REQUIRES IEF=-3 OR -10 AND ICOMP=0/1/2.')
+      END
+C*MODULE PCM     *DECK SOLVENT
+      SUBROUTINE SOLVENT(XCTS,YCTS,ZCTS,XCTS2,YCTS2,ZCTS2,AS,NVERT,QSN,
+     *                   QSND,
+     *                   Q_FS,VAD,QOR,XE,YE,ZE,RE,ISPHE,ALPHA,RIN,INITS,
+     *                   METHOD,VEC_MUL)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL SOME, GOPARR, DSKWRK, MASWRK
+C
+      PARAMETER (MXATM=2000, MXVRT=20)
+C
+      COMMON /FMCOM / XX(1)
+      COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /MACHIN/ NWDVAR,MAXFM,MAXSM,LIMFM,LIMSM
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMCHG/ PB,PX,PC,UNZ,QNUC,FN,FE,UNZOR,PORT
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMITR/ RCUT(2),THRES,IPCMIT,IMUL,MXDIIS,NREG,MXITR1,
+     *                MXITR2,MODPAP
+      COMMON /PCMOPT/ RABI,RASC,REFPOL,THRSLS,DENSLS,WB,WA,ETA2,GD,EVAC,
+     *                RHOW,PM,AREATL,AREAKP,BONDRY,OMEGA,RET,FRO,EPSINF,
+     *                EPS,DR,RSOLV,VMOL,TCE,STEN,DSTEN,CMF,TABS,IDIRCT,
+     *                IPCDER,IDP,ICOMP,IFIELD,ICAV,IDISP,IPRINT,IRETCAV,
+     *                ICENT,IFAST,NEVAL,IEFPOL,KEEPSM,IMGABI,IMGASC,NADD
+      COMMON /PCMPAR/ IPCM,NFT26,NFT27,IKREP,IEF,IP_F,NFMOPCM
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+      COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
+     *                MPLEVL,MPCTYP
+      DIMENSION XCTS(*),YCTS(*),ZCTS(*),XCTS2(*),YCTS2(*),ZCTS2(*),
+     *          AS(*),NVERT(*),QSN(*),QSND(*),
+     *          Q_FS(*),VAD(*),QOR(*),XE(*),YE(*),
+     *          ZE(*),RE(*),ISPHE(*),ALPHA(*),RIN(*),INITS(*),METHOD(*),
+     *          VEC_MUL(*)
+C
+      DATA RMC/8HMCSCF   /
+      DATA GVB/8HGVB     /
+      DATA CHECK/8HCHECK   /
+C
+C     ----- set up a PCM-BEM calculation -----
+C
+C     The common blocks used by the PCM package all begin with PCM...
+C       /PCMABC/ reaction field grid
+C       /PCMCHG/ surface charge info, nonequilibrium PCM
+C       /PCMITR/ PCM iterative procedure related data
+C       /PCMOPT/ cavity sphere info, dispersion info, repulsion info
+C       /PCMPLY/ polyhedron definitions, tessera data
+C       /PCMPRT/ final print results
+C       /PCMTHF/ time dependent HF data
+C       /PCMUGG/ surface energy data
+C
+C     The disk files used by the PCM package are
+C       PCMDATA - NFT26 - All runs have the D inverse matrix, while
+C                         gradient runs also have the DERPUNT, DERTES,
+C                         DERCENTR, and DERRAD arrays present.
+C       PCMINTS - NFT27 - elec field ints projected on tesserae normals
+C     The file 26 data cannot be stored on DAF, unfortunately, as the
+C     number of tesserae on the cavity surface changes during the run.
+C
+C     The DAF records used by the PCM package are
+C       330 - CEL matrix, AO components of electric fields on normals.
+C       331 - VEF matrix, for auxiliary dispersion basis set.
+C       332 - QEFF matrix
+C       333 - ELD matrix
+C
+C     The memory usage by the PCM package is controlled by 2 parameters,
+C       MXSP = maximum number of spheres in the cavity.  This should be
+C              similar to the number of atoms being treated, although a
+C              methyl group, for example, might be in a single sphere.
+C       MXTS = maximum number of cavity tessera.  This should be roughly
+C              25 times MXSP, more or less.
+C     There are two other less well set up memory parameters,
+C       MXTSEC in routine SOLVNT for the escaped charge cavity.
+C       MXDBS in routine SOLVNT for dispersion basis set size.
+C     The 'mung' script can be used to resize MXSP or MXTS, but the
+C     other two require hand editing of the source routines.
+C
+      L2 = (NUM*NUM+NUM)/2
+      L3 = NUM*NUM
+      SOME = NPRINT.NE.-5
+      IF(SOME.AND.(IP_F.EQ.1)) THEN
+        IF(MASWRK) WRITE(IW,800)
+      ELSE
+        IF(SOME .AND. MASWRK) WRITE(IW,900)
+      END IF
+C
+C     1) Solute's cavity formation (GEPOL-GAUSS-BONNET method)
+C
+      IF(NFG.EQ.0) THEN
+         CALL TESIN(NAT,XE,YE,ZE,ALPHA,RIN,INITS,METHOD)
+         CALL MAKCVM
+         CALL PEDRAM
+         IF(SOME .AND. MASWRK) THEN
+            WRITE(IW,*)
+            WRITE(IW,*) '..... DONE GENERATING CAVITY .....'
+            CALL TIMIT(1)
+         END IF
+      ENDIF
+C
+C     ----  print PCM memory message ---
+C
+      IF(IPCMIT.EQ.0) THEN
+         IF(MASWRK) THEN
+            WRITE(IW,*) ' '
+            WRITE(IW,*) 'GAMESS NEEDS AT LEAST ',NTS*NTS,
+     *                  ' WORDS ON EACH NODE TO RUN PCM.'
+            IF(IEF.EQ.3) THEN
+              WRITE(IW,*) 'IF THE MEMORY IS MORE THAN ',
+     *             INT(3.2*NTS*NTS),'(3.2 TIMES ',NTS*NTS,')'
+              WRITE(IW,*) 'GAMESS WILL USE 3 MATRICES THUS',
+     *                     ' AROUND 2.5 TIMES FASTER.'
+              WRITE(IW,*) 'PLEASE SELECT OPTIMAL MEMORY AND NODES',
+     *             ' TO ACHIEVE THE HIGHEST EFFICIENCY.'
+            END IF
+            WRITE(IW,*) ' '
+         END IF
+C
+C     ----  if memory is enough, use 3 matrices (~2.5 times faster)
+C           if not enough, use 1 matrix (slow but affordable)
+C
+         CALL GOTFM(NGOTMX)
+         NMAT = 1
+         IF(NGOTMX.GT.(3.2*NTS*NTS)) NMAT = 3
+      ELSE
+         NMAT=1
+      END IF
+C
+C     1b) New cavity with a finer mesh to be used in the calculation of
+C         escaped electronic charge.
+C
+      IF(ICOMP.EQ.3  .OR.  IKREP.EQ.1) THEN
+C
+C     Maximum number of tesserae in escaped charge cavity is MXTSEC,
+C     Note that the factor times the number of tessera is just a guess,
+C     4*MXTS works for Vitamin C, but much smaller HF and CH4 take
+C     more than 8*MXTS.
+C
+         MXTSEC = MAX(4*MXTS,5000)
+         MXVERT = MXTSEC/2 + 2
+C
+         CALL VALFM(LOADFM)
+         LCV    = LOADFM + 1
+         LJTR   = LCV    + MXVERT*3
+         LOLDTR = LJTR   + (MXTSEC*3)/NWDVAR + 1
+         LEDNEW = LOLDTR + (100*100)/NWDVAR
+         LINTSP = LEDNEW + (90*100)/NWDVAR
+         LX     = LINTSP + (MXTSEC*MXVRT)/NWDVAR
+         LY     = LX     + MXTSEC
+         LZ     = LY     + MXTSEC
+         LAS    = LZ     + MXTSEC
+         LX1    = LAS    + MXTSEC
+         LY1    = LX1    + MXTSEC
+         LZ1    = LY1    + MXTSEC
+         LSCR   = LZ1    + MXTSEC
+         LSCR2  = LSCR   + L2*3
+         LCEL   = LSCR2  + 3*784
+         LAST   = LCEL   + L2
+         NEED   = LAST - LOADFM - 1
+         CALL GETFM(NEED)
+         IF(EXETYP.NE.CHECK) THEN
+            CALL MORETS(XX(LCV),XX(LJTR),XX(LOLDTR),XX(LEDNEW),
+     *                  XX(LINTSP),XX(LX),XX(LY),XX(LZ),XX(LX1),
+     *                  XX(LY1),XX(LZ1),XX(LAS),XX(LSCR),XX(LSCR2),
+     *                  XX(LCEL),L2,MXTSEC,MXVERT,XE,YE,ZE,RE)
+         END IF
+         CALL RETFM(NEED)
+         IF(SOME .AND. MASWRK) THEN
+            WRITE(IW,*)
+            WRITE(IW,*) '..... DONE FORMING ESCAPED CHARGE CAVITY .....'
+            CALL TIMIT(1)
+         END IF
+      END IF
+C
+C     Memory pointers for both DDMM and CCVEBF, note the overlaps.
+C     NTS= number of tesserae in original cavity
+C
+C     in the iterative calculation no need to invoke CCVEBF
+      IF (IPCMIT.EQ.0) THEN
+         NTS3 = NTS*NTS
+      ELSE
+         NTS3=0
+      END IF
+C
+C     NTS3 = NTS*NTS
+      NTV  = NTS*3*MXVRT
+      CALL VALFM(LOADFM)
+      LDMATM = LOADFM + 1
+      LAST   = LDMATM + NTS3
+C
+      IF(IEF.NE.0) THEN
+         LSE   = LAST
+         LDE   = LSE   + NTS3
+         LAST  = LDE   + NTS3
+         IF(IEF.LT.3) THEN
+            LSI   = LAST
+            LDI   = LSI   + NTS3
+            LVERT = LDI   + NTS3
+            LCNT  = LVERT + NTV
+            LAST  = LCNT  + NTV
+         ELSE
+C              only 1 nts3 is needed if nmat=1 .
+            IF(NMAT.EQ.1) LAST  = LDMATM + NTS3
+            LSI   = LAST
+            LDI   = LAST
+            LVERT = LAST
+            LCNT  = LAST
+         END IF
+      END IF
+C
+      LWORK  = LAST
+      LIPVT  = LWORK  + NTS
+      LDIMT1 = LIPVT  + NTS
+      LDIMT2 = LDIMT1 + NTS
+      LAST1  = LDIMT2 + NTS
+C
+      IF(IEF.NE.0) THEN
+        LMEP=LAST
+        LCAM=LMEP+NTS
+        LAST=LCAM+NTS
+      END IF
+      LBMCHG = LAST
+      LVEC   = LBMCHG + L2
+      LFLD   = LVEC   + NTS
+      LFLW   = LFLD   + L2*3
+      LAST2  = LFLW   + 784*3
+      LAST   = MAX(LAST1,LAST2)
+      NEED   = LAST - LOADFM - 1
+      CALL GETFM(NEED)
+C
+C     2) Calculation of D matrix and its inverse.
+C     Save the inverse D matrix on file nft26, after derivative
+C     information from -PEDRA-, if these exist.
+C     Note memory is not returned, to pass D inverse to -CCVEBF-
+C
+      CALL SEQREW(NFT26)
+      CALL DERCHK(NDER)
+      IF(NDER.EQ.1.AND.IPCDER.EQ.1) THEN
+         CALL SEQADV(NFT26)
+         CALL SEQADV(NFT26)
+         CALL SEQADV(NFT26)
+         CALL SEQADV(NFT26)
+      END IF
+C
+      IF(EXETYP.EQ.CHECK) THEN
+         CALL VCLR(XX(LDMATM),1,NTS3)
+         IF(IEF.NE.0) THEN
+          CALL VCLR(XX(LSE),1,NTS3)
+          CALL VCLR(XX(LDE),1,NTS3)
+          IF(IEF.LT.3) THEN
+           CALL VCLR(XX(LSI),1,NTS3)
+           CALL VCLR(XX(LDI),1,NTS3)
+           CALL VCLR(XX(LVERT),1,NTV)
+           CALL VCLR(XX(LCNT),1,NTV)
+          END IF
+         END IF
+      ELSE
+         IF(IEF.EQ.0) THEN
+           CALL DDMM(XX(LDMATM),XX(LWORK),XX(LIPVT),XCTS,YCTS,ZCTS,
+     *               XCTS2,YCTS2,ZCTS2,AS,RE,ISPHE)
+         ELSE
+           IF(IEF.LT.3) THEN
+              CALL SQREAD(NFT26,XX(LVERT),NTV)
+              CALL SQREAD(NFT26,XX(LCNT),NTV)
+              CALL IEFCMM(XX(LDMATM),XX(LSE),XX(LDE),XX(LSI),XX(LDI),
+     *                    XX(LVERT),XX(LCNT),XX(LWORK),XX(LIPVT),
+     *                    XCTS,YCTS,ZCTS,AS,NVERT,XE,YE,ZE,RE,ISPHE)
+           ELSE
+C     in iterative procedure this section is skipped
+             IF (IPCMIT.EQ.0) THEN
+             IF (IEF.EQ.10) THEN
+                 CALL CPCMMV(XX(LDMATM),XX(LWORK),XX(LIPVT),XCTS,
+     *                       YCTS,ZCTS,AS)
+             ELSE
+              IF(NMAT.EQ.1)
+     *           CALL IEFCMV1(XX(LDMATM),
+     *                  XX(LWORK),XX(LIPVT),XX(LDIMT1),XX(LDIMT2),
+     *                  XCTS,YCTS,ZCTS,AS,VAD,QOR,XE,YE,ZE,RE,ISPHE)
+              IF(NMAT.EQ.3)
+     *           CALL IEFCMMV(XX(LDMATM),XX(LSE),XX(LDE),
+     *                  XX(LWORK),XX(LIPVT),XX(LDIMT1),XX(LDIMT2),
+     *                  XCTS,YCTS,ZCTS,AS,VAD,QOR,XE,YE,ZE,RE,ISPHE)
+             END IF
+             END IF
+           END IF
+         END IF
+      END IF
+C
+      IF(IEF.GT.0.AND.IEF.LT.3) THEN
+        CALL SQWRIT(NFT26,XX(LSE),NTS3)
+        CALL SQWRIT(NFT26,XX(LDE),NTS3)
+      END IF
+      CALL SQWRIT(NFT26,XX(LDMATM),NTS3)
+      CALL SEQREW(NFT26)
+C cris
+      IF (IPCMIT.EQ.0) THEN
+C
+        IF(SOME .AND. MASWRK) THEN
+         WRITE(IW,*)
+         IF(IEF.EQ.0) THEN
+          WRITE(IW,*) '..... DONE GENERATING -D- INVERSE MATRIX .....'
+         ELSE
+          WRITE(IW,*) '..... DONE GENERATING -C- INVERSE MATRIX .....'
+         END IF
+         CALL TIMIT(1)
+        END IF
+      END IF
+C----------------------------------
+C
+C     C. Amovilli and B. Mennucci
+C     2b) Preparation of data for dispersion calculation
+C     The maximum size of auxiliary dispersion basis set is -mxdbs-
+C
+      IF(IDP.EQ.1) THEN
+         MXDBS = 200
+         CALL VALFM(LOADFM)
+         LNKTYP = LOADFM + 1
+         LXYZE  = LNKTYP + MXDBS
+         LAST   = LXYZE  + MXDBS*4
+         NEEDDP = LAST - LOADFM - 1
+         CALL GETFM(NEEDDP)
+         CALL ENLBS(XX(LNKTYP),XX(LXYZE),MXDBS,NUMB)
+         CALL RETFM(NEEDDP)
+C
+         NUMB2 = (NUMB*NUMB+NUMB)/2
+         CALL VALFM(LOADFM)
+         LSINV  = LOADFM + 1
+         LSSQR  = LSINV  + NUMB2
+         LIPVT2 = LSSQR  + NUMB*NUMB
+         LWORK2 = LIPVT2 + NUMB
+         LVX    = LWORK2 + NUMB
+         LEX    = LVX    + NUMB
+         LA     = LEX    + NUMB
+         LPOT   = LA     + L3
+         LFLD2  = LPOT   + NUMB2
+         LFLW2  = LFLD2  + 3*NUMB2
+         LAST   = LFLW2  + 3*784
+         NEEDDP = LAST - LOADFM - 1
+         CALL GETFM(NEEDDP)
+         IF(EXETYP.EQ.CHECK) THEN
+            CALL VCLR(XX(LSINV),1,L2)
+         ELSE
+            CALL DBSINV(XX(LSINV),XX(LSSQR),XX(LIPVT2),XX(LWORK2),
+     *                  NUMB,NUMB2)
+            CALL INTVE(XX(LSINV),XX(LVX),XX(LEX),XX(LA),XX(LPOT),
+     *                 XX(LFLD2),XX(LFLW2),NUMB,NUMB2,L3,
+     *                 XCTS,YCTS,ZCTS,XCTS2,YCTS2,ZCTS2,AS)
+         END IF
+         CALL DAWRIT(IDAF,IODA,XX(LSINV),L2,331,0)
+         CALL RETFM(NEEDDP)
+         IF(SOME .AND. MASWRK) THEN
+            WRITE(IW,*)
+            WRITE(IW,*) '..... DONE WITH DISPERSION SETUP .....'
+            CALL TIMIT(1)
+         END IF
+      END IF
+C
+C     3) Calculation of induced charges on the cavity.
+C     CCVEBF writes the electric field integrals to disk file -NFT27-.
+C
+      IF(EXETYP.NE.CHECK) THEN
+       IF(IEF.EQ.0) THEN
+         CALL CCVEBF(XX(LDMATM),XX(LBMCHG),XX(LVEC),XX(LFLD),XX(LFLW),
+     *            L2,NFT27,SOME,XCTS,YCTS,ZCTS,XCTS2,YCTS2,ZCTS2,AS,QSN)
+       ELSE
+C
+         IF(IEF.LT.3) THEN
+          CALL ICVEBF(XX(LDMATM),XX(LSE),XX(LDE),XX(LBMCHG),XX(LVEC),
+     *        XX(LMEP),XX(LCAM),XX(LFLD),XX(LFLW),L2,NFT27,SOME,
+     *        XCTS,YCTS,ZCTS,AS,QSN,XE,YE,ZE,RE,ISPHE)
+         ELSE
+C
+C     cris: the electronic potential is now calculated in ELEPOT,
+C     in the iterative procedure there is no need to call ICVEV
+C
+               IF (IPCMIT.EQ.0) THEN
+                 CALL ICVEV(XX(LDMATM),XX(LBMCHG),XX(LMEP),XX(LCAM),
+     *                      L2,NFT27,SOME,XCTS,YCTS,ZCTS,AS,QSN,
+     *                      QSND,VAD,
+     *                      QOR,XE,YE,ZE,RE,ISPHE)
+               ELSE
+                 IF(IDIRCT.NE.1) CALL ELEPOT(XX(LBMCHG),L2,NFT27,XCTS,
+     *                                       YCTS,ZCTS)
+                 CALL VCLR(QSN,1,NTS)
+               END IF
+         END IF
+C
+       END IF
+      END IF
+      IF(IEF.LT.3.AND.SOME .AND. MASWRK) THEN
+         WRITE(IW,*)
+         WRITE(IW,*) '..... DONE WITH ELECTRIC FIELD INTEGRALS .....'
+         CALL TIMIT(1)
+      END IF
+C
+C     4) Calculation of the interaction free energy between
+C        solute's nuclei-nuclear induced charges.
+C
+C     in iterative qsn are all 0 thus vnn is not useful
+C
+      IF(EXETYP.NE.CHECK) THEN
+         IF (IPCMIT.EQ.0) THEN
+            CALL VNN(XCTS,YCTS,ZCTS,QSN,QOR)
+            IF(SOME .AND. MASWRK) THEN
+               WRITE(IW,*)
+               WRITE(IW,*)
+     *              '..... DONE WITH INDUCED NUCLEAR CHARGES .....'
+               CALL TIMIT(1)
+            END IF
+         ELSE
+            UNZ=0.0D+00
+         ENDIF
+      END IF
+C
+C-----PRADIPTA---CHANGES-FOR-THE-EFP+PCM-model---------
+C     4a) Additive terms like Vf,n-Vf,f-and-Vn,f-are-evaluated in the
+C         next routine.
+      IF(IP_F.EQ.1) THEN
+         CALL VALFM(LOADFM)
+         LVEC    = LOADFM   + 1
+         LVECI   = LVEC     + L2
+         LVECTEST= LVECI    + L2
+         LAST    = LVECTEST + L2
+         NEEDEF = LAST - LOADFM -1
+         CALL GETFM(NEEDEF)
+C
+         IF (IPCMIT.EQ.0) THEN
+          IF(EXETYP.NE.CHECK.AND.SCFTYP.NE.RMC.AND.SCFTYP.NE.GVB) THEN
+           CALL ENUADD(XX(LDMATM),XX(LVEC),XX(LVECI),XX(LVECTEST),
+     *          L2,XCTS,YCTS,ZCTS,AS,
+     *          QSN,Q_FS,VEC_MUL)
+           CALL DAWRIT(IDAF,IODA,XX(LVECI),L2,263,0)
+          END IF
+         ELSE
+           CALL VCLR(Q_FS,1,NTS)
+         END IF
+C
+         CALL RETFM(NEEDEF)
+      ELSE
+         CALL VCLR(Q_FS,1,NTS)
+      END IF
+C
+C        this is paired with a memory request quite a ways above here.
+C
+      CALL RETFM(NEED)
+C
+C     5) Calculation of the interaction matrix between nuclear induced
+C        charges and solute's electrons. The matrix has to be added to
+C        the monoelectronic terms of the hamiltonian H.
+C
+      IF (IPCMIT.EQ.0) THEN
+        IF(IDP.EQ.0) THEN
+         CALL VALFM(LOADFM)
+         LVEC  = LOADFM + 1
+         LVEC2 = LVEC   + L2
+         LS    = LVEC2  + L2
+         LREP  = LS     + L2
+         LCEL  = LREP   + L2
+         LAST  = LCEL   + L2
+         NEED  = LAST - LOADFM - 1
+         CALL GETFM(NEED)
+         IF(EXETYP.NE.CHECK.AND.SCFTYP.NE.RMC.AND.SCFTYP.NE.GVB) THEN
+            CALL JMAT(XX(LVEC),XX(LVEC2),XX(LS),XX(LREP),XX(LCEL),L2,
+     *                XCTS,YCTS,ZCTS,QSN,QOR)
+            CALL DAWRIT(IDAF,IODA,XX(LVEC2),L2,264,0)
+            IF(SOME .AND. MASWRK) THEN
+               WRITE(IW,*)
+               WRITE(IW,*) '..... DONE GENERATING -J- MATRIX .....'
+               CALL TIMIT(1)
+            END IF
+         END IF
+         CALL RETFM(NEED)
+        END IF
+      END IF
+C
+      IF((.NOT.SOME).AND.MASWRK) THEN
+         WRITE(IW,*)
+         WRITE(IW,*) '..... DONE SETTING UP PCM CALCULATION .....'
+         CALL TIMIT(1)
+      END IF
+      RETURN
+C
+  900 FORMAT(/10X,'-------------------------------------'/
+     *        10X,'---- POLARISABLE CONTINUUM MODEL ----'/
+     *        10X,'----      UNIVERSITY OF PISA     ----'/
+     *        10X,'-------------------------------------')
+  800 FORMAT(/10X,'********************************************'/
+     *        10X,'*    EFFECTIVE FRAGMENT POTENTIAL(EFP)     *'/
+     *        10X,'*                 +                        *'/
+     *        10X,'*    POLARISABLE CONTINUUM MODEL(PCM)      *'/
+     *        10X,'*                                          *'/
+     *        10X,'*       PRADIPTA BANDYOPADHYAY             *'/
+     *        10X,'*               AND                        *'/
+     *        10X,'*         BENEDETTA MENNUCCI               *'/
+     *        10X,'*             JULY-2000                    *'/
+     *        10X,'********************************************')
+      END
+C*MODULE PCM     *DECK MAKECVM
+      SUBROUTINE MAKECVM(XE,YE,ZE,ALPHA,RIN)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      DIMENSION XE(*),YE(*),ZE(*),ALPHA(*),RIN(*)
+      PARAMETER (MXATM=2000)
+      COMMON /FMCOM / X(1)
+      COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
+      COMMON /FMOPNT/ LICHFG,LMULFG,LIDMREC,LFRGNAM,LLAYFRG,LINDAT,
+     *                LNCBS,LFMOZAN,LFMOC,LFMOMAS,LIZBAS,LIAGLOB,LIBDGH,
+     *                LIABDFG,LJABDFG,LNCAO,LIDXCAO,LIAPRJO,LJAPRJO,
+     *                LCOREAO,LOCCCOR,LSHIFTB,LIODFMO,LFMODA,LFMODB,
+     *                LFMOESPA,LFMOESPB,LLOCFMO,LSCFFRG,LFMOSCF,LRIJ,
+     *                LPOPMUL,LPOPMAT,LIALOC,LINDBD,LIATFRG,LINDFRG,
+     *                LINDGFRG,LNATFRG,LNAT0FRG,LIANFRG,LZANFRG,LCFRG,
+     *                LLIBISH,LLIBNSH,LLIBNG,LINDATG,LFMOBUF(3),LFMODE,
+     *                LNUMFRG,LLOCTAT,LIAOGLOB,LLOADM,LFMOGE,LDGRID,
+     *                LIODCFMO,LJOB2GRP,LFMOPG,LEMOCDR,LUNTXYZ,LUNTROT,
+     *                LSTONEP,LMAPSU,LFRGMUL,LCLMO,LIALMO,LINDLMO,
+     *                LATCLMO,LLMOBDF,LFGFLMO,LNFGLMO,LLFGLMO,LPFGLMO,
+     *                LPOPDMAT
+      COMMON /ECP2  / CLP(400),ZLP(400),NLP(400),KFIRST(MXATM,6),
+     *                KLAST(MXATM,6),LMAX(MXATM),LPSKIP(MXATM),
+     *                IZCORE(MXATM)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /MACHIN/ NWDVAR,MAXFM,MAXSM,LIMFM,LIMSM
+C
+C         get dynamic memory for -makcav-
+C
+      CALL VALFM(LOADFM)
+      LIZCORE=LOADFM+1
+      LAST = LIZCORE
+      IF(NFG.NE.0) LAST=LIZCORE+(NATFMO-1)/NWDVAR+1
+      NEED = LAST - LOADFM - 1
+      CALL GETFM(NEED)
+C
+C        IZCORE is not defined in FMO yet
+C        (no ECP support, so just zero out now).
+      IF(NFG.NE.0) CALL VICLR(X(LIZCORE),1,NATFMO)
+C
+      IF(NFG.EQ.0) THEN
+        CALL MAKCAV(NAT,ZAN,C,IZCORE,
+     *              XE,YE,ZE,ALPHA,RIN)
+      ELSE
+        CALL MAKCAV(NATFMO,X(LFMOZAN),X(LFMOC),X(LIZCORE),
+     *              XE,YE,ZE,ALPHA,RIN)
+      ENDIF
+C
+      CALL RETFM(NEED)
+      RETURN
+      END
+C*MODULE PCM     *DECK MAKCAV
+      SUBROUTINE MAKCAV(NAT,ZAN,C,IZCORE,XE,YE,ZE,ALPHA,RIN)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      CHARACTER*8 FRGNME
+C
+      LOGICAL GOPARR,DSKWRK,MASWRK,OK
+C
+      DIMENSION ZAN(*),C(3,*),IZCORE(*),
+     *          XE(*),YE(*),ZE(*),ALPHA(*),RIN(*)
+      DIMENSION RVDW(86)
+C
+      PARAMETER (MXPT=2000, MXFRG=1050, MXFGPT=12000,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+      PARAMETER (MXATM=2000)
+C
+      COMMON /EFMULT/ EFC(3,MXFGPT),EFCHG(2,MXFGPT),EFATRM(MXFGPT),
+     *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
+     *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
+     *                EFOCT(10,MXFGPT),FRGNME(MXFGPT)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /FRGMSS/ FPMASS(MXPT),FMASS(MXFGPT),
+     *                FPNUC(MXPT),FGNUC(MXFGPT)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMEPS/ EPSHET(MXATM),IHET
+      COMMON /PCMOPT/ RABI,RASC,REFPOL,THRSLS,DENSLS,WB,WA,ETA2,GD,EVAC,
+     *                RHOW,PM,AREATL,AREAKP,BONDRY,OMEGA,RET,FRO,EPSINF,
+     *                EPS,DR,RSOLV,VMOL,TCE,STEN,DSTEN,CMF,TABS,IDIRCT,
+     *                IPCDER,IDP,ICOMP,IFIELD,ICAV,IDISP,IPRINT,IRETCAV,
+     *                ICENT,IFAST,NEVAL,IEFPOL,KEEPSM,IMGABI,IMGASC,NADD
+      COMMON /PCMPAR/ IPCM,NFT26,NFT27,IKREP,IEF,IP_F,NFMOPCM
+      COMMON /PCMPLY/ STOT,VOL,CCX,CCY,CCZ,RDIF,NESF,NESFP,NESFF,I_NESF,
+     *                L_AST
+      COMMON /PCMTMP/ IDSP(MXATM+MXFRG*5),DPCMFRG(6,MXFRG),
+     *                EGPCM(3,MXATM)
+C
+      PARAMETER (TOANGS=0.52917724924D+00)
+C
+      PARAMETER (NNAM=7)
+      DIMENSION QNAM(NNAM),KQNAM(NNAM)
+      DATA CAVWD/8HPCMCAV  /
+      DATA QNAM/8HXE      ,8HYE      ,8HZE      ,8HRIN     ,
+     *          8HALPHA   ,8HRADII   ,8HEPSHET  /
+      DATA KQNAM/-3,-3,-3,-3,-3,5,-3/
+C
+      DATA RINPUT/8HINPUT   /
+      DATA VANDW/8HVANDW   /
+      DATA SUAHF/8HSUAHF   /
+      DATA VDWEFP/8HVDWEFP  /
+C
+C       van der Waals radii taken from "The Elements", 2nd edition,
+C       John Emsley, Clarendon Press, Oxford, 1991.  Unknown values
+C       are simply set to zero, rather than trying to guess them.
+C
+C       A.Bondi, J.Chem.Phys. 68: 441-451(1964) gives alternate
+C       values, and a few transition metals.
+C
+      DATA (RVDW(II),II=1,18)/1.20D+00,1.22D+00,
+     *      0.00D+00,0.00D+00,2.08D+00,1.85D+00,
+     *      1.54D+00,1.40D+00,1.35D+00,1.60D+00,
+     *      2.31D+00,0.00D+00,2.05D+00,2.00D+00,
+     *      1.90D+00,1.85D+00,1.81D+00,1.91D+00/
+      DATA (RVDW(II),II=19,36)/2.31D+00,13*0.0D+00,
+     *      2.00D+00,2.00D+00,1.95D+00,1.98D+00/
+      DATA (RVDW(II),II=37,54)/2.44D+00,13*0.0D+00,
+     *      2.20D+00,2.20D+00,2.15D+00,0.00D+00/
+      DATA (RVDW(II),II=55,86)/2.62D+00,27*0.0D+00,2.40D+00,3*0.0D+00/
+C
+C       --- read possible $PCMCAV input group ---
+C
+C     override the above table with U. Pisa's experience
+C     as to what works best for singly bonded C,N,O
+C
+      RVDW(6) = 1.70D+00
+      RVDW(7) = 1.60D+00
+      RVDW(8) = 1.50D+00
+C
+      KQNAM(1) = 10*MXSP + 3
+      KQNAM(2) = 10*MXSP + 3
+      KQNAM(3) = 10*MXSP + 3
+      KQNAM(4) = 10*MXSP + 3
+      KQNAM(5) = 10*MXSP + 3
+      KQNAM(7) = 10*MXATM + 3
+C
+C        sphere centers XE,YE,ZE and radii RIN must be input in Angstrom
+C
+      CALL VCLR(XE,1,MXSP)
+      CALL VCLR(YE,1,MXSP)
+      CALL VCLR(ZE,1,MXSP)
+      CALL VCLR(RIN,1,MXSP)
+      CALL VCLR(ALPHA,1,MXSP)
+      CALL VICLR(IDSP,1,MXATM+MXFRG*5)
+      DO II=1,MXATM
+         EPSHET(II) = EPS
+      ENDDO
+C
+      RADII=VANDW
+C
+C        "practice" read of $PCMCAV, so that we get the RADII keyword
+C
+      JRET=0
+      CALL NAMEIO(IR,JRET,CAVWD,NNAM,QNAM,KQNAM,
+     *            XE,YE,ZE,RIN,ALPHA,RADII,EPSHET,
+     *          0,0,  0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,
+     *    0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,
+     *    0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0)
+      IF(JRET.EQ.2) THEN
+         IF(MASWRK) WRITE(IW,9000) CAVWD
+         CALL ABRT
+      END IF
+C
+C        Heterogeneous CPCM compatability
+C
+      IHET = 0
+      DO II=1,MXATM
+         IF(EPSHET(II).NE.EPS)THEN
+            IHET = 1
+            IF(IEF.NE.10)THEN
+               IF(MASWRK)WRITE(IW,*)'HET-CPCM REQUIRES IEF=10 OR -10'
+               CALL ABRT
+            END IF
+            IF(ICOMP.NE.0)THEN
+               IF(MASWRK)WRITE(IW,*)'HET-CPCM REQUIRES ICOMP=0'
+               CALL ABRT
+            END IF
+         END IF
+      ENDDO
+C
+C        check spelling on the RADII keyword
+C
+      OK=.FALSE.
+      IF(RADII.EQ.VANDW)  OK=.TRUE.
+      IF(RADII.EQ.VDWEFP) OK=.TRUE.
+      IF(RADII.EQ.SUAHF)  OK=.TRUE.
+      IF(RADII.EQ.RINPUT) OK=.TRUE.
+      IF(.NOT.OK) THEN
+         IF(MASWRK) WRITE(IW,9040) RADII
+         CALL ABRT
+      ENDIF
+C
+C        establish default sphere centers and radii values
+C
+C     NSP : THE TOTAL NUMBER OF PCM SPHERES
+C           IF THE INPUT NESFP > 0, USE NSP=NESFP
+C
+      NSP = 0
+      IF(NESFP.GT.0) THEN
+         NSP = NESFP
+      ELSE
+         IF(RADII.EQ.VANDW. OR. RADII.EQ.VDWEFP) THEN
+C              -- ab initio atoms must go first --
+            DO J=1,NAT
+               NSP = NSP + 1
+               XE(NSP)=C(1,J)*TOANGS
+               YE(NSP)=C(2,J)*TOANGS
+               ZE(NSP)=C(3,J)*TOANGS
+               NUCZ = INT(ZAN(J)+IZCORE(J)+0.001D+00)
+               RIN(NSP) = RVDW(NUCZ)
+               IF(RIN(NSP).LT.1.0D-03.AND.RADII.EQ.VDWEFP)
+     *               RIN(NSP)=1.6D+00
+            ENDDO
+C              -- for EFP points with non-zero nuclear charges --
+            IF(IP_F.EQ.1) THEN
+               III = 0
+               DO  100 IFRG = 1, NFRG
+                  DO 110 IMPT = 1, NMPTS(IFRG)
+                     III = III + 1
+                     IF(FGNUC(III).GT.0.001D+00) THEN
+                        NSP = NSP + 1
+                        IDSP(NSP) = IFRG
+                        XE(NSP) = EFC(1,III)*TOANGS
+                        YE(NSP) = EFC(2,III)*TOANGS
+                        ZE(NSP) = EFC(3,III)*TOANGS
+                        NUCZ = INT(FGNUC(III)+0.001D+00)
+                        RIN(NSP)=RVDW(NUCZ)
+                        IF(RIN(NSP).LT.1.0D-03.AND.RADII.EQ.VDWEFP)
+     *                     RIN(NSP)=1.6D+00
+                     END IF
+ 110              CONTINUE
+ 100           CONTINUE
+            END IF
+         ELSE IF(RADII.EQ.SUAHF) THEN
+C           SUAHF: Simplified United Atomic radii for EFP
+C           -- for ab initio atoms --
+            DO J=1,NAT
+               NSP = NSP + 1
+               XE(NSP)=C(1,J)*TOANGS
+               YE(NSP)=C(2,J)*TOANGS
+               ZE(NSP)=C(3,J)*TOANGS
+               NUCZ = INT(ZAN(J)+IZCORE(J)+0.001D+00)
+               RIN(NSP)=1.500D+00
+               IF(NUCZ.EQ. 1) RIN(NSP)=0.010D+00
+               IF(NUCZ.EQ. 6) RIN(NSP)=1.770D+00
+               IF(NUCZ.EQ. 7) RIN(NSP)=1.680D+00
+               IF(NUCZ.EQ. 8) RIN(NSP)=1.590D+00
+               IF(NUCZ.EQ.15) RIN(NSP)=2.100D+00
+               IF(NUCZ.EQ.16) RIN(NSP)=2.100D+00
+               IF(NUCZ.GE.17) RIN(NSP)=2.300D+00
+            ENDDO
+C           -- for EFP points with non-zero nuclear charges --
+            IF(IP_F.EQ.1) THEN
+               III = 0
+               DO  200 IFRG = 1, NFRG
+                  DO 210 IMPT = 1, NMPTS(IFRG)
+                     III = III + 1
+                     IF(FGNUC(III).GT.0.001D+00) THEN
+                        NSP = NSP + 1
+                        IDSP(NSP) = IFRG
+                        XE(NSP) = EFC(1,III)*TOANGS
+                        YE(NSP) = EFC(2,III)*TOANGS
+                        ZE(NSP) = EFC(3,III)*TOANGS
+                        NUCZ = INT(FGNUC(III)+0.001D+00)
+                        RIN(NSP)=1.500D+00
+                        IF(NUCZ.EQ. 1) RIN(NSP)=0.010D+00
+                        IF(NUCZ.EQ. 6) RIN(NSP)=1.770D+00
+                        IF(NUCZ.EQ. 7) RIN(NSP)=1.680D+00
+                        IF(NUCZ.EQ. 8) RIN(NSP)=1.590D+00
+                        IF(NUCZ.EQ.15) RIN(NSP)=2.100D+00
+                        IF(NUCZ.EQ.16) RIN(NSP)=2.100D+00
+                        IF(NUCZ.GE.17) RIN(NSP)=2.300D+00
+                     END IF
+ 210              CONTINUE
+ 200           CONTINUE
+            END IF
+         END IF
+      END IF
+      I_NESF=NSP
+      NESF=NSP
+C
+C     -- NOW WE READ THE INPUT AGAIN FOR XE,YE,ZE,RIN,ALPHA
+C        THESE VALUES WILL OVERWRITE THE ABOVE PRE-SETS.
+C
+      JRET=0
+      CALL NAMEIO(IR,JRET,CAVWD,NNAM,QNAM,KQNAM,
+     *            XE,YE,ZE,RIN,ALPHA,RADII,EPSHET,
+     *          0,0,  0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,
+     *    0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,
+     *    0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0)
+C
+      IF(JRET.EQ.2) THEN
+         IF(MASWRK) WRITE(IW,9000) CAVWD
+         CALL ABRT
+      END IF
+C
+      IF(MASWRK.AND.NPRINT.NE.817) WRITE(IW,9010)
+      NERR = 0
+      DO J=1,NSP
+         IF(MASWRK.AND.NPRINT.NE.817)
+     *       WRITE(IW,9020) J,XE(J),YE(J),ZE(J),RIN(J)
+         IF(RIN(J).LE.0) NERR=NERR+1
+      ENDDO
+      IF(NERR.GT.0) THEN
+         IF(MASWRK) WRITE(IW,9030)
+         CALL ABRT
+         STOP
+      END IF
+C
+C        on exit, XE,YE,ZE should be converted to Bohr, but RIN stays A.
+C
+      DO J=1,NSP
+         XE(J)=XE(J)/TOANGS
+         YE(J)=YE(J)/TOANGS
+         ZE(J)=ZE(J)/TOANGS
+      ENDDO
+C
+C     If parameter ALPHA(I) is greater than 0 the I-th radius is
+C     multiplied by ALPHA(I).
+C     This allows to use radii=R(van der Waals)*ALPHA in the calculation
+C     of electrostatic (and eventually SCF disp-rep) contribution, and
+C     radii = RvdW for the cavitation.
+C     It is possible to give a different value of ALPHA to each atom:
+C     if the first one is less than zero, it is fixed equal to 1,
+C     otherwise it keeps its value. Each following value less than zero
+C     is changed to 1.
+C
+      IF(ALPHA(1).LE.0.0D+00) ALPHA(1) = 1.2D+00
+      DO I = 2, MXSP
+        IF(ALPHA(I).LE.0.0D+00) ALPHA(I) = ALPHA(1)
+      ENDDO
+      RETURN
+C
+ 9000 FORMAT(1X,'**** ERROR IN $',A8,' INPUT')
+ 9010 FORMAT(/5X,'INPUT FOR CAVITY DEFINITION '/5X,27(1H-)/
+     *   5X,'ATOM         COORDINATES           RADIUS ')
+ 9020 FORMAT(1X,I6,4(2X,F8.4))
+ 9030 FORMAT(1X,'**** ERROR **** PCM SPHERE(S) MUST HAVE',
+     *          ' A POSITIVE RADIUS')
+ 9040 FORMAT(1X,'ILLEGAL SPELLING GIVEN FOR RADII IN $PCMCAV, ',A8/
+     *       1X,'CHOOSE RADII=VANDW, VDWEFP, OR SUAHF TO USE',
+     *          ' TABULATED DATA.'/
+     *       1X,'CHOOSE RADII=INPUT IF YOU WISH TO READ ALL -RIN-',
+     *          ' VALUES MANUALLY.')
+      END
+C*MODULE PCM     *DECK CCVEBF
+      SUBROUTINE CCVEBF(DMATM1,BEMCHG,VEC,FLD,FLW,L2,NFT27,SOME,
+     *                  XCTS,YCTS,ZCTS,XCTS2,YCTS2,ZCTS2,AS,QSN)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      DIMENSION DMATM1(NTS,NTS),BEMCHG(L2),VEC(NTS),FLD(L2,3),
+     *          FLW(784,3),XCTS(*),YCTS(*),ZCTS(*),XCTS2(*),YCTS2(*),
+     *          ZCTS2(*),AS(*),QSN(*)
+C
+      LOGICAL SOME, GOPARR, DSKWRK, MASWRK
+C
+      PARAMETER (MXATM=2000)
+C
+      COMMON /ELPROP/ ELDLOC,ELMLOC,ELPLOC,ELFLOC,
+     *                IEDEN,IEMOM,IEPOT,IEFLD,MODENS,
+     *                IEDOUT,IEMOUT,IEPOUT,IEFOUT,
+     *                IEDINT,IEMINT,IEPINT,IEFINT
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMCHG/ PB,PX,PC,UNZ,QNUC,FN,FE,UNZOR,PORT
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMOPT/ RABI,RASC,REFPOL,THRSLS,DENSLS,WB,WA,ETA2,GD,EVAC,
+     *                RHOW,PM,AREATL,AREAKP,BONDRY,OMEGA,RET,FRO,EPSINF,
+     *                EPS,DR,RSOLV,VMOL,TCE,STEN,DSTEN,CMF,TABS,IDIRCT,
+     *                IPCDER,IDP,ICOMP,IFIELD,ICAV,IDISP,IPRINT,IRETCAV,
+     *                ICENT,IFAST,NEVAL,IEFPOL,KEEPSM,IMGABI,IMGASC,NADD
+      COMMON /PCMPLY/ STOT,VOL,CCX,CCY,CCZ,RDIF,NESF,NESFP,NESFF,I_NESF,
+     *                L_AST
+      COMMON /XYZPRP/ XP,YP,ZP,DMY(35)
+C
+      PARAMETER (TOANGS=0.52917724924D+00, ANTOAU=1.0D+00/TOANGS)
+C
+      DATA ZERO, ONE  /0.0D+00, 1.0D+00/
+      DATA FPI/12.56637061D+00/
+      DATA ELFLD  /8HELFLD   /
+C
+C     After projection onto the normal to the tessera,
+C     the electric field integrals are written to disk file -nft27-.
+C
+C  1) Calculation of < chi(mu) | alpha/r | chi(nu) > integrals
+C     (elect. field integrals) on representative points of tesserae.
+C
+      IEFLDOLD=IEFLD
+      IEFLD=1
+      CALL SEQREW(NFT27)
+      DO ITS = 1, NTS
+         XP=XCTS(ITS)
+         YP=YCTS(ITS)
+         ZP=ZCTS(ITS)
+         CNX=(XP-XCTS2(ITS))/DR
+         CNY=(YP-YCTS2(ITS))/DR
+         CNZ=(ZP-ZCTS2(ITS))/DR
+         CALL PRCALC(ELFLD,FLD,FLW,3,L2,.FALSE.)
+         DO IBAS = 1, L2
+            BEMCHG(IBAS) = FLD(IBAS,1)*CNX
+     *                   + FLD(IBAS,2)*CNY
+     *                   + FLD(IBAS,3)*CNZ
+         ENDDO
+         CALL SQWRIT(NFT27,BEMCHG,L2)
+      ENDDO
+      CALL SEQREW(NFT27)
+      IEFLD=IEFLDOLD
+C
+C  2) Calculation of apparent charges generated by the solute's nuclei.
+C
+      DO  ITS = 1, NTS
+         XI=XCTS(ITS)
+         YI=YCTS(ITS)
+         ZI=ZCTS(ITS)
+         CX=(XI-XCTS2(ITS))/DR
+         CY=(YI-YCTS2(ITS))/DR
+         CZ=(ZI-ZCTS2(ITS))/DR
+         VEC(ITS) = ZERO
+         DO  JATOM = 1, NAT
+            XL=C(1,JATOM)
+            YL=C(2,JATOM)
+            ZL=C(3,JATOM)
+            RIL= SQRT((XI-XL)**2+(YI-YL)**2+(ZI-ZL)**2)
+            XM = ((XI-XL)*CX+(YI-YL)*CY+(ZI-ZL)*CZ) / RIL**3
+            VEC(ITS) = VEC(ITS) + XM*ZAN(JATOM)
+         ENDDO
+      ENDDO
+C         write(iw,*)'raja3'
+C
+      QNTOT = ZERO
+      QNUC2 = ZERO
+      DO ITS = 1, NTS
+         QSN(ITS) = ZERO
+         DO JTS = 1, NTS
+            QSN(ITS) = QSN(ITS)+DMATM1(ITS,JTS)*VEC(JTS)
+         ENDDO
+         QSN(ITS) = QSN(ITS)*AS(ITS)
+         QNUC2 = QNUC2 + VEC(ITS)*AS(ITS)
+         QNTOT = QNTOT + QSN(ITS)
+      ENDDO
+      QNUC2 = QNUC2/FPI
+      IF(SOME .AND. MASWRK) WRITE(IW,1200) QNUC2
+C
+C  4) Renormalization of `nuclear' apparent charges.
+C     If ICOMP=1 the correction is proportional to the tessera's area.
+C     If ICOMP=2 or ICOMP=3 the correction is equal for each tessera.
+C
+      CHG = ZERO
+      DO JATOM = 1, NAT
+         CHG = CHG + ZAN(JATOM)
+      ENDDO
+      TCH = - CHG * (EPS - ONE) / EPS
+      QNTOTN = ZERO
+C
+C     Option 1:
+C
+      FN = ONE
+      IF(ICOMP.EQ.1) THEN
+         SUPTOT = STOT * ANTOAU * ANTOAU
+         DIFF = TCH - QNTOT
+         DO ITS = 1, NTS
+            QSN(ITS) = QSN(ITS) + DIFF * AS(ITS) / SUPTOT
+            QNTOTN = QNTOTN + QSN(ITS)
+         ENDDO
+C
+C     Option 2:
+C
+      ELSE IF(ICOMP.EQ.2.OR.ICOMP.EQ.3) THEN
+         FN = TCH / QNTOT
+         DO ITS = 1, NTS
+            QSN(ITS) = QSN(ITS) * FN
+            QNTOTN = QNTOTN + QSN(ITS)
+         ENDDO
+      END IF
+C
+C     Total apparent charge before and after renormalization.
+C
+      IF(SOME .AND. MASWRK) THEN
+         IF(ICOMP.NE.0) WRITE(IW,1000) QNTOT, TCH, QNTOTN
+         IF(ICOMP.EQ.0) WRITE(IW,1100) QNTOT, TCH
+      END IF
+      RETURN
+C
+ 1000 FORMAT(1X,'NUCLEAR APPARENT CHARGE',F10.5,' THEORETICAL',
+     *          F10.5,' RENORMALIZED',F10.5)
+ 1100 FORMAT(1X,'NUCLEAR APPARENT CHARGE',F10.5,' THEORETICAL',
+     *          F10.5,' NOT RENORMALIZED',F10.5)
+ 1200 FORMAT(/1X,'ESTIMATE OF NUCLEAR CHARGE',F15.5)
+      END
+C*MODULE PCM     *DECK XMATBF
+      SUBROUTINE XMATBF(D,XX,Q,SCR,DMATM1,QET,QETN,TCH,NUM2,NFT27,
+     *                  XCTS,YCTS,ZCTS,AS,QSN,QSE)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      PARAMETER (MXATM=2000)
+C
+      DIMENSION D(NUM2),XX(NUM2),SCR(NUM2),Q(NTS),DMATM1(NTS,NTS),
+     *          XCTS(*),YCTS(*),ZCTS(*),AS(*),QSN(*),QSE(*)
+C
+      LOGICAL GOPARR, DSKWRK, MASWRK
+C
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMCHG/ PB,PX,PC,UNZ,QNUC,FN,FE,UNZOR,PORT
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMOPT/ RABI,RASC,REFPOL,THRSLS,DENSLS,WB,WA,ETA2,GD,EVAC,
+     *                RHOW,PM,AREATL,AREAKP,BONDRY,OMEGA,RET,FRO,EPSINF,
+     *                EPS,DR,RSOLV,VMOL,TCE,STEN,DSTEN,CMF,TABS,IDIRCT,
+     *                IPCDER,IDP,ICOMP,IFIELD,ICAV,IDISP,IPRINT,IRETCAV,
+     *                ICENT,IFAST,NEVAL,IEFPOL,KEEPSM,IMGABI,IMGASC,NADD
+      COMMON /PCMPLY/ STOT,VOL,CCX,CCY,CCZ,RDIF,NESF,NESFP,NESFF,I_NESF,
+     *                L_AST
+C
+      PARAMETER (TOANGS=0.52917724924D+00, ANTOAU=1.0D+00/TOANGS)
+C
+      DATA ZERO, ONE/0.0D+00, 1.0D+00/
+C
+C     Routine for the calculation of matrix XX (interaction between
+C     `electronic' apparent charges and electronic potential of the
+C     solute):
+C         XX(m,n) = sum_i[ V(m,n;i)QSE(i) ]
+C         QSE(i) = a(i)sum_j[ DMATM1(i,j){sum_m,n[ D(m,n)dV(m,n;i)dn ]}
+C     which is used in the SCF routine in order to correct two-electron
+C     integrals.
+C
+C     Disk file NFT27 stores the normal components of the electric
+C     field -dV(m,n;i)/dn.
+C
+      CALL SEQREW(NFT27)
+C
+      DO ITS = 1, NTS
+         CALL SQREAD(NFT27,SCR,NUM2)
+         Q(ITS) = TRACEP(D,SCR,NUM)
+      ENDDO
+C
+      CALL SEQREW(NFT27)
+C
+      QET = ZERO
+      DO ITS = 1, NTS
+         QSE(ITS) = ZERO
+         DO ITSJ = 1, NTS
+            QSE(ITS) = QSE(ITS)+DMATM1(ITS,ITSJ)*Q(ITSJ)
+         ENDDO
+         QSE(ITS) = QSE(ITS)*AS(ITS)
+         QET = QET + QSE(ITS)
+      ENDDO
+C
+C  4) Normalizzazione delle cariche virtuali elementari elettroniche.
+C     Per ICOMP=1 la correzione e' distribuita in proporzione
+C     all'area della tessera.
+C     Per ICOMP=2 la correzione e' effettuata con fattori costanti.
+C
+      NELEC = NE
+      TCH = NELEC * (EPS - ONE) / EPS
+      QETN = ZERO
+C
+C     Option 1
+C
+      FE = ONE
+      IF(ICOMP.EQ.1) THEN
+         SUPTOT = STOT * ANTOAU * ANTOAU
+         DIFF = TCH - QET
+         DO ITS = 1, NTS
+            QSE(ITS) = QSE(ITS) + DIFF * AS(ITS) / SUPTOT
+            QETN = QETN + QSE(ITS)
+        ENDDO
+C
+C     Option 2
+C
+      ELSE IF(ICOMP.EQ.2) THEN
+         FE = TCH / QET
+         DO ITS = 1, NTS
+            QSE(ITS) = QSE(ITS) * FE
+            QETN = QETN + QSE(ITS)
+         ENDDO
+      END IF
+C
+C     Print total induced charge before and after renormalization
+C
+      IF(NPRINT.EQ.5 .AND. MASWRK) THEN
+         IF(ICOMP.NE.0) WRITE(IW,1000) QET, TCH, QETN
+         IF(ICOMP.EQ.0) WRITE(IW,1100) QET, TCH
+      END IF
+C
+C   Calculation of interaction matrices to be added to the Fock matrix
+C
+      CALL VCLR(XX,1,NUM2)
+      PB = ZERO
+      PC = ZERO
+      PX = ZERO
+C
+      DO ITS = 1, NTS
+        CALL INTMEP(SCR,XCTS(ITS),YCTS(ITS),ZCTS(ITS))
+        DO IBAS = 1, NUM2
+          XX(IBAS) = XX(IBAS) - SCR(IBAS) * QSE(ITS)
+C          WRITE(IW,*)'MAGNITUDE',XX(IBAS),SCR(IBAS),QSE(ITS)
+        ENDDO
+C
+C     PB = interaction electrons-nuclear induced charges
+C     PX = interaction electrons-electronic induced charges
+C
+        VEL =  - TRACEP(D,SCR,NUM)
+        PB = PB + VEL * QSN(ITS)
+        PX = PX + VEL * QSE(ITS)
+C
+C     PC = interaction nuclei-electronic induced charges
+C
+        DO JATOM = 1, NAT
+          R2 = (C(1,JATOM)-XCTS(ITS))**2 + (C(2,JATOM)-
+     *         YCTS(ITS))**2 + (C(3,JATOM)-ZCTS(ITS))**2
+          R = SQRT(R2)
+          PC = PC + QSE(ITS) * ZAN(JATOM) / R
+        ENDDO
+      ENDDO
+      RETURN
+C
+ 1000 FORMAT(1X,'ELECTRONIC APPARENT CHARGE',F10.5,' THEORETICAL ',
+     * F10.5,' RENORMALIZED',F10.5)
+ 1100 FORMAT(1X,'ELECTRONIC APPARENT CHARGE',F10.5,' THEORETICAL ',
+     * F10.5,' NOT RENORMALIZED',F10.5)
+      END
+C*MODULE PCM     *DECK INTMEP
+      SUBROUTINE INTMEP(VALUE,XPP,YPP,ZPP)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      LOGICAL IANDJ,NORM,DOUBLE,GOPARR,DSKWRK,MASWRK
+C
+      DIMENSION VALUE(*)
+      DIMENSION IX(35),IY(35),IZ(35),JX(35),JY(35),JZ(35),
+     *          XIN(125),YIN(125),ZIN(125),WINT(225),WORK(225),
+     *          DIJ(225),IJX(225),IJY(225),IJZ(225),
+     *          HP(28),WP(28),MINP(7),MAXP(7)
+C
+      PARAMETER (MXSH=5000, MXGTOT=20000, MXATM=2000)
+C
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMPAR/ IPCM,NFT26,NFT27,IRPPCM,IEFPCM,IP_F,NFMOPCM
+      COMMON /PCMITR/ RCUT(2),THRES,IPCMIT,IMUL,MXDIIS,NREG,MXITR1,
+     *                MXITR2,MODPAP
+      COMMON /ROOT  / XX,U(13),W(13),NROOTS
+      COMMON /HERMIT/ H1,H2(2),H3(3),H4(4),H5(5),H6(6),H7(7),
+     *                H8(8),H9(9),H10(10),
+     *                H11(11),H12(12),H13(13),H14(14),H15(15)
+      COMMON /WERMIT/ W1,W2(2),W3(3),W4(4),W5(5),W6(6),W7(7),
+     *                W8(8),W9(9),W10(10),
+     *                W11(11),W12(12),W13(13),W14(14),W15(15)
+C
+      EQUIVALENCE (HP(1),H1),(WP(1),W1)
+C
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00)
+      PARAMETER (PI212=1.1283791670955D+00)
+      PARAMETER (SQRT3=1.73205080756888D+00)
+      PARAMETER (SQRT5=2.23606797749979D+00)
+      PARAMETER (SQRT7=2.64575131106459D+00)
+      PARAMETER (RLN10=2.30258D+00)
+      DATA MINP /1,2,4, 7,11,16,22/
+      DATA MAXP /1,3,6,10,15,21,28/
+      DATA JX / 0, 1, 0, 0, 2, 0, 0, 1, 1, 0,
+     *          3, 0, 0, 2, 2, 1, 0, 1, 0, 1,
+     *          4, 0, 0, 3, 3, 1, 0, 1, 0, 2,
+     *          2, 0, 2, 1, 1/
+      DATA IX / 1, 6, 1, 1,11, 1, 1, 6, 6, 1,
+     *         16, 1, 1,11,11, 6, 1, 6, 1, 6,
+     *         21, 1, 1,16,16, 6, 1, 6, 1,11,
+     *         11, 1,11, 6, 6/
+      DATA JY / 0, 0, 1, 0, 0, 2, 0, 1, 0, 1,
+     *          0, 3, 0, 1, 0, 2, 2, 0, 1, 1,
+     *          0, 4, 0, 1, 0, 3, 3, 0, 1, 2,
+     *          0, 2, 1, 2, 1/
+      DATA IY / 1, 1, 6, 1, 1,11, 1, 6, 1, 6,
+     *          1,16, 1, 6, 1,11,11, 1, 6, 6,
+     *          1,21, 1, 6, 1,16,16, 1, 6,11,
+     *          1,11, 6,11, 6/
+      DATA JZ / 0, 0, 0, 1, 0, 0, 2, 0, 1, 1,
+     *          0, 0, 3, 0, 1, 0, 1, 2, 2, 1,
+     *          0, 0, 4, 0, 1, 0, 1, 3, 3, 0,
+     *          2, 2, 1, 1, 2/
+      DATA IZ / 1, 1, 1, 6, 1, 1,11, 1, 6, 6,
+     *          1, 1,16, 1, 6, 1, 6,11,11, 6,
+     *          1, 1,21, 1, 6, 1, 6,16,16, 1,
+     *         11,11, 6, 6,11/
+C
+C       EVALUATE THE -MEP- VALUE FOR ALL POINTS GIVEN IN -XYZ-
+C
+C
+C     check on basis set, for this routine is limited to spdfg
+C
+      CALL BASCHK(LMAX)
+      IF(LMAX.GT.4) THEN
+         IF(MASWRK) WRITE(6,*) 'INTMEP: CODE IS SPDFG LIMITED'
+         CALL ABRT
+      END IF
+C
+C     Reduce the accuracy 50 times (e**4) for iterative solver in PCM
+C     (at present this routine is only called in case of iterative
+C      PCM solver and the reason for accuracy reduction is its limited
+C      numeric accuracy).
+C
+      ITOLPCM=ITOL
+      IF(IPCM.NE.0.AND.IPCMIT.NE.0) ITOLPCM=ITOLPCM-4
+      TOL = RLN10*ITOLPCM
+C     TOL  = RLN10*ITOL
+      NORM = NORMF .NE. 1 .OR. NORMP .NE. 1
+C
+C                    LOOP OVER SHELLS II
+C
+      DO 510 II=1,NSHELL
+      I    = KATOM(II)
+      XI   = C(1,I)
+      YI   = C(2,I)
+      ZI   = C(3,I)
+      I1   = KSTART(II)
+      I2   = I1 + KNG(II) - 1
+      LIT  = KTYPE(II)
+      MINI = KMIN(II)
+      MAXI = KMAX(II)
+      LOCI = KLOC(II) - MINI
+C
+C                    LOOP OVER SHELLS JJ
+C
+      DO 500  JJ=1,II
+C
+      J    = KATOM(JJ)
+      XJ   = C(1,J)
+      YJ   = C(2,J)
+      ZJ   = C(3,J)
+      J1   = KSTART(JJ)
+      J2   = J1 + KNG(JJ) - 1
+      LJT  = KTYPE(JJ)
+      MINJ = KMIN(JJ)
+      MAXJ = KMAX(JJ)
+      LOCJ = KLOC(JJ) - MINJ
+C
+      RR     = (XI-XJ)**2 + (YI-YJ)**2 + (ZI-ZJ)**2
+      NROOTS = (LIT + LJT - 2)/2 + 1
+      IANDJ  = II.EQ.JJ
+C
+C             PREPARE INDICES FOR PAIRS OF (I,J) ORBITALS
+C
+      IJ = 0
+      MAX = MAXJ
+      DO 100  I=MINI,MAXI
+      NX = IX(I)
+      NY = IY(I)
+      NZ = IZ(I)
+C
+      IF (IANDJ) MAX = I
+      DO 100  J=MINJ,MAX
+      IJ = IJ+1
+      IJX(IJ) = NX+JX(J)
+      IJY(IJ) = NY+JY(J)
+      IJZ(IJ) = NZ+JZ(J)
+  100 CONTINUE
+C
+      CALL VCLR(WORK,1,225)
+C
+C                     LOOP OVER PRIMITIVES IG
+C
+      JGMAX = J2
+      DO 410  IG=I1,I2
+      AI  = EX(IG)
+      CSI = CS(IG)
+      CPI = CP(IG)
+      CDI = CD(IG)
+      CFI = CF(IG)
+      CGI = CG(IG)
+C
+C                     LOOP OVER PRIMITIVES JG
+C
+      IF (IANDJ) JGMAX = IG
+      DO 400 JG=J1,JGMAX
+      AJ  = EX(JG)
+      CSJ = CS(JG)
+      CPJ = CP(JG)
+      CDJ = CD(JG)
+      CFJ = CF(JG)
+      CGJ = CG(JG)
+C
+      AA  = AI + AJ
+      AA1 = ONE/AA
+      FI  = PI212*AA1
+C
+      AAX = (AI*XI + AJ*XJ)
+      AAY = (AI*YI + AJ*YJ)
+      AAZ = (AI*ZI + AJ*ZJ)
+C
+      AX  = AAX*AA1
+      AY  = AAY*AA1
+      AZ  = AAZ*AA1
+C
+      DUM = AI*AJ*RR*AA1
+      IF(DUM .GT. TOL) GO TO 400
+      FAC = FI*EXP(-DUM)
+C
+C                       CALCULATE DENSITY FACTORS
+C
+      DOUBLE = IANDJ.AND.IG.NE.JG
+      MAX = MAXJ
+      NN  = 0
+C
+      DUM1 = ZERO
+      DUM2 = ZERO
+      DO 200 I = MINI,MAXI
+         IF(I.EQ.1) DUM1=CSI*FAC
+         IF(I.EQ.2) DUM1=CPI*FAC
+         IF(I.EQ.5) DUM1=CDI*FAC
+         IF(I.EQ.8.AND.NORM) DUM1=DUM1*SQRT3
+         IF(I.EQ.11) DUM1 = CFI*FAC
+         IF((I.EQ.14).AND.NORM) DUM1 = DUM1*SQRT5
+         IF((I.EQ.20).AND.NORM) DUM1 = DUM1*SQRT3
+         IF(I.EQ.21) DUM1 = CGI*FAC
+         IF((I.EQ.24).AND.NORM) DUM1 = DUM1*SQRT7
+         IF((I.EQ.30).AND.NORM) DUM1 = DUM1*SQRT5/SQRT3
+         IF((I.EQ.33).AND.NORM) DUM1 = DUM1*SQRT3
+         IF(IANDJ) MAX = I
+         DO 180 J = MINJ,MAX
+            NN = NN+1
+            IF(J.EQ.1) THEN
+              DUM2 = DUM1*CSJ
+              IF(DOUBLE .AND. I.EQ.1) DUM2 = DUM2 + DUM2
+              IF(DOUBLE .AND. I.GT.1) DUM2 = DUM2 + CSI*CPJ*FAC
+C
+            ELSE IF(J.EQ.2) THEN
+              DUM2 = DUM1*CPJ
+              IF(DOUBLE) DUM2 = DUM2 + DUM2
+C
+            ELSE IF(J.EQ.5) THEN
+              DUM2 = DUM1*CDJ
+              IF(DOUBLE) DUM2 = DUM2 + DUM2
+C
+            ELSE IF((J.EQ.8).AND.NORM) THEN
+              DUM2 = DUM2*SQRT3
+C
+            ELSE IF (J.EQ.11) THEN
+              DUM2 = DUM1*CFJ
+              IF (DOUBLE) DUM2 = DUM2+DUM2
+C
+            ELSE IF ((J.EQ.14).AND.NORM) THEN
+              DUM2 = DUM2*SQRT5
+C
+            ELSE IF ((J.EQ.20).AND.NORM) THEN
+              DUM2 = DUM2*SQRT3
+C
+            ELSE IF (J.EQ.21) THEN
+              DUM2 = DUM1*CGJ
+              IF (DOUBLE) DUM2 = DUM2+DUM2
+C
+            ELSE IF ((J.EQ.24).AND.NORM) THEN
+              DUM2 = DUM2*SQRT7
+C
+            ELSE IF ((J.EQ.30).AND.NORM) THEN
+              DUM2 = DUM2*SQRT5/SQRT3
+C
+            ELSE IF ((J.EQ.33).AND.NORM) THEN
+              DUM2 = DUM2*SQRT3
+C
+            END IF
+C
+            DIJ(NN) = DUM2
+  180    CONTINUE
+  200 CONTINUE
+C
+C       CALCULATE POINTS AND WEIGHTS FOR RYS POLYNOMIAL
+C
+      XX  = AA * ((AX-XPP)**2 + (AY-YPP)**2 + (AZ-ZPP)**2)
+      IF (NROOTS.LE.3) CALL RT123
+      IF (NROOTS.EQ.4) CALL ROOT4
+      IF (NROOTS.EQ.5) CALL ROOT5
+C
+C       LOOP OVER ROOTS OF RYS POLYNOMIAL TO CALCULATE INTEGRALS
+C
+      MM = 0
+      DO 340  K=1,NROOTS
+C
+      UU = AA*U(K)
+      WW = W(K)
+      TT = ONE/(AA+UU)
+      T  = SQRT(TT)
+C
+      X0 = (AAX + UU*XPP)*TT
+      Y0 = (AAY + UU*YPP)*TT
+      Z0 = (AAZ + UU*ZPP)*TT
+C
+C      CALCULATE 1-DIMENSIONAL INTEGRALS OVER ALL ANGULAR MOMENTA
+C
+      IN = -5+MM
+      DO 320  I=1,LIT
+      IN = IN+5
+      NI = I
+C
+      DO 320  J=1,LJT
+      JN = IN+J
+      NJ = J
+C
+C       EVALUATE MOMENT INTEGRALS USING GAUSS-HERMITE QUADRATURE:
+C
+      XINT0 = ZERO
+      YINT0 = ZERO
+      ZINT0 = ZERO
+C
+      NPTS = (NI + NJ - 2)/2 + 1
+      IMIN = MINP(NPTS)
+      IMAX = MAXP(NPTS)
+C
+      DO 310  IROOT=IMIN,IMAX
+C
+      DUM = WP(IROOT)
+      PX = DUM
+      PY = DUM
+      PZ = DUM
+C
+      DUM = HP(IROOT)*T
+      PTX = DUM + X0
+      PTY = DUM + Y0
+      PTZ = DUM + Z0
+C
+      AXI = PTX - XI
+      AYI = PTY - YI
+      AZI = PTZ - ZI
+C
+      BXI = PTX - XJ
+      BYI = PTY - YJ
+      BZI = PTZ - ZJ
+C
+      GO TO (250,240,230,220,210),NI
+C
+  210 PX = PX*AXI
+      PY = PY*AYI
+      PZ = PZ*AZI
+C
+  220 PX = PX*AXI
+      PY = PY*AYI
+      PZ = PZ*AZI
+C
+  230 PX = PX*AXI
+      PY = PY*AYI
+      PZ = PZ*AZI
+C
+  240 PX = PX*AXI
+      PY = PY*AYI
+      PZ = PZ*AZI
+C
+  250 CONTINUE
+C
+      GO TO (300,290,280,270,260),NJ
+C
+  260 PX = PX*BXI
+      PY = PY*BYI
+      PZ = PZ*BZI
+C
+  270 PX = PX*BXI
+      PY = PY*BYI
+      PZ = PZ*BZI
+C
+  280 PX = PX*BXI
+      PY = PY*BYI
+      PZ = PZ*BZI
+C
+  290 PX = PX*BXI
+      PY = PY*BYI
+      PZ = PZ*BZI
+C
+  300 CONTINUE
+C
+      XINT0 = XINT0 + PX
+      YINT0 = YINT0 + PY
+      ZINT0 = ZINT0 + PZ
+C
+  310 CONTINUE
+C
+      XIN(JN) = XINT0
+      YIN(JN) = YINT0
+      ZIN(JN) = ZINT0*WW
+C
+  320 CONTINUE
+C
+      MM = MM+25
+  340 CONTINUE
+C
+C                      LOOP OVER ORBITAL PRODUCTS
+C
+      DO 360 I=1,IJ
+         NX = IJX(I)
+         NY = IJY(I)
+         NZ = IJZ(I)
+         SUM = ZERO
+         MM = 0
+         DO 350 K=1,NROOTS
+            SUM = SUM + XIN(NX+MM)*YIN(NY+MM)*ZIN(NZ+MM)
+            MM = MM+25
+  350    CONTINUE
+         WINT(I) = SUM*DIJ(I)
+  360 CONTINUE
+C
+C              SET UP EXPECTATION VALUE MATRICES
+C
+      INDEX = 1
+      MAX = MAXJ
+      NN2 = 0
+      DO 380 I=MINI,MAXI
+         IF (IANDJ) MAX = I
+         DO 370 J=MINJ,MAX
+            INDEX = INDEX + 1
+            NN2 = NN2 + 1
+            WORK(INDEX) = WORK(INDEX) + WINT(NN2)
+  370    CONTINUE
+  380 CONTINUE
+C
+  400 CONTINUE
+  410 CONTINUE
+C
+C        END OF LOOPS OVER PRIMITIVES
+C
+      INDEX = 1
+      MAX = MAXJ
+      DO 420  I=MINI,MAXI
+         LI = LOCI + I
+         IN = LI*(LI-1)/2
+         IF (IANDJ) MAX = I
+         DO 420  J=MINJ,MAX
+            LJ = LOCJ + J
+            JN = LJ + IN
+            INDEX = INDEX + 1
+            DW  = WORK(INDEX)
+            VALUE(JN) = DW
+  420 CONTINUE
+C
+  500 CONTINUE
+  510 CONTINUE
+C
+C        END OF LOOPS OVER SHELLS
+C
+      RETURN
+      END
+C*MODULE PCM     *DECK VNN
+      SUBROUTINE VNN(XCTS,YCTS,ZCTS,QSN,QOR)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      PARAMETER (MXATM=2000)
+C
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /PCMPAR/ IPCM,NFT26,NFT27,IKREP,IEF,IP_F,NFMOPCM
+      COMMON /PCMCHG/ PB,PX,PC,UNZ,QNUC,FN,FE,UNZOR,PORT
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      DIMENSION XCTS(*),YCTS(*),ZCTS(*),QSN(*),QOR(*)
+C
+      DATA ZERO, TWO  /0.0D+00, 2.0D+00/
+C
+C     Routine for calculation of free energy of interaction between
+C     solute nuclei and the polarization charges induced by the
+C     nuclei themselves.
+C
+      UNZ = ZERO
+      UNZOR = ZERO
+      DO ITS = 1, NTS
+        DO JATOM = 1, NAT
+          R2 = (C(1,JATOM)-XCTS(ITS))**2 + (C(2,JATOM)-
+     *         YCTS(ITS))**2 + (C(3,JATOM)-ZCTS(ITS))**2
+          R = SQRT(R2)
+          UNZ = UNZ + QSN(ITS) * ZAN(JATOM) / R
+          IF(IEF.EQ.5.OR.IEF.EQ.8)
+     *       UNZOR = UNZOR + QOR(ITS) * ZAN(JATOM) / R
+        ENDDO
+      ENDDO
+      UNZ = UNZ / TWO
+      RETURN
+      END
+C*MODULE PCM     *DECK JMAT
+      SUBROUTINE JMAT(VEC,VEC2,S,REP,CEL,NUM2,XCTS,YCTS,ZCTS,QSN,QOR)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      DIMENSION VEC(NUM2),VEC2(NUM2),S(NUM2),REP(NUM2),CEL(NUM2),
+     *          XCTS(*),YCTS(*),ZCTS(*),QSN(*),QOR(*)
+C
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PCMPAR/ IPCM,NFT26,NFT27,IKREP,IEF,IP_F,NFMOPCM
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
+     *                MPLEVL,MPCTYP
+C
+      DATA RMC/8HMCSCF   /
+      DATA GVB/8HGVB     /
+C
+C     This routine computes J matrix  (interaction between induced
+C     nuclear charges and electronic potential due to the solute):
+C         J(m,n) = sum[ V(m,n;i)qsn(i) ]
+C     and if IKREP=1 h_(rep) matrix (repulsive interaction between
+C     solute and solvent):
+C          h_(rep)(m,n) = gamma*(S(m,n)+sum_i[E_i(m,n)*a(i)]/4PI)
+C     (S=overlap matrix, E_i=matrix of normal components of the field)
+C     These matrices are used to correct 1-e integrals obtained without
+C     solvent (they are stored in file 11, or for MCSCF in file 87).
+C
+      CALL VCLR(VEC2,1,NUM2)
+C
+      DCOEF=1.0D+0
+C     IF (SCFTYP.EQ.RMC)DCOEF=0.50D+0
+         DO ITS = 1, NTS
+            QT=DCOEF*QSN(ITS)
+            IF(IEF.EQ.5.OR.IEF.EQ.8)QT=DCOEF*QSN(ITS)+QOR(ITS)
+            CALL INTMEP(VEC,XCTS(ITS),YCTS(ITS),ZCTS(ITS))
+            DO IBAS = 1, NUM2
+               VEC2(IBAS) = VEC2(IBAS) - VEC(IBAS)*QT
+            ENDDO
+         ENDDO
+C
+C     Add repulsion potential
+C
+      IF(IKREP.EQ.1) THEN
+         CALL DAREAD(IDAF,IODA,S,NUM2,12,0)
+         CALL POTREP(REP,S,CEL,NUM2)
+      END IF
+C
+C     Read original 1-e integrals
+C
+      NH1=11
+      IF (SCFTYP .EQ. RMC .OR. SCFTYP.EQ.GVB) NH1=87
+      CALL DAREAD(IDAF,IODA,VEC,NUM2,NH1,0)
+      DO IBAS = 1, NUM2
+        IF(IKREP.EQ.1) VEC2(IBAS)=VEC2(IBAS)+REP(IBAS)
+        VEC(IBAS) = VEC(IBAS) + VEC2(IBAS)
+      ENDDO
+C
+C     Write modified 1-e integrals
+C
+      CALL DAWRIT(IDAF,IODA,VEC,NUM2,NH1,0)
+      RETURN
+      END
+C*MODULE PCM     *DECK DDMM
+      SUBROUTINE DDMM(DMATM1,WORK,IPVT,XCTS,YCTS,ZCTS,XCTS2,YCTS2,ZCTS2,
+     *                AS,RE,ISPHE)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      DIMENSION DMATM1(NTS,NTS),WORK(NTS),IPVT(NTS),DET(2),XCTS(*),
+     *          YCTS(*),ZCTS(*),XCTS2(*),YCTS2(*),ZCTS2(*),AS(*),RE(*),
+     *          ISPHE(*)
+C
+      LOGICAL GOPARR, DSKWRK, MASWRK
+C
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMOPT/ RABI,RASC,REFPOL,THRSLS,DENSLS,WB,WA,ETA2,GD,EVAC,
+     *                RHOW,PM,AREATL,AREAKP,BONDRY,OMEGA,RET,FRO,EPSINF,
+     *                EPS,DR,RSOLV,VMOL,TCE,STEN,DSTEN,CMF,TABS,IDIRCT,
+     *                IPCDER,IDP,ICOMP,IFIELD,ICAV,IDISP,IPRINT,IRETCAV,
+     *                ICENT,IFAST,NEVAL,IEFPOL,KEEPSM,IMGABI,IMGASC,NADD
+C
+      DATA ZERO,ONE/0.0D+00,1.0D+00/
+      DATA TPI,FPI/6.28318531D+00,12.56637061D+00/
+C
+C        compute the d and then d-inverse matrix
+C
+      IF(IPRINT.EQ.1 .AND. MASWRK) THEN
+         WRITE(IW,*) ' -------------------'
+         WRITE(IW,*) ' -- MATRIX D^(-1) --'
+         WRITE(IW,*) ' -------------------'
+      END IF
+C
+C         compute the d matrix, stored at -dmatm1-
+C
+      DO 140 I=1,NTS
+        L=ISPHE(I)
+        ETA=SQRT(AS(I)/(FPI*RE(L)**2))
+        DMATM1(I,I) = TPI*(ONE-ETA)-FPI*EPS/(EPS-ONE)
+        XI=XCTS(I)
+        YI=YCTS(I)
+        ZI=ZCTS(I)
+        CX=(XCTS2(I)-XCTS(I))/DR
+        CY=(YCTS2(I)-YCTS(I))/DR
+        CZ=(ZCTS2(I)-ZCTS(I))/DR
+        DO 150 J=1,NTS
+          IF(J.EQ.I) GO TO 150
+          XJ=XCTS(J)
+          YJ=YCTS(J)
+          ZJ=ZCTS(J)
+          RIJ=SQRT((XI-XJ)**2+(YI-YJ)**2+(ZI-ZJ)**2)
+          IF(RIJ.GE.0.026D+00) THEN
+             DIJ = AS(J) * ((XI-XJ)*CX+(YI-YJ)*CY+(ZI-ZJ)*CZ) / RIJ**3
+          ELSE
+             DIJ = ZERO
+          END IF
+          DMATM1(I,J) = DIJ
+  150   CONTINUE
+  140 CONTINUE
+C
+      IF(IPRINT.EQ.1 .AND. MASWRK) THEN
+         WRITE(IW,*) ' DDMM: THE D MATRIX IS'
+         CALL PRSQ(DMATM1,NTS,NTS,NTS)
+      END IF
+C
+      INFO=0
+      CALL DGEFA(DMATM1,NTS,NTS,IPVT,INFO)
+      IF(INFO.NE.0) THEN
+         IF(MASWRK) WRITE(IW,*) ' THE D MATRIX IS SINGULAR'
+         CALL ABRT
+         STOP
+      END IF
+C
+      CALL DGEDI(DMATM1,NTS,NTS,IPVT,DET,WORK,01)
+C
+      IF(IPRINT.EQ.1 .AND. MASWRK) THEN
+         WRITE(IW,*) ' DDMM: THE D INVERSE MATRIX IS'
+         CALL PRSQ(DMATM1,NTS,NTS,NTS)
+      END IF
+      RETURN
+      END
+C*MODULE PCM     *DECK DISRPE
+      SUBROUTINE DISRPE(XCTS,YCTS,ZCTS,AS,NVERT,XE,YE,ZE,RE,SSFE,ISPHE,
+     *                  RIN,PCMCDR)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      PARAMETER (MXATM=2000, MXFRG=1050, MXPT=2000,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+      COMMON /FMCOM / X(1)
+      COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
+      COMMON /FMOPNT/ LICHFG,LMULFG,LIDMREC,LFRGNAM,LLAYFRG,LINDAT,
+     *                LNCBS,LFMOZAN,LFMOC,LFMOMAS,LIZBAS,LIAGLOB,LIBDGH,
+     *                LIABDFG,LJABDFG,LNCAO,LIDXCAO,LIAPRJO,LJAPRJO,
+     *                LCOREAO,LOCCCOR,LSHIFTB,LIODFMO,LFMODA,LFMODB,
+     *                LFMOESPA,LFMOESPB,LLOCFMO,LSCFFRG,LFMOSCF,LRIJ,
+     *                LPOPMUL,LPOPMAT,LIALOC,LINDBD,LIATFRG,LINDFRG,
+     *                LINDGFRG,LNATFRG,LNAT0FRG,LIANFRG,LZANFRG,LCFRG,
+     *                LLIBISH,LLIBNSH,LLIBNG,LINDATG,LFMOBUF(3),LFMODE,
+     *                LNUMFRG,LLOCTAT,LIAOGLOB,LLOADM,LFMOGE,LDGRID,
+     *                LIODCFMO,LJOB2GRP,LFMOPG,LEMOCDR,LUNTXYZ,LUNTROT,
+     *                LSTONEP,LMAPSU,LFRGMUL,LCLMO,LIALMO,LINDLMO,
+     *                LATCLMO,LLMOBDF,LFGFLMO,LNFGLMO,LLFGLMO,LPFGLMO,
+     *                LPOPDMAT
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /PCMPNT/ LXYZRE,LSSFE,LLIST,LALPCM,LRINPCM,LINAPCM,LINFPCM,
+     *                LINIPCM,LMEPCM,LAXYZCT,LXYZCT2,LNVERT,LQSN,LQSE,
+     *                LQFS,LQIND,LISPHE,LVAD,LQOR,LVECMUL,LAIPRJ,LFIPRJ,
+     *                LPEL,LPCMCDR,LDAI,LIDDAI,LQSND,LQSED
+      DIMENSION XCTS(*),YCTS(*),ZCTS(*),AS(*),NVERT(*),XE(*),YE(*),
+     *          ZE(*),RE(*),SSFE(*),ISPHE(*),RIN(*),PCMCDR(3,*)
+C
+      NTA=NAT+NMTTPT
+      IF(NFG.NE.0) NTA=NATFMO
+      NTB=30
+      CALL VALFM(LOADFM)
+      LDKT   = LOADFM + 1
+      LRWT   = LDKT   + NTB
+      LNT    = LRWT   + NTB
+      LRDIFF = LNT    + NTB
+      LEPSI  = LRDIFF + NTB
+      LSIGMA = LEPSI  + NTA
+      LDKA   = LSIGMA + NTA
+      LRWA   = LDKA   + NTA
+      LTEMP  = LRWA   + NTA
+      LDSUMTD = LTEMP   + 3*MXPT
+      LDSUMTR = LDSUMTD + 3*NTA
+      LEFCSV = LDSUMTR  + 3*NTA
+      LDIS   = LEFCSV + 3*MXPT
+      LT3    = LDIS   + 6
+      LAST   = LT3    + 9
+      NEED   = LAST - LOADFM - 1
+C
+      CALL GETFM(NEED)
+      IF(NFG.EQ.0) THEN
+        CALL DISREP(NAT,ZAN,C,X(LDKT),X(LRWT),X(LNT),X(LRDIFF),X(LEPSI),
+     *              X(LSIGMA),X(LDKA),X(LRWA),NTA,NTB,XCTS,YCTS,ZCTS,AS,
+     *              NVERT,XE,YE,ZE,RE,SSFE,ISPHE,RIN,PCMCDR,X(LTEMP),
+     *              X(LEFCSV),X(LDIS),X(LT3),X(LDSUMTD),X(LDSUMTR),
+     *              X(LMEPCM))
+      ELSE
+        CALL DISREP(NATFMO,X(LFMOZAN),X(LFMOC),X(LDKT),X(LRWT),X(LNT),
+     *              X(LRDIFF),X(LEPSI),
+     *              X(LSIGMA),X(LDKA),X(LRWA),NTA,NTB,XCTS,YCTS,ZCTS,AS,
+     *              NVERT,XE,YE,ZE,RE,SSFE,ISPHE,RIN,PCMCDR,X(LTEMP),
+     *              X(LEFCSV),X(LDIS),X(LT3),X(LDSUMTD),X(LDSUMTR),
+     *              X(LMEPCM))
+      ENDIF
+C
+      CALL RETFM(NEED)
+      RETURN
+      END
+C*MODULE PCM     *DECK DISREP
+      SUBROUTINE DISREP(NAT,ZAN,C,DKT,RWT,NT,RDIFF,EPSI,SIGMA,DKA,RWA,
+     *                  NTA,NTB,XCTS,YCTS,ZCTS,AS,NVERT,XE,YE,ZE,RE,
+     *                  SSFE,ISPHE,RIN,PCMCDR,TEMP,EFCSV,DIS,T3,
+     *                  DSUMTD,DSUMTR,METHOD)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      CHARACTER*8 FRGNME
+C
+      LOGICAL GOPARR,DSKWRK,MASWRK
+C
+      PARAMETER (MXATM=2000, MXFRG=1050, MXPT=2000, MXFGPT=12000,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12, OFFSET=1.0D-06)
+C
+      DIMENSION ZAN(*),C(3,*),EPSI(NTA),SIGMA(NTA),DKA(NTA),RWA(NTA),
+     *          DKT(NTB),RWT(NTB),NT(NTB),RDIFF(NTB),XCTS(*),YCTS(*),
+     *          ZCTS(*),AS(*),NVERT(*),XE(*),YE(*),ZE(*),RE(*),SSFE(*),
+     *          ISPHE(*),PCMCDR(3,*),TEMP(3,MXPT),EFCSV(3,MXPT),DIS(6),
+     *          T3(3,3),DSUMTD(3,NTA),DSUMTR(3,NTA),METHOD(*)
+C
+      COMMON /EFMULT/ EFC(3,MXFGPT),EFCHG(2,MXFGPT),EFATRM(MXFGPT),
+     *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
+     *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
+     *                EFOCT(10,MXFGPT),FRGNME(MXFGPT)
+      COMMON /FMCOM / X(1)
+      COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
+     *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
+     *                ATORQ(3,MXFRG)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /FRGMSS/ FPMASS(MXPT),FMASS(MXFGPT),
+     *                FPNUC(MXPT),FGNUC(MXFGPT)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /MACHIN/ NWDVAR,MAXFM,MAXSM,LIMFM,LIMSM
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMOPT/ RABI,RASC,REFPOL,THRSLS,DENSLS,WB,WA,ETA2,GD,EVAC,
+     *                RHOW,PM,AREATL,AREAKP,BONDRY,OMEGA,RET,FRO,EPSINF,
+     *                EPS,DR,RSOLV,VMOL,TCE,STEN,DSTEN,CMF,TABS,IDIRCT,
+     *                IPCDER,IDP,ICOMP,IFIELD,ICAV,IDISP,IPRINT,IRETCAV,
+     *                ICENT,IFAST,NEVAL,IEFPOL,KEEPSM,IMGABI,IMGASC,NADD
+      COMMON /PCMPLY/ STOT,VOL,CCX,CCY,CCZ,RDIF,NESF,NESFP,NESFF,I_NESF,
+     *                L_AST
+      COMMON /PCMPRT/ GCAVP,GCAVS,GDISP,GREP,EHFGAS
+      COMMON /PCMTMP/ IDSP(MXATM+MXFRG*5),DPCMFRG(6,MXFRG),
+     *                EGPCM(3,MXATM)
+      COMMON /PCMPNT/ LXYZRE,LSSFE,LLIST,LALPCM,LRINPCM,LINAPCM,LINFPCM,
+     *                LINIPCM,LMEPCM,LAXYZCT,LXYZCT2,LNVERT,LQSN,LQSE,
+     *                LQFS,LQIND,LISPHE,LVAD,LQOR,LVECMUL,LAIPRJ,LFIPRJ,
+     *                LPEL,LPCMCDR,LDAI,LIDDAI,LQSND,LQSED
+C
+      DATA ZERO, AUTOKAL /0.0D+00, 627.509541D+00/
+C
+      PARAMETER (NNAM=12)
+      DIMENSION QNAM(NNAM),KQNAM(NNAM)
+C
+      DATA DISWD/8HDISREP  /
+      DATA QNAM/8HICLAV   ,8HN       ,8HRHO     ,8HNT      ,8HRDIFF   ,
+     *          8HDKT     ,8HRWT     ,8HDKA     ,8HRWA     ,8HILJ     ,
+     *          8HEPSI    ,8HSIGMA   /
+      DATA KQNAM/1,1,3,-1,-3,-3,-3,-3,-3,1,-3,-3/
+C
+C     ICLAV = 1:
+C     Buckinggham formula, R^-6 for dispersion, Exp for repulsion
+C     Pertsin-Kitaigorodsky "The atom-atom potential method", page 146.
+C
+C     ILJ = 1:
+C     Lennard-Jones, R^-6 for dispersion, R^-12 for repulsion
+C
+C
+C       Se ICLAV = 1:
+C       legge i dati riferiti al solvente (T) e al soluto (A):
+C            N = number of types of atoms in the solvent molecule
+C            RHO = density of the solvent molecule
+C            NT(I) = numero di atomi del tipo i in 1 molec. di solvente
+C            RDIFF(I) = distanza dei primi atomi di tipo I dalla cavita'
+C                       originaria
+C            DK, RW = parametri dell'interazione atomo-atomo
+C
+C       Se ILJ = 1
+C       legge i dati relativi al potenziale di Lennard-Jones:
+C       EPSI(I) = costante relativa all'energia, riferita all'i-esimo
+C                 atomo del soluto
+C       SIGMA(I)= distanza tipica, riferita all'i-esimo atomo del soluto
+C       RHO     = densita' numerale del solvente
+C
+C       I dati relativi agli atomi del soluto devono corrispondere
+C       all'ordine con cui PEDRA elenca i centri.
+C
+C     SPECIFY DEFAULT PARAMETERS
+C     SOLVENT: WATER
+C
+      ICLAV=1
+      N=2
+      RHO=3.348D-02
+      ILJ = 0
+      CALL VICLR(NT,1,NTB)
+      NT(1)=2
+      NT(2)=1
+      CALL VCLR(RDIFF,1,NTB)
+      RDIFF(1)=1.20D+00
+      RDIFF(2)=1.50D+00
+      CALL VCLR(DKT,1,NTB)
+      DKT(1)=1.0D+00
+      DKT(2)=1.36D+00
+      CALL VCLR(RWT,1,NTB)
+      RWT(1)=1.2D+00
+      RWT(2)=1.5D+00
+      KQNAM(4) = 10*NTB + 1
+      KQNAM(5) = 10*NTB + 3
+      KQNAM(6) = 10*NTB + 3
+      KQNAM(7) = 10*NTB + 3
+      CALL VCLR(DKA,1,NTA)
+      CALL VCLR(RWA,1,NTA)
+C         define default DKA and RWA
+      DO I = 1, NTA
+        NZ = 0
+        IF(I.LE.NAT) THEN
+           NZ = INT(ZAN(I))
+        ELSE IF(FGNUC(I-NAT).GT.1.0D-03) THEN
+           NZ = INT(FGNUC(I-NAT)+1.0D-03)
+        END IF
+        IF(NZ.EQ.1) DKA(I)=1.00D+00
+        IF(NZ.EQ.1) RWA(I)=1.20D+00
+C     NOTE:Be and B have the same value as C
+        IF(NZ.EQ.4) DKA(I)=1.00D+00
+        IF(NZ.EQ.4) RWA(I)=1.72D+00
+        IF(NZ.EQ.5) DKA(I)=1.00D+00
+        IF(NZ.EQ.5) RWA(I)=1.72D+00
+C
+        IF(NZ.EQ.6) DKA(I)=1.00D+00
+        IF(NZ.EQ.6) RWA(I)=1.72D+00
+        IF(NZ.EQ.7) DKA(I)=1.10D+00
+        IF(NZ.EQ.7) RWA(I)=1.60D+00
+        IF(NZ.EQ.8) DKA(I)=1.36D+00
+        IF(NZ.EQ.8) RWA(I)=1.50D+00
+        IF(NZ.EQ.15) DKA(I)=2.10D+00
+        IF(NZ.EQ.15) RWA(I)=1.85D+00
+        IF(NZ.EQ.16) DKA(I)=1.40D+00
+        IF(NZ.EQ.16) RWA(I)=1.80D+00
+      ENDDO
+C
+      CALL VCLR(EPSI,1,NTA)
+      CALL VCLR(SIGMA,1,NTA)
+      KQNAM( 8) = 10*NTA + 3
+      KQNAM( 9) = 10*NTA + 3
+      KQNAM(11) = 10*NTA + 3
+      KQNAM(12) = 10*NTA + 3
+C
+      JRET=0
+      CALL NAMEIO(IR,JRET,DISWD,NNAM,QNAM,KQNAM,
+     *            ICLAV, N, RHO, NT, RDIFF, DKT, RWT,
+     *            DKA, RWA, ILJ, EPSI, SIGMA,
+     *            0,0,
+     *    0,0,0,0,0,  0,0,0,0,0,
+     *    0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,
+     *    0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0)
+C
+      IF(JRET.EQ.2) THEN
+         IF(MASWRK.AND.NPRINT.NE.817) WRITE(IW,930) DISWD
+         CALL ABRT
+      END IF
+C
+      IF(JRET.EQ.0.AND.MASWRK.AND.NPRINT.NE.817) THEN
+       WRITE(IW,950) ICLAV,N,RHO,ILJ
+        WRITE(IW,*)'      ATOM      DK        RW '
+        WRITE(IW,*)'------------------------------'
+       WRITE(IW,*)'1)        SOLVENT'
+       DO I=1,N
+        WRITE(IW,960)I,DKT(I),RWT(I)
+       ENDDO
+        WRITE(IW,*)'------------------------------'
+       WRITE(IW,*)'2)        SOLUTE '
+       DO I=1,NAT
+        WRITE(IW,960) I,DKA(I),RWA(I)
+       ENDDO
+      END IF
+C
+      CALL DERCHK(MAXDER)
+      IF(METHOD(1).EQ.4 .AND. MAXDER.GT.0) THEN
+         CALL VALFM(LOADFM)
+         LLDAI   = LOADFM + 1
+         LLIDDAI = LLDAI   + 3*20*MXTS
+         LAST    = LLIDDAI + 21*MXTS/NWDVAR + 1
+         NEED    = LAST   - LOADFM -1
+         CALL GETFM(NEED)
+         CALL DISRPX(NAT,C,DKT,RWT,NT,RDIFF,EPSI,SIGMA,DKA,RWA,
+     *            NTA,NTB,XCTS,YCTS,ZCTS,AS,NVERT,XE,YE,ZE,RE,
+     *            SSFE,ISPHE,RIN,ICLAV,ILJ,N,RHO,0,X(LLDAI),
+     *            X(LLIDDAI),PCMCDR,X(LALPCM),DSUMTD,DSUMTR,METHOD)
+         CALL RETFM(NEED)
+      ELSE
+         CALL DISRPX(NAT,C,DKT,RWT,NT,RDIFF,EPSI,SIGMA,DKA,RWA,
+     *            NTA,NTB,XCTS,YCTS,ZCTS,AS,NVERT,XE,YE,ZE,RE,
+     *            SSFE,ISPHE,RIN,ICLAV,ILJ,N,RHO,0,DUM1,
+     *            DUM2,PCMCDR,X(LALPCM),DSUMTD,DSUMTR,METHOD)
+      END IF
+C
+      IF(MASWRK.AND.NPRINT.NE.817) WRITE(IW,*)
+     *      '..... DONE COMPUTING DISPERSION-REPULSION .....'
+      IF(NPRINT.NE.817)CALL TIMIT(1)
+C
+      IF(MAXDER.EQ.0) RETURN
+      IF(METHOD(1).EQ.4) RETURN
+C
+C     POSSIBLE DIS-REP GRADIENTS
+C
+      NPRTBK = NPRINT
+      NPRINT = 817
+      GDIS0  = GDISP
+      GREP0  = GREP
+C
+C     -- QM ATOMS --
+C
+      IPCOUNT = ME - 1
+C
+      DO 200 IAT = 1, NAT
+C
+         IF(GOPARR) THEN
+            IPCOUNT = IPCOUNT +1
+            IF(MOD(IPCOUNT,NPROC).NE.0) THEN
+               PCMCDR(1,IAT) = ZERO
+               PCMCDR(2,IAT) = ZERO
+               PCMCDR(3,IAT) = ZERO
+               GOTO 200
+            END IF
+         END IF
+C
+         DO 210 IXYZ = 1, 3
+            IF(IXYZ.EQ.1) XE(IAT) = XE(IAT) + OFFSET
+            IF(IXYZ.EQ.2) YE(IAT) = YE(IAT) + OFFSET
+            IF(IXYZ.EQ.3) ZE(IAT) = ZE(IAT) + OFFSET
+            C(IXYZ,IAT) = C(IXYZ,IAT) + OFFSET
+C
+            CALL DISRPX(NAT,C,DKT,RWT,NT,RDIFF,EPSI,SIGMA,DKA,RWA,
+     *                  NTA,NTB,XCTS,YCTS,ZCTS,AS,NVERT,XE,YE,ZE,RE,
+     *                  SSFE,ISPHE,RIN,ICLAV,ILJ,N,RHO,1,DUM1,
+     *                  DUM2,PCMCDR,X(LALPCM),DSUMTD,DSUMTR,
+     *                  METHOD)
+C
+            DDISQM=(GDISP-GDIS0)/OFFSET/AUTOKAL
+            DREPQM=(GREP -GREP0)/OFFSET/AUTOKAL
+C           -- THESE ENERGIES ARE NOT CONTINUOUS AND
+C              HUGE VALUES SUCH AS ~ 1.0 CAN BE SEEN OCCASIONALLY
+C              THE REAL VALUES ARE USUALLY 0.0001~0.001
+            IF(DDISQM.GT.0.01D+00)DDISQM=0.01D+00
+            IF(DDISQM.LT.-0.01D+00)DDISQM=-0.01D+00
+            IF(DREPQM.GT.0.01D+00)DREPQM=0.01D+00
+            IF(DREPQM.LT.-0.01D+00)DREPQM=-0.01D+00
+C           -- IF ICAV=1, PCMCDR ARE ALREADY VALUED IN ROUTINE 'CAVITM'
+            IF(ICAV.EQ.1) THEN
+               PCMCDR(IXYZ,IAT) = PCMCDR(IXYZ,IAT) + DDISQM + DREPQM
+            ELSE
+               PCMCDR(IXYZ,IAT) = DDISQM + DREPQM
+            END IF
+            IF(IXYZ.EQ.1) XE(IAT) = XE(IAT) - OFFSET
+            IF(IXYZ.EQ.2) YE(IAT) = YE(IAT) - OFFSET
+            IF(IXYZ.EQ.3) ZE(IAT) = ZE(IAT) - OFFSET
+            C(IXYZ,IAT) = C(IXYZ,IAT) - OFFSET
+ 210     CONTINUE
+ 200  CONTINUE
+      IF(GOPARR) THEN
+        CALL DDI_GSUMF(2407,PCMCDR,3*NAT)
+      END IF
+C
+C
+C     -- EFP FRAGMENTS --
+C
+      DO ICRD =1, 6
+         DIS(ICRD) = ZERO
+      END DO
+C
+      IPCOUNT = ME - 1
+C
+      IPT = 0
+      DO 300 IFRG = 1,NFRG
+C
+         IF(GOPARR) THEN
+            IPCOUNT = IPCOUNT +1
+            IF(MOD(IPCOUNT,NPROC).NE.0) THEN
+               DO III=1,6
+                  DPCMFRG(III,IFRG) = ZERO
+               ENDDO
+               IPT = IPT + NMPTS(IFRG)
+               GOTO 300
+            END IF
+         END IF
+C
+         DO III = 1, NMPTS(IFRG)
+            EFCSV(1,III) = EFC(1,IPT+III)
+            EFCSV(2,III) = EFC(2,IPT+III)
+            EFCSV(3,III) = EFC(3,IPT+III)
+         END DO
+C
+         DO 310 ICRD = 1, 6
+            DIS(ICRD)=OFFSET
+            CALL EFROTT(DIS(4),DIS(5),DIS(6),T3)
+            DO III=1, NMPTS(IFRG)
+               DO J=1,3
+                  TEMP(J,III) = EFC(J,IPT+III) - EFCENT(J,IFRG)
+               END DO
+            END DO
+            CALL MRARBR(T3,3,3,3,TEMP,3,NMPTS(IFRG),EFC(1,IPT+1),3)
+            DO III = 1, NMPTS(IFRG)
+               DO J=1,3
+                  EFC(J,IPT+III)=EFC(J,IPT+III)+EFCENT(J,IFRG)+DIS(J)
+               END DO
+               DO ISP = 1, I_NESF
+                  DX=ABS(XE(ISP) - EFC(1,IPT+III))
+                  DY=ABS(YE(ISP) - EFC(2,IPT+III))
+                  DZ=ABS(ZE(ISP) - EFC(3,IPT+III))
+                  IF((DX+DY+DZ).LE.1.0D-02)THEN
+                     XE(ISP) = EFC(1,IPT+III)
+                     YE(ISP) = EFC(2,IPT+III)
+                     ZE(ISP) = EFC(3,IPT+III)
+                  END IF
+               END DO
+            END DO
+C
+            CALL DISRPX(NAT,C,DKT,RWT,NT,RDIFF,EPSI,SIGMA,DKA,RWA,
+     *                  NTA,NTB,XCTS,YCTS,ZCTS,AS,NVERT,XE,YE,ZE,RE,
+     *                  SSFE,ISPHE,RIN,ICLAV,ILJ,N,RHO,1,DUM1,
+     *                  DUM2,PCMCDR,X(LALPCM),DSUMTD,DSUMTR,
+     *                  METHOD)
+C
+            DDISEF=(GDISP-GDIS0)/OFFSET/AUTOKAL
+            DREPEF=(GREP -GREP0)/OFFSET/AUTOKAL
+            IF(DDISEF.GT.0.05D+00)DDISEF=0.05D+00
+            IF(DDISEF.LT.-0.05D+00)DDISEF=-0.05D+00
+            IF(DREPEF.GT.0.05D+00)DREPEF=0.05D+00
+            IF(DREPEF.LT.-0.05D+00)DREPEF=-0.05D+00
+            IF(ICAV.EQ.1) THEN
+               DPCMFRG(ICRD,IFRG) = DPCMFRG(ICRD,IFRG)+DDISEF+DREPEF
+            ELSE
+               DPCMFRG(ICRD,IFRG) = DDISEF+DREPEF
+            END IF
+            DO III = 1, NMPTS(IFRG)
+               EFC(1,IPT+III) = EFCSV(1,III)
+               EFC(2,IPT+III) = EFCSV(2,III)
+               EFC(3,IPT+III) = EFCSV(3,III)
+               DO ISP = 1, I_NESF
+                  DX=ABS(XE(ISP) - EFC(1,IPT+III))
+                  DY=ABS(YE(ISP) - EFC(2,IPT+III))
+                  DZ=ABS(ZE(ISP) - EFC(3,IPT+III))
+                  IF((DX+DY+DZ).LE.1.0D-02)THEN
+                     XE(ISP) = EFC(1,IPT+III)
+                     YE(ISP) = EFC(2,IPT+III)
+                     ZE(ISP) = EFC(3,IPT+III)
+                  END IF
+               END DO
+            END DO
+            DIS(ICRD) = ZERO
+ 310     CONTINUE
+         IPT = IPT + NMPTS(IFRG)
+ 300  CONTINUE
+C
+      IF(GOPARR) THEN
+        CALL DDI_GSUMF(2408,DPCMFRG,6*MXFRG)
+      END IF
+C
+C
+      NPRINT = NPRTBK
+      GDISP  = GDIS0
+      GREP   = GREP0
+C
+      RETURN
+C
+  930 FORMAT(1X,'**** ERROR IN $',A8,' INPUT')
+  950 FORMAT(/5X,'INPUT FOR PCM DISP-REP CALCULATION '/5X,35(1H-)/
+     *5X,'ICLAV=',I4,5X,'N  =',I4,5X,'RHO=',F8.4,2X,'ILJ=',I4,5X/)
+  960 FORMAT(5X,I4,5X,F6.3,5X,F6.3)
+      END
+C*MODULE PCM     *DECK DISRPX
+      SUBROUTINE DISRPX(NAT,C,DKT,RWT,NT,RDIFF,EPSI,SIGMA,DKA,RWA,
+     *                  NTA,NTB,XCTS,YCTS,ZCTS,AS,NVERT,XE,YE,ZE,RE,
+     *                  SSFE,ISPHE,RIN,ICLAV,ILJ,N,RHO,NUMDIF,DAI,
+     *                  IDDAI,PCMCDR,ALPHA,DSUMTD,DSUMTR,METHOD)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      CHARACTER*8 FRGNME
+C
+      LOGICAL GOPARR,DSKWRK,MASWRK
+C
+      PARAMETER (MXPT=2000, MXFGPT=12000)
+C
+      DIMENSION C(3,*),EPSI(NTA),SIGMA(NTA),DKA(NTA),RWA(NTA),
+     *          DKT(NTB),RWT(NTB),NT(NTB),RDIFF(NTB),XCTS(*),YCTS(*),
+     *          ZCTS(*),AS(*),NVERT(*),XE(*),YE(*),ZE(*),RE(*),SSFE(*),
+     *          ISPHE(*),ALPHA(*),METHOD(*)
+      DIMENSION PCMCDR(3,MXSP),DSUMTD(3,NTA),DSUMTR(3,NTA)
+      DIMENSION DAI(3,20,MXTS),IDDAI(21,MXTS)
+C
+      COMMON /EFMULT/ EFC(3,MXFGPT),EFCHG(2,MXFGPT),EFATRM(MXFGPT),
+     *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
+     *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
+     *                EFOCT(10,MXFGPT),FRGNME(MXFGPT)
+      COMMON /FRGMSS/ FPMASS(MXPT),FMASS(MXFGPT),
+     *                FPNUC(MXPT),FGNUC(MXFGPT)
+      COMMON /FMCOM / XX(1)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /MACHIN/ NWDVAR,MAXFM,MAXSM,LIMFM,LIMSM
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMOPT/ RABI,RASC,REFPOL,THRSLS,DENSLS,WB,WA,ETA2,GD,EVAC,
+     *                RHOW,PM,AREATL,AREAKP,BONDRY,OMEGA,RET,FRO,EPSINF,
+     *                EPS,DR,RSOLV,VMOL,TCE,STEN,DSTEN,CMF,TABS,IDIRCT,
+     *                IPCDER,IDP,ICOMP,IFIELD,ICAV,IDISP,IPRINT,IRETCAV,
+     *                ICENT,IFAST,NEVAL,IEFPOL,KEEPSM,IMGABI,IMGASC,NADD
+      COMMON /PCMPAR/ IPCM,NFT26,NFT27,IKREP,IEF,IP_F,NFMOPCM
+      COMMON /PCMPLY/ STOT,VOL,CCX,CCY,CCZ,RDIF,NESF,NESFP,NESFF,I_NESF,
+     *                L_AST
+      COMMON /PCMPRT/ GCAVP,GCAVS,GDISP,GREP,EHFGAS
+C
+      PARAMETER (TOANGS=0.52917724924D+00)
+      DATA ZERO,ONE,TWO/0.0D+00,1.0D+00,2.0D+00/
+      DATA AUTOKAL /627.509541D+00/
+C
+      CALL DERCHK(MAXDER)
+C
+      CALL VALFM(LOADFM)
+      LALPHA = LOADFM  + 1
+      LTMPD  = LALPHA  + I_NESF
+      LTMPR  = LTMPD   + MXTS*N
+      LAST   = LTMPR   + MXTS*N
+      NEED   = LAST - LOADFM - 1
+      CALL GETFM(NEED)
+C
+      CALL VCLR(XX(LTMPD),1,MXTS*N)
+      CALL VCLR(XX(LTMPR),1,MXTS*N)
+C
+C     - SAVE ALPHA(I) -
+      DO I = 1, I_NESF
+         XX(LALPHA + I - 1) = ALPHA(I)
+      ENDDO
+C
+      IF(METHOD(1).EQ.4 .AND. MAXDER.GT.0) THEN
+         CALL  VCLR(DAI  ,1,3*20*MXTS)
+         CALL VICLR(IDDAI,1,  21*MXTS)
+      END IF
+      CALL VCLR(DSUMTD,1,3*NTA)
+      CALL VCLR(DSUMTR,1,3*NTA)
+C
+C     -- CALCULATE DISPERSION AND REPULSION ENERGIES --
+C
+      IF (ICLAV.EQ.1) THEN
+C
+        IF(IKREP.NE.1) THEN
+           IF(MASWRK.AND.NPRINT.NE.817) WRITE (IW, 400)
+        ELSE
+           IF(MASWRK.AND.NPRINT.NE.817) WRITE (IW, 401)
+        END IF
+C
+C       - INITIALIZE PARALLEL
+        IPCOUNT = ME - 1
+        SUMTD = ZERO
+        SUMTR = ZERO
+        DO 100 M = 1, N
+           IF(MASWRK.AND.NPRINT.NE.817) WRITE (IW, 410) M
+           RDIF = RDIFF(M)
+           IDISP = 2
+C
+           IF(METHOD(1).NE.4) THEN
+              CALL PEDFSM(XCTS,YCTS,ZCTS,AS,NVERT,
+     *                    XE,YE,ZE,RE,SSFE,ISPHE,RIN)
+           ELSE IF(METHOD(1).EQ.4) THEN
+              CALL MAKCVM
+              DO I = 1, I_NESF
+                 ALPHA(I) = ONE
+              ENDDO
+              CALL PEDRAM
+              DO I = 1, I_NESF
+                 ALPHA(I) = XX(LALPHA + I - 1)
+              ENDDO
+           ENDIF
+C
+           FACT = NT(M) * RHO
+           SUMAD = ZERO
+           SUMAR = ZERO
+           DO 110 I = 1, NTA
+C             - GO PARALLEL
+              IF(GOPARR) THEN
+                 IPCOUNT = IPCOUNT + 1
+                 IF(MOD(IPCOUNT,NPROC).NE.0) GOTO 110
+              END IF
+C
+              RWAT = 2.0D+00 * SQRT(RWA(I)*RWT(M))
+              IF(I.LE.NAT) THEN
+                 XA = C(1,I)*TOANGS
+                 YA = C(2,I)*TOANGS
+                 ZA = C(3,I)*TOANGS
+              ELSE IF(FGNUC(I-NAT).GT.1.0D-03) THEN
+                 XA = EFC(1,I-NAT)*TOANGS
+                 YA = EFC(2,I-NAT)*TOANGS
+                 ZA = EFC(3,I-NAT)*TOANGS
+              ELSE
+                 GO TO 110
+              END IF
+              SUMKD = ZERO
+              SUMKR = ZERO
+              DO 120 K = 1, NTS
+                 L = ISPHE(K)
+                 X = XCTS(K)*TOANGS
+                 Y = YCTS(K)*TOANGS
+                 Z = ZCTS(K)*TOANGS
+                 AREA = AS(K)*TOANGS*TOANGS
+                 R2 = (XA-X)**2 + (YA-Y)**2 + (ZA-Z)**2
+                 R = SQRT(R2)
+                 XC = XE(L)*TOANGS
+                 YC = YE(L)*TOANGS
+                 ZC = ZE(L)*TOANGS
+                 RL = RE(L)*TOANGS
+                 RL2 = RL*RL
+                 DR2 = (XA-XC)**2 + (YA-YC)**2 + (ZA-ZC)**2
+                 RAPP = (RL2 + R2 - DR2) / (2.0D+00 * RL)
+                 DAT = 0.214D+00 * DKA(I) * DKT(M) * RWAT**6
+                 BAT = 47000.0D+00 * DKA(I) * DKT(M)
+                 ALPHAT = 12.35D+00 / RWAT
+C
+                 R6 = R2*R2*R2
+                 AD = - DAT / (3.0D+00 * R6)
+                 SUMKD = SUMKD + AREA * RAPP * AD
+C
+                 S1  = ALPHAT * R
+                 S   = 1.0D+00/S1+2.0D+00/(S1*S1)+2.0D+00/(S1*S1*S1)
+                 ESP = EXP(- ALPHAT * R)
+                 AR  = BAT * ESP * S
+                 SUMKR = SUMKR + (AREA * AR * RAPP)
+C
+C                -- POSSIBLE FIXPVA DIS+REP GRADIENTS --
+C
+                 IF(METHOD(1).NE.4 .OR. MAXDER.EQ.0) GOTO 120
+C
+C                - ACCUMULATE RAPP*AD AND RAPP*AR FOR GRADIENTS -
+                 XX(LTMPD+(M-1)*MXTS+K-1) = XX(LTMPD+(M-1)*MXTS+K-1)
+     *                                    + RAPP * AD
+                 XX(LTMPR+(M-1)*MXTS+K-1) = XX(LTMPR+(M-1)*MXTS+K-1)
+     *                                    + RAPP * AR
+C
+                 ONER   = ONE/R
+                 DRX    = (XA-X)*ONER
+                 DRY    = (YA-Y)*ONER
+                 DRZ    = (ZA-Z)*ONER
+                 ONERL  = ONE/RL
+                 DRAPPX = (R*DRX - XA + XC)*ONERL
+                 DRAPPY = (R*DRY - YA + YC)*ONERL
+                 DRAPPZ = (R*DRZ - ZA + ZC)*ONERL
+                 ONER7  = ONER/R6
+                 DADX   = TWO*DAT*DRX*ONER7
+                 DADY   = TWO*DAT*DRY*ONER7
+                 DADZ   = TWO*DAT*DRZ*ONER7
+                 DSX    = -           ALPHAT*DRX/(S1*S1)
+     *                    - 4.0D+00 * ALPHAT*DRX/(S1*S1*S1)
+     *                    - 6.0D+00 * ALPHAT*DRX/(S1*S1*S1*S1)
+                 DSY    = -           ALPHAT*DRY/(S1*S1)
+     *                    - 4.0D+00 * ALPHAT*DRY/(S1*S1*S1)
+     *                    - 6.0D+00 * ALPHAT*DRY/(S1*S1*S1*S1)
+                 DSZ    = -           ALPHAT*DRZ/(S1*S1)
+     *                    - 4.0D+00 * ALPHAT*DRZ/(S1*S1*S1)
+     *                    - 6.0D+00 * ALPHAT*DRZ/(S1*S1*S1*S1)
+                 DARX   = BAT*ESP*DSX - ALPHAT*BAT*ESP*S*DRX
+                 DARY   = BAT*ESP*DSY - ALPHAT*BAT*ESP*S*DRY
+                 DARZ   = BAT*ESP*DSZ - ALPHAT*BAT*ESP*S*DRZ
+C
+C                - ONLY PARTS OF THE GRADIENTS -
+                 DSUMKDX =  AREA   * DRAPPX * AD
+     *                   +  AREA   * RAPP   * DADX
+                 DSUMKDY =  AREA   * DRAPPY * AD
+     *                   +  AREA   * RAPP   * DADY
+                 DSUMKDZ =  AREA   * DRAPPZ * AD
+     *                   +  AREA   * RAPP   * DADZ
+                 DSUMTD(1,I) = DSUMTD(1,I) + FACT * DSUMKDX
+                 DSUMTD(2,I) = DSUMTD(2,I) + FACT * DSUMKDY
+                 DSUMTD(3,I) = DSUMTD(3,I) + FACT * DSUMKDZ
+                 DSUMTD(1,L) = DSUMTD(1,L) - FACT * DSUMKDX
+                 DSUMTD(2,L) = DSUMTD(2,L) - FACT * DSUMKDY
+                 DSUMTD(3,L) = DSUMTD(3,L) - FACT * DSUMKDZ
+C
+                 DSUMKRX =  AREA   * DRAPPX * AR
+     *                    + AREA   * RAPP   * DARX
+                 DSUMKRY =  AREA   * DRAPPY * AR
+     *                    + AREA   * RAPP   * DARY
+                 DSUMKRZ =  AREA   * DRAPPZ * AR
+     *                    + AREA   * RAPP   * DARZ
+                 DSUMTR(1,I) = DSUMTR(1,I) + FACT * DSUMKRX
+                 DSUMTR(2,I) = DSUMTR(2,I) + FACT * DSUMKRY
+                 DSUMTR(3,I) = DSUMTR(3,I) + FACT * DSUMKRZ
+                 DSUMTR(1,L) = DSUMTR(1,L) - FACT * DSUMKRX
+                 DSUMTR(2,L) = DSUMTR(2,L) - FACT * DSUMKRY
+                 DSUMTR(3,L) = DSUMTR(3,L) - FACT * DSUMKRZ
+C
+  120         CONTINUE
+              SUMAD = SUMAD + SUMKD
+              SUMAR = SUMAR + SUMKR
+              IF(NFMOPCM.NE.0.AND.NUMDIF.EQ.0)
+     *           CALL MONEDR(I,FACT*SUMKD,FACT*SUMKR)
+  110      CONTINUE
+           SUMTD = SUMTD + FACT * SUMAD
+           SUMTR = SUMTR + FACT * SUMAR
+  100   CONTINUE
+C       - SUM UP
+        IF(GOPARR) THEN
+           CALL DDI_GSUMF(2405,SUMTD,1)
+           CALL DDI_GSUMF(2406,SUMTR,1)
+           IF(METHOD(1).EQ.4 .AND. MAXDER.GT.0) THEN
+              CALL DDI_GSUMF(2407,XX(LTMPD),MXTS*N)
+              CALL DDI_GSUMF(2408,XX(LTMPR),MXTS*N)
+           END IF
+        END IF
+        GDISP = SUMTD
+        GREP  = SUMTR
+        IF(IKREP.NE.1) THEN
+           IF(MASWRK.AND.NPRINT.NE.817) WRITE (IW, 500)GDISP, GREP
+        ELSE
+           GREP = 0.0D+00
+           IF(MASWRK.AND.NPRINT.NE.817) WRITE (IW, 501)GDISP
+        END IF
+C
+C       -- NOW THE AREA DERATIVE PART OF THE DIS+REP GRADIENTS   --
+C       --     UNFORTUNATELY THIS MUST BE DONE SEPARATELY        --
+C
+        IF(METHOD(1).EQ.4 .AND. MAXDER.GT.0) THEN
+        NPRTBK = NPRINT
+        NPRINT = 817
+C       - INITIALIZE PARALLEL
+        IPCOUNT = ME - 1
+        DO 200 M = 1, N
+           IF(MASWRK.AND.NPRINT.NE.817) WRITE (IW, 410) M
+           RDIF = RDIFF(M)
+           IDISP = 2
+C
+           CALL MAKCVM
+           DO I = 1, I_NESF
+              ALPHA(I) = ONE
+           ENDDO
+           CALL PEDRAM
+           DO I = 1, I_NESF
+              ALPHA(I) = XX(LALPHA + I - 1)
+           ENDDO
+           CALL DAREAD(IDAF,IODA,  DAI,3*20*MXTS         ,334,0)
+           CALL DAREAD(IDAF,IODA,IDDAI,(21*MXTS)/NWDVAR+1,335,1)
+C
+           FACT = NT(M) * RHO
+           DO 210 IAT = 1, NTA
+C             - GO PARALLEL
+              IF(GOPARR) THEN
+                 IPCOUNT = IPCOUNT + 1
+                 IF(MOD(IPCOUNT,NPROC).NE.0) GOTO 210
+              END IF
+C
+              DO 220 K = 1, NTS
+                 DO III = 1, IDDAI(21,K)
+                    IF(IAT.EQ.IDDAI(III,K)) THEN
+                       DAREAX = DAI(1,III,K)*TOANGS
+                       DAREAY = DAI(2,III,K)*TOANGS
+                       DAREAZ = DAI(3,III,K)*TOANGS
+C
+                       DSUMKDX =  DAREAX * XX(LTMPD+(M-1)*MXTS+K-1)
+                       DSUMKDY =  DAREAY * XX(LTMPD+(M-1)*MXTS+K-1)
+                       DSUMKDZ =  DAREAZ * XX(LTMPD+(M-1)*MXTS+K-1)
+                       DSUMTD(1,IAT) = DSUMTD(1,IAT) + FACT * DSUMKDX
+                       DSUMTD(2,IAT) = DSUMTD(2,IAT) + FACT * DSUMKDY
+                       DSUMTD(3,IAT) = DSUMTD(3,IAT) + FACT * DSUMKDZ
+C
+                       DSUMKRX =  DAREAX * XX(LTMPR+(M-1)*MXTS+K-1)
+                       DSUMKRY =  DAREAY * XX(LTMPR+(M-1)*MXTS+K-1)
+                       DSUMKRZ =  DAREAZ * XX(LTMPR+(M-1)*MXTS+K-1)
+                       DSUMTR(1,IAT) = DSUMTR(1,IAT) + FACT * DSUMKRX
+                       DSUMTR(2,IAT) = DSUMTR(2,IAT) + FACT * DSUMKRY
+                       DSUMTR(3,IAT) = DSUMTR(3,IAT) + FACT * DSUMKRZ
+                    ENDIF
+                 ENDDO
+  220         CONTINUE
+  210      CONTINUE
+  200   CONTINUE
+C       - SUM UP
+        IF(GOPARR) THEN
+           CALL DDI_GSUMF(2409,DSUMTD,3*NTA)
+           CALL DDI_GSUMF(2410,DSUMTR,3*NTA)
+        END IF
+        DO I = 1, NTA
+           IF(ICAV.EQ.1) THEN
+              PCMCDR(1,I) = PCMCDR(1,I)
+     *                    + (DSUMTD(1,I)+DSUMTR(1,I))/AUTOKAL*TOANGS
+              PCMCDR(2,I) = PCMCDR(2,I)
+     *                    + (DSUMTD(2,I)+DSUMTR(2,I))/AUTOKAL*TOANGS
+              PCMCDR(3,I) = PCMCDR(3,I)
+     *                    + (DSUMTD(3,I)+DSUMTR(3,I))/AUTOKAL*TOANGS
+           ELSE
+           PCMCDR(1,I) = (DSUMTD(1,I) + DSUMTR(1,I))/AUTOKAL*TOANGS
+           PCMCDR(2,I) = (DSUMTD(2,I) + DSUMTR(2,I))/AUTOKAL*TOANGS
+           PCMCDR(3,I) = (DSUMTD(3,I) + DSUMTR(3,I))/AUTOKAL*TOANGS
+           ENDIF
+        ENDDO
+        NPRINT = NPRTBK
+        ENDIF
+C
+      ELSE IF (ILJ.EQ.1) THEN
+         IF(MASWRK.AND.NPRINT.NE.817) WRITE (IW, 450)
+         RDIF = RSOLV
+         IDISP = 2
+         IF(METHOD(1).NE.4) THEN
+            CALL PEDFSM(XCTS,YCTS,ZCTS,AS,NVERT,
+     *                  XE,YE,ZE,RE,SSFE,ISPHE,RIN)
+         ELSE IF(METHOD(1).EQ.4) THEN
+            IF(MAXDER.GT.0)THEN
+               CALL  VCLR(DAI  ,1,3*20*MXTS)
+               CALL VICLR(IDDAI,1,  21*MXTS)
+            END IF
+            CALL MAKCVM
+            DO I = 1, I_NESF
+               ALPHA(I) = ONE
+            ENDDO
+            CALL PEDRAM
+            DO I = 1, I_NESF
+               ALPHA(I) = XX(LALPHA + I - 1)
+            ENDDO
+            IF(MAXDER.GT.0)THEN
+               CALL DAREAD(IDAF,IODA,  DAI,3*20*MXTS         ,334,0)
+               CALL DAREAD(IDAF,IODA,IDDAI,(21*MXTS)/NWDVAR+1,335,1)
+            END IF
+         END IF
+C        - INITIALIZE PARALLEL
+         IPCOUNT = ME - 1
+         SUMAD = ZERO
+         SUMAR = ZERO
+         DO 130 I = 1, NTA
+C           - GO PARALLEL
+            IF(GOPARR) THEN
+               IPCOUNT = IPCOUNT + 1
+               IF(MOD(IPCOUNT,NPROC).NE.0) GOTO 130
+            END IF
+C
+            XA = C(1,I)*TOANGS
+            YA = C(2,I)*TOANGS
+            ZA = C(3,I)*TOANGS
+            SUMKD = ZERO
+            SUMKR = ZERO
+            DO 140 K = 1, NTS
+               L    = ISPHE(K)
+               X    = XCTS(K)*TOANGS
+               Y    = YCTS(K)*TOANGS
+               Z    = ZCTS(K)*TOANGS
+               AREA = AS(K)*TOANGS*TOANGS
+               R2   = (XA-X)**2 + (YA-Y)**2 + (ZA-Z)**2
+               R    = SQRT(R2)
+               R2   = R*R
+               XC   = XE(L)*TOANGS
+               YC   = YE(L)*TOANGS
+               ZC   = ZE(L)*TOANGS
+               RL   = RE(L)*TOANGS
+               RL2  = RL*RL
+               DR2  = (XA-XC)**2 + (YA-YC)**2 + (ZA-ZC)**2
+               RAPP = (RL2 + R2 - DR2) / (2.0D+00 * RL)
+               DAT  = 4.0D+00 * EPSI(I) * SIGMA(I)**6
+               CAT  = 4.0D+00 * EPSI(I) * SIGMA(I)**12
+               R6   = R2*R2*R2
+               R12  = R6 * R6
+               SUMKD= SUMKD - AREA * RAPP * DAT / (3.0D+00 * R6)
+               SUMKR= SUMKR + AREA * RAPP * CAT / (9.0D+00 * R12)
+C
+C              -- POSSIBLE FIXPVA DIS+REP GRADIENTS --
+C
+               IF(METHOD(1).NE.4 .OR. MAXDER.EQ.0) GOTO 140
+C
+C              - ACCUMULATE RAPP*DAT AND RAPP*CAT FOR GRADIENTS -
+               XX(LTMPD+K-1) = XX(LTMPD+K-1)
+     *                       + RAPP * DAT / (3.0D+00 * R6)
+               XX(LTMPR+K-1) = XX(LTMPR+K-1)
+     *                       + RAPP * CAT / (9.0D+00 * R12)
+C
+               ONER   = ONE/R
+               DRX    = (XA-X)*ONER
+               DRY    = (YA-Y)*ONER
+               DRZ    = (ZA-Z)*ONER
+               ONERL  = ONE/RL
+               DRAPPX = (R*DRX - XA + XC)*ONERL
+               DRAPPY = (R*DRY - YA + YC)*ONERL
+               DRAPPZ = (R*DRZ - ZA + ZC)*ONERL
+               ONER7  = ONER/R6
+               ONER13 = ONER/R12
+               D3R6X  = -TWO*DRX*ONER7
+               D3R6Y  = -TWO*DRY*ONER7
+               D3R6Z  = -TWO*DRZ*ONER7
+               D9R12X = -(4.0D+00/3.0D+00)*DRX*ONER13
+               D9R12Y = -(4.0D+00/3.0D+00)*DRY*ONER13
+               D9R12Z = -(4.0D+00/3.0D+00)*DRZ*ONER13
+C
+C              - ONLY PARTS OF THE GRADIENTS -
+               DSUMKDX = -   AREA * DRAPPX * DAT / (3.0D+00 * R6)
+     *                   -   AREA * RAPP   * DAT * D3R6X
+               DSUMKDY = -   AREA * DRAPPY * DAT / (3.0D+00 * R6)
+     *                   -   AREA * RAPP   * DAT * D3R6Y
+               DSUMKDZ = -   AREA * DRAPPZ * DAT / (3.0D+00 * R6)
+     *                   -   AREA * RAPP   * DAT * D3R6Z
+               DSUMTD(1,I) = DSUMTD(1,I) + RHO * DSUMKDX
+               DSUMTD(2,I) = DSUMTD(2,I) + RHO * DSUMKDY
+               DSUMTD(3,I) = DSUMTD(3,I) + RHO * DSUMKDZ
+               DSUMTD(1,L) = DSUMTD(1,L) - RHO * DSUMKDX
+               DSUMTD(2,L) = DSUMTD(2,L) - RHO * DSUMKDY
+               DSUMTD(3,L) = DSUMTD(3,L) - RHO * DSUMKDZ
+C
+               DSUMKRX = +   AREA * DRAPPX * CAT / (9.0D+00 * R12)
+     *                   +   AREA * RAPP   * CAT * D9R12X
+               DSUMKRY = +   AREA * DRAPPY * CAT / (9.0D+00 * R12)
+     *                   +   AREA * RAPP   * CAT * D9R12Y
+               DSUMKRZ = +   AREA * DRAPPZ * CAT / (9.0D+00 * R12)
+     *                   +   AREA * RAPP   * CAT * D9R12Z
+               DSUMTR(1,I) = DSUMTR(1,I) + RHO * DSUMKRX
+               DSUMTR(2,I) = DSUMTR(2,I) + RHO * DSUMKRY
+               DSUMTR(3,I) = DSUMTR(3,I) + RHO * DSUMKRZ
+               DSUMTR(1,L) = DSUMTR(1,L) - RHO * DSUMKRX
+               DSUMTR(2,L) = DSUMTR(2,L) - RHO * DSUMKRY
+               DSUMTR(3,L) = DSUMTR(3,L) - RHO * DSUMKRZ
+C
+  140       CONTINUE
+            SUMAD = SUMAD + SUMKD
+            SUMAR = SUMAR + SUMKR
+C        call monedr from here too?
+  130    CONTINUE
+C       - SUM UP
+         IF(GOPARR) THEN
+            CALL DDI_GSUMF(2405,SUMAD,1)
+            CALL DDI_GSUMF(2406,SUMAR,1)
+            IF(METHOD(1).EQ.4 .AND. MAXDER.GT.0) THEN
+               CALL DDI_GSUMF(2407,XX(LTMPD),MXTS*N)
+               CALL DDI_GSUMF(2408,XX(LTMPR),MXTS*N)
+            END IF
+         END IF
+         GDISP = RHO * SUMAD
+         GREP  = RHO * SUMAR
+         IF(MASWRK.AND.NPRINT.NE.817) WRITE (IW, 500)GDISP, GREP
+C
+C        -- NOW THE AREA DERATIVE PART OF THE DIS+REP GRADIENTS --
+C
+         IF(METHOD(1).EQ.4 .AND. MAXDER.GT.0) THEN
+C        - INITIALIZE PARALLEL
+         IPCOUNT = ME - 1
+         DO 230 IAT=1,NTA
+C           - GO PARALLEL
+            IF(GOPARR) THEN
+               IPCOUNT = IPCOUNT + 1
+               IF(MOD(IPCOUNT,NPROC).NE.0) GOTO 230
+            END IF
+C
+            DO 240 K = 1, NTS
+               DO III = 1, IDDAI(21,K)
+                  IF(IAT.EQ.IDDAI(III,K)) THEN
+                     DAREAX = DAI(1,III,K)*TOANGS
+                     DAREAY = DAI(2,III,K)*TOANGS
+                     DAREAZ = DAI(3,III,K)*TOANGS
+C
+                     DSUMKDX = - DAREAX * XX(LTMPD+K-1)
+                     DSUMKDY = - DAREAY * XX(LTMPD+K-1)
+                     DSUMKDZ = - DAREAZ * XX(LTMPD+K-1)
+                     DSUMTD(1,IAT) = DSUMTD(1,IAT) + RHO * DSUMKDX
+                     DSUMTD(2,IAT) = DSUMTD(2,IAT) + RHO * DSUMKDY
+                     DSUMTD(3,IAT) = DSUMTD(3,IAT) + RHO * DSUMKDZ
+C
+                     DSUMKRX = + DAREAX * XX(LTMPR+K-1)
+                     DSUMKRY = + DAREAY * XX(LTMPR+K-1)
+                     DSUMKRZ = + DAREAZ * XX(LTMPR+K-1)
+                     DSUMTR(1,IAT) = DSUMTR(1,IAT) + RHO * DSUMKRX
+                     DSUMTR(2,IAT) = DSUMTR(2,IAT) + RHO * DSUMKRY
+                     DSUMTR(3,IAT) = DSUMTR(3,IAT) + RHO * DSUMKRZ
+                  ENDIF
+               ENDDO
+  240       CONTINUE
+  230    CONTINUE
+C        - SUM UP
+         IF(GOPARR) THEN
+            CALL DDI_GSUMF(2409,DSUMTD,3*NTA)
+            CALL DDI_GSUMF(2410,DSUMTR,3*NTA)
+         END IF
+C
+         DO I = 1, NTA
+            IF(ICAV.EQ.1) THEN
+               PCMCDR(1,I) = PCMCDR(1,I)
+     *                    + (DSUMTD(1,I)+DSUMTR(1,I))/AUTOKAL*TOANGS
+               PCMCDR(2,I) = PCMCDR(2,I)
+     *                    + (DSUMTD(2,I)+DSUMTR(2,I))/AUTOKAL*TOANGS
+               PCMCDR(3,I) = PCMCDR(3,I)
+     *                    + (DSUMTD(3,I)+DSUMTR(3,I))/AUTOKAL*TOANGS
+            ELSE
+            PCMCDR(1,I) = (DSUMTD(1,I) + DSUMTR(1,I))/AUTOKAL*TOANGS
+            PCMCDR(2,I) = (DSUMTD(2,I) + DSUMTR(2,I))/AUTOKAL*TOANGS
+            PCMCDR(3,I) = (DSUMTD(3,I) + DSUMTR(3,I))/AUTOKAL*TOANGS
+            ENDIF
+         ENDDO
+         ENDIF
+      END IF
+C
+      CALL RETFM(NEED)
+      RETURN
+C
+  400 FORMAT(/,'DISPERSION-REPULSION FREE ENERGY: ',
+     *         ' ATOM-ATOM INTERACTION.',/)
+  401 FORMAT(/,'DISPERSION FREE ENERGY: ',
+     *         ' ATOM-ATOM INTERACTION.',/)
+  410 FORMAT(/, 'CAVITY REFERRED TO SOLVENT ATOM OF TYPE',I3,/)
+  450 FORMAT(/,'DISPERSION-REPULSION FREE ENERGY: ',
+     *         ' LENNARD-JONES POTENTIAL.',/)
+  500 FORMAT(//,'   GDISP =', 3X,F15.8,3X,'KCAL/MOL',/,
+     *  '   GREP  =', 3X,F15.8,3X,'KCAL/MOL')
+  501 FORMAT(//,'   GDISP =', 3X,F15.8,3X,'KCAL/MOL')
+      END
+C*MODULE PCM     *DECK SOLPRT
+      SUBROUTINE SOLPRT
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      PARAMETER (MXFRG=1050, MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      LOGICAL GOPARR, DSKWRK, MASWRK
+C
+      COMMON /CONV  / DENTOL,EN,ET,EHF,EHF0,DIFF,ITER,ICALP,ICBET
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /ENRGMP/ EMP2,EMP3,EMP4,EMP2A
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMCHG/ PB,PX,PC,UNZ,QNUC,FN,FE,UNZOR,PORT
+      COMMON /PCMEFP/ PB_MUL,PC_MUL,PB_POL,PC_POL,P_FF,P_NF,P_FN,P_I,
+     *                P_IBIS,P_J,P_NUCC,P_NUCCBIS,ENPCM
+      COMMON /PCMITR/ RCUT(2),THRES,IPCMIT,IMUL,MXDIIS,NREG,MXITR1,
+     *                MXITR2,MODPAP
+      COMMON /PCMOPT/ RABI,RASC,REFPOL,THRSLS,DENSLS,WB,WA,ETA2,GD,EVAC,
+     *                RHOW,PM,AREATL,AREAKP,BONDRY,OMEGA,RET,FRO,EPSINF,
+     *                EPS,DR,RSOLV,VMOL,TCE,STEN,DSTEN,CMF,TABS,IDIRCT,
+     *                IPCDER,IDP,ICOMP,IFIELD,ICAV,IDISP,IPRINT,IRETCAV,
+     *                ICENT,IFAST,NEVAL,IEFPOL,KEEPSM,IMGABI,IMGASC,NADD
+      COMMON /PCMPAR/ IPCM,NFT26,NFT27,IKREP,IEF,IP_F,NFMOPCM
+      COMMON /PCMPRT/ GCAVP,GCAVS,GDISP,GRP,EHFGAS
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+      COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
+     *                MPLEVL,MPCTYP
+C
+      DATA AUTOKAL /627.509541D+00/
+      DATA ZERO /0.0D+00/
+      DATA ENERGY  /8HENERGY  /,RNONE  /8HNONE    /
+C
+C  ------------------------------------------------------------
+C
+C    ETOT= total energy of the system solute-solvent
+C    EINT= internal energy of the solute
+C    EDELTA=EINT-EVAC= variation of internal energy
+C          = <PSI| H(0) |PSI> - <PSI(0)| H(0) |PSI(0)>
+C
+C    Electrostatic contribution:
+C    GES = 1/2 (PB + PC) + 1/2 PX + UNZ
+C
+C    PB = interaction solute electrons - polarization nuclear charges
+C             PB = sum_i [Vel(i) * QSN(i)]
+C
+C    PC = interaction solute nuclei - polarization electronic charges
+C             PC = sum_i [Vnuc(i) * QSE(i)]
+C
+C    PX = interaction solute electrons - polarization electronic charges
+C             PX = sum_i [Vel(i) * QSE(i)]
+C
+C    UNZ = 1/2 interaction nuclei - polarization nuclear charges
+C
+C    GCAVP = cavitation energy (Pierotti's theory)
+C    GCAVS = cavitation energy (Sinanoglu's theory)
+C
+C    GDISP = dispersion free energy
+C    GREP =  repulsion free energy
+C  --------------------------------------------------------------
+C
+      ETOT = ET
+      IF(MPLEVL.EQ.2) ETOT=EMP2
+C
+C        hui li 04/28/2003  remove the cav+dis+rep energies.
+      IF( ICAV.EQ.1) ETOT=ETOT-GCAVP/AUTOKAL
+      IF(IDISP.EQ.1) ETOT=ETOT-(GDISP+GRP)/AUTOKAL
+C
+C              ----- total electrostatic contribution -----
+C     The explicit solver has various terms to sum, some of which may
+C     be zero depending on whether or not the EFP model is being used.
+C     The iterative solver apparently has been summing these all along.
+C
+      IF(IPCMIT.EQ.0) THEN
+         GES = 0.5D+00 * (PB + PC) + 0.5D+00 * PX + UNZ
+     *       + 0.5D+00 * (P_I+P_IBIS+P_J+P_NUCC+P_NUCCBIS)
+      ELSE
+         GES = 0.50D+00 * ENPCM
+      END IF
+C
+      EINT = ETOT - GES
+C
+C     Cavitation contribution: 1-Pierotti; 2-Sinanoglu
+C
+                     GCAV = 0.0D+00
+      IF (ICAV.EQ.1) GCAV = GCAVP
+      IF (ICAV.EQ.2) GCAV = GCAVS
+C
+C     Dispersive and repulsive contributions
+C
+      IF(IDISP.EQ.0) THEN
+         GDISP=ZERO
+         GREP=ZERO
+      ELSE
+         GREP=GRP
+      END IF
+C
+C     SCF method:
+C
+      IF(IKREP.EQ.1) THEN
+         GREP = GRP*AUTOKAL
+         EINT=EINT-GRP
+      END IF
+      IF(IDP.EQ.1) THEN
+         EINT=EINT-GD
+         GDISP = GD*AUTOKAL
+         EDELTA=EINT-EVAC+GCAV/AUTOKAL
+      ELSE
+         EDELTA=ZERO
+      END IF
+C
+      GINT =  GES + GCAV/AUTOKAL + GDISP/AUTOKAL + GREP/AUTOKAL
+      GTOT = ETOT + GCAV/AUTOKAL
+      IF(IDISP.NE.0)
+     * GTOT = GTOT + GDISP/AUTOKAL + GREP/AUTOKAL
+C
+      IF(MASWRK) THEN
+        WRITE(IW,150)
+        IF(TDDFTYP.NE.RNONE) WRITE(IW,160)
+        WRITE(IW,100) ETOT,EINT,EDELTA,GES,
+     *                GCAV/AUTOKAL,GDISP/AUTOKAL,GREP/AUTOKAL,
+     *                GINT,GTOT
+C            print details of electrostatic interaction
+        IPOT=IEFC+IEFD+IEFQ+IEFO+IEFP+IREP
+        IF(IPOT.GT.0) THEN
+          IF(IPCMIT.EQ.0) THEN
+             E_EE=0.50D+00*PX*AUTOKAL
+             E_EN=0.50D+00*(PB-PB_MUL-PB_POL)*AUTOKAL
+             E_EM=0.50D+00*PB_MUL*AUTOKAL
+             E_EP=0.50D+00*PB_POL*AUTOKAL
+             E_NE=0.50D+00*(PC-PC_MUL-PC_POL)*AUTOKAL
+             E_NN=(UNZ-0.50D+00*(P_FF+P_NF+P_FN))*AUTOKAL
+             E_NM=0.50D+00*P_NF*AUTOKAL
+             E_NP=0.50D+00*P_I*AUTOKAL
+             E_ME=0.50D+00*PC_MUL*AUTOKAL
+             E_MN=0.50D+00*P_FN*AUTOKAL
+             E_MM=0.50D+00*P_FF*AUTOKAL
+             E_MP=0.50D+00*P_NUCC*AUTOKAL
+             E_PE=0.50D+00*PC_POL*AUTOKAL
+             E_PN=0.50D+00*P_IBIS*AUTOKAL
+             E_PM=0.50D+00*P_NUCCBIS*AUTOKAL
+             E_PP=0.50D+00*P_J*AUTOKAL
+             E_TT=E_EE+E_EN+E_EM+E_EP+E_NE+E_NN+E_NM+E_NP
+     *           +E_ME+E_MN+E_MM+E_MP+E_PE+E_PN+E_PM+E_PP
+             WRITE(IW,101) E_EE,E_EN,E_EM,E_EP,E_NE,E_NN,E_NM,E_NP,
+     *                     E_ME,E_MN,E_MM,E_MP,E_PE,E_PN,E_PM,E_PP,E_TT
+          ELSE
+             E_TT=0.50D+00*ENPCM*AUTOKAL
+             WRITE(IW,103) E_TT
+          END IF
+        ELSE
+          IF(IPCMIT.EQ.0) THEN
+             WRITE(IW,102) PB,PC,PX,UNZ,P_I,P_IBIS,P_J,P_NUCC,P_NUCCBIS
+          ENDIF
+        END IF
+        WRITE(IW,105) ETOT*AUTOKAL,EINT*AUTOKAL,
+     *                EDELTA*AUTOKAL,GES*AUTOKAL,
+     *                GCAV,GDISP,GREP,
+     *                GINT*AUTOKAL,GTOT*AUTOKAL
+C
+C     Calculate and print the correct solvation energy,
+C     which are the difference between PCM and gas phase,
+C     note that only runtyp=energy does both phases.
+C
+        IF(RUNTYP.EQ.ENERGY.AND.TDDFTYP.EQ.RNONE) THEN
+           WRITE(IW,120) (ETOT-EHFGAS)*AUTOKAL,
+     *                   (ETOT-EHFGAS)*AUTOKAL+GCAV,
+     *                   (ETOT-EHFGAS)*AUTOKAL+GCAV+GDISP+GREP
+        END IF
+C
+C           and try to help with interpretation of the output.
+        WRITE(IW,110)
+C
+        WRITE(IW,*) '.... DONE PRINTING PCM SOLVENT SUMMARY ....'
+        CALL TIMIT(1)
+      END IF
+      IF(MPLEVL.EQ.2) ETOT=ETOT-EMP2
+C
+      RETURN
+C
+  150 FORMAT(/13X,'----------------------------------------------'/
+     *        13X,'-------   RESULTS OF PCM CALCULATION   -------'/
+     *        13X,'----------------------------------------------'/)
+  160 FORMAT(13X,'        COMPUTED FOR THE GROUND STATE         ',/)
+  100 FORMAT(1X,'FREE ENERGY IN SOLVENT = <PSI| H(0)+V/2 |PSI>       =',
+     *          F20.10,' A.U.'/
+     *       1X,'INTERNAL ENERGY IN SOLVENT = <PSI| H(0) |PSI>       =',
+     *          F20.10,' A.U.'/
+     *       1X,'DELTA INTERNAL ENERGY =  <D-PSI| H(0) |D-PSI>       =',
+     *          F20.10,' A.U.'/
+     *       1X,'ELECTROSTATIC INTERACTION                           =',
+     *          F20.10,' A.U.'/
+     *       1X,'PIEROTTI CAVITATION ENERGY                          =',
+     *          F20.10,' A.U.'/
+     *       1X,'DISPERSION FREE ENERGY                              =',
+     *          F20.10,' A.U.'/
+     *       1X,'REPULSION FREE ENERGY                               =',
+     *          F20.10,' A.U.'/
+     *       1X,'TOTAL INTERACTION (DELTA + ES + CAV + DISP + REP)   =',
+     *          F20.10,' A.U.'/
+     *       1X,'TOTAL FREE ENERGY IN SOLVENT                        =',
+     *          F20.10,' A.U.')
+  101 FORMAT(
+     * /11X,'-------   EFP/PCM ELECTROSTATIC INTERATIONS   -------'/
+     *  11X,'--------------------  KCAL/MOL  ---------------------'//
+     *  23X,'      ELECTRON        NUCLEI     MULTIPOLE   POLARIZABLE'/
+     *  23X,'       INDUCED       INDUCED       INDUCED       INDUCED'/
+     *  23X,'        CHARGE        CHARGE        CHARGE        CHARGE'/
+     *  1X,'ELECTRONIC  POTENTIAL ',4F14.2/
+     *  1X,'NUCLEAR     POTENTIAL ',4F14.2/
+     *  1X,'MULTIPOLE   POTENTIAL ',4F14.2/
+     *  1X,'POLARIZABLE POTENTIAL ',4F14.2/
+     *  11X,'----------------- TOTAL: ',F10.2,' -----------------'//)
+  102 FORMAT(/5X,'VARIOUS COMPONENTS OF THE ELECTROSTATIC ENERGY ARE'/
+     *       5X,'     (THIS IS MAINLY DEBUGGING INFORMATION)'/
+     *       5X,'  PB =',F15.8,' A.U.     PC =',F15.8,' A.U.'/
+     *       5X,'  PX =',F15.8,' A.U.    UNZ =',F15.8,' A.U.'/
+     *       5X,'  PI =',F15.8,' A.U.  PIBIS =',F15.8,' A.U.'/
+     *       5X,'  PJ =',F15.8,' A.U.'/
+     *       5X,'PNUC =',F15.8,' A.U. PNCBIS =',F15.8,' A.U.'/
+     *    7X,'ES = (PB+PC+PX)/2 + UNZ + (PI+PJ+PIBIS+PNUC+PNCBIS)/2')
+  103 FORMAT(
+     * /11X,'-------   EFP/PCM ELECTROSTATIC INTERATIONS   -------'/
+     *  11X,'----------------  ITERATIVE METHOD  -----------------'//
+     *  11X,'------------- TOTAL: ',F10.2,' KCAL/MOL-------------'//)
+  105 FORMAT(/1X,'FREE ENERGY IN SOLVENT       =',F15.2,' KCAL/MOL'/
+     *        1X,'INTERNAL ENERGY IN SOLVENT   =',F15.2,' KCAL/MOL'/
+     *        1X,'DELTA INTERNAL ENERGY        =',F15.2,' KCAL/MOL'/
+     *        1X,'ELECTROSTATIC INTERACTION    =',F15.2,' KCAL/MOL'/
+     *        1X,'PIEROTTI CAVITATION ENERGY   =',F15.2,' KCAL/MOL'/
+     *        1X,'DISPERSION FREE ENERGY       =',F15.2,' KCAL/MOL'/
+     *        1X,'REPULSION FREE ENERGY        =',F15.2,' KCAL/MOL'/
+     *        1X,'TOTAL INTERACTION            =',F15.2,' KCAL/MOL'/
+     *        1X,'TOTAL FREE ENERGY IN SOLVENT =',F15.2,' KCAL/MOL')
+  110 FORMAT(/1X,'-INTERNAL ENERGY IN SOLVENT-'/,
+     *        4X,'OMITS ES,CAV,DISP,REP (USES SOLVATED ORBITALS IN',
+     *           ' THE GAS PHASE HAMILTONIAN)'/
+     *        1X,'-FREE ENERGY IN SOLVENT-'/
+     *        4X,'INCLUDES ES+DISP+REP WHICH ARE IN THE',
+     *           ' SELF-CONSISTENT WAVEFUNCTION.'/
+     *        1X,'-TOTAL FREE ENERGY IN SOLVENT-'/
+     *        4X,'INCLUDES ES+DISP+REP+CAV, MEANING CAVITATION',
+     *           ' IS NOT IN THE SCF ENERGY.'/)
+  120 FORMAT(
+     * /11X,'-----  ENERGY CHANGE FROM GAS PHASE TO SOLVENT  -----'/
+     *   3X,'           ELEC          ELEC+CAV    ELEC+CAV+DIS+REP'/
+     *   1X,F17.3,F18.3,F20.3,' KCAL/MOL')
+      END
+C*MODULE PCM     *DECK DATSOL
+      SUBROUTINE DATSOL(ZSOL,EPS,EPSINF,RSOLV,VMOL,TCE,STEN,DSTEN,CMF)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL GOPARR, DSKWRK, MASWRK
+C
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+      CHARACTER*8 ZSOL
+C
+C     The data below came from Pisa, with no references to its sources.
+C     Here's some help on this data from Dan Chipman and Jan Jensen.
+C
+C     EPSINF is needed only for TDHF runs, and if you don't care about
+C     the cavity energies, you therefore need only EPS and RSOLV.
+C
+C     dielectric constants EPS:
+C        http://www.clippercontrols.com/info/dielectric_constants.html
+C     and see also traditional sources like the CRC Handbook.
+C
+C     RSolv is the radius of a solvent molecule. That is ambiguous for
+C     a nonspherical molecule, so some compromise effective or average
+C     value must be adopted. For water it is typically taken as 1.4 Ang.
+C
+C     In practice, EpsInf is generally taken as the square of the
+C     refractive index measured at the sodium D line.
+C
+C     Database of optical and physical data for various solvents:
+C
+      IF(ZSOL.EQ.'WATER   '  .OR.  ZSOL.EQ.'H2O     ') THEN
+        EPS = 78.39D+00
+        EPSINF = 1.776D+00
+        RSOLV = 1.385D+00
+        VMOL = 18.07D+00
+        TCE = 2.57D-04
+        STEN = 71.81D+00
+        DSTEN = 0.650D+00
+        CMF = 1.277D+00
+      ELSE IF(ZSOL.EQ.'METHANOL' .OR.  ZSOL.EQ.'CH3OH   ') THEN
+        EPS = 32.63D+00
+        EPSINF = 1.758D+00
+        RSOLV = 1.855D+00
+        VMOL = 40.7D+00
+        TCE = 1.182D-03
+        STEN = 22.12D+00
+        DSTEN = 1.154D+00
+        CMF = 1.776D+00
+      ELSE IF(ZSOL.EQ.'ETHANOL ' .OR.  ZSOL.EQ.'C2H5OH  ') THEN
+        EPS = 24.55D+00
+        EPSINF = 1.847D+00
+        RSOLV = 2.180D+00
+        VMOL = 58.7D+00
+        TCE = 1.103D-03
+        STEN = 21.89D+00
+        DSTEN = 1.146D+00
+        CMF = 1.543D+00
+      ELSE IF(ZSOL.EQ.'CLFORM  '  .OR.  ZSOL.EQ.'CHCL3   ') THEN
+        EPS = 4.90D+00
+        EPSINF = 2.085D+00
+        RSOLV = 2.48D+00
+        VMOL = 80.7D+00
+        TCE = 1.255D-03
+        STEN = 26.53D+00
+        DSTEN = 0.0D+00
+        CMF = 0.0D+00
+      ELSE IF(ZSOL.EQ.'METHYCL '  .OR.  ZSOL.EQ.'CH2CL2  ') THEN
+        EPS = 8.93D+00
+        EPSINF = 2.020D+00
+        RSOLV = 2.27D+00
+        VMOL = 64.5D+00
+        TCE = 1.367D-03
+        STEN = 27.33D+00
+        DSTEN = 0.0D+00
+        CMF = 0.0D+00
+      ELSE IF(ZSOL.EQ.'12DCLET '  .OR.  ZSOL.EQ.'C2H4CL2 ') THEN
+        EPS = 10.36D+00
+        EPSINF = 2.085D+00
+        RSOLV = 2.505D+00
+        VMOL = 79.4D+00
+        TCE = 1.156D-03
+        STEN = 31.54D+00
+        DSTEN = 0.0D+00
+        CMF = 0.0D+00
+      ELSE IF(ZSOL.EQ.'CTCL    '  .OR.  ZSOL.EQ.'CCL4    ') THEN
+        EPS = 2.228D+00
+        EPSINF = 2.129D+00
+        RSOLV = 2.685D+00
+        VMOL = 96.5D+00
+        TCE = 1.270D-03
+        STEN = 26.15D+00
+        DSTEN = 1.436D+00
+        CMF = 0.629D+00
+      ELSE IF(ZSOL.EQ.'BENZENE '  .OR.  ZSOL.EQ.'C6H6    ') THEN
+        EPS = 2.247D+00
+        EPSINF = 2.244D+00
+        RSOLV = 2.63D+00
+        VMOL = 88.91D+00
+        TCE = 1.380D-03
+        STEN = 28.18D+00
+        DSTEN = 1.469D+00
+        CMF = 0.629D+00
+      ELSE IF(ZSOL.EQ.'TOLUENE '  .OR.  ZSOL.EQ.'C6H5CH3 ') THEN
+        EPS = 2.379D+00
+        EPSINF = 2.232D+00
+        RSOLV = 2.82D+00
+        VMOL = 106.3D+00
+        TCE = 1.08D-03
+        STEN = 27.92D+00
+        DSTEN = 1.391D+00
+        CMF = 0.679D+00
+      ELSE IF(ZSOL.EQ.'CLBENZ  '  .OR.  ZSOL.EQ.'C6H5CL  ') THEN
+        EPS = 5.621D+00
+        EPSINF = 2.320D+00
+        RSOLV = 2.805D+00
+        VMOL = 101.79D+00
+        TCE = 0.981D-03
+        STEN = 32.69D+00
+        DSTEN = 0.0D+00
+        CMF = 0.0D+00
+      ELSE IF(ZSOL.EQ.'NITMET  '  .OR.  ZSOL.EQ.'CH3NO2  ') THEN
+        EPS = 38.20D+00
+        EPSINF = 1.904D+00
+        RSOLV = 2.155D+00
+        VMOL = 53.68D+00
+        TCE = 1.192D-03
+        STEN = 36.47D+00
+        DSTEN = 1.373D+00
+        CMF = 0.808D+00
+      ELSE IF(ZSOL.EQ.'NEPTANE '  .OR.  ZSOL.EQ.'C7H16   ') THEN
+        EPS = 1.92D+00
+        EPSINF = 1.918D+00
+        RSOLV = 3.125D+00
+        VMOL = 146.56D+00
+        TCE = 1.25D-03
+        STEN = 19.80D+00
+        DSTEN = 1.505D+00
+        CMF = 0.687D+00
+      ELSE IF(ZSOL.EQ.'CYCHEX  '  .OR.  ZSOL.EQ.'C6H12   ') THEN
+        EPS = 2.023D+00
+        EPSINF = 2.028D+00
+        RSOLV = 2.815D+00
+        VMOL = 108.10D+00
+        TCE = 1.20D-03
+        STEN = 24.38D+00
+        DSTEN = 1.467D+00
+        CMF = 0.621D+00
+      ELSE IF(ZSOL.EQ.'ANILINE '  .OR.  ZSOL.EQ.'C6H5NH2 ') THEN
+        EPS = 6.89D+00
+        EPSINF = 2.506D+00
+        RSOLV = 2.80D+00
+        VMOL = 91.15D+00
+        TCE = 0.85D-03
+        STEN = 42.79D+00
+        DSTEN = 0.731D+00
+        CMF = 0.972D+00
+      ELSE IF(ZSOL.EQ.'ACETONE '  .OR.  ZSOL.EQ.'CH3COCH3') THEN
+        EPS = 20.7D+00
+        EPSINF = 1.841D+00
+        RSOLV = 2.38D+00
+        VMOL = 73.52D+00
+        TCE = 1.42D-03
+        STEN = 22.67D+00
+        DSTEN = 0.0D+00
+        CMF = 0.0D+00
+      ELSE IF(ZSOL.EQ.'THF     ') THEN
+        EPS = 7.58D+00
+        EPSINF = 1.971D+00
+        RSOLV = 2.9D+00
+        VMOL = 81.11D+00
+        TCE = 1.142D-03
+        STEN = 26.40D+00
+        DSTEN = 0.0D+00
+        CMF = 0.0D+00
+      ELSE IF(ZSOL.EQ.'DMETSOX '  .OR.  ZSOL.EQ.'DMSO    ') THEN
+        EPS = 46.7D+00
+        EPSINF = 2.179D+00
+        RSOLV = 2.455D+00
+        VMOL = 70.94D+00
+        TCE = 9.82D-02
+        STEN = 42.86D+00
+        DSTEN = 0.0D+00
+        CMF = 0.0D+00
+      ELSE
+        IF(MASWRK) WRITE(IW,9010) ZSOL
+        CALL ABRT
+        STOP
+      END IF
+      IF(MASWRK) WRITE(IW,9020)
+     *         ZSOL,EPS,EPSINF,RSOLV,VMOL,TCE,STEN,DSTEN,CMF
+C
+ 9010 FORMAT(/,'*** ERROR: NO DATA TABULATED FOR SOLVENT=',A8//
+     * 'ALLOWED SOLVENTS ARE: WATER (OR H2O); METHANOL (OR CH3OH); '/
+     * 'ETHANOL (OR C2H5OH); CHLOROFORM (OR CHCL3); ',
+     * 'METHYLENE CHLORIDE (OR CH2CL2);'/
+     * '1,2-DICHLOROETHANE (OR CH2CLCH2CL); CARBON TETRACHLORIDE ',
+     * '(OR CCL4);'/
+     * 'BENZENE (OR C6H6); TOLUENE (OR C6H5CH3); CHLOROBENZENE ',
+     * '(OR C6H5CL);'/
+     * 'NITROMETHANE (OR CH3NO2); N-EPTANE (OR C7H16); CYCLOHEXANE ',
+     * '(OR C6H12);'/
+     * 'ANILINE (OR C6H5NH2); ACETONE (OR CH3COCH3); TETRAHYDROFURAN ',
+     * '(OR THF);'/
+     * 'DIMETHYLSULFOXIDE (OR DMSO)'//
+     * 'DATA FOR OTHER SOLVENTS CAN BE ADDED TO THE ',
+     * 'DATABASE IN ROUTINE "DATSOL"'/
+     * 'OR DIRECTLY INPUT IN THE NAMELIST $PCM (SEE INSTRUCTIONS).')
+C
+ 9020 FORMAT(/1X,'** LOOKING UP INTERNALLY STORED DATA FOR SOLVENT=',
+     *            A8,' **'/
+     *        1X,'OPTICAL AND PHYSICAL CONSTANTS:'/
+     *        1X,'EPS= ',F6.3,';',1X,'EPSINF= ',F6.3,';',
+     *           ' RSOLV= ',F6.3,' A;',1X,'VMOL= ',F7.3,' ML/MOL;'/
+     *        1X,'TCE= ',E10.5,' 1/K;',1X,'STEN= ',F6.3,
+     *           ' DYN/CM;',1X,' DSTEN= ',F7.4,';',1X,'CMF= ',F7.4/)
+      RETURN
+      END
+C*MODULE PCM     *DECK PCMFLD
+      SUBROUTINE PCMFLD(XH1,XFB,XD,XSOL,XQ,XSCR,XDISV,XDIS1,XDIS2,XBK,
+     *                  XCOL1,XDM,XCQEF,XQEFF,XELD,XQPOT,XQFLD,XVPOT,
+     *                  XSE,XDE,Q0,Q1,Q2,Q3,D0,QA,DIMAT,QREP,
+     *                  TMP,TMP1,TMP2,IPVT,
+     *                  POTTMP,RMUL,TCH,QET,QETN,QESC,ISD,NFT27,IPCFP,
+     *                  L1,L2,NTSPAR,XCTS,YCTS,ZCTS,XCTS2,YCTS2,ZCTS2,
+     *                  AS,QSN,QSE,QSED,Q_FS,VEC_MUL,
+     *                  CHG2,CHG2N,PEL,ASCCRD,ASCCHG,ASCDIP,
+     *                  ASCQAD,XE,YE,ZE,RE,ISPHE,LIST)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      LOGICAL DIRSCF,FDIFF,TRIPLET,TDDFT,SG1T,MP2PCM
+C
+      DIMENSION XH1(L2),XFB(L2),XD(L2),XSOL(L2),XQ(NTS),XSCR(L2),
+     *          XDISV(*),XDIS1(L2),XDIS2(L2),XBK(L1,L1),XCOL1(L1),
+     *          XDM(NTS,NTS),XCQEF(NTS),XQEFF(NTS),XELD(NTS),XQPOT(NTS),
+     *          XQFLD(NTS),XVPOT(L2),XSE(NTS,NTS),XDE(NTS,NTS),
+     *          Q0(NTS),Q1(NTS),Q2(NTS),Q3(NTS),
+     *          D0(NTS),QA(NTS),DIMAT(MXDIIS+1,MXDIIS+1),
+     *          QREP(NTSPAR,MXDIIS,2),TMP(NTS,3),TMP1(MXDIIS+1),
+     *          TMP2(MXDIIS+1,MXDIIS+1),IPVT(MXDIIS+1),POTTMP(NTS),
+     *          RMUL(MXSP,10),XCTS(*),YCTS(*),ZCTS(*),XCTS2(*),YCTS2(*),
+     *          ZCTS2(*),AS(*),QSN(*),QSE(*),QSED(*),Q_FS(*),
+     *          VEC_MUL(*),CHG2(*),CHG2N(*),
+     *          PEL(*),XE(*),YE(*),ZE(*),RE(*),ISPHE(*),LIST(*),
+     *          ASCCRD(*),ASCCHG(*),ASCDIP(*),ASCQAD(*)
+C
+C          the following are used only by the iterative solver:
+C        q0,q1,q2,q3,d0,qa,dimat,qrep,tmp,tmp1,tmp2,ipvt,rmul
+C
+      PARAMETER (MXATM=2000)
+C
+      COMMON /CONV  / DENTOL,EN,ETOT,EHF,EHF0,DIFF,ITER,ICALP,ICBET
+      COMMON /INFOTD/ CNVTOL,TRIPLET,SG1T,JANST,NRADT,NTHET,NPHIT,NLEBT,
+     *                NSTAT,NTRIAL,MAXVEC,NTHST,IRECTD,ITDFG,NONEQR,
+     *                ITDPRP
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /OPTGRD/ X(3*MXATM),ES,FE(20),
+     *                CONVF,FMAXT,DXMAXT,RMAX,RMIN,RLIM,
+     *                EIGMAX,EIGMIN,GRDERR,FRMS,FMAX,TRMAX,TRMIN,
+     *                IC(20),NSTEP,NSERCH,NPMAX,NP,IFOLOW,
+     *                NNEG,IUPHSS,IEXIT,ITRUPD,IPAD,KDIAGH
+      COMMON /OPTSCF/ DIRSCF,FDIFF
+      COMMON /PCMCHG/ PB,PX,PC,UNZ,QNUC,FN,FEX,UNZOR,PORT
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMITR/ RCUT(2),THRES,IPCMIT,IMUL,MXDIIS,NREG,MXITR1,
+     *                MXITR2,MODPAP
+      COMMON /PCMMP2/ IDOMP2
+      COMMON /PCMOPT/ RABI,RASC,REFPOL,THRSLS,DENSLS,WB,WA,ETA2,GD,EVAC,
+     *                RHOW,PM,AREATL,AREAKP,BONDRY,OMEGA,RET,FRO,EPSINF,
+     *                EPS,DR,RSOLV,VMOL,TCE,STEN,DSTEN,CMF,TABS,IDIRCT,
+     *                IPCDER,IDP,ICOMP,IFIELD,ICAV,IDISP,IPRINT,IRETCAV,
+     *                ICENT,IFAST,NEVAL,IEFPOL,KEEPSM,IMGABI,IMGASC,NADD
+      COMMON /PCMPAR/ IPCM,N26,N27,IKREP,IEF,IP_F,NFMOPCM
+      COMMON /PCMPRT/ GCAVP,GCAVS,GDISP,GREP,EHFGAS
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+      COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
+     *                MPLEVL,MPCTYP
+C
+      PARAMETER (HALF=0.5D+00)
+C
+      DATA RHF,RMC/8HRHF     ,8HMCSCF   /
+      DATA UHF,ROHF/8HUHF     ,8HROHF    /
+      DATA OPT /8HOPTIMIZE/,RNONE  /8HNONE    /
+      DATA GVB /8HGVB     /
+C
+C         --- Induce the PCM surface charges and energy correction ---
+C         For RHF, -XH1- is the Fock operator,
+C         For UHF and ROHF, -XH1- is the Alpha Fock operator
+C                           -XFB- is the Beta Fock operator
+C         For MCSCF and GVB, -XH1- is the one electron hamiltonian.
+C
+      IF(IKREP.EQ.1.OR.ICOMP.EQ.3) CALL SFUG(XD,XSCR,CSF,QNUC,L2)
+C
+      IF(IDP.EQ.0. OR. (IDP.EQ.1.AND.ISD.EQ.1)) THEN
+C
+C        skip PCM for scftype=rhf and runtyp=opt to save time
+C     use the last pcm XSOL
+C
+         IF(RUNTYP.EQ.OPT) THRSLS=0.0D+00
+         IF(SCFTYP.EQ.RHF) THEN
+            IF(RUNTYP.EQ.OPT .AND. IFAST.EQ.1.AND.
+     *           ITER.GT.1.AND.NSERCH.GT.0) THEN
+              IF(DIFF.GT.DENTOL) THEN
+                GOTO 100
+              ELSE
+                IF(DENSLS.EQ.NSERCH*1.0D+04) GO TO 100
+                DENSLS=NSERCH*1.0D+04
+              END IF
+            END IF
+         END IF
+C
+         IF(ICOMP.LE.2) THEN
+            IF(IEF.EQ.0) THEN
+              CALL XMATBF(XD,XSOL,XQ,XSCR,XDM,QET,QETN,TCH,L2,
+     *                    NFT27,XCTS,YCTS,ZCTS,AS,QSN,QSE)
+            ELSE
+             IF(IEF.LT.3) THEN
+              CALL IXMATBF(XD,XSOL,XQ,XSCR,XDM,XSE,XDE,XQPOT,XQFLD,
+     *                     XVPOT,QET,QETN,TCH,L2,NFT27,XCTS,YCTS,ZCTS,
+     *                     AS,QSN,QSE)
+             ELSE
+              CALL IXMATV(XD,XSOL,XSCR,XDM,XQPOT,XVPOT,
+     *                    Q0,Q1,Q2,Q3,D0,QA,DIMAT,QREP,TMP,
+     *                    TMP1,TMP2,IPVT,POTTMP,RMUL,QET,TCH,QESC,QETN,
+     *                    NFT27,IPCFP,L2,MXDIIS+1,NTSPAR,
+     *                    XCTS,YCTS,ZCTS,AS,QSN,QSE,QSED,
+     *                    Q_FS,VEC_MUL,
+     *                    CHG2,CHG2N,PEL,XE,YE,ZE,RE,ISPHE,
+     *                    LIST,ASCCRD,ASCCHG,ASCDIP,ASCQAD)
+             END IF
+            END IF
+         ELSE
+            CALL XMATEF(XD,XSOL,XQ,XSCR,XDM,XCQEF,XQEFF,XELD,
+     *                  QET,TCH,QESC,QETN,L2,CSF,NFT27,XCTS,YCTS,
+     *                  ZCTS,XCTS2,YCTS2,ZCTS2,AS,QSN,QSE,RE,ISPHE)
+            CALL DAWRIT(IDAF,IODA,XQEFF,NTS,332,0)
+            CALL DAWRIT(IDAF,IODA,XELD,NTS,333,0)
+         END IF
+C
+C---     IF(SCFTYP.EQ.RMC) CALL DSCAL(L2,HALF,XSOL,1)
+         TDDFT  = TDDFTYP.NE.RNONE .AND. ITDFG.EQ.1
+         MP2PCM = MPLEVL.EQ.2 .AND. IDOMP2.EQ.1
+         IF(TDDFT) CALL DSCAL(L2,2.0D+00,XSOL,1)
+C
+C     ---- add dispersion interaction (if idp=1) ----
+C
+         IF(IDP.EQ.1) THEN
+            CALL DISP(XD,XSCR,XDISV,XDIS1,XDIS2,XBK,XCOL1,L1,L2,XCTS,
+     *                YCTS,ZCTS,XCTS2,YCTS2,ZCTS2,AS)
+            IF(SCFTYP.EQ.RMC) THEN
+               CALL VADD(XH1,1,XDIS1,1,XH1,1,L2)
+               CALL DSCAL(L2,HALF,XDIS2,1)
+            END IF
+            IF(ISD.EQ.1) CALL VADD(XSOL,1,XDIS1,1,XSOL,1,L2)
+            CALL VADD(XH1,1,XDIS2,1,XH1,1,L2)
+         END IF
+C
+C       --- at this point add total correction -XSOL- to -XH1- ---
+C       for differenced Fock formation, add only the change to -XSOL-
+C
+ 100    CONTINUE
+C
+         IF((SCFTYP.EQ.RHF .OR. SCFTYP.EQ.ROHF .OR. SCFTYP.EQ.UHF)
+     *   .AND.  DIRSCF  .AND.  FDIFF  .AND.  .NOT.TDDFT
+     *   .AND. .NOT.MP2PCM) THEN
+            IF(ISD.EQ.1  .AND.  ITER.EQ.1) THEN
+               CALL VCLR(XSCR,1,L2)
+            ELSE
+               CALL DAREAD(IDAF,IODA,XSCR,L2,88,0)
+            END IF
+            CALL DAWRIT(IDAF,IODA,XSOL,L2,88,0)
+            CALL VSUB(XSCR,1,XSOL,1,XSOL,1,L2)
+         END IF
+C
+         CALL VADD(XH1,1,XSOL,1,XH1,1,L2)
+         IF(SCFTYP.EQ.UHF.OR.SCFTYP.EQ.ROHF)
+     *      CALL VADD(XFB,1,XSOL,1,XFB,1,L2)
+C
+      END IF
+C
+C     ----- STORE THE pcm model REPULSION FREE ENERGY -----
+C
+      IF(IKREP.EQ.1) GREP=CSF*0.063D+00*RHOW*NEVAL/PM
+C
+C     --- FOR MCSCF, H1+PERTURBATION MUST BE WRITTEN TO DAF ---
+C
+      IF(SCFTYP.EQ.RMC) CALL DAWRIT(IDAF,IODA,XH1,L2,11,0)
+      IF(SCFTYP.EQ.GVB) CALL DAWRIT(IDAF,IODA,XH1,L2,11,0)
+C
+      RETURN
+      END
+C*MODULE PCM     *DECK IEFDAT
+      SUBROUTINE IEFDAT
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      LOGICAL GOPARR,DSKWRK,MASWRK
+C
+      COMMON /ANIDAT/ EPSM,EPSXX,EPSXY,EPSXZ,EPSYY,EPSYZ,EPSZZ,
+     *                EPSM1XX,EPSM1XY,EPSM1XZ,EPSM1YY,EPSM1YZ,EPSM1ZZ,
+     *                EPS1,EPS2,EPS3,ROT(3,3)
+      COMMON /CAVANIS/ DLMOL,ANGSS,ALP,DLAM
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /IONDAT/ EPSI,DK2,DALP
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMOPT/ RABI,RASC,REFPOL,THRSLS,DENSLS,WB,WA,ETA2,GD,EVAC,
+     *                RHOW,PM,AREATL,AREAKP,BONDRY,OMEGA,RET,FRO,EPSINF,
+     *                EPS,DR,RSOLV,VMOL,TCE,STEN,DSTEN,CMF,TABS,IDIRCT,
+     *                IPCDER,IDP,ICOMP,IFIELD,ICAV,IDISP,IPRINT,IRETCAV,
+     *                ICENT,IFAST,NEVAL,IEFPOL,KEEPSM,IMGABI,IMGASC,NADD
+      COMMON /PCMPAR/ IPCM,NFT26,NFT27,IKREP,IEF,IP_F,NFMOPCM
+C
+      PARAMETER (NNAM=12)
+      DIMENSION QNAM(NNAM),KQNAM(NNAM)
+C
+      DATA FPI/12.56637061D+00/
+      DATA ANIWD/8HIEFPCM  /
+      DATA QNAM/8HEPSI    ,8HDISM     ,
+     *          8HEPS1    ,8HEPS2    ,8HEPS3    ,
+     *          8HEUPHI   ,8HEUTHE   ,8HEUPSI   ,
+     *          8HDLMOL   ,8HANGSS   ,8HALP     ,8HDLAM    /
+      DATA KQNAM/3,3,3,3,3,3,3,3,3,3,3,3/
+C
+      EPSI=EPS
+      DISM=0.0D+00
+      EPS1=EPS
+      EPS2=EPS
+      EPS3=EPS
+C   EULERIAN ANGLES IN DEGREE
+      EUPHI=0.0D+00
+      EUTHE=0.0D+00
+      EUPSI=0.0D+00
+C
+      JRET=0
+      CALL NAMEIO(IR,JRET,ANIWD,NNAM,QNAM,KQNAM,
+     *            EPSI,DISM,EPS1,EPS2,EPS3,EUPHI,EUTHE,EUPSI,
+     *            DLMOL,ANGSS,ALP,DLAM,
+     *            0,0,
+     *    0,0,0,0,0,  0,0,0,0,0,
+     *    0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,
+     *    0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0)
+C
+      IF(JRET.EQ.2) THEN
+         IF(MASWRK) WRITE(IW,930) ANIWD
+         CALL ABRT
+      END IF
+C
+      IF(IEF.EQ.1) THEN
+C
+C-----------------------
+C ANISOTROPIC DIELECTRIC
+C-----------------------
+C Required data:
+C
+C EPS1, EPS2, EPS3 = diagonal values of the dielectric permittivity
+C                    tensor with respect of the laboratory frame
+C                    (ie. the frame respect to which the solute position
+C                     is given).
+C EUPHI EUTHE EUPSI= eulerian angles which say the rotation of the
+C                    solvent orientation with respect to the laboratory
+C                    frame.
+C
+C read three diel const. values and euler angles in degrees
+C
+      CSPHI=COS(EUPHI)
+      SNPHI=SIN(EUPHI)
+      CSTHE=COS(EUTHE)
+      SNTHE=SIN(EUTHE)
+      CSPSI=COS(EUPSI)
+      SNPSI=SIN(EUPSI)
+C
+      ROT(1,1)=CSPHI*CSPSI-SNPHI*CSTHE*SNPSI
+      ROT(1,2)=-SNPHI*CSPSI-CSPHI*CSTHE*SNPSI
+      ROT(1,3)=SNTHE*SNPSI
+      ROT(2,1)=CSPHI*SNPSI+SNPHI*CSTHE*CSPSI
+      ROT(2,2)=-SNPHI*SNPSI+CSPHI*CSTHE*CSPSI
+      ROT(2,3)=-SNTHE*CSPSI
+      ROT(3,1)=SNPHI*SNTHE
+      ROT(3,2)=CSPHI*SNTHE
+      ROT(3,3)=CSTHE
+C
+      EPSM=(EPS1*EPS2*EPS3)**(1.0D+00/3.0D+00)
+C
+      EPSXX=(EPS1*ROT(1,1)*ROT(1,1)+EPS2*ROT(2,1)*ROT(2,1)+
+     *      EPS3*ROT(3,1)*ROT(3,1))
+      EPSXY=(EPS1*ROT(1,1)*ROT(1,2)+EPS2*ROT(2,1)*ROT(2,2)+
+     *      EPS3*ROT(3,1)*ROT(3,2))
+      EPSXZ=(EPS1*ROT(1,1)*ROT(1,3)+EPS2*ROT(2,1)*ROT(2,3)+
+     *      EPS3*ROT(3,1)*ROT(3,3))
+      EPSYY=(EPS1*ROT(1,2)*ROT(1,2)+EPS2*ROT(2,2)*ROT(2,2)+
+     *      EPS3*ROT(3,2)*ROT(3,2))
+      EPSYZ=(EPS1*ROT(1,2)*ROT(1,3)+EPS2*ROT(2,2)*ROT(2,3)+
+     *      EPS3*ROT(3,2)*ROT(3,3))
+      EPSZZ=(EPS1*ROT(1,3)*ROT(1,3)+EPS2*ROT(2,3)*ROT(2,3)+
+     *      EPS3*ROT(3,3)*ROT(3,3))
+C
+      EPSM1XX=(EPS1**(-1)*ROT(1,1)*ROT(1,1)+EPS2**(-1)*ROT(2,1)
+     *      *ROT(2,1)+EPS3**(-1)*ROT(3,1)*ROT(3,1))
+      EPSM1XY=(EPS1**(-1)*ROT(1,1)*ROT(1,2)+EPS2**(-1)*ROT(2,1)
+     *      *ROT(2,2)+EPS3**(-1)*ROT(3,1)*ROT(3,2))
+      EPSM1XZ=(EPS1**(-1)*ROT(1,1)*ROT(1,3)+EPS2**(-1)*ROT(2,1)
+     *      *ROT(2,3)+EPS3**(-1)*ROT(3,1)*ROT(3,3))
+      EPSM1YY=(EPS1**(-1)*ROT(1,2)*ROT(1,2)+EPS2**(-1)*ROT(2,2)
+     *      *ROT(2,2)+EPS3**(-1)*ROT(3,2)*ROT(3,2))
+      EPSM1YZ=(EPS1**(-1)*ROT(1,2)*ROT(1,3)+EPS2**(-1)*ROT(2,2)
+     *      *ROT(2,3)+EPS3**(-1)*ROT(3,2)*ROT(3,3))
+      EPSM1ZZ=(EPS1**(-1)*ROT(1,3)*ROT(1,3)+EPS2**(-1)*ROT(2,3)
+     *      *ROT(2,3)+EPS3**(-1)*ROT(3,3)*ROT(3,3))
+C
+       EPS=EPSM
+       IF(MASWRK) WRITE(IW,950)
+       IF(MASWRK) WRITE(IW,*)'     EPS1,  EPS2,  EPS3,  EPSM'
+       IF(MASWRK) WRITE(IW,55)EPS1,EPS2,EPS3,EPSM
+      ELSE IF(IEF.EQ.2) THEN
+C
+C----------------
+C IONIC SOLUTIONS
+C----------------
+C
+C Required data:
+C
+C EPSI= dielectric constant (is equal to the permittivity
+C                            of the chosen solvent, EPS)
+C In atomic units:
+C DK2= 29.8633 I/(4*PI*EPSI)
+C      where I=ionic strength in mol/dm^3 (M)
+C      dimensional units: [DK2] = (bohr)^(-2)
+C      The square root of DK2 (DALP) is the inverse of the
+C      physical quantity known as Debye length (LD),
+C      DALP is here expressed in bohr^-1.
+C
+C read the ionic strength in mol/dm^3 (M): DISM
+C
+       EPS=EPSI
+       DK2=29.8633D+00*DISM/(FPI*EPS)
+       DALP=SQRT(DK2)
+       IF(MASWRK) WRITE(IW,951)
+       IF(MASWRK) WRITE(IW,*)'     EPSI, IONIC-STRENGTH (M)'
+       IF(MASWRK) WRITE(IW,55) EPSI,DISM
+      ELSE IF(IEF.EQ.5.OR.IEF.EQ.8) THEN
+C
+C----------------------
+C NONEQUILIBRIUM SOLVENT
+C----------------------
+C
+C Required data:
+C EPSINF= dielectric constant at infinite frequency
+C         it determines the fast contribution (due to electronic
+C         motions) to the polarization of the solvent
+C
+       EPSM=1.0D+00
+       EPS=EPSINF
+       IF(MASWRK) WRITE(IW,953) EPS
+      ELSE
+       EPSM=1.0D+00
+       IF(MASWRK) WRITE(IW,952) EPS
+      END IF
+C
+  930 FORMAT(1X,'**** ERROR IN $',A8,' INPUT')
+  950 FORMAT(/5X,'INPUT FOR ANISOTROPIC DIELECTRICS '/5X,30(1H-))
+  951 FORMAT(/5X,'INPUT FOR IONIC SOLUTIONS '/5X,22(1H-))
+  952 FORMAT(/5X,'INPUT FOR ISOTROPIC DIELECTRICS'/5X,31(1H-)/
+     *        5X,'EPS=',F9.2)
+  953 FORMAT(/5X,'INPUT FOR SOLVENTS AT NONEQUILIBRIUM'/5X,32(1H-)/
+     *        5X,'EPS=',F9.2)
+  55  FORMAT(3X,4(2X,F8.4))
+      RETURN
+      END
+C*MODULE PCM     *DECK PCMMEM1
+      SUBROUTINE PCMMEM1(NDER,LAST)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      COMMON /MACHIN/ NWDVAR,MAXFM,MAXSM,LIMFM,LIMSM
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMPNT/ LXYZRE,LSSFE,LLIST,LALPCM,LRINPCM,LINAPCM,LINFPCM,
+     *                LINIPCM,LMEPCM,LAXYZCT,LXYZCT2,LNVERT,LQSN,LQSE,
+     *                LQFS,LQIND,LISPHE,LVAD,LQOR,LVECMUL,LAIPRJ,LFIPRJ,
+     *                LPEL,LPCMCDR,LDAI,LIDDAI,LQSND,LQSED
+C
+C     XE(MXSP),YE(MXSP),ZE(MXSP),RE(MXSP),SSFE(MXSP),LIST(MXSP+1),
+C     ALPHA(MXSP),RIN(MXSP),INA(MXSP),INF(MXSP),INITS(MXSP),METHOD(MXSP)
+C
+C     XCTS(MXTSPT),YCTS(MXTSPT),ZCTS(MXTSPT),AS(MXTS),NVERT(MXTS),
+C     QSN(MXTS),QSE(MXTS),Q_FS(MXTS),Q_IND(MXTS),ISPHE(MXTS),VAD(MXTS),
+C     QOR(MXTS),VEC_MUL(MXTS)
+C
+C     The following are now allocated in pcmmem3.
+C     ASCCRD(3,MXSP),ASCCHG(MXSP),ASCDIP(3,MXSP),ASCQAD(6,MXSP),
+C     CHG2(MXTS),CHG2N(MXTS),V_ELE(MXTS),V_NUC(MXTS),
+C
+C     Compute the total amount of PCM memory required to store sphere
+C     information (MXSP arrays) and assign all pointers.
+C
+C     No memory is allocated in this subroutine!
+C
+C     SSFE at present is not used in FMO-PCM but we allocate it anyway.
+C
+C     memory for INA and INF is no longer used anywhere,
+C     but the matching pointers still sit in common blocks.
+C
+      LXYZRE = LAST
+      LSSFE  = LXYZRE  + MXSP*4
+      LLIST  = LSSFE   + MXSP
+      LALPCM = LLIST   + (MXSP+1-1)/NWDVAR+1
+      LRINPCM= LALPCM  + MXSP
+      LINIPCM= LRINPCM + MXSP
+      LMEPCM = LINIPCM + (MXSP-1)/NWDVAR+1
+      LAST   = LMEPCM  + (MXSP-1)/NWDVAR+1
+      LPCMCDR=LAST
+      IF(NDER.GT.0) LAST=LPCMCDR+3*MXSP
+      MEMPCM1=LAST-LXYZRE
+C
+      LINAPCM = 0
+      LINFPCM = 0
+C
+      RETURN
+      END
+C*MODULE PCM     *DECK PCMMEM2
+      SUBROUTINE PCMMEM2(NDER,LAST)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      COMMON /FMCOM / X(1)
+      COMMON /MACHIN/ NWDVAR,MAXFM,MAXSM,LIMFM,LIMSM
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMPAR/ IPCM,N26,N27,IKREP,IEF,IP_F,NFMOPCM
+      COMMON /PCMPNT/ LXYZRE,LSSFE,LLIST,LALPCM,LRINPCM,LINAPCM,LINFPCM,
+     *                LINIPCM,LMEPCM,LAXYZCT,LXYZCT2,LNVERT,LQSN,LQSE,
+     *                LQFS,LQIND,LISPHE,LVAD,LQOR,LVECMUL,LAIPRJ,LFIPRJ,
+     *                LPEL,LPCMCDR,LDAI,LIDDAI,LQSND,LQSED
+C
+C     Careful investigation of PCM-related code revealed that the
+C     following variables are used in:
+C     direct inversion: Q_FS, Q_IND, VAD, QOR, VEC_MUL, VELE
+C     EFP_PCM:          Q_FS, Q_IND, VAD, QOR
+C     PCM gradient:     Q_FS, Q_IND, XCTS2, YCTS2, ZCTS2
+C     FMO/PCM gradient is thought to need only Q_FS, Q_IND
+C     (because XCTS2, YCTS2, ZCTS2 are used by options unsupported
+C      in FMO/PCM).
+C     The second half of QIND(MXTS,2) is used as the mysterious
+C     Q2 array in PCM gradient and as CHG2N in PCMFLD, since CHG2N
+C     has to be stored in an area outside of SCF iterations.
+C     One should have split QIND into two arrays for clarity but the
+C     fact of needing two was learnt too late...
+C     FMO-PCM memory can be reduced from MXTS*8 into MXTS*6+NTS*2
+C     by a somewhat messy change (QSN and QSE arrays).
+C     (FMO-PCM asks for MXTS*11).
+C
+      LAXYZCT= LAST
+      LNVERT = LAXYZCT + MXTS*4
+      LQSN   = LNVERT  + MXTS/NWDVAR + 1
+      LQSND  = LQSN    + MXTS
+      LQSE   = LQSND   + MXTS
+      LQSED  = LQSE    + MXTS
+      LISPHE = LQSED   + MXTS
+      LAST   = LISPHE  + MXTS/NWDVAR + 1
+C
+      LDAI  =LAST
+      LIDDAI=LAST
+C
+      IF(NFMOPCM.EQ.0) THEN
+C       It might be possible to put appropriate IF clauses to reduce
+C       the amount, but it is safer to allocate for any IEF, etc.
+C
+C       XYZCT2 are used in
+C       a) PCM gradient,
+C       b) IEF=0,
+C       c) repulsion/dispersion with IREP/IDP (not IDISP).
+C       And possibly something else. None of those may be used in
+C       FMO-PCM so no storage is allocated.
+C       See PEDRA where XYZCTS2 are set.
+C
+        LXYZCT2= LAST
+        LQFS   = LXYZCT2+ MXTS*3
+        LQIND  = LQFS   + MXTS
+        LVAD   = LQIND  + MXTS*2
+        LQOR   = LVAD   + MXTS
+        LVECMUL= LQOR   + MXTS
+        LAIPRJ = LVECMUL+ MXTS
+        LFIPRJ = LAIPRJ + MXTS
+        LPEL   = LFIPRJ + MXTS
+        LAST   = LPEL   + MXTS
+      ELSE
+        LQFS   = LAST
+        IF(NDER.GT.0) THEN
+          LQIND  = LQFS   + MXTS
+          LAST   = LQIND  + MXTS*2
+        ELSE
+          LQIND  = LAST
+        END IF
+        IF(IXFTCH(X(LMEPCM),1).EQ.4 .AND. NDER.GT.0) THEN
+          LDAI   = LAST
+          LIDDAI = LDAI   + 3*20*MXTS
+          LAST   = LIDDAI + 21*MXTS/NWDVAR + 1
+        ENDIF
+        LXYZCT2= LAST
+        LVAD   = LAST
+        LQOR   = LAST
+        LVECMUL= LAST
+        LAIPRJ = LAST
+        LFIPRJ = LAST
+        LPEL   = LAST
+      ENDIF
+      MEMPCM2=LAST-LAXYZCT
+C
+      RETURN
+      END
+C*MODULE PCM     *DECK PCMMEM3
+      SUBROUTINE PCMMEM3(IPCFP,L2,LAST,NTSPAR,LSOL,LCHG,LDMATM,LQPOT,
+     *                   LQFLD,LVPOT,LSE,LDE,LQ0,LQ1,LQ2,LQ3,LD0,LQA,
+     *                   LDIMAT,LQREP,LTMP0,LTMP1,LTMP2,LIPVT,LPOTTMP,
+     *                   LRMUL,LCHG2,LASCCRD,LASCCHG,LASCDIP
+     *                  ,LASCQAD,LDISV,LDIS1,LDIS2,LCQEF,LQEFF,LELD,
+     *                   LXDINT,LYDINT,LZDINT,LEFLD,MADD,LABFLD,LVECMP,
+     *                   LVEC_2,LVEC_S,LAPROJ,LFPROJ)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      LOGICAL IPCFP,IZRFLS,GOPARR,DSKWRK,MASWRK
+      PARAMETER (MXFRG=1050, MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMITR/ RCUT(2),THRES,IPCMIT,IMUL,MXDIIS,NREG,MXITR1,
+     *                MXITR2,MODPAP
+      COMMON /PCMOPT/ RABI,RASC,REFPOL,THRSLS,DENSLS,WB,WA,ETA2,GD,EVAC,
+     *                RHOW,PM,AREATL,AREAKP,BONDRY,OMEGA,RET,FRO,EPSINF,
+     *                EPS,DR,RSOLV,VMOL,TCE,STEN,DSTEN,CMF,TABS,IDIRCT,
+     *                IPCDER,IDP,ICOMP,IFIELD,ICAV,IDISP,IPRINT,IRETCAV,
+     *                ICENT,IFAST,NEVAL,IEFPOL,KEEPSM,IMGABI,IMGASC,NADD
+      COMMON /PCMPAR/ IPCM,NFT26,NFT27,IRPPCM,IEF,IP_F,NFMOPCM
+      COMMON /ZRFPAR/ GZRF,FIND(3),GNUCF,EBORN,DIELEC,IZRF,ICALC
+C
+C     Set PCM dynamic memory pointers for SCF. No allocation here.
+C
+      IZRFLS = IZRF.NE.0
+      IF(IPCM.EQ.1.OR.IPCFP) THEN
+         IF (IPCMIT.EQ.0) THEN
+            NTS2=NTS*NTS
+            NNTS=NTS
+            IF(IEF.EQ.3.OR.IEF.EQ.10) NNTS = 1
+            NNTS2=NNTS*NNTS
+         ELSE
+            NNTS2=0
+            NTS2=0
+         END IF
+         NTSPAR=(NTS-1)/NPROC+1
+         LSOL   = LAST
+         LCHG   = LSOL   + L2
+         LDMATM = LCHG   + NTS
+         LAST   = LDMATM + NTS2
+         IF(IEF.NE.0) THEN
+            LQPOT  = LAST
+            LQFLD  = LQPOT + NTS
+            LVPOT  = LQFLD + NTS
+            LSE    = LVPOT + L2
+            LDE    = LSE   + NNTS2
+            LAST   = LDE   + NNTS2
+         ELSE
+            LQPOT  = LAST
+            LQFLD  = LAST
+            LVPOT  = LAST
+            LSE    = LAST
+            LDE    = LAST
+         END IF
+C        10 in RMUL is for 10 tensor components, NOT 10 vertices.
+         IF(IEF.NE.0  .AND.  IPCMIT.NE.0) THEN
+            MXDII1 = MXDIIS + 1
+            LQ0    = LAST
+            LQ1    = LQ0    + NTS
+            LQ2    = LQ1    + NTS
+            LQ3    = LQ2    + NTS
+            LD0    = LQ3    + NTS
+            LQA    = LD0    + NTS
+            LDIMAT = LQA    + NTS
+            LQREP  = LDIMAT + MXDII1*MXDII1
+            LTMP0  = LQREP  + NTSPAR*MXDII1*2
+            LTMP1  = LTMP0  + NTS*3
+            LTMP2  = LTMP1  + MXDII1
+            LIPVT  = LTMP2  + MXDII1*MXDII1
+            LPOTTMP= LIPVT  + MXDII1
+            LRMUL  = LPOTTMP+ NTS
+            LCHG2  = LRMUL  + MXSP*10
+            LASCCRD= LCHG2  + NTS
+            LASCCHG= LASCCRD+ 3*MXSP
+            LASCDIP= LASCCHG+ MXSP
+            LASCQAD= LASCDIP+ 3*MXSP
+            LAST   = LASCQAD+ 6*MXSP
+         ELSE
+            LQ0    = LAST
+            LQ1    = LAST
+            LQ2    = LAST
+            LQ3    = LAST
+            LD0    = LAST
+            LQA    = LAST
+            LDIMAT = LAST
+            LQREP  = LAST
+            LTMP0  = LAST
+            LTMP1  = LAST
+            LTMP2  = LAST
+            LIPVT  = LAST
+            LPOTTMP= LAST
+            LRMUL  = LAST
+            LCHG2  = LAST
+            LASCCRD= LAST
+            LASCCHG= LAST
+            LASCDIP= LAST
+            LASCQAD= LAST
+         END IF
+         IF(IDP.EQ.1) THEN
+            LDISV  = LAST
+            LDIS1  = LAST
+            IF(IEF.GE.3) LDIS1=LDISV+3*L2
+            LDIS2  = LDIS1 + L2
+            LAST   = LDIS2 + L2
+         ELSE
+            LDISV  = LAST
+            LDIS1  = LAST
+            LDIS2  = LAST
+         END IF
+         IF(ICOMP.LE.2) THEN
+            LCQEF  = LAST
+            LQEFF  = LAST
+            LELD   = LAST
+         ELSE
+            LCQEF  = LAST
+            LQEFF  = LCQEF + NTS
+            LELD   = LQEFF + NTS
+            LAST   = LELD  + NTS
+         END IF
+      ELSE
+         NTSPAR=0
+         LSOL   = LAST
+         LCHG   = LAST
+         LDMATM = LAST
+      END IF
+C
+C          MEMORY FOR SCRF, EFP, OR PCM/EFP
+C
+      IF (IZRFLS .OR. IEFP.EQ.1 .OR. IPCFP) THEN
+         LXDINT = LAST
+         LYDINT = LXDINT  + L2
+         LZDINT = LYDINT  + L2
+         LAST   = LZDINT  + L2
+         IF(IEFP.EQ.1.OR.IPCFP) THEN
+            LEFLD  = LAST
+            MADD   = LEFLD  + 3*NPTTPT
+            LABFLD = MADD   + 3*NPTTPT
+            LAST   = LABFLD + 3*NPTTPT
+            IF(IPCFP) THEN
+               LVECMP = LAST
+               LVEC_2 = LVECMP + L2
+               LVEC_S = LVEC_2 + L2
+               LAPROJ = LVEC_S + L2
+               LFPROJ = LAPROJ + NTS
+               LAST   = LFPROJ + NTS
+            ELSE
+               LVECMP = LAST
+               LVEC_2 = LAST
+               LVEC_S = LAST
+               LAPROJ = LAST
+               LFPROJ = LAST
+            END IF
+         ELSE
+            LEFLD  = LAST
+            MADD   = LAST
+            LABFLD = LAST
+         END IF
+      ELSE
+         LXDINT = LAST
+         LYDINT = LAST
+         LZDINT = LAST
+      END IF
+      RETURN
+      END
+C*MODULE PCM     *DECK EFIELDM
+      SUBROUTINE EFIELDM
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      COMMON /FMCOM / X(1)
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMPNT/ LXYZRE,LSSFE,LLIST,LALPCM,LRINPCM,LINAPCM,LINFPCM,
+     *                LINIPCM,LMEPCM,LAXYZCT,LXYZCT2,LNVERT,LQSN,LQSE,
+     *                LQFS,LQIND,LISPHE,LVAD,LQOR,LVECMUL,LAIPRJ,LFIPRJ,
+     *                LPEL,LPCMCDR,LDAI,LIDDAI,LQSND,LQSED
+C
+      CALL EFIELD(X(LAXYZCT),X(LAXYZCT+MXTS),X(LAXYZCT+MXTS*2),
+     *            X(LQSN),X(LQSE),X(LISPHE))
+      RETURN
+      END
+C*MODULE PCM     *DECK DISRPM
+      SUBROUTINE DISRPM
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      COMMON /FMCOM / X(1)
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMPNT/ LXYZRE,LSSFE,LLIST,LALPCM,LRINPCM,LINAPCM,LINFPCM,
+     *                LINIPCM,LMEPCM,LAXYZCT,LXYZCT2,LNVERT,LQSN,LQSE,
+     *                LQFS,LQIND,LISPHE,LVAD,LQOR,LVECMUL,LAIPRJ,LFIPRJ,
+     *                LPEL,LPCMCDR,LDAI,LIDDAI,LQSND,LQSED
+C
+      CALL MAKCVM
+      CALL DISRPE(X(LAXYZCT),X(LAXYZCT+MXTS),X(LAXYZCT+MXTS*2),
+     *            X(LAXYZCT+MXTS*3),X(LNVERT),X(LXYZRE),X(LXYZRE+MXSP),
+     *            X(LXYZRE+MXSP*2),X(LXYZRE+MXSP*3),X(LSSFE),X(LISPHE),
+     *            X(LRINPCM),X(LPCMCDR))
+      RETURN
+      END
+C*MODULE PCM     *DECK INPPCM
+      SUBROUTINE INPPCM(NDER,MXSP0,NAT0)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      COMMON /FMCOM / X(1)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMPNT/ LXYZRE,LSSFE,LLIST,LALPCM,LRINPCM,LINAPCM,LINFPCM,
+     *                LINIPCM,LMEPCM,LAXYZCT,LXYZCT2,LNVERT,LQSN,LQSE,
+     *                LQFS,LQIND,LISPHE,LVAD,LQOR,LVECMUL,LAIPRJ,LFIPRJ,
+     *                LPEL,LPCMCDR,LDAI,LIDDAI,LQSND,LQSED
+C
+C     In FMO-PCM memory for spheres and tesserae is allocated and
+C     returned in FMOX, otherwise it is allocated here and returned
+C     in PROGRAM GAMESS.  The default value of MXSP is set here.
+C
+C     The two VCLR calls inserted here in 2008 cover up the lack of
+C     initializations of something, further into the run.  It would
+C     be more elegant if someday we knew what wasn't set correctly!
+C
+C     If an input exists which shows such problem, we can do
+C     NAN=acos(-2)
+C     dacopy(NAN,...) instead of VCLR to track the problem... DGF
+C
+      IF(MXSP.EQ.0) MXSP=MXSP0
+C
+      CALL VALFM(LOADFM)
+      LAST = LOADFM + 1
+      LASTSAVE = LAST
+      CALL PCMMEM1(NDER,LAST)
+      CALL GETFM(MEMPCM1)
+      CALL VCLR(X(LASTSAVE),1,MEMPCM1)
+C
+C     The default MXTS is set in TESIN, based on NAT0 and NTSALL.
+C
+      CALL MAKCVM
+      CALL TESIN(NAT0,X(LXYZRE),X(LXYZRE+MXSP),X(LXYZRE+MXSP),
+     *           X(LALPCM),X(LRINPCM),X(LINIPCM),X(LMEPCM))
+      IF(NDER.GT.0) CALL PCMGIN(X(LMEPCM))
+C
+      CALL VALFM(LOADFM)
+      LAST = LOADFM + 1
+      LASTSAVE = LAST
+      CALL PCMMEM2(NDER,LAST)
+      CALL GETFM(MEMPCM2)
+      CALL VCLR(X(LASTSAVE),1,MEMPCM2)
+C
+      IF(MASWRK) WRITE(IW,9000) MXSP,MXTS,MEMPCM1+MEMPCM2
+      RETURN
+ 9000 FORMAT(/1X,'PCM DIMENSIONS: MXSP=',I6,', MXTS=',I10,', MEMORY=',
+     *           I14)
+      END
+C
+C*MODULE PCM     *DECK SOLVNT
+      SUBROUTINE SOLVNT
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      COMMON /FMCOM / X(1)
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMPNT/ LXYZRE,LSSFE,LLIST,LALPCM,LRINPCM,LINAPCM,LINFPCM,
+     *                LINIPCM,LMEPCM,LAXYZCT,LXYZCT2,LNVERT,LQSN,LQSE,
+     *                LQFS,LQIND,LISPHE,LVAD,LQOR,LVECMUL,LAIPRJ,LFIPRJ,
+     *                LPEL,LPCMCDR,LDAI,LIDDAI,LQSND,LQSED
+C
+      CALL SOLVENT(X(LAXYZCT),X(LAXYZCT+MXTS),X(LAXYZCT+MXTS*2),
+     *             X(LXYZCT2),X(LXYZCT2+MXTS),X(LXYZCT2+MXTS*2),
+     *             X(LAXYZCT+MXTS*3),X(LNVERT),X(LQSN),X(LQSND),
+     *             X(LQFS),X(LVAD),
+     *             X(LQOR),X(LXYZRE),X(LXYZRE+MXSP),X(LXYZRE+MXSP*2),
+     *             X(LXYZRE+MXSP*3),X(LISPHE),X(LALPCM),X(LRINPCM),
+     *             X(LINIPCM),X(LMEPCM),X(LVECMUL))
+      RETURN
+      END
+C*MODULE PCM     *DECK DERCCM
+      SUBROUTINE DERCCM
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      COMMON /FMCOM / X(1)
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMPNT/ LXYZRE,LSSFE,LLIST,LALPCM,LRINPCM,LINAPCM,LINFPCM,
+     *                LINIPCM,LMEPCM,LAXYZCT,LXYZCT2,LNVERT,LQSN,LQSE,
+     *                LQFS,LQIND,LISPHE,LVAD,LQOR,LVECMUL,LAIPRJ,LFIPRJ,
+     *                LPEL,LPCMCDR,LDAI,LIDDAI,LQSND,LQSED
+C
+      CALL DERCCMX(X(LAXYZCT),X(LAXYZCT+MXTS),X(LAXYZCT+MXTS*2),
+     *             X(LAXYZCT+MXTS*3),X(LQSN),X(LQSE),
+     *             X(LQSND),X(LQSED),X(LQFS),X(LQIND),
+     *             X(LQIND+MXTS),X(LXYZRE),X(LXYZRE+MXSP),
+     *             X(LXYZRE+MXSP*2),X(LXYZRE+MXSP*3),X(LISPHE),
+     *             X(LPCMCDR))
+      RETURN
+      END
+C*MODULE PCM     *DECK DERPCM
+      SUBROUTINE DERPCM
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      COMMON /FMCOM / X(1)
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMPNT/ LXYZRE,LSSFE,LLIST,LALPCM,LRINPCM,LINAPCM,LINFPCM,
+     *                LINIPCM,LMEPCM,LAXYZCT,LXYZCT2,LNVERT,LQSN,LQSE,
+     *                LQFS,LQIND,LISPHE,LVAD,LQOR,LVECMUL,LAIPRJ,LFIPRJ,
+     *                LPEL,LPCMCDR,LDAI,LIDDAI,LQSND,LQSED
+C
+      CALL DERPCMX(X(LAXYZCT),X(LAXYZCT+MXTS),X(LAXYZCT+MXTS*2),
+     *             X(LXYZCT2),X(LXYZCT2+MXTS),X(LXYZCT2+MXTS*2),
+     *             X(LAXYZCT+MXTS*3),X(LQSN),X(LQSE),X(LXYZRE),
+     *             X(LXYZRE+MXSP),X(LXYZRE+MXSP*2),X(LXYZRE+MXSP*3),
+     *             X(LISPHE),X(LPCMCDR))
+      RETURN
+      END
+C*MODULE PCM     *DECK DERIEF
+      SUBROUTINE DERIEF
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      COMMON /FMCOM / X(1)
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMPNT/ LXYZRE,LSSFE,LLIST,LALPCM,LRINPCM,LINAPCM,LINFPCM,
+     *                LINIPCM,LMEPCM,LAXYZCT,LXYZCT2,LNVERT,LQSN,LQSE,
+     *                LQFS,LQIND,LISPHE,LVAD,LQOR,LVECMUL,LAIPRJ,LFIPRJ,
+     *                LPEL,LPCMCDR,LDAI,LIDDAI,LQSND,LQSED
+C
+      CALL DERIEFX(X(LAXYZCT),X(LAXYZCT+MXTS),X(LAXYZCT+MXTS*2),
+     *             X(LAXYZCT+MXTS*3),X(LQSN),X(LQSE),X(LQFS),X(LQIND),
+     *             X(LXYZRE),X(LXYZRE+MXSP),X(LXYZRE+MXSP*2),
+     *             X(LXYZRE+MXSP*3),X(LISPHE),X(LPCMCDR))
+      RETURN
+      END
+C*MODULE PCM     *DECK MAKCVM
+      SUBROUTINE MAKCVM
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      COMMON /FMCOM / X(1)
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMPNT/ LXYZRE,LSSFE,LLIST,LALPCM,LRINPCM,LINAPCM,LINFPCM,
+     *                LINIPCM,LMEPCM,LAXYZCT,LXYZCT2,LNVERT,LQSN,LQSE,
+     *                LQFS,LQIND,LISPHE,LVAD,LQOR,LVECMUL,LAIPRJ,LFIPRJ,
+     *                LPEL,LPCMCDR,LDAI,LIDDAI,LQSND,LQSED
+C
+      CALL MAKECVM(X(LXYZRE),X(LXYZRE+MXSP),X(LXYZRE+MXSP*2),
+     *             X(LALPCM),X(LRINPCM))
+      RETURN
+      END
+C*MODULE PCM     *DECK MONEDR
+      SUBROUTINE MONEDR(IAT,EDISPI,EREPI)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      COMMON /FMCOM / X(1)
+      COMMON /FMOPNT/ LICHFG,LMULFG,LIDMREC,LFRGNAM,LLAYFRG,LINDAT,
+     *                LNCBS,LFMOZAN,LFMOC,LFMOMAS,LIZBAS,LIAGLOB,LIBDGH,
+     *                LIABDFG,LJABDFG,LNCAO,LIDXCAO,LIAPRJO,LJAPRJO,
+     *                LCOREAO,LOCCCOR,LSHIFTB,LIODFMO,LFMODA,LFMODB,
+     *                LFMOESPA,LFMOESPB,LLOCFMO,LSCFFRG,LFMOSCF,LRIJ,
+     *                LPOPMUL,LPOPMAT,LIALOC,LINDBD,LIATFRG,LINDFRG,
+     *                LINDGFRG,LNATFRG,LNAT0FRG,LIANFRG,LZANFRG,LCFRG,
+     *                LLIBISH,LLIBNSH,LLIBNG,LINDATG,LFMOBUF(3),LFMODE,
+     *                LNUMFRG,LLOCTAT,LIAOGLOB,LLOADM,LFMOGE,LDGRID,
+     *                LIODCFMO,LJOB2GRP,LFMOPG,LEMOCDR,LUNTXYZ,LUNTROT,
+     *                LSTONEP,LMAPSU,LFRGMUL,LCLMO,LIALMO,LINDLMO,
+     *                LATCLMO,LLMOBDF,LFGFLMO,LNFGLMO,LLFGLMO,LPFGLMO,
+     *                LPOPDMAT
+C
+C     This routine DOES NOT ASSUME that sphere numbers are exactly
+C     same as atomic numbers
+C
+      IFG=IXFTCH(X(LINDAT),IAT)
+      LEMOCDRI=LEMOCDR+(IFG-1)*3+1
+      X(LEMOCDRI)=X(LEMOCDRI)+EDISPI
+      X(LEMOCDRI+1)=X(LEMOCDRI+1)+EREPI
+C     write(6,*) 'wwwedr',iat,ifg,edispi,erepi
+      RETURN
+      END

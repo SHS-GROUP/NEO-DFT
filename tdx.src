@@ -1,0 +1,2678 @@
+C 18 Jul 08 - MWS - suppress debug output on unit 0
+c  7 Apr 06 - OQ  - changes to allow spherical harmonics
+C 19 Sep 05 - MWS - change DDIJ dimension for h+i
+C  5 Jul 05 - MWS - SELECT NEW ATOM,BASIS,EFP,PCM,DAF DIMENSIONS
+C  5 Feb 05 - OQ  - New module for extended TDHF properties
+C
+C     meaning of the bits of soli :
+C     1 : doing a freq computation
+C     2 : doing a freq2 computation
+C     4 : use normal modes instead of Cartesian coordinates
+C
+C*MODULE TDX   *DECK TDHFX
+      subroutine TDHFXMAIN
+      implicit none
+C     Used common blocks
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      character*8 method
+      integer itermax
+      double precision convergence
+      common/OLI_CYCLE/convergence,method,itermax
+      integer NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      logical PK,PANDK,BLOCK
+      COMMON /PKFIL / PK,PANDK,BLOCK
+      integer NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,IAN
+      integer MXATM
+      parameter (MXATM=2000)
+      double precision ZAN,C
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      integer NEVALS,NGLEVL,NHLEVL
+      double precision RUNTYP,EXETYP
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+C     Constants
+      character*8 sDIIS
+      parameter (sDIIS='DIIS')
+      double precision ENERGY
+      DATA ENERGY /8HENERGY  /
+C     Body of the subprogram
+      call IOInit
+      call OLIINI
+      call NLOINI
+      call VIBNLOINI
+      NOPK=1
+      PK=.false.
+      soli = 0
+C---  write(0,*) 'Compute Energy:begin'
+      RUNTYP=ENERGY
+      call ENERGX()
+C---  write(0,*) 'Compute Energy:end'
+      soli = 0
+      nocc = NE/2
+      nmos = NQMT
+      naos = NUM
+      nvir = nmos-nocc
+      nxyz = 3*nat
+      ngeom = nxyz
+C---  write(0,*) "OLIX:PARAMS:",nocc,nvir,nmos,naos,nxyz,ngeom
+      nmodes = 0
+      nfld = 3
+      ibfld = 1
+      iefld = 3
+      convergence=1d-5
+      method=sDIIS
+      itermax=100
+      call WriteHeader()
+      call ReadParameters()
+      end
+C
+C*MODULE TDX   *DECK WriteHeader
+      subroutine WriteHeader()
+      implicit none
+C     Used common block
+      integer IR, IW, IP, IS,IPK,IDAF,NAV,IODA
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+C     Body of the subprogram
+      write(IW,1000)
+      return
+ 1000  format(/,
+     & 80('*'),/,
+     & '*',78x,'*',/,
+     & '*',22x,'eXtended Time Dependent Package by',22x,'*',/,
+     & '*',78x,'*',/,
+     & '*  B. Champagne, B. Kirtman and O. Quinet ',
+     & '                                     *',/,
+     & '*',78x,'*',/,
+     & '* The used algorithms are given in the following references :',
+     & '                  *',/,
+     & '*  dAlpha/dX : O. Quinet and B. Champagne, ',
+     &    'J. Chem.  Phys. 115, p.6293(2001).  *',/,
+     & '*  d2Alpha/dX2 : O. Quinet, B. Champagne, and B. Kirtman, ',
+     & 21x,'*',/,
+     &    '*',16x,'J. Comp. Chem. 22, p.1920(2001).',30x,'*',/,
+     & '*  dBeta/dX : O. Quinet and B. Champagne, ',
+     &    'J. Chem. Phys. 117, p.2481(2002).    *',/,
+     & '*  d2Beta/dX2 : O. Quinet, B. Champagne, and B. Kirtman, ',
+     & 22x,'*',/,
+     &    '*',15x,'J. Chem. Phys. 118, p.505(2003).',31x,'*',/,
+     & '*',78x,'*',/,
+     & '* Add references in your work to these papers.',
+     & '                                 *',/,
+     & '*',78x,'*',/,
+     & 80('*'),/
+     & )
+C
+      end
+C
+C*MODULE TDX   *DECK ABRTX
+      subroutine ABRTX(str)
+      implicit none
+C     Arguments
+      character*(*) str
+C     Body of the subprogram
+      write(*,*) str
+      call abrt
+      end
+C
+C*MODULE TDX   *DECK FindTDHFX
+      subroutine FindTDHFX(icard)
+      implicit none
+C     Arguments
+      integer icard
+C     Used common block
+      integer IR, IW, IP, IS,IPK,IDAF,NAV,IODA
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+C     Variables and constants
+      integer ieof
+      integer i
+C     Body of the subprogram
+      CALL SEQREW(IR)
+      CALL FNDGRP(IR,' $TDHFX ',IEOF)
+      IF(IEOF.NE.0) THEN
+         WRITE (IW,9028)
+         CALL ABRTX("FINDTDHFX")
+      END IF
+      do i = 1,icard
+         CALL RDCARD('   *    ',IEOF)
+      end do
+ 9028 format(1X,'**** ERROR, NO $TDHFX GROUP WAS FOUND')
+      end
+C
+C*MODULE TDX   *DECK endofcard
+      logical function EndOfCard()
+      implicit none
+C     Arguments
+C     Used common block
+      integer NCOL,LSTCOL,MAXCOL,KEOF,KERR,LUIN,LUOUT,LUERR,KOLSV
+      COMMON /FREFM1/ NCOL,LSTCOL,MAXCOL,KEOF,KERR,LUIN,LUOUT,
+     &                LUERR,KOLSV
+C     Body of the subprogram
+      EndOfCard = ncol.ge.lstcol
+      end
+C
+C
+C*MODULE TDX   *DECK ReadParameters
+      subroutine ReadParameters
+      implicit none
+C     Used common blocks
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      integer IR, IW, IP, IS,IPK,IDAF,NAV,IODA
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      character*8 method
+      integer itermax
+      double precision convergence
+      common/OLI_CYCLE/convergence,method,itermax
+C     Variables and constants
+      integer ieof,ierr,icard,len
+      character*80 buffer
+      double precision omega(3)
+      integer nw
+      character*8 sNONE,sDIIS
+      parameter (sNONE='NONE',sDIIS='DIIS')
+      double precision ZERO
+      parameter (ZERO=0.0D+00)
+C     Called subprogram
+      logical EndOfCard
+      integer ifind
+      double precision rfind
+C     Body of the subprogram
+      call FindTDHFX(0)
+      icard=1
+      write(iw,9000)
+C
+C     Fortran 90 solution
+C      do
+C     Fortran 77 solution : ugly (goto instruction needed)
+ 100  continue
+C
+         ieof = 0
+         ierr = 0
+C
+         CALL RDCARD('   *    ',IEOF)
+         buffer(1:1)=' '
+         len=-80
+         call GSTRNG(buffer, len)
+C
+C     Fortran 90 solution
+C         IF(IEOF.NE.0) exit
+C     Fortran 77 solution : ugly (goto instruction needed)
+         IF(IEOF.NE.0) goto 900
+C
+         write(iw,9002) buffer
+C
+C     Fortran 90 solution
+C         if(buffer(1:4).eq."$END") exit
+C     Fortran 77 solution : ugly (goto instruction needed)
+         if(buffer.eq."$END") goto 900
+C
+         omega(1)=ZERO
+         omega(2)=ZERO
+         omega(3)=ZERO
+C
+         if(buffer.eq."ALLDIRS") then
+            nfld = 3
+            ibfld = 1
+            iefld = 3
+         else if(buffer.eq."DIR") then
+            nfld = 1
+            ibfld = ifind('DIR',ierr)
+            iefld = ibfld
+            if((ibfld.ne.1).and.
+     &         (ibfld.ne.2).and.
+     &         (ibfld.ne.3))then
+               call abrtx("READPARAMETERS")
+            end if
+         else if(buffer.eq."CONV") then
+            convergence=rfind('ATOL    ',ierr)
+         else if(buffer.eq."ITERMAX") then
+            itermax=ifind('ITERMAX ',ierr)
+         else if(buffer.eq."NOACCEL") then
+            method=sNONE
+         else if(buffer.eq."DIIS") then
+            method=sDIIS
+         else if(buffer.eq."MU") then
+            call MakeDipole()
+         else if(buffer.eq."ALPHA") then
+            omega(1)=rfind('W1      ',ierr)
+            call MakeAlpha(omega(1))
+         else if(buffer.eq."BETA") then
+            omega(1)=rfind('W1      ',ierr)
+            omega(2)=rfind('W2      ',ierr)
+            call MakeBeta(omega(1),omega(2))
+         else if(buffer.eq."BETA_NI") then
+            omega(1)=rfind('W1      ',ierr)
+            omega(2)=rfind('W2      ',ierr)
+            call MakeBetaNI(omega(1),omega(2))
+         else if(buffer.eq."GAMMA") then
+            omega(1)=rfind('W1      ',ierr)
+            omega(2)=rfind('W2      ',ierr)
+            omega(3)=rfind('W3      ',ierr)
+            call MakeGamma(omega(1),omega(2),omega(3))
+         else if(buffer.eq."GAMMA_NI") then
+            omega(1)=rfind('W1      ',ierr)
+            omega(2)=rfind('W2      ',ierr)
+            omega(3)=rfind('W3      ',ierr)
+            call MakeGammaNI(omega(1),omega(2),omega(3))
+         else if(buffer.eq."POCKELS") then
+            omega(1)=rfind('W1      ',ierr)
+            omega(2)=ZERO
+            call MakeBeta(omega(1),omega(2))
+         else if(buffer.eq."POCKELS_NI") then
+            omega(1)=rfind('W1      ',ierr)
+            omega(2)=ZERO
+            call MakeBetaNI(omega(1),omega(2))
+         else if(buffer.eq."OR") then
+            omega(1)=rfind('W1      ',ierr)
+            omega(2)=-omega(1)
+            call MakeBeta(omega(1),omega(2))
+         else if(buffer.eq."OR_NI") then
+            omega(1)=rfind('W1      ',ierr)
+            omega(2)=-omega(1)
+            call MakeBetaNI(omega(1),omega(2))
+         else if(buffer.eq."SHG") then
+            omega(1)=rfind('W1      ',ierr)
+            omega(2)=omega(1)
+            call MakeBeta(omega(1),omega(2))
+         else if(buffer.eq."SHG_NI") then
+            omega(1)=rfind('W1      ',ierr)
+            omega(2)=omega(1)
+            call MakeBetaNI(omega(1),omega(2))
+         else if(buffer.eq."KERR") then
+            omega(1)=rfind('W1      ',ierr)
+            omega(2)=ZERO
+            omega(3)=ZERO
+            call MakeGamma(omega(1),omega(2),omega(3))
+         else if(buffer.eq."KERR_NI") then
+            omega(1)=rfind('W1      ',ierr)
+            omega(2)=ZERO
+            omega(3)=ZERO
+            call MakeGammaNI(omega(1),omega(2),omega(3))
+         else if(buffer.eq."ESHG") then
+            omega(1)=rfind('W1      ',ierr)
+            omega(2)=omega(1)
+            omega(3)=ZERO
+            call MakeGamma(omega(1),omega(2),omega(3))
+         else if(buffer.eq."ESHG_NI") then
+            omega(1)=rfind('W1      ',ierr)
+            omega(2)=omega(1)
+            omega(3)=ZERO
+            call MakeGammaNI(omega(1),omega(2),omega(3))
+         else if(buffer.eq."THG") then
+            omega(1)=rfind('W1      ',ierr)
+            omega(2)=omega(1)
+            omega(3)=omega(1)
+            call MakeGamma(omega(1),omega(2),omega(3))
+         else if(buffer.eq."THG_NI") then
+            omega(1)=rfind('W1      ',ierr)
+            omega(2)=omega(1)
+            omega(3)=omega(1)
+            call MakeGammaNI(omega(1),omega(2),omega(3))
+         else if(buffer.eq."DFWM") then
+            omega(1)=rfind('W1      ',ierr)
+            omega(2)=omega(1)
+            omega(3)=-omega(1)
+            call MakeGamma(omega(1),omega(2),omega(3))
+         else if(buffer.eq."DFWM_NI") then
+            omega(1)=rfind('W1      ',ierr)
+            omega(2)=omega(1)
+            omega(3)=-omega(1)
+            call MakeGammaNI(omega(1),omega(2),omega(3))
+         else if(buffer.eq."ZALPHA") then
+            omega(1)=rfind('W1      ',ierr)
+C            call MakeZAlpha(omega(1))
+         else if(buffer.eq."USE_C") then
+            call ISETOLI(0,4)
+         else if(buffer.eq."USE_Q") then
+            call ISETOLI(4,4)
+         else if(buffer.eq."FREQ") then
+            call ISETOLI(1,3)
+            call HESSX(.TRUE., .TRUE.)
+            call ISETOLI(0,3)
+            call FindTDHFX(icard)
+         else if(buffer.eq."FREQ2") then
+            call ISETOLI(3,3)
+            call HESSX(.TRUE., .TRUE.)
+            call ISETOLI(0,3)
+            call FindTDHFX(icard)
+         else if(buffer.eq."DADX") then
+            omega(1)=rfind('W1      ',ierr)
+            call MakedAlphadX(omega(1))
+         else if(buffer.eq."DBDX") then
+            omega(1)=rfind('W1      ',ierr)
+            omega(2)=rfind('W2      ',ierr)
+            call MakedBetadX(omega(1),omega(2))
+         else if(buffer.eq."DMDX_NI") then
+            call MakedMudXNI()
+         else if(buffer.eq."DADX_NI") then
+            omega(1)=rfind('W1      ',ierr)
+            call MakedAlphadXNI(omega(1))
+         else if(buffer.eq."DBDX_NI") then
+            omega(1)=rfind('W1      ',ierr)
+            omega(2)=rfind('W2      ',ierr)
+            call MakedBetadXNI(omega(1),omega(2))
+         else if(buffer.eq."D2MDX2_NI") then
+            call Maked2MudX2NI()
+         else if(buffer.eq."D2ADX2_NI") then
+            omega(1)=rfind('W1      ',ierr)
+            call Maked2AlphadX2NI(omega(1))
+         else if(buffer.eq."D2BDX2_NI") then
+            omega(1)=rfind('W1      ',ierr)
+            omega(2)=rfind('W2      ',ierr)
+            call Maked2BetadX2NI(omega(1),omega(2))
+         else if(buffer.eq."RAMAN") then
+            omega(1)=rfind('W1      ',ierr)
+            call MakeRaman(omega(1))
+         else if(buffer.eq."HRAMAN") then
+            omega(1)=rfind('W1      ',ierr)
+            call MakeHyperRaman(omega(1))
+         else if(buffer.eq."ALPHAV") then
+            omega(1)=rfind('W1      ',ierr)
+C            call MakeMu2(omega(1))
+         else if(buffer.eq."BETAV") then
+            omega(1)=rfind('W1      ',ierr)
+            omega(2)=rfind('W2      ',ierr)
+C            call MakeMuAlpha(omega(1),omega(2))
+C            call MakeMu3(omega(1),omega(2))
+         else if(buffer.eq."ALPHA2") then
+            omega(1)=rfind('W1      ',ierr)
+            omega(2)=rfind('W2      ',ierr)
+            omega(3)=rfind('W3      ',ierr)
+C            call MakeAlpha2(omega(1),omega(2),omega(3))
+         else if(buffer.eq."MUBETA") then
+            omega(1)=rfind('W1      ',ierr)
+            omega(2)=rfind('W2      ',ierr)
+            omega(3)=rfind('W3      ',ierr)
+C            call MakeMuBeta(omega(1),omega(2),omega(3))
+         else if(buffer.eq."GAMMAV") then
+            omega(1)=rfind('W1      ',ierr)
+            omega(2)=rfind('W2      ',ierr)
+            omega(3)=rfind('W3      ',ierr)
+C            call MakeAlpha2(omega(1),omega(2),omega(3))
+C            call MakeMuBeta(omega(1),omega(2),omega(3))
+C            call MakeMu2Alpha(omega(1),omega(2),omega(3))
+C         else if(buffer.eq."THETA") then
+C            call MakeTheta()
+C         else if(buffer.eq."UPPERA") then
+C            omega(1)=rfind('W1      ',ierr)
+C            call MakeUpperA(omega(1))
+C         else if(buffer.eq."UPPERA2") then
+C            omega(1)=rfind('W1      ',ierr)
+C            call MakeUpperA2(omega(1))
+C         else if(buffer.eq."DUPPERADX") then
+C            omega(1)=rfind('W1      ',ierr)
+C            call MakedUpperAdX(omega(1))
+         else if(buffer.eq."FREE") then
+            nw = 0
+            omega(1)=rfind('W1      ',ierr)
+            if(.not.EndOfCard()) nw = nw+1
+            omega(2)=rfind('W2      ',ierr)
+            if(.not.EndOfCard()) nw = nw+1
+            omega(3)=rfind('W3      ',ierr)
+            if(.not.EndOfCard()) nw = nw+1
+            if(nw.ne.0) call FreeSlots(omega,nw)
+         else if(buffer.eq."$END") then
+            return
+         else
+            write(iw,9003) buffer
+            call abrtx("READPARAMETERS")
+         end if
+         icard = icard+1
+C     Fortran 90 solution
+C      end do
+C     Fortran 77 solution : ugly (goto instruction needed)
+      goto 100
+ 900  continue
+C
+      write(iw,9001)
+C
+ 9000 format('$TDHFX Parameters:begin')
+ 9001 format('$TDHFX Parameters:end')
+ 9002 format('$TDHFX : read keyword = [',A,']')
+ 9003 format('$TDHFX : unknown keyword = [',A,']')
+      end
+C
+C*MODULE TDX   *DECK GetEnergy
+      subroutine GetEnergy(E,nmos)
+      implicit none
+C     Arguments
+      integer nmos
+      double precision E(nmos)
+C     Used common block
+      integer IR, IW, IP, IS,IPK,IDAF,NAV,IODA
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+C     Body of the subprogram
+      CALL DAREAD(IDAF,IODA,E,nmos,17,0)
+      end
+C
+C*MODULE TDX   *DECK GetLCAO
+      subroutine GetLCAO(C,nmos,naos)
+      implicit none
+C     Arguments
+      integer nmos,naos
+      double precision C(naos,nmos)
+C     Used common block
+      integer IR, IW, IP, IS,IPK,IDAF,NAV,IODA
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+C     Body of the subprogram
+      CALL DAREAD(IDAF,IODA,C,naos*nmos,15,0)
+      
+c      call PrintX(C,naos,nmos,"OLIX:LCAO")
+
+      end
+C
+C*MODULE TDX   *DECK OLIINI
+      SUBROUTINE OLIINI
+      IMPLICIT NONE
+C     Used common block
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+C     Body of the subprogram
+      soli=0
+      call NLOINI
+      END
+C
+C*MODULE TDX   *DECK IGETOLI
+      integer FUNCTION IGETOLI(imask)
+      IMPLICIT NONE
+C     Arguments
+      integer imask
+C     Used common block
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+C     Body of the subprogram
+      if(imask.eq.0) then
+         IGETOLI = soli
+      else
+         IGETOLI = IAND(soli,imask)
+      end if
+      END
+C
+C*MODULE TDX   *DECK ISETOLI
+      subroutine ISETOLI(ioli,imask)
+      IMPLICIT NONE
+C     Arguments
+      integer ioli,imask
+C     Used common block
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+C     Body of the subprogram
+C---      ISETOLI = soli
+      soli = IOR(soli-IAND(soli,imask),ioli)
+C      soli = IOR(IAND(soli,INOT(imask)),ioli)
+      END
+C
+C*MODULE TDX   *DECK CheckFields
+      subroutine CheckFields(bFLDX,bFLDY,bFLDZ)
+      implicit none
+C     Arguments
+      logical bFLDX,bFLDY,bFLDZ
+C     Used common block
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+C     Body of the subprogram
+      bFLDX = (ibfld.le.1).and.(iefld.ge.1)
+      bFLDY = (ibfld.le.2).and.(iefld.ge.2)
+      bFLDZ = (ibfld.le.3).and.(iefld.ge.3)
+      end
+C
+C*MODULE TDX   *DECK NEWMEM
+      subroutine NEWMEM(ialloc,isize)
+      implicit none
+C     Arguments
+      integer ialloc,isize
+C     Variables
+      integer NEED,LAST,LOADFM
+C     Body of the subprogram
+      CALL VALFM(LOADFM)
+      ialloc = LOADFM+1
+      LAST = ialloc + isize
+      NEED = LAST-LOADFM-1
+      if(NEED.le.0) then
+         write(*,9000) isize
+         call abrtx("NEW")
+      end if
+      CALL GETFM(NEED)
+C     Format
+ 9000 format('Could not allocate block of size <= 0!(isize=',I10,')')
+      end
+C
+C*MODULE TDX   *DECK DELETEMEM
+      subroutine DELETEMEM(ialloc,isize)
+      implicit none
+C     Arguments
+      integer ialloc,isize
+C     Variables
+      integer NEED,LOADFM
+C     Body of the subprogram
+      NEED = isize
+      call RETFM(NEED)
+      CALL VALFM(LOADFM)
+      LOADFM=LOADFM+1
+      if(ialloc.ne.LOADFM) then
+         write(*,*) 'Deallocate non consistent'
+         call abrtx("DELETE")
+      end if
+      end
+C
+C*MODULE TDX   *DECK Project2Q
+      subroutine Project2Q(modes,dX,dQ,nxyz,nmodes,size1,size2)
+      implicit none
+C     Arguments
+      integer nxyz,nmodes,size1,size2
+      double precision modes(nxyz,nmodes)
+      double precision dX(size1,nxyz,size2)
+      double precision dQ(size1,nmodes,size2)
+C     Variables and constants
+      integer ixyz,imode,i1,i2
+      double precision dummy
+      double precision ZERO
+      parameter (ZERO=0.0D+00)
+C     Body of the subprogram
+      do i2=1,size2
+         do imode=1,nmodes
+            do i1=1,size1
+               dummy = ZERO
+               do ixyz=1,nxyz
+                  dummy=dummy+dX(i1,ixyz,i2)*modes(ixyz,imode)
+               end do
+               dQ(i1,imode,i2)=dummy
+            end do
+         end do
+      end do
+      end
+C
+C*MODULE TDX   *DECK Project2QQ
+      subroutine Project2QQ(modes,dXY,dQQ,nxyz,nmodes,size1,size2)
+      implicit none
+C     Arguments
+      integer nxyz,nmodes,size1,size2
+      double precision modes(nxyz,nmodes)
+      double precision dXY(size1,(nxyz*nxyz+nxyz)/2,size2)
+      double precision dQQ(size1,(nmodes*nmodes+nmodes)/2,size2)
+C     Variables and constants
+      integer ixyz,jxyz,ijxyz,imode,jmode,ijmode,i1,i2
+      double precision dummy
+      double precision ZERO
+      parameter (ZERO=0.0D+00)
+C     Body of the subprogram
+      ijmode=0
+      do i2=1,size2
+         do jmode=1,nmodes
+            do imode=1,jmode
+               ijmode=ijmode+1
+               do i1=1,size1
+                  dummy = ZERO
+                  do jxyz=1,nxyz
+                     do ixyz=1,nxyz
+                        if(ixyz.gt.jxyz) then
+                           ijxyz = (ixyz*ixyz-ixyz)/2+jxyz
+                        else
+                           ijxyz = (jxyz*jxyz-jxyz)/2+ixyz
+                        end if
+C
+                        dummy=dummy+dXY(i1,ijxyz,i2)*
+     &                       modes(ixyz,imode)*modes(jxyz,jmode)
+                     end do
+                  end do
+                  dQQ(i1,ijmode,i2)=dummy
+               end do
+            end do
+         end do
+      end do
+      end
+C
+C*MODULE TDX   *DECK dXtodA
+      subroutine dXtodA(modes,bm,dX,dA,norb2,nxyz,nmodes,nparams)
+      implicit none
+C     Arguments
+      logical bm
+      integer norb2,nxyz,nmodes,nparams
+      double precision modes(nxyz,nmodes)
+      double precision dX(nparams,nxyz,norb2)
+      double precision dA(norb2,nparams,nmodes)
+C     Variables and constants
+      integer ijorb,iparam,imode,ixyz
+      double precision dummy
+      double precision ZERO
+      parameter (ZERO=0.0D+00)
+C     Body of the subprogram
+      if(bm) then
+         do imode=1,nmodes
+            do iparam=1,nparams
+               do ijorb=1,norb2
+                  dummy = ZERO
+                  do ixyz=1,nxyz
+                     dummy = dummy + dX(iparam,ixyz,ijorb)
+     &                              *modes(ixyz,imode)
+                  end do
+                  dA(ijorb,iparam,imode) = dummy
+               end do
+            end do
+         end do
+      else
+         do ixyz=1,nxyz
+            do ijorb=1,norb2
+               do iparam=1,nparams
+                  dA(ijorb,iparam,ixyz) = dX(iparam,ixyz,ijorb)
+               end do
+            end do
+         end do
+      end if
+      end
+C
+C*MODULE TDX   *DECK dXYtodAB
+      subroutine dXYtodAB(modes,bm,dXY,dAB,norb2,nat,nmodes,nparams)
+      implicit none
+C     Arguments
+C       note that -modes- is unused if -bm- is false.
+      logical bm
+      integer norb2,nat,nmodes,nparams
+      double precision modes(3*nat,nmodes)
+      double precision dXY(nparams,9*(nat*nat+nat)/2,norb2)
+      double precision dAB(norb2,nparams,(nmodes*nmodes+nmodes)/2)
+C     Variables and constants
+      integer ijorb,iparam,imode,jmode,ijmode,ixyz,jxyz,ijxyz,iat,jat
+      integer nxyz,ix,jx,ij
+      double precision dummy
+      double precision ZERO
+      parameter (ZERO=0.0D+00)
+C     Body of the subprogram
+      nxyz = 3*nat
+      if(bm) then
+         do iparam=1,nparams
+            ijmode = 1
+            do jmode=1,nmodes
+               do imode=1,jmode
+                  do ijorb=1,norb2
+                     dummy = ZERO
+                     do jxyz=1,nxyz
+                        jat = (jxyz-1)/3
+                        jx = jxyz-jat*3-1
+                        do ixyz=1,nxyz
+                           iat = (ixyz-1)/3
+                           ix = ixyz-iat*3-1
+C
+                           if(jxyz.gt.ixyz) then
+                              ij = jx*3+ix+9*((jat*jat+jat)/2+iat)+1
+                           else
+                              ij = ix*3+jx+9*((iat*iat+iat)/2+jat)+1
+                           end if
+C
+                           dummy = dummy + dXY(iparam,ij,ijorb)*
+     &                          modes(jxyz,jmode)*modes(ixyz,imode)
+                        end do
+                     end do
+                     dAB(ijorb,iparam,ijmode) = dummy
+                  end do
+                  ijmode = ijmode+1
+               end do
+            end do
+         end do
+      else
+         ijxyz = 0
+         do jxyz=1,nxyz
+C
+            jat = (jxyz-1)/3
+            jx = jxyz-jat*3-1
+            do ixyz=1,jxyz
+               ijxyz = ijxyz+1
+C
+               iat = (ixyz-1)/3
+               ix = ixyz-iat*3-1
+C
+               ij = jx*3+ix+9*((jat*jat+jat)/2+iat)+1
+C
+               do iparam=1,nparams
+                  do ijorb=1,norb2
+                     dAB(ijorb,iparam,ijxyz) = dXY(iparam,ij,ijorb)
+                  end do
+               end do
+            end do
+         end do
+      end if
+      end
+C
+C*MODULE TDX   *DECK MakeD0
+      subroutine MakeD0(D0,C0,nocc,nmos,naos)
+      implicit none
+C     Arguments
+      integer nocc,nmos,naos
+      double precision D0(naos,naos)
+      double precision C0(naos,nmos)
+C     Variables and constants
+      double precision ZERO,TWO
+      parameter (ZERO=0.0D+00,TWO=2.0D+00)
+      character*1 sT,sN
+      parameter (sT='T',sN='N')
+C     Body of the subprogram
+      call DGEMM(sN,sT,naos,naos,nocc,
+     &           TWO,C0,naos,C0,naos,ZERO,D0,naos)
+
+c      call PrintX(D0,naos,naos,"OLIX:D0")
+
+      end
+C
+C*MODULE TDX   *DECK DTRACE
+      double precision function DTRACE(TRANSA,TRANSB,A,LDA,B,LDB,N,M)
+      implicit none
+C     Arguments
+      integer LDA,LDB,N,M
+      double precision A(LDA,*),B(LDB,*)
+      character*1 TRANSA,TRANSB
+C     Variables and constant
+      integer i,j,itype
+      double precision sum,ZERO
+      parameter (ZERO=0.0D+00)
+C     Called subprogram
+      double precision DDOT
+C     Body of the subprogram
+      sum=ZERO
+C
+      if((TRANSA.ne.'S').and.(TRANSA.ne.'N').and.(TRANSA.ne.'T')) then
+         write(*,*) 'Wrong type for TRANSA [',TRANSB,'] in DTRACE'
+         call abrtx("DTRACE:1")
+      end if
+      if((TRANSB.ne.'S').and.(TRANSB.ne.'N').and.(TRANSB.ne.'T')) then
+         write(*,*) 'Wrong type for TRANSB [',TRANSB,'] in DTRACE'
+         call abrtx("DTRACE:2")
+      end if
+C
+      itype=0
+      if(TRANSA.eq.'T') itype = itype+1
+      if(TRANSB.eq.'T') itype = itype+2
+C
+      if((itype.eq.0).and.(TRANSA.eq.'S')) itype = itype+1
+      if((itype.eq.0).and.(TRANSB.eq.'S')) itype = itype+2
+C
+      if(itype.eq.0) then
+C     -----------
+C     sum Aij Bji
+C     -----------
+         if((n.gt.LDA).or.(m.gt.LDB)) then
+            write(*,*) 'N(',n,') must be <= LDA(',LDA,') and'
+            write(*,*) 'M(',m,') must be <= LDB(',LDB,') in DTRACE!'
+            call abrtx("DTRACE:3")
+         else
+            do j = 1,M
+               sum=sum+DDOT(N,A(1,j),1,B(j,1),LDB)
+            end do
+         end if
+      else if(itype.eq.1) then
+C     -----------
+C     sum Aji Bji
+C     -----------
+         if((m.gt.LDA).or.(m.gt.LDB)) then
+            write(*,*) 'M(',m,') must be <= LDA(',LDA,') and'
+            write(*,*) 'M(',m,') must be <= LDB(',LDB,') in DTRACE!'
+            call abrtx("DTRACE:4")
+         else if((m.eq.LDA).and.(m.eq.LDB)) then
+            sum=DDOT(M*N,A,1,B,1)
+         else
+            do i = 1,N
+               sum=sum+DDOT(M,A(1,i),1,B(1,i),1)
+            end do
+         end if
+      else if(itype.eq.2) then
+C     -----------
+C     sum Aij Bij
+C     -----------
+         if((n.gt.LDA).or.(n.gt.LDB)) then
+            write(*,*) 'N(',n,') must be <= LDA(',LDA,') and'
+            write(*,*) 'N(',n,') must be <= LDB(',LDB,') in DTRACE!'
+            call abrtx("DTRACE:5")
+         else if((n.eq.LDA).and.(n.eq.LDB)) then
+            sum=DDOT(M*N,A,1,B,1)
+         else
+            do j = 1,M
+               sum=sum+DDOT(N,A(1,j),1,B(1,j),1)
+            end do
+         end if
+      else if(itype.eq.3) then
+C     -----------
+C     sum Aji Bij
+C     -----------
+         if((m.gt.LDA).or.(n.gt.LDB)) then
+            write(*,*) 'M(',m,') must be <= LDA(',LDA,') and'
+            write(*,*) 'N(',n,') must be <= LDB(',LDB,') in DTRACE!'
+            call abrtx("DTRACE:6")
+         else
+            do i = 1,N
+               sum=sum+DDOT(M,A(1,i),1,B(i,1),LDB)
+            end do
+         end if
+      else
+         write(*,*) 'Something wrong happened in DTRACE! itype=',itype
+         call abrtx("DTRACE:7")
+      end if
+C
+      DTRACE = sum
+      end
+C
+C*MODULE TDX   *DECK VTRACE
+      subroutine VTRACE(V,TRANSA,TRANSB,A,LDA,B,LDB,N,M)
+      implicit none
+C     Arguments
+      integer LDA,LDB,N,M
+      double precision V(*),A(LDA,*),B(LDB,*)
+      character*1 TRANSA,TRANSB
+C     Variables and constant
+      integer i,itype
+C     Called subprogram
+      double precision DDOT
+C     Body of the subprogram
+C
+      call VCLR(V,1,N)
+C
+      if((TRANSA.ne.'S').and.(TRANSA.ne.'N').and.(TRANSA.ne.'T')) then
+         write(*,*) 'Wrong type for TRANSA [',TRANSB,'] in VTRACE'
+         call abrtx("VTRACE:1")
+      end if
+      if((TRANSB.ne.'S').and.(TRANSB.ne.'N').and.(TRANSB.ne.'T')) then
+         write(*,*) 'Wrong type for TRANSB [',TRANSB,'] in VTRACE'
+         call abrtx("VTRACE:2")
+      end if
+C
+      itype=0
+      if(TRANSA.eq.'T') itype = itype+1
+      if(TRANSB.eq.'T') itype = itype+2
+C
+      if(itype.eq.0) then
+C     ------------
+C     Vi = Aij Bji
+C     ------------
+         if((n.gt.LDA).or.(m.gt.LDB)) then
+            write(*,*) 'N(',n,') must be <= LDA(',LDA,') and'
+            write(*,*) 'M(',m,') must be <= LDB(',LDB,') in VTRACE!'
+            call abrtx("VTRACE:3")
+         else
+            do i = 1,N
+               V(i) = DDOT(M,A(i,1),LDA,B(1,i),1)
+            end do
+         end if
+      else if(itype.eq.1) then
+C     ------------
+C     Vi = Aji Bji
+C     ------------
+         if((m.gt.LDA).or.(m.gt.LDB)) then
+            write(*,*) 'M(',m,') must be <= LDA(',LDA,') and'
+            write(*,*) 'M(',m,') must be <= LDB(',LDB,') in VTRACE!'
+            call abrtx("VTRACE:4")
+         else
+            do i = 1,N
+               V(i) = DDOT(M,A(1,i),1,B(1,i),1)
+            end do
+         end if
+      else if(itype.eq.2) then
+C     ------------
+C     Vi = Aij Bij
+C     ------------
+         if((n.gt.LDA).or.(n.gt.LDB)) then
+            write(*,*) 'N(',n,') must be <= LDA(',LDA,') and'
+            write(*,*) 'N(',n,') must be <= LDB(',LDB,') in VTRACE!'
+            call abrtx("VTRACE:5")
+         else
+            do i = 1,N
+               V(i) = DDOT(M,A(i,1),LDA,B(i,1),LDB)
+            end do
+         end if
+      else if(itype.eq.3) then
+C     ------------
+C     Vi = Aji Bij
+C     ------------
+         if((m.gt.LDA).or.(n.gt.LDB)) then
+            write(*,*) 'M(',m,') must be <= LDA(',LDA,') and'
+            write(*,*) 'N(',n,') must be <= LDB(',LDB,') in VTRACE!'
+            call abrtx("VTRACE:6")
+         else
+            do i = 1,N
+               V(i) = DDOT(M,A(1,i),1,B(i,1),LDB)
+            end do
+         end if
+      else
+         write(*,*) 'Something wrong happened in VTRACE! itype=',itype
+         call abrtx("VTRACE:7")
+      end if
+      end
+C
+C*MODULE TDX   *DECK DSUM
+      double precision function DSUM(n,x,incr)
+      implicit none
+C     Arguments
+      integer n,incr
+      double precision x(*)
+C     Variables and constant
+      integer i,ii
+      double precision sum
+      double precision ZERO
+      parameter (ZERO=0.0D+00)
+C     Body of the subprogram
+      sum = ZERO
+      if(incr.eq.1) then
+         do i = 1,n
+            sum = sum + x(i)
+         end do
+      else
+         ii = 1
+         do i = 1,n
+            sum = sum + x(ii)
+            ii = ii + incr
+         end do
+      end if
+      DSUM = sum
+      end
+C
+c--C*MODULE TDX   *DECK PrintX
+c--      subroutine PrintX(A,size1,size2,title)
+c--      implicit none
+c--c     Arguments
+c--      integer size1,size2
+c--      double precision A(size1,size2)
+c--      character*(*) title
+c--c     Used common block
+c--      integer IR, IW, IP, IS,IPK,IDAF,NAV,IODA
+c--      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+c--c     Variables
+c--      integer i,j,jmax,nj,jj,j1,j2
+c--c     Body of the subprogram
+c--      jmax=6
+c--      nj = ((size2-1)/jmax)+1
+c--      write(iw,*) title
+c--      do 100 i=1,size1
+c--         j1=1
+c--         do 110 jj=1,nj
+c--            j2=j1+jmax-1
+c--            if(j2.gt.size2) j2=size2
+c--            if(jj.eq.1) then
+c--               write(iw,3001) i,j1,(A(i,j),j=j1,j2)
+c--            else
+c--               write(iw,3002) j1,(A(i,j),j=j1,j2)
+c--            endif
+c--            j1=j2+1
+c-- 110     continue
+c-- 100  continue
+c--c
+c-- 3001 FORMAT(I3,',',I3,':',2X,E16.10,2X,E16.10,2X,E16.10,
+c--     &                     2X,E16.10,2X,E16.10,2X,E16.10)
+c-- 3002 FORMAT(3x,1x ,I3,':',2X,E16.10,2X,E16.10,2X,E16.10,
+c--     &                     2X,E16.10,2X,E16.10,2X,E16.10)
+c--      end
+c--c
+c--C*MODULE TDX   *DECK PrintMM
+c--      subroutine PrintMM(A,size,nparams,title)
+c--      implicit none
+c--c     Arguments
+c--      integer size,nparams
+c--      double precision A(size,size,nparams)
+c--      character*(*) title
+c--c     Used common block
+c--      integer IR, IW, IP, IS,IPK,IDAF,NAV,IODA
+c--      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+c--c     Variables
+c--      integer iparam,i,j,jmax,nj,jj,j1,j2
+c--c     Body of the subprogram
+c--      jmax=6
+c--      nj = ((size-1)/jmax)+1
+c--      write(iw,*) title
+c--      do iparam=1,nparams
+c--         write(iw,3000) iparam
+c--         do i=1,size
+c--            j1=1
+c--            do jj=1,nj
+c--               j2=j1+jmax-1
+c--               if(j2.gt.size) j2=size
+c--               if(jj.eq.1) then
+c--                  write(iw,3001) i,j1,(A(i,j,iparam),j=j1,j2)
+c--               else
+c--                  write(iw,3002) j1,(A(i,j,iparam),j=j1,j2)
+c--               endif
+c--               j1=j2+1
+c--            end do
+c--         end do
+c--      end do
+c--c
+c-- 3000 FORMAT('Parameter',I3)
+c-- 3001 FORMAT(I3,',',I3,':',2X,E16.10,2X,E16.10,2X,E16.10,
+c--     &                     2X,E16.10,2X,E16.10,2X,E16.10)
+c-- 3002 FORMAT(3x,1x ,I3,':',2X,E16.10,2X,E16.10,2X,E16.10,
+c--     &                     2X,E16.10,2X,E16.10,2X,E16.10)
+c--c
+c--      end
+c--C--c
+c--C*MODULE TDX   *DECK PrintU
+c--      subroutine PrintU(U,nocc,nvir,nxyz)
+c--      implicit none
+c--c     Arguments
+c--      integer nocc,nvir,nxyz
+c--      double precision U(nocc,nvir,2,nxyz)
+c--c     Variables and Constants
+c--      integer ixyz,i,j
+c--c     Body of the subprogram
+c--      write(*,*) "OLIX:CYCLE:U"
+c--      do ixyz=1,nxyz
+c--         write(*,*) "Parameter:",ixyz
+c--         do i=1,nocc
+c--            write(*,*) (U(i,j,1,ixyz),j=1,nvir)
+c--         end do
+c--         do j=1,nvir
+c--            write(*,*) (U(i,j,2,ixyz),i=1,nocc)
+c--         end do
+c--      end do
+c--      end
+C
+C*MODULE TDX   *DECK MakeHf
+      subroutine MakeHf()
+      implicit none
+C     Used common blocks
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables
+      double precision dummy,DIPINT
+      integer lHf,lHx
+C     Body of the subprogram
+      DATA DIPINT/8HDIPINT  /
+C
+      write(*,*) 'TDHFX:MakeHf():begin'
+      call NEWMEM(lHx,naos*naos*nfld)
+C
+      dummy = 0.0D+00
+      call DIPDER(dummy,dummy,dummy,dummy,0,XX(LHx),naos,nfld,1,DIPINT)
+C
+      call NEWMEM(lHf,naos*naos*nfld)
+      call dXtodA(dummy,.false.,XX(lHx),XX(lHf),naos*naos,1,1,nfld)
+      call SetHF(XX(lHf),naos,nfld)
+      call DELETEMEM(lHF,naos*naos*nfld)
+      call DELETEMEM(lHx,naos*naos*nfld)
+      write(*,*) 'TDHFX:MakeHf():end'
+      CALL TIMIT(1)
+      end
+C
+C*MODULE TDX   *DECK MakeHfa
+      subroutine MakeHfa()
+      implicit none
+C     Used common blocks
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables
+      integer lHfx,lHfa,lQ
+      logical bUseQ
+      double precision dummy,DIPDINT
+C     Called subprograms
+      integer IGetOLI
+      logical GetFNM
+C     Body of the subprogram
+      DATA DIPDINT/8HDIPDINT /
+C
+      bUseQ = IGetOLI(4).ne.0
+      write(*,*) "TDHFX:MakeHfa():begin"
+      call NEWMEM(lHfx,naos*naos*nxyz*nfld)
+      dummy = 0.0D+00
+      call DIPDER(dummy,dummy,dummy,dummy,0,XX(LHfx),naos,nfld,nxyz,
+     &            DIPDINT)
+C
+C      write(*,*) (XX(lHfx+i),i=0,norb*norb*nxyz*nfld-1)
+C
+      if(bUseQ) then
+         call NEWMEM(lQ,nmodes*nxyz)
+         if(.not.GetFNM(XX(lQ),.false.,XX(lQ),.true.,nxyz,nmodes)) then
+            call abrtx("MAKEHFA:1")
+         end if
+      end if
+      call NEWMEM(lHfa,naos*naos*ngeom*nfld)
+      call dXtodA(XX(lQ),bUseq,XX(lHfx),XX(lHfa),
+     &            naos*naos,nxyz,ngeom,nfld)
+      call SetHfa(XX(lHfa),naos,ngeom,nfld)
+      call DELETEMEM(lHfa,naos*naos*ngeom*nfld)
+      if(bUseQ) call DELETEMEM(lQ,nmodes*nxyz)
+      call DELETEMEM(lHfx,naos*naos*nxyz*nfld)
+      write(*,*) "TDHFX:MakeHfa():end"
+      CALL TIMIT(1)
+      end
+C
+C*MODULE TDX   *DECK MakeHfab
+      subroutine MakeHfab()
+      implicit none
+C     Used common blocks
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables
+      integer lQ,lHfab,lHfxy
+      integer nat,nat2,ngeom2
+      logical bUseQ
+      double precision dummy, DIPD2INT
+C     Called subprograms
+      integer IGetOLI
+      logical GetFNM
+C     Body of the subprogram
+      DATA DIPD2INT/8HDIPD2INT /
+C
+      bUseQ = IGetOLI(4).ne.0
+      nat = nxyz/3
+      nat2 = (nat*nat+nat)/2
+      ngeom2 = (ngeom*ngeom+ngeom)/2
+      write(*,*) "TDHFX:MakeHfab():begin"
+      call NEWMEM(lHfxy,9*naos*naos*nat2*nfld)
+      dummy = 0.0D+00
+      call DIPDER(dummy,dummy,dummy,dummy,0,XX(LHfxy),naos,nfld,9*nat2,
+     &            DIPD2INT)
+      if(bUseQ) then
+         call NEWMEM(lQ,nmodes*nxyz)
+         if(.not.GetFNM(XX(lQ),.false.,XX(lQ),.true.,nxyz,nmodes)) then
+            call abrtx("MAKEHFAB:1")
+         end if
+      end if
+      call NEWMEM(lHfab,naos*naos*ngeom2*nfld)
+      call dXYtodAB(XX(lQ),bUseQ,XX(lHfxy),XX(lHfab),
+     &              naos*naos,nat,ngeom,nfld)
+      call SetHfab(XX(lHfab),naos,ngeom2,nfld)
+      call DELETEMEM(lHfab,naos*naos*ngeom2*nfld)
+      if(bUseQ) call DELETEMEM(lQ,nmodes*nxyz)
+      call DELETEMEM(lHfxy,9*naos*naos*nat2*nfld)
+      write(*,*) "TDHFX:MakeHfab():end"
+      CALL TIMIT(1)
+      end
+C
+C--C*MODULE TDX   *DECK MakeNop
+C--      subroutine MakeNop()
+C--      implicit none
+C--c     Used common blocks
+C--      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+C--     &           iefld
+C--      common/OLI/soli,ngeom,nocc,nvir,norb,nxyz,nmodes,
+C--     &           nfld,ibfld,iefld
+C--      DOUBLE PRECISION XX
+C--      COMMON /FMCOM / XX(1)
+C--c     Variables
+C--      double precision dummy,QUAINT
+C--      integer lNop,lNxy,nfld2
+C--c     Body of the subprogram
+C--      DATA QUAINT/8HQUAINT  /
+C--c
+C--      write(*,*) 'TDHFX:MakeNop():begin'
+C--      nfld2=nfld*nfld
+C--      call NEWMEM(lNxy,naos*naos*nfld2)
+C--c
+C--      dummy = 0.0D+00
+C--      call DIPDER(dummy,dummy,dummy,dummy,0,XX(LNxy),
+C--     &            naos,nfld2,1,QUAINT)
+C--c
+C--      call NEWMEM(lNop,naos*naos*nfld2)
+C--      call dXtodA(dummy,.false.,XX(lNxy),XX(lNop),
+C--     &            naos*naos,1,1,nfld2)
+C--      call SetNop(XX(lNop),naos,nfld)
+C--c      call PrintMM(XX(lNop),naos,9,'TDHFX:Nop:')
+C--      call DELETEMEM(lNop,naos*naos*nfld2)
+C--      call DELETEMEM(lNxy,naos*naos*nfld2)
+C--      write(*,*) 'TDHFX:MakeNop():end'
+C--      CALL TIMIT(1)
+C--      end
+C--c
+C--C*MODULE TDX   *DECK MakeNopa
+C--      subroutine MakeNopa()
+C--      implicit none
+C--c     Used common blocks
+C--      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+C--     &           iefld
+C--      common/OLI/soli,ngeom,nocc,nvir,norb,nxyz,nmodes,
+C--                 nfld,ibfld,iefld
+C--      DOUBLE PRECISION XX
+C--      COMMON /FMCOM / XX(1)
+C--c     Variables
+C--      double precision dummy,QUADINT
+C--      integer nfld2
+C--      integer lNopa,lNxya,lQ
+C--      logical bUseQ
+C--c     Called subprograms
+C--      integer IGetOLI
+C--      logical GetFNM
+C--c     Body of the subprogram
+C--      DATA QUADINT /8HQUADINT /
+C--c
+C--      bUseQ = IGetOLI(4).ne.0
+C--c
+C--      write(*,*) 'TDHFX:MakeNopa():begin'
+C--      nfld2=nfld*nfld
+C--      call NEWMEM(lNxya,naos*naos*nxyz*nfld2)
+C--      dummy = 0.0D+00
+C--      call DIPDER(dummy,dummy,dummy,dummy,0,XX(LNxya),
+C--     &            naos,nfld2,nxyz,QUADINT)
+C--      if(bUseQ) then
+C--         call NEWMEM(lQ,nmodes*nxyz)
+C--         if(.not.GetFNM(XX(lQ),.false.,XX(lQ),.true.,
+C--     &                  nxyz,nmodes)) then
+C--            call abrtx("MAKENOPA:1")
+C--         end if
+C--      end if
+C--      call NEWMEM(lNopa,naos*naos*ngeom*nfld2)
+C--      call dXtodA(XX(lQ),bUseq,XX(lNxya),XX(lNopa),
+C--     &            naos*naos,nxyz,ngeom,nfld2)
+C--      call SetNopa(XX(lNopa),naos,ngeom,nfld)
+C--c      call PrintMM(XX(lNopa),naos,9*ngeom,'TDHFX:Nopa:')
+C--      call DELETEMEM(lNopa,naos*naos*ngeom*nfld2)
+C--      if(bUseQ) call DELETEMEM(lQ,nmodes*nxyz)
+C--      call DELETEMEM(lNxya,naos*naos*nxyz*nfld2)
+C--      write(*,*) 'TDHFX:MakeNopa():end'
+C--      CALL TIMIT(1)
+C--      end
+C
+C*MODULE TDX   *DECK DERIoli
+      SUBROUTINE DERIoli(DXDI,DYDI,DZDI,X,Y,Z,LIT,LJT,AI)
+      IMPLICIT none
+C     Arguments
+      double precision X(6,6),Y(6,6),Z(6,6)
+      double precision DXDI(6,6),DYDI(6,6),DZDI(6,6)
+      integer LIT,LJT
+      double precision AI
+C     Variables
+      integer i,j
+C     Body of the subprogram
+C
+C     ----- DXDI ... -----
+C
+      DO 110 J=1,LJT
+        DXDI(1,J)=X(2,J)*(AI+AI)
+        DYDI(1,J)=Y(2,J)*(AI+AI)
+        DZDI(1,J)=Z(2,J)*(AI+AI)
+  110 CONTINUE
+C
+      IF(LIT.EQ.1) RETURN
+C
+      DO 120 I=2,LIT
+        DO 120 J=1,LJT
+          DXDI(I,J)=X(I+1,J)*(AI+AI) - X(I-1,J)*(I-1)
+          DYDI(I,J)=Y(I+1,J)*(AI+AI) - Y(I-1,J)*(I-1)
+          DZDI(I,J)=Z(I+1,J)*(AI+AI) - Z(I-1,J)*(I-1)
+  120 CONTINUE
+C
+      RETURN
+      END
+C
+C--C*MODULE TDX   *DECK DERIIoli
+C--      SUBROUTINE DERIIoli(DXDIDI,DYDIDI,DZDIDI,X,Y,Z,LIT,LJT,AI)
+C--      IMPLICIT none
+C--c     Arguments
+C--      double precision X(6,6),Y(6,6),Z(6,6)
+C--      double precision DXDIDI(6,6),DYDIDI(6,6),DZDIDI(6,6)
+C--      integer LIT,LJT
+C--      double precision AI
+C--c     Variables
+C--      integer i,j,idum2
+C--      double precision AI2,AI4,dum1
+C--c     Body of the subprogram
+C--c
+C--c     Do the same as two calls to DERIoli
+C--c
+C--c     ----- DXDIDI ... -----
+C--c
+C--      AI2=AI+AI
+C--      AI4=AI2*AI2
+C--c
+C--      dum1 = AI2
+C--      DO 100 J=1,LJT
+C--         DXDIDI(1,J)=X(3,J)*AI4-X(1,J)*dum1
+C--         DYDIDI(1,J)=Y(3,J)*AI4-Y(1,J)*dum1
+C--         DZDIDI(1,J)=Z(3,J)*AI4-Z(1,J)*dum1
+C-- 100  CONTINUE
+C--      IF(LIT.eq.1) RETURN
+C--c
+C--      dum1 = AI2 * 3
+C--      DO 110 J=1,LJT
+C--         DXDIDI(2,J)=X(4,J)*AI4-X(2,J)*dum1
+C--         DYDIDI(2,J)=Y(4,J)*AI4-Y(2,J)*dum1
+C--         DZDIDI(2,J)=Z(4,J)*AI4-Z(2,J)*dum1
+C-- 110  CONTINUE
+C--      IF(LIT.eq.2) RETURN
+C--c
+C--      DO 120 I=3,LIT
+C--         dum1 = AI2*(2*I-1)
+C--         idum2 = (i-1)*(i-2)
+C--        DO 121 J=1,LJT
+C--           DXDIDI(I,J)=X(I+2,J)*AI4-X(I,J)*dum1+X(I-2,J)*idum2
+C--           DYDIDI(I,J)=Y(I+2,J)*AI4-Y(I,J)*dum1+Y(I-2,J)*idum2
+C--           DZDIDI(I,J)=Z(I+2,J)*AI4-Z(I,J)*dum1+Z(I-2,J)*idum2
+C-- 121    continue
+C-- 120  CONTINUE
+C--c
+C--      RETURN
+C--      END
+C--c
+C*MODULE TDX   *DECK DERJoli
+      SUBROUTINE DERJoli(DXDJ,DYDJ,DZDJ,X,Y,Z,LIT,LJT,AJ)
+      IMPLICIT none
+C     Arguments
+      double precision X(6,6),Y(6,6),Z(6,6)
+      double precision DXDJ(6,6),DYDJ(6,6),DZDJ(6,6)
+      integer LIT,LJT
+      double precision AJ
+C     Variables
+      integer i,j
+C     body of the subprogram
+C
+C     ----- DXDJ ... -----
+C
+      DO 110 I=1,LIT
+        DXDJ(I,1)=X(I,2)*(AJ+AJ)
+        DYDJ(I,1)=Y(I,2)*(AJ+AJ)
+        DZDJ(I,1)=Z(I,2)*(AJ+AJ)
+  110 CONTINUE
+C
+      IF(LJT.EQ.1) RETURN
+C
+      DO 120 J=2,LJT
+        DO 120 I=1,LIT
+          DXDJ(I,J)=X(I,J+1)*(AJ+AJ) - X(I,J-1)*(J-1)
+          DYDJ(I,J)=Y(I,J+1)*(AJ+AJ) - Y(I,J-1)*(J-1)
+          DZDJ(I,J)=Z(I,J+1)*(AJ+AJ) - Z(I,J-1)*(J-1)
+  120 CONTINUE
+C
+      RETURN
+      END
+C
+C--C*MODULE TDX   *DECK DERIJoli
+C--      SUBROUTINE DERIJoli(DXDIDJ,DYDIDJ,DZDIDJ,X,Y,Z,LIT,LJT,AI,AJ)
+C--      IMPLICIT none
+C--c     Arguments
+C--      double precision X(6,6),Y(6,6),Z(6,6)
+C--      double precision DXDIDJ(6,6),DYDIDJ(6,6),DZDIDJ(6,6)
+C--      integer LIT,LJT
+C--      double precision AI,AJ
+C--c     Variables
+C--      integer i,j,ijdum
+C--      double precision AI2,AJ2,AIJ4,dumi,dumj
+C--      logical lit1,ljt1
+C--c     Body of the subprogram
+C--c
+C--c     Do the same as a call to DERIoli and then to DERJoli
+C--c
+C--c     ----- DXDIDJ ... -----
+C--c
+C--c
+C--      lit1 = lit.eq.1
+C--      ljt1 = ljt.eq.1
+C--c
+C--      AI2=AI+AI
+C--      AJ2=AJ+AJ
+C--      AIJ4=AI2*AJ2
+C--c
+C--      DXDIDJ(1,1)=X(2,2)*AIJ4
+C--      DYDIDJ(1,1)=Y(2,2)*AIJ4
+C--      DZDIDJ(1,1)=Z(2,2)*AIJ4
+C--c
+C--      if(lit1.and.ljt1) return
+C--c
+C--      if(.not.ljt1) then
+C--         do 100 j=2,ljt
+C--            dumj = AI2*(j-1)
+C--            DXDIDJ(1,j)=X(2,j+1)*AIJ4-X(2,j-1)*dumj
+C--            DYDIDJ(1,j)=Y(2,j+1)*AIJ4-Y(2,j-1)*dumj
+C--            DZDIDJ(1,j)=Z(2,j+1)*AIJ4-Z(2,j-1)*dumj
+C-- 100     continue
+C--      end if
+C--c
+C--      if(.not.lit1) then
+C--         do 200 i=2,lit
+C--            dumi = AJ2*(i-1)
+C--            DXDIDJ(i,1)=X(i+1,2)*AIJ4-X(i-1,2)*dumi
+C--            DYDIDJ(i,1)=Y(i+1,2)*AIJ4-Y(i-1,2)*dumi
+C--            DZDIDJ(i,1)=Z(i+1,2)*AIJ4-Z(i-1,2)*dumi
+C-- 200     continue
+C--      end if
+C--c
+C--      if((.not.lit1).and.(.not.ljt1)) then
+C--         do 300 i=2,lit
+C--            dumi = AJ2*(i-1)
+C--            do 310 j=2,ljt
+C--               ijdum = (i-1)*(j-1)
+C--               dumj = AI2*(j-1)
+C--               DXDIDJ(i,j)=X(i+1,j+1)*AIJ4+X(i-1,j-1)*ijdum
+C--     &                    -X(i+1,j-1)*dumj-X(i-1,j+1)*dumi
+C--               DYDIDJ(i,j)=Y(i+1,j+1)*AIJ4+Y(i-1,j-1)*ijdum
+C--     &                    -Y(i+1,j-1)*dumj-Y(i-1,j+1)*dumi
+C--               DZDIDJ(i,j)=Z(i+1,j+1)*AIJ4+Z(i-1,j-1)*ijdum
+C--     &                    -Z(i+1,j-1)*dumj-Z(i-1,j+1)*dumi
+C-- 310        continue
+C-- 300     continue
+C--      end if
+C--c
+C--      RETURN
+C--      END
+C
+C*MODULE TDX   *DECK svgSDD
+      SUBROUTINE svgSDD(SDD,nxyz2,nat,l2)
+      IMPLICIT NONE
+C     Arguments
+      integer l2,nxyz2,nat
+      double precision SDD(*)
+C     Used common blocks
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables and constants
+      INTEGER lC0,lXab
+      integer i,j,ixyz,ngeom2,isize
+      double precision modes(1)
+C     Body of the subprogram
+      write(*,*) "TDHFX:svgSDD:begin",l2,nxyz2
+C
+      ngeom2=(ngeom*ngeom+ngeom)/2
+C
+      isize=max(naos*naos*ngeom2,nxyz2*l2)
+      call NEWMEM(lXab,isize)
+C
+C      call PrintMM(SDD,3,(nat*nat+nat)/2*l2,"Sxy")
+      call DCOPY(nxyz2*l2,SDD,1,XX(lXab),1)
+      modes(1) = 0.0D+00
+      call dXYtodAB(modes,.false.,XX(lXab),SDD,l2,nat,ngeom,1)
+C
+      i=0
+      j=1
+      do ixyz=1,ngeom2
+         CALL EXPND(SDD(j),XX(lXab+i),naos,0)
+         j=j+l2
+         i=i+naos*naos
+      end do
+C      call PrintMM(XX(lXab),norb,ngeom2,"TDHFX:Sab")
+C
+      call NEWMEM(lC0,naos*nmos)
+      call GetLCAO(XX(lC0),nmos,naos)
+      call MakeGij(XX(lXab),XX(lC0),XX(lXab),nmos,naos,ngeom2)
+      call DELETEMEM(lC0,naos*nmos)
+C
+      call SetIab(XX(lXab),nmos,ngeom2)
+C
+      call DELETEMEM(lXab,isize)
+C
+      write(*,*) "TDHFX:svgSDD:end"
+      end
+C
+C*MODULE TDX   *DECK svgFDD
+      SUBROUTINE svgFDD(FDD,nxyz2,nat,l2)
+      IMPLICIT NONE
+C     Arguments
+      integer l2,nxyz2,nat
+      double precision FDD(*)
+C     Used common blocks
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables and constants
+      INTEGER lXab
+      integer i,j,ixyz,ngeom2,isize
+      double precision modes(1)
+C     Body of the subprogram
+      write(*,*) "TDHFX:svgFDD:begin",l2,nxyz2
+C
+      ngeom2=(ngeom*ngeom+ngeom)/2
+C
+      isize=max(naos*naos*ngeom2,nxyz2*l2)
+      call NEWMEM(lXab,isize)
+C
+C      call PrintMM(FDD,3,(nat*nat+nat)/2*l2,"Hxy")
+      call DCOPY(nxyz2*l2,FDD,1,XX(lXab),1)
+      modes(1) = 0.0D+00
+      call dXYtodAB(modes,.false.,XX(lXab),FDD,l2,nat,ngeom,1)
+C
+      i=0
+      j=1
+      do ixyz=1,ngeom2
+         CALL EXPND(FDD(j),XX(lXab+i),naos,0)
+         j=j+l2
+         i=i+naos*naos
+      end do
+C
+      call SetHab(XX(lXab),naos,ngeom2)
+C
+      call DELETEMEM(lXab,isize)
+C
+      write(*,*) "TDHFX:svgFDD:end"
+      end
+C
+C*MODULE TDX   *DECK symFDD
+      subroutine symFDD(FDD,nat,l2)
+      implicit none
+C     Arguments
+      integer nat,l2
+      double precision FDD(9,(nat*nat+nat)/2,l2)
+C     Variables and constants
+      integer iat,ij,mc
+      double precision dummy24,dummy37,dummy68
+      double precision HALF
+      parameter (HALF=0.5D+00)
+C     Body of the subprogram
+      do ij=1,l2
+         do iat = 1,nat
+            mc = (iat*iat+iat)/2
+            dummy24 = (FDD(2,mc,ij)+FDD(4,mc,ij))*HALF
+            dummy37 = (FDD(3,mc,ij)+FDD(7,mc,ij))*HALF
+            dummy68 = (FDD(6,mc,ij)+FDD(8,mc,ij))*HALF
+            FDD(2,mc,ij)=dummy24
+            FDD(3,mc,ij)=dummy37
+            FDD(4,mc,ij)=dummy24
+            FDD(6,mc,ij)=dummy68
+            FDD(7,mc,ij)=dummy37
+            FDD(8,mc,ij)=dummy68
+         end do
+      end do
+C
+      end
+C
+C*MODULE TDX   *DECK ADDFOE
+      subroutine ADDFOE(FDD,iat,jat,FOE,FAC,DIAG)
+      implicit none
+C     Arguments
+      integer iat,jat
+      double precision FDD(*)
+      double precision FOE(*)
+      double precision FAC,DIAG
+C     Used Common blocks
+      integer NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,IAN
+      integer MXATM
+      parameter (MXATM=2000)
+      double precision ZAN,C
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+C     Body of the subprogram
+      call ADDFOEX(FDD,iat,jat,FOE,FAC,DIAG,nat)
+      end
+C
+C*MODULE TDX   *DECK ADDFOEX
+      subroutine ADDFOEX(FDD,iat,jat,FOE,FAC,DIAG,nat)
+      implicit none
+C     Arguments
+      integer iat,jat,nat
+      double precision FDD(9,(nat*nat+nat)/2,*)
+      double precision FOE(36,9)
+      double precision FAC,DIAG
+C     Used Common blocks
+      integer LIT,LJT,LKT,LLT,LOCI,LOCJ,LOCK,LOCL,
+     &        MINI,MINJ,MINK,MINL,MAXI,MAXJ,MAXK,MAXL,
+     &        NIJ,IJD,KLD,IJ,KL
+      COMMON /SHLOED/ LIT,LJT,LKT,LLT,LOCI,LOCJ,LOCK,LOCL,
+     &                MINI,MINJ,MINK,MINL,MAXI,MAXJ,MAXK,MAXL,
+     &                NIJ,IJD,KLD,IJ,KL
+C     Variables
+      double precision mult
+      integer i,j,nj,ni,nnij,ijfoe,mc
+C     Body of the subprogram
+C      write(*,*) "ADDFOE",iat,jat
+      ijfoe=1
+      if(iat.gt.jat) then
+         mc = iat*(iat-1)/2+jat
+      else if(jat.gt.iat) then
+         mc = jat*(jat-1)/2+iat
+      else
+         mc = iat*(iat-1)/2+iat
+      endif
+C
+      DO J = MINJ,MAXJ
+         NJ = LOCJ + J
+         DO I = MINI,MAXI
+            NI = LOCI + I
+            IF(NJ .GE. NI) then
+               NNIJ = NJ * (NJ-1)/2 + NI
+            else
+               NNIJ = NI * (NI-1)/2 + NJ
+            endif
+            MULT = FAC
+            IF(NI .EQ. NJ) MULT = MULT*DIAG
+C
+            FDD(1,mc,nnij)=FDD(1,mc,nnij)+FOE(ijfoe,1)*MULT
+            FDD(2,mc,nnij)=FDD(2,mc,nnij)+FOE(ijfoe,2)*MULT
+            FDD(3,mc,nnij)=FDD(3,mc,nnij)+FOE(ijfoe,3)*MULT
+            FDD(4,mc,nnij)=FDD(4,mc,nnij)+FOE(ijfoe,4)*MULT
+            FDD(5,mc,nnij)=FDD(5,mc,nnij)+FOE(ijfoe,5)*MULT
+            FDD(6,mc,nnij)=FDD(6,mc,nnij)+FOE(ijfoe,6)*MULT
+            FDD(7,mc,nnij)=FDD(7,mc,nnij)+FOE(ijfoe,7)*MULT
+            FDD(8,mc,nnij)=FDD(8,mc,nnij)+FOE(ijfoe,8)*MULT
+            FDD(9,mc,nnij)=FDD(9,mc,nnij)+FOE(ijfoe,9)*MULT
+C
+            ijfoe=ijfoe+1
+         end do
+      end do
+C
+      end
+C
+C*MODULE TDX   *DECK MakeXab
+      subroutine MakeXab()
+      implicit none
+C     Used common blockx
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables and constants
+      integer lXab,lIa,lUa
+      integer ngeom2
+      double precision dummy(1)
+C     Called subprogram
+      logical GetGUIDEa,GetIab
+C     Body of the subprogram
+C
+      ngeom2 = (ngeom*ngeom+ngeom)/2
+C
+      call NEWMEM(lXab,nmos*nmos*ngeom2)
+      call NEWMEM(lIa,nmos*nmos*ngeom)
+      call NEWMEM(lUa,nmos*nmos*ngeom)
+C
+      dummy(1) = 0.0D+00
+      if(.not.GetGUIDEa(dummy,.false.,XX(lUa),.true.,XX(lIa),.true.,
+     &                  dummy,.false.,dummy,.false.,
+     &                  nmos,naos,ngeom)) then
+         call abrtx("MAKEXAB:1")
+      end if
+      if(.not.GetIab(XX(lXab),.true.)) then
+         call abrtx("MAKEXAB:2")
+      end if
+C
+      call CompJab(XX(lXab),XX(lUa),XX(lIa),nmos,ngeom,ngeom2)
+      call SetJab(XX(lXab),nmos,ngeom2)
+      call CompXab(XX(lXab),XX(lUa),nmos,ngeom,ngeom2)
+      call SetXab(XX(lXab),nmos,ngeom2)
+C
+      call DELETEMEM(lUa,nmos*nmos*ngeom)
+      call DELETEMEM(lIa,nmos*nmos*ngeom)
+      call DELETEMEM(lXab,nmos*nmos*ngeom2)
+C
+      end
+C
+C*MODULE TDX   *DECK CompJab
+      subroutine CompJab(Xab,Ua,Ia,nmos,ngeom,ngeom2)
+      implicit none
+C     Arguments
+      integer nmos,ngeom,ngeom2
+      double precision Xab(nmos*nmos,ngeom2)
+      double precision Ua(nmos*nmos,ngeom)
+      double precision Ia(nmos*nmos,ngeom)
+C     Variables and constants
+      integer igeom,jgeom,ijgeom
+      double precision ONE
+      parameter (ONE=1.0D+00)
+      character*1 sN
+      parameter (sN='N')
+C     Body of the subprogram
+      ijgeom=0
+C
+C     -------------------
+C     Jab = Iab+IaUb+IbUa
+C     -------------------
+      do jgeom=1,ngeom
+         do igeom=1,jgeom
+            ijgeom=ijgeom+1
+            call DGEMM(sN,sN,nmos,nmos,nmos,
+     &                 ONE,Ia(1,igeom),nmos,Ua(1,jgeom),nmos,
+     &                 ONE,Xab(1,ijgeom),nmos)
+            call DGEMM(sN,sN,nmos,nmos,nmos,
+     &                 ONE,Ia(1,jgeom),nmos,Ua(1,igeom),nmos,
+     &                 ONE,Xab(1,ijgeom),nmos)
+         end do
+      end do
+      end
+C
+C*MODULE TDX   *DECK CompXab
+      subroutine CompXab(Xab,Ua,nmos,ngeom,ngeom2)
+      implicit none
+C     Arguments
+      integer nmos,ngeom,ngeom2
+      double precision Xab(nmos*nmos,ngeom2)
+      double precision Ua(nmos*nmos,ngeom)
+C     Variables and constants
+      integer igeom,jgeom,ijgeom
+      double precision ONE,MINUSONE
+      parameter (ONE=1.0D+00,MINUSONE=-1.0D+00)
+      character*1 sT
+      parameter (sT='T')
+C     Body of the subprogram
+      ijgeom=0
+C
+C     ----------------------------
+C     Xab = -Jab + UdaUdb + UdbUda
+C     ----------------------------
+      do jgeom=1,ngeom
+         do igeom=1,jgeom
+            ijgeom=ijgeom+1
+            call DGEMM(sT,sT,nmos,nmos,nmos,
+     &                 ONE,Ua(1,igeom),nmos,Ua(1,jgeom),nmos,
+     &                 MINUSONE,Xab(1,ijgeom),nmos)
+            call DGEMM(sT,sT,nmos,nmos,nmos,
+     &                 ONE,Ua(1,jgeom),nmos,Ua(1,igeom),nmos,
+     &                 ONE,Xab(1,ijgeom),nmos)
+         end do
+      end do
+      end
+C
+C*MODULE TDX   *DECK GetDJKa
+      SUBROUTINE GetDJKa(D,DJKa,nparams)
+      IMPLICIT NONE
+C     Arguments
+      integer nparams
+      DOUBLE PRECISION D(*)
+      DOUBLE PRECISION DJKa(*)
+C     Used common blocks
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+      integer IR, IW, IP, IS,IPK,IDAF,NAV,IODA
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      LOGICAL FIRST,SECND,CPHF,BOTH,MFIRST,MSECND,MCPHF
+      COMMON /HSSPAR/ FIRST,SECND,CPHF,BOTH,MFIRST,MSECND,MCPHF
+C     Variables and constants
+      integer lDJKx,lQ
+      logical bUseQ
+C     Called subprogram
+      integer IGetOLI
+      logical GetFNM
+C     Body of the subprogram
+      bUseQ = IGetOLI(4).ne.0
+      WRITE(IW,*) 'module TDHFX'
+      WRITE(IW,*) 'GetDJKa:',nparams
+C
+      call NEWMEM(lDJKx,naos*naos*nxyz*nparams)
+C
+      FIRST=.TRUE.
+      SECND=.FALSE.
+      CPHF=.falsE.
+      BOTH=.FALSE.
+      MFIRST=.TRUE.
+      MSECND=.FALSE.
+      MCPHF=.FALSE.
+C
+C     module : hss2a.src
+      call VCLR(XX(lDJKx),1,naos*naos*nxyz*nparams)
+      call DDERJKolix(D,XX(lDJKx),naos,nxyz,nparams,1)
+      if(bUseQ) then
+         call NEWMEM(lQ,nmodes*nxyz)
+         if(.not.GetFNM(XX(lQ),.false.,XX(lQ),.true.,nxyz,nmodes)) then
+            call abrtx("GETDJKA:1")
+         end if
+      end if
+      call dXtodA(XX(lQ),bUseq,XX(lDJKx),DJKa,
+     &            naos*naos,nxyz,ngeom,nparams)
+      if(bUseQ) call DELETEMEM(lQ,nmodes*nxyz)
+C
+      call DELETEMEM(lDJKx,naos*naos*nxyz*nparams)
+C
+      END
+C
+C*MODULE TDX   *DECK GetDJKav
+      SUBROUTINE GetDJKab(D,DJKab,nparams)
+      IMPLICIT NONE
+C     Arguments
+      integer nparams
+      DOUBLE PRECISION D(*)
+      DOUBLE PRECISION DJKab(*)
+C     Used common blocks
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+      integer IR, IW, IP, IS,IPK,IDAF,NAV,IODA
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      LOGICAL FIRST,SECND,CPHF,BOTH,MFIRST,MSECND,MCPHF
+      COMMON /HSSPAR/ FIRST,SECND,CPHF,BOTH,MFIRST,MSECND,MCPHF
+C     Variables and constants
+      integer lDJKxy,lQ
+      integer nat,nxyz3
+      logical bUseQ
+C     Called subprogram
+      integer IGetOLI
+      logical GetFNM
+C     Body of the subprogram
+      bUseQ = IGetOLI(4).ne.0
+      nat = nxyz/3
+C     module : hss2a.src
+      nxyz3 = 9*(nat*nat+nat)/2
+C
+      WRITE(IW,*) 'module TDHFX'
+      WRITE(IW,*) 'GetDJKab:',nparams
+C
+      call NEWMEM(lDJKxy,naos*naos*nxyz3*nparams)
+C
+      FIRST=.FALSE.
+      SECND=.TRUE.
+      CPHF=.false.
+      BOTH=.FALSE.
+      MFIRST=.FALSE.
+      MSECND=.TRUE.
+      MCPHF=.FALSE.
+C
+      call VCLR(XX(lDJKxy),1,naos*naos*nxyz3*nparams)
+      call DDERJKolix(D,XX(lDJKxy),naos,nxyz3,nparams,2)
+C
+      if(bUseQ) then
+         call NEWMEM(lQ,nmodes*nxyz)
+         if(.not.GetFNM(XX(lQ),.false.,XX(lQ),.true.,nxyz,nmodes)) then
+            call abrtx("GETDJKAB:1")
+         end if
+      end if
+C
+C      call PrintMM(XX(lDJKxy),3,(nat*nat+nat)/2*norb*norb,"DJKxy")
+C
+      call dXYtodAB(XX(lQ),bUseQ,XX(lDJKxy),DJKab,
+     &              naos*naos,nat,ngeom,nparams)
+C
+C      call PrintMM(DJKab,norb,(ngeom*ngeom+ngeom)/2,"DJKab")
+C
+      if(bUseQ) call DELETEMEM(lQ,nmodes*nxyz)
+C
+      call DELETEMEM(lDJKxy,naos*naos*nxyz3*nparams)
+C
+      end
+C
+C*MODULE TDX   *DECK MakeFFfa
+      subroutine MakeFFfa(w1)
+      implicit none
+C     Arguments
+      double precision w1
+C     Used common blocks
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables and constants
+      integer lFFfa,lHfa,lDf
+      double precision dummy
+      double precision ONE
+      parameter (ONE=1.0D+00)
+C     Called subprograms
+      logical GetHfa,GetGUDEf
+C     Body of the subprogram
+      dummy = 0.0D+00
+      if(.not.GetGUDEf(w1,dummy,.false.,dummy,.false.,
+     &                 dummy,.false.,dummy,.false.,nmos,naos,nfld))
+     &     call MakeAlpha(w1)
+      if(.not.GetHfa(dummy,.false.)) call MakeHfa()
+C
+      call NEWMEM(lFFfa,naos*naos*ngeom*nfld)
+C     ------------------
+C     Step 1 : Df[2J-K]a
+C     ------------------
+      call NEWMEM(lDf,naos*naos*nfld)
+      if(.not.GetGUDEf(w1,dummy,.false.,dummy,.false.,
+     &                 XX(lDf),.true.,dummy,.false.,
+     &                 nmos,naos,nfld)) then
+         call abrtx("MAKEFFFA:1")
+      end if
+      call GetDJKa(XX(lDf),XX(lFFfa),nfld)
+      call DELETEMEM(lDf,naos*naos*nfld)
+C
+C     ----------------
+C     Step 2 : add Hfa
+C     ----------------
+      call NEWMEM(lHfa,naos*naos*ngeom*nfld)
+      if(.not.GetHfa(XX(lHfa),.true.)) then
+         call abrtx("MAKEFFFA:2")
+      end if
+      call DAXPY(naos*naos*ngeom*nfld,ONE,XX(lHfa),1,XX(lFFfa),1)
+      call DELETEMEM(lHfa,naos*naos*ngeom*nfld)
+C
+C
+      call SetFFfa(w1,XX(lFFfa),naos,ngeom,nfld)
+      call DELETEMEM(lFFfa,naos*naos*ngeom*nfld)
+      end
+C
+C*MODULE TDX   *DECK MakeFFab
+      subroutine MakeFFab()
+      implicit none
+C     Used common blocks
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables and constants
+      integer ngeom2
+      integer lFFab,lHab,lC0,lD0,lD0JKab,lDa,lDaJKb
+      double precision dummy
+      double precision ONE
+      parameter (ONE=1.0D+00)
+C     Called subprograms
+      logical GetHab,GetGUIDEa
+C     Body of the subprogram
+      ngeom2 = (ngeom*ngeom+ngeom)/2
+C
+      call NEWMEM(lFFab,naos*naos*ngeom2)
+C
+C     -------------------
+C     Step 1 : D0[2J-K]ab
+C     -------------------
+      call NEWMEM(lD0,naos*naos)
+      lC0=lFFab
+      call GetLCAO(XX(lC0),nmos,naos)
+      call MakeD0(XX(lD0),XX(lC0),nocc,nmos,naos)
+      lD0JKab = lFFab
+      call VCLR(XX(lFFab),1,naos*naos*ngeom2)
+      call GetDJKab(XX(lD0),XX(lD0JKab),1)
+      call DELETEMEM(lD0,naos*naos)
+C     ----------------
+C     Step 2 : add Hab
+C     ----------------
+      call NEWMEM(lHab,naos*naos*ngeom2)
+      if(.not.GetHab(XX(lHab),.true.)) then
+         call abrtx("MAKEFFAB:1")
+      end if
+      call DAXPY(naos*naos*ngeom2,ONE,XX(lHab),1,XX(lFFab),1)
+      call DELETEMEM(lHab,naos*naos*ngeom2)
+C     --------------------------------
+C     Step 3 : add Da[2J-K]b+Db[2J-K]a
+C     --------------------------------
+      call NEWMEM(lDa,naos*naos*ngeom)
+      dummy = 0.0D+00
+      if(.not.GetGUIDEa(dummy,.false.,dummy,.false.,dummy,.false.,
+     &                  XX(lDa),.true.,dummy,.false.,
+     &                  nmos,naos,ngeom)) then
+         call abrtx("MAKEFFAB:2")
+      end if
+      call NEWMEM(lDaJKb,naos*naos*ngeom*ngeom)
+      call GetDJKa(XX(lDa),XX(lDaJKb),ngeom)
+      call AddDfaJKb(XX(lFFab),XX(lDaJKb),naos,ngeom,1)
+      call DELETEMEM(lDaJKb,naos*naos*ngeom*ngeom)
+      call DELETEMEM(lDa,naos*naos*ngeom)
+C     ---------
+C     Save FFab
+C     ---------
+      call SetFFab(XX(lFFab),naos,ngeom2)
+C
+C      call PrintMM(XX(lFFab),norb,ngeom2,"TDHFX:FFab")
+C
+      call DELETEMEM(lFFab,naos*naos*ngeom2)
+C
+      end
+C
+C*MODULE TDX   *DECK MakeFFfab
+      subroutine MakeFFfab(w1)
+      implicit none
+C     Arguments
+      double precision w1
+C     Used common blocks
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables and constants
+      integer lFFfab,lHfab,lDf,lDfa,lDfaJKb
+      integer ngeom2
+      double precision dummy
+      double precision ONE
+      parameter (ONE=1.0D+00)
+C     Called subprograms
+      logical GetHfab,GetGUDEf,GetGUXDEfa
+C     Body of the subprogram
+C
+      ngeom2 = (ngeom*ngeom+ngeom)/2
+C
+      dummy = 0.0D+00
+      if(.not.GetGUDEf(w1,dummy,.false.,dummy,.false.,
+     &                 dummy,.false.,dummy,.false.,nmos,naos,nfld))
+     &     call MakeAlpha(w1)
+      if(.not.GetHfab(dummy,.false.)) call MakeHfab()
+      if(.not.GetGUXDEfa(w1,dummy,.false.,dummy,.false.,dummy,.false.,
+     &                   dummy,.false.,dummy,.false.,
+     &                   nmos,naos,nfld,ngeom))
+     &     call MakeDAlphadX(w1)
+C
+      call NEWMEM(lFFfab,naos*naos*ngeom2*nfld)
+C
+C     -------------------
+C     Step 1 : Df[2J-K]ab
+C     -------------------
+      call NEWMEM(lDf,naos*naos*nfld)
+      if(.not.GetGUDEf(w1,dummy,.false.,dummy,.false.,
+     &                 XX(lDf),.true.,dummy,.false.,
+     &                 nmos,naos,nfld)) then
+         call abrtx("MAKEFFFAB:1")
+      end if
+      call GetDJKab(XX(lDf),XX(lFFfab),nfld)
+      call DELETEMEM(lDf,naos*naos*nfld)
+C
+C     -----------------
+C     Step 2 : add Hfab
+C     -----------------
+      call NEWMEM(lHfab,naos*naos*ngeom2*nfld)
+      if(.not.GetHfab(XX(lHfab),.true.)) then
+         call abrtx("MAKEFFFAB:2")
+      end if
+      call DAXPY(naos*naos*ngeom2*nfld,ONE,XX(lHfab),1,XX(lFFfab),1)
+      call DELETEMEM(lHfab,naos*naos*ngeom2*nfld)
+C
+C     ----------------------------------
+C     Step 3 : add Dfa[2J-K]b+Dfb[2J-K]a
+C     ----------------------------------
+      call NEWMEM(lDfa,naos*naos*ngeom*nfld)
+      if(.not.GetGUXDEfa(w1,dummy,.false.,dummy,.false.,dummy,.false.,
+     &                   XX(lDfa),.true.,dummy,.false.,
+     &                   nmos,naos,nfld,ngeom)) then
+         call abrtx("MAKEFFFAB:3")
+      end if
+      call NEWMEM(lDfaJKb,naos*naos*nfld*ngeom*ngeom)
+      call GetDJKa(XX(lDfa),XX(lDfaJKb),nfld*ngeom)
+      call AddDfaJKb(XX(lFFfab),XX(lDfaJKb),naos,ngeom,nfld)
+      call DELETEMEM(lDfaJKb,naos*naos*nfld*ngeom*ngeom)
+      call DELETEMEM(lDfa,naos*naos*ngeom*nfld)
+C
+      call SetFFfab(w1,XX(lFFfab),naos,ngeom2,nfld)
+      call DELETEMEM(lFFfab,naos*naos*ngeom2*nfld)
+      end
+C
+C*MODULE TDX   *DECK AddDfaJKb
+      subroutine AddDfaJKb(FFab,DaJKb,naos,ngeom,nfld)
+      implicit none
+C     Arguments
+      integer naos,ngeom,nfld
+      double precision FFab(naos*naos,nfld,*)
+      double precision DaJKb(naos*naos,nfld,ngeom,ngeom)
+C     Variables and constant
+      integer ifld,igeom,jgeom,ijgeom
+      double precision mult
+      double precision ONE,TWO
+      parameter (ONE=1.0D+00,TWO=2.0D+00)
+C     Body of the subprogram
+      ijgeom = 0
+      do jgeom = 1,ngeom
+         do igeom = 1,jgeom
+            ijgeom = ijgeom+1
+            mult = ONE
+            if(igeom.eq.jgeom) mult = TWO
+            do ifld=1,nfld
+               call DAXPY(naos*naos,mult,
+     &                    DaJKb(1,ifld,igeom,jgeom),1,
+     &                    FFab(1,ifld,ijgeom),1)
+            end do
+            if(igeom.ne.jgeom) then
+               do ifld=1,nfld
+                  call DAXPY(naos*naos,ONE,
+     &                       DaJKb(1,ifld,jgeom,igeom),1,
+     &                       FFab(1,ifld,ijgeom),1)
+               end do
+            end if
+         end do
+      end do
+      end
+C
+C*MODULE TDX   *DECK MakeRaman
+      subroutine MakeRaman(w)
+      implicit none
+C     Arguments
+      double precision w
+C     Used common blocks
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      integer IR, IW, IP, IS,IPK,IDAF,NAV,IODA
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables and constants
+      integer ldAdQ,lW
+      double precision dummy(1)
+C     Called subprograms
+      logical GetdAlphadQ,GetFNM
+C     Body of the subprogram
+C
+      dummy(1) = 0.0D+00
+      if(.not.GetdAlphadQ(w,dummy,.false.))
+     &     call MakedAlphadXNI(w)
+C
+      call NEWMEM(ldAdQ,9*nmodes)
+      if(.not.GetdAlphadQ(w,XX(ldAdQ),.true.)) then
+         call abrtx("MAKERAMAN:1")
+      end if
+      call NEWMEM(lW,nmodes)
+      if(.not.GetFNM(XX(lW),.true.,dummy,.false.,nxyz,nmodes)) then
+         call abrtx("MAKERAMAN:1")
+      end if
+      call PrintRaman(iw,XX(ldAdQ),nmodes,XX(lW),w)
+      call DELETEMEM(lW,nmodes)
+      call DELETEMEM(ldAdQ,9*nmodes)
+C
+      end
+C
+C*MODULE TDX   *DECK MakeHyperRaman
+      subroutine MakeHyperRaman(w)
+      implicit none
+C     Arguments
+      double precision w
+C     Used common blocks
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      integer IR, IW, IP, IS,IPK,IDAF,NAV,IODA
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables and constants
+      integer ldBdQ,lW
+      double precision dummy(1)
+C     Called subprograms
+      logical GetdBetadQ,GetFNM
+C     Body of the subprogram
+C
+      dummy(1) = 0.0D+00
+      if(.not.GetdBetadQ(w,w,dummy,.false.))
+     &     call MakedBetadXNI(w,w)
+C
+      call NEWMEM(ldBdQ,27*nmodes)
+      if(.not.GetdBetadQ(w,w,XX(ldBdQ),.true.)) then
+         call abrtx("MAKEHYPERRAMAN:1")
+      end if
+      call NEWMEM(lW,nmodes)
+      if(.not.GetFNM(XX(lW),.true.,dummy,.false.,nxyz,nmodes)) then
+         call abrtx("MAKEHYPERRAMAN:2")
+      end if
+      call PrintHyperRaman(iw,XX(ldBdQ),nmodes,XX(lW),w)
+      call DELETEMEM(lW,nmodes)
+      call DELETEMEM(ldBdQ,27*nmodes)
+C
+      end
+C
+C*MODULE TDX   *DECK svgSa
+      SUBROUTINE svgSa(dsao,dsmo,C0,T)
+      IMPLICIT NONE
+C     Used common blocks
+      integer IR, IW, IP, IS,IPK,IDAF,NAV,IODA
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+C     Arguments
+      DOUBLE PRECISION dsao((naos*naos+naos)/2,nxyz)
+      DOUBLE PRECISION C0(naos,nmos),dsmo(nmos,nmos)
+      DOUBLE PRECISION T(naos)
+C     Variables and constants
+      INTEGER LIa
+      integer ixyz,ij
+C     Body of the subprogram
+      WRITE(IW,*) 'module TDHFX'
+      WRITE(IW,*) 'svgSa'
+C
+      call NEWMEM(lIa,nmos*nmos*nxyz)
+      ij=0
+      do ixyz=1,nxyz
+         call TFTRI(dsmo,dsao(1,ixyz),C0,T,nmos,naos,naos)
+         CALL EXPND(dsmo,XX(lIa+ij),nmos,0)
+         ij=ij+nmos*nmos
+      end do
+C
+      call SaveFQX(XX(lIa),.false.,XX(lIa),.false.,XX(lIa),.true.,
+     &             nmos,naos,nxyz)
+C
+      call DELETEMEM(lIa,nmos*nmos*nxyz)
+C
+      END
+C
+C
+C*MODULE TDX   *DECK svgGa1
+      SUBROUTINE svgGa1(DFMO,NFTF)
+      IMPLICIT NONE
+C     Arguments
+      DOUBLE PRECISION DFMO(*)
+      integer NFTF
+C     Used common blocks
+      integer IR,IW,IP,IS,IPK,IDAF,NAV,IODA
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables and constans
+      INTEGER lGa
+      integer ixyz,n2,ij
+C     Body of the subprogram
+      WRITE(IW,*) 'module TDHFX'
+      WRITE(IW,*) 'svgGa1'
+      n2 = (nmos+nmos*nmos)/2
+      call NEWMEM(lGa,nmos*nmos*nxyz)
+C
+      call SEQREW(NFTF)
+      ij = 0
+      do ixyz=1,nxyz
+         call SQREAD(NFTF,DFMO,n2)
+         call EXPND(DFMO,XX(lGa+ij),nmos,0)
+         ij=ij+nmos*nmos
+      end do
+      call SEQREW(NFTF)
+C
+      call FreeFQX()
+      call SaveFQX(XX(lGa),.false.,XX(lGa),.true.,XX(lGa),.false.,
+     &             nmos,naos,nxyz)
+C
+      call DELETEMEM(lGa,nmos*nmos*nxyz)
+C
+      END
+C
+C*MODULE TDX   *DECK svgGa2
+      SUBROUTINE svgGa2(E0,C0,YAMO,NROT,FX,Y,DTEMP,FTEMP,n2,
+     &                  GHONDO,XINTS,DSH,DDIJ,X,IX,MAXG,NSH2,MXG2)
+      IMPLICIT NONE
+C     Used common blocks
+      integer IR, IW, IP, IS,IPK,IDAF,NAV,IODA
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Arguments
+      integer n2,nrot,MAXG,NSH2,MXG2
+      DOUBLE PRECISION E0(nmos)
+      DOUBLE PRECISION YAMO(NROT,nxyz)
+      DOUBLE PRECISION C0(naos,nmos),Y(naos,naos)
+      DOUBLE PRECISION FX(naos*naos)
+      DOUBLE PRECISION DTEMP(nxyz*n2),FTEMP(nxyz*n2)
+      DOUBLE PRECISION GHONDO(MAXG)
+      DOUBLE PRECISION XINTS(NSH2),DSH(NSH2)
+      DOUBLE PRECISION DDIJ(49*MXG2)
+      DOUBLE PRECISION X(*),IX(*)
+C     Variables and constants
+      INTEGER lIa,lGa,lUa,lDa,lEa
+      integer ixyz,i,j,ij,ijk,iii
+      integer NINT,NSCHWZ
+      character*1 sT,sN
+      parameter (sT='T',sN='N')
+      double precision ZERO,ONE,TWO
+      parameter (ZERO=0.0D+00,ONE=1.0D+00,TWO=2.0D+00)
+C     Called subprograms
+      logical LoadFQX
+C     Body of the subprogram
+      WRITE(IW,*) 'module TDHFX'
+      WRITE(IW,*) 'svgGa2:begin',nrot,nocc,nvir,n2,nmos,naos,nxyz
+C
+      call NEWMEM(lGa,nmos*nmos*nxyz)
+      call NEWMEM(lIa,nmos*nmos*nxyz)
+      call NEWMEM(lUa,nmos*nmos*nxyz)
+C
+      if(.not.LoadFQX(XX(lGa),.false.,XX(lGa),.true.,XX(lIa),.true.,
+     &                nmos,naos,nxyz)) then
+         call abrtx("SVGGA2:1")
+      end if
+C
+c      call PrintMM(XX(lGa),nmos,nxyz,"svgga:Ga")
+c      call PrintMM(XX(lIa),nmos,nxyz,"svgga:Ia")
+C
+C      do ixyz=1,nxyz
+C         write(*,*) (YAMO(i,ixyz),i=1,nrot)
+C      enddo
+C
+      call InitUaij(XX(lUa),YAMO,XX(lIa),nocc,nvir,nmos,nxyz)
+C
+c      call PrintMM(XX(lUa),nmos,nxyz,"svgga:Ua")
+C
+      ijk = 0
+      do ixyz=1,nxyz
+C     Body of the subprogram
+         call DGEMM(sN,sN,naos,nmos,nmos,
+     &              ONE,C0,naos,XX(lUa+ijk),nmos,ZERO,FX,naos)
+         call DGEMM(sN,sT,naos,naos,nocc,
+     &              ONE,C0,naos,FX,naos,ZERO,Y,naos)
+!         CALL MRARBR(C0,norb,norb,norb,XX(lUa+ijk),norb,norb,FX,norb)
+!         CALL MRARTR(C0,norb,norb,nocc,FX,norb,norb,Y,norb)
+         ij = 0
+         DO i=1,naos
+            DO j=1,i
+               DTEMP(ixyz+ij) = (Y(i,j) + Y(j,i))*TWO
+               ij = ij + nxyz
+            end do
+         end do
+         ijk=ijk+nmos*nmos
+      end do
+C
+C     BUILD THE CORRESPONDING "FOCK-LIKE MATRICES" IN -FTEMP-
+C
+      CALL AOFLM2(DTEMP,FTEMP,GHONDO,XINTS,DSH,DDIJ,X,IX,
+     &            naos,nxyz,MAXG,NSH2,MXG2,NINT,NSCHWZ)
+C
+C  TRANSFORM BACK INTO THE MO BASIS
+C
+      ijk=0
+      iii=0
+      DO ixyz = 1,nxyz
+         CALL DCOPY(n2,FTEMP(ixyz),nxyz,Y,1)
+         CALL EXPND(Y,FX,naos,0)
+C
+         call MakeGij(FX,C0,FX,nmos,naos,1)
+C         CALL MRARBR(FX,norb,norb,norb,C0,norb,norb,Y,norb)
+C         CALL MRTRBR(C0,norb,norb,norb,Y,norb,norb,FX,norb)
+C
+         ij=1
+         do j=1,nmos
+            do i=1,nmos
+               XX(lGa+ijk)=XX(lGa+ijk)+Fx(ij)
+               ij=ij+1
+               ijk=ijk+1
+            end do
+         end do
+         iii=iii+nmos*nmos
+      end do
+C
+      call NEWMEM(lDa,naos*naos*nxyz)
+      call NEWMEM(lEa,nmos*nmos*nxyz)
+      call MakeDa(XX(lDa),XX(lUa),C0,nocc,nmos,naos,nxyz)
+      call MakeEa(XX(lEa),XX(lGa),XX(lIa),E0,nocc,nmos,nxyz)
+      call SetGUIDEa(XX(lGa),XX(lUa),XX(lIa),XX(lDa),XX(lEa),
+     &               nmos,naos,nxyz)
+C
+c      call PrintMM(XX(lGa),nmos,nxyz,"Ga")
+c      call PrintMM(XX(lUa),nmos,nxyz,"Ua")
+c      call PrintMM(XX(lIa),nmos,nxyz,"Ia")
+c      call PrintMM(XX(lDa),naos,nxyz,"Da")
+c      call PrintMM(XX(lEa),nmos,nxyz,"Ea")
+C
+      call DELETEMEM(lEa,nmos*nmos*nxyz)
+      call DELETEMEM(lDa,naos*naos*nxyz)
+      call DELETEMEM(lUa,nmos*nmos*nxyz)
+      call DELETEMEM(lIa,nmos*nmos*nxyz)
+      call DELETEMEM(lGa,nmos*nmos*nxyz)
+C
+      WRITE(IW,*) 'svgGa2:end'
+c
+      END
+C
+C*MODULE TDX   *DECK InitUaij
+      SUBROUTINE InitUaij(Ua,YAMO,Ia,nocc,nvir,nmos,nxyz)
+      IMPLICIT NONE
+C     Arguments
+      integer nocc,nvir,nmos,nxyz
+      DOUBLE PRECISION YAMO(nocc,nvir,nxyz)
+      DOUBLE PRECISION Ua(nmos,nmos,nxyz),Ia(nmos,nmos,nxyz)
+C     Variables and constants
+      integer i,j,ixyz
+      double precision HALF
+      parameter (HALF=0.5D+00)
+C     Body of the subprogram
+      do ixyz=1,nxyz
+         do j=1,nocc
+            do i=1,nocc
+               Ua(i,j,ixyz)=-HALF*Ia(i,j,ixyz)
+            end do
+            do i=nocc+1,nmos
+               Ua(i,j,ixyz)=YAMO(j,i-nocc,ixyz)
+            end do
+         end do
+         do j=nocc+1,nmos
+            do i=1,nocc
+               Ua(i,j,ixyz)=-YAMO(i,j-nocc,ixyz)-Ia(i,j,ixyz)
+            end do
+            do i=nocc+1,nmos
+               Ua(i,j,ixyz)=-HALF*Ia(i,j,ixyz)
+            end do
+         end do
+      end do
+      END
+C
+C*MODULE TDX   *DECK MakeEa
+      subroutine MakeEa(Ea,Ga,Ia,E0,nocc,nmos,nxyz)
+      implicit none
+C     Arguments
+      integer nocc,nmos,nxyz
+      double precision Ea(nmos,nmos,nxyz)
+      double precision Ga(nmos,nmos,nxyz)
+      double precision Ia(nmos,nmos,nxyz)
+      double precision E0(nmos)
+C     Variables and contants
+      integer i,j,ixyz
+      double precision dummy
+      double precision ZERO,HALF
+      parameter (ZERO=0.0D+00,HALF=0.5D+00)
+C     Body of the subprogram
+      do ixyz=1,nxyz
+         do j=1,nocc
+            do i=1,nocc
+               dummy=E0(i)+E0(j)
+               Ea(i,j,ixyz)=Ga(i,j,ixyz)-HALF*Ia(i,j,ixyz)*dummy
+            end do
+            do i=nocc+1,nmos
+               Ea(i,j,ixyz)=ZERO
+            end do
+         end do
+         do j=nocc+1,nmos
+            do i=1,nocc
+               Ea(i,j,ixyz)=ZERO
+            end do
+            do i=nocc+1,nmos
+               dummy=E0(i)+E0(j)
+               Ea(i,j,ixyz)=Ga(i,j,ixyz)-HALF*Ia(i,j,ixyz)*dummy
+            end do
+         end do
+      end do
+      return
+      end
+C
+C*MODULE TDX   *DECK MakeDa
+      subroutine MakeDa(Da,Ua,C0,nocc,nmos,naos,nxyz)
+      implicit none
+C     Arguments
+      integer nocc,nmos,naos,nxyz
+      double precision Da(naos*naos,nxyz)
+      double precision Ua(nmos,nmos,nxyz)
+      double precision C0(naos,nmos)
+C     Variables and constants
+      integer ixyz,i,j,ij
+      double precision ZERO,TWO
+      parameter (ZERO=0.0D+00,TWO=2.0D+00)
+C     Body of the subprogram
+      do ixyz=1,nxyz
+         ij=1
+         do j=1,nocc
+            do i=1,nocc
+               Da(ij,ixyz)=Ua(i,j,ixyz)*TWO
+               ij=ij+1
+            end do
+            do i=nocc+1,nmos
+               Da(ij,ixyz)=Ua(i,j,ixyz)
+               ij=ij+1
+            end do
+         end do
+         do j=nocc+1,nmos
+            do i=1,nocc
+               Da(ij,ixyz)=Ua(j,i,ixyz)
+               ij=ij+1
+            end do
+            do i=nocc+1,nmos
+               Da(ij,ixyz)=ZERO
+               ij=ij+1
+            end do
+         end do
+      end do
+      call CompDDterm(Da,C0,nmos,naos,nxyz)
+      end
+C
+C*MODULE TDX   *DECK svgFNM
+      SUBROUTINE svgFNM(E,vec,nc1,linear)
+      IMPLICIT NONE
+C     Arguments
+      integer nc1
+      logical linear
+      DOUBLE PRECISION E(nc1)
+      DOUBLE PRECISION vec(nc1,nc1)
+C     Used common block
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      integer IR, IW, IP, IS,IPK,IDAF,NAV,IODA
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      DOUBLE PRECISION XX
+      COMMON /FMCOM / XX(1)
+C     Variables and constants
+      integer lW,lQ,lGa,lUa,lIa,lDa,lEa,lWORK,lXab
+      integer ifirstmode,ngeom2,nxyz2
+      DOUBLE PRECISION fact
+      parameter (fact=4.556335267D-06)
+      logical bUseQ,bFREQ2
+C     Called subprograms
+      integer IGetOLI
+      logical GetGUIDEa,GetIab,GetHab
+C     Body of the subprogram
+      bUseQ = IGetOLI(4).ne.0
+      bFREQ2 = IGetOLI(2).ne.0
+      WRITE(IW,*) 'TDHFX : svgFNM',nc1, nxyz
+      if(nc1.ne.nxyz) then
+         WRITE(IW,*) 'nc1(',nc1,') != nxyz(',nxyz,')'
+         call ABRTx("SVGFNM:1")
+      end if
+C
+      ifirstmode = 6+1
+      if(linear) ifirstmode=5+1
+C
+      nmodes=nxyz-ifirstmode+1
+C
+      call NEWMEM(lQ,nxyz*nmodes)
+      call NEWMEM(lW,nmodes)
+C     Select the choosen modes
+      call DCOPY(nmodes,E(ifirstmode),1,XX(lW),1)
+      call DSCAL(nmodes,fact,XX(lW),1)
+      call DCOPY(nmodes*nxyz,vec(1,ifirstmode),1,XX(lQ),1)
+C     Save data
+      call TransfQ(XX(lQ))
+      call SetFNM(XX(lW),XX(lQ),nxyz,nmodes)
+      call DELETEMEM(lW,nmodes)
+C     Modify the Ga,Ua,Ia,... matrices
+      if(bUseQ) then
+         ngeom=nmodes
+         call NEWMEM(lGa,nmos*nmos*nxyz)
+         call NEWMEM(lUa,nmos*nmos*nxyz)
+         call NEWMEM(lIa,nmos*nmos*nxyz)
+         call NEWMEM(lDa,naos*naos*nxyz)
+         call NEWMEM(lEa,nmos*nmos*nxyz)
+         if(.not.GetGUIDEa(XX(lGa),.true.,XX(lUa),.true.,XX(lIa),.true.,
+     &                     XX(lDa),.true.,XX(lEa),.true.,
+     &                     nmos,naos,nxyz)) then
+            call abrtx("SVGFNM:2")
+         end if
+         call NEWMEM(lWORK,naos*naos*nxyz)
+         call DCOPY(nmos*nmos*nxyz,XX(lGa),1,XX(lWORK),1)
+         call Project2Q(XX(lQ),XX(lWORK),XX(lGa),nxyz,ngeom,nmos*nmos,1)
+         call DCOPY(nmos*nmos*nxyz,XX(lUa),1,XX(lWORK),1)
+         call Project2Q(XX(lQ),XX(lWORK),XX(lUa),nxyz,ngeom,nmos*nmos,1)
+         call DCOPY(nmos*nmos*nxyz,XX(lIa),1,XX(lWORK),1)
+         call Project2Q(XX(lQ),XX(lWORK),XX(lIa),nxyz,ngeom,nmos*nmos,1)
+         call DCOPY(naos*naos*nxyz,XX(lDa),1,XX(lWORK),1)
+         call Project2Q(XX(lQ),XX(lWORK),XX(lDa),nxyz,ngeom,naos*naos,1)
+         call DCOPY(nmos*nmos*nxyz,XX(lEa),1,XX(lWORK),1)
+         call Project2Q(XX(lQ),XX(lWORK),XX(lEa),nxyz,ngeom,nmos*nmos,1)
+         call FreeGUIDEa()
+         call SetGUIDEa(XX(lGa),XX(lUa),XX(lIa),XX(lDa),XX(lEa),
+     &                  nmos,naos,ngeom)
+         call DELETEMEM(lWORK,naos*naos*nxyz)
+         call DELETEMEM(lEa,nmos*nmos*nxyz)
+         call DELETEMEM(lDa,naos*naos*nxyz)
+         call DELETEMEM(lIa,nmos*nmos*nxyz)
+         call DELETEMEM(lUa,nmos*nmos*nxyz)
+         call DELETEMEM(lGa,nmos*nmos*nxyz)
+      end if
+      if(bUseQ.and.bFREQ2) then
+         ngeom2=(ngeom*ngeom+ngeom)/2
+         nxyz2 =(nxyz*nxyz+nxyz)/2
+C
+         call NEWMEM(lXab,naos*naos*ngeom2)
+         call NEWMEM(lWORK,naos*naos*nxyz2)
+C
+         if(.not.GetIab(XX(lWORK),.true.)) then
+            call abrtx("SVGFNM:3")
+         end if
+         call Project2QQ(XX(lQ),XX(lWORK),XX(lXab),nxyz,ngeom,
+     &                   nmos*nmos,1)
+         call SetIab(XX(lXab),nmos,ngeom2)
+C
+         if(.not.GetHab(XX(lWORK),.true.)) then
+            call abrtx("SVGFNM:4")
+         end if
+         call Project2QQ(XX(lQ),XX(lWORK),XX(lXab),nxyz,ngeom,
+     &                   naos*naos,1)
+         call SetHab(XX(lXab),naos,ngeom2)
+C
+         call DELETEMEM(lWORK,naos*naos*nxyz2)
+         call DELETEMEM(lXab,naos*naos*ngeom2)
+C
+      end if
+C
+      call DELETEMEM(lQ,nxyz*nmodes)
+      END
+C
+C*MODULE TDX   *DECK TransfQ
+      subroutine TransfQ(vec)
+      implicit none
+C     Used common block
+      integer soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      common/OLI/soli,ngeom,nocc,nvir,nmos,naos,nxyz,nmodes,nfld,ibfld,
+     &           iefld
+      integer MXATM
+      parameter (MXATM=2000)
+      double precision ZMASS
+      COMMON /MASSES/ ZMASS(MXATM)
+C     Arguments
+      DOUBLE PRECISION vec(nxyz,nmodes)
+C     Variables and constants
+      integer ixyz,imode,iat
+      double precision meffe
+      double precision ZERO,FACT
+      parameter (ZERO=0.0D+00,FACT=1822.888D+00)
+C     Called subprograms
+C     Body of the subprogram
+      do imode = 1,nmodes
+         meffe = ZERO
+         do ixyz = 1,nxyz
+            iat = (ixyz-1)/3+1
+            meffe=meffe+vec(ixyz,imode)*vec(ixyz,imode)*ZMASS(iat)
+         end do
+         meffe = 1.0D+00/sqrt(meffe*FACT)
+         call DSCAL(nxyz,meffe,vec(1,imode),1)
+      end do
+      end
+
+! Local Variables:
+! mode:Fortran
+! End:
+

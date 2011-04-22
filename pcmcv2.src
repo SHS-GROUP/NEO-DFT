@@ -1,0 +1,4812 @@
+C 29 MAR 10 - DGF - ADD A SCREENING IN FELECQ FOR FMO-PCM
+C 25 MAR 10 - DJS,YLW,HL - ADD HET-CPCM; MP2/PCM AND TDDFT/PCM GRADIENTS
+C 12 JAN 09 - HL  - REDUCE MEMORY FOR MTHALL=4
+C 15 DEC 08 - DGF - SYNCHRONIZE PCMTMP COMMON
+C 20 NOV 08 - HL  - CCMBEM: RIGOROUS FIXPVA GRADIENTS FOR QM/EFP/PCM
+C 23 OCT 08 - PFS,HL - ADD FIXPVA TESSELATION FOR C-PCM
+C 18 JUL 08 - KRG - PEDGB: INITIALIZE -GOPA- FOR ALL TESSERA COUNTS
+C 28 AUG 07 - HL  - REMOVE DECK CAVDIS, USE NEW CAV+DIS+REP GRADIENTS
+C 20 AUG 07 - DGF - SYNCHRONISE FMOPNT
+C 24 FEB 07 - MWS - PAD THE FRGINF,EFPPAR COMMON BLOCKS
+C 22 DEC 06 - HL  - INITIAL CHANGES FOR FMO/PCM GRADIENT
+C  6 NOV 06 - MWS - ADJUST WAVEFUNCTION COMMON BLOCK
+C  7 APR 06 - MWS - REMOVE ICENT/NESFF/INA/INF TRACES
+C 17 JAN 06 - HL  - CORRECT INDUCED DIPOLE GRADIENTS
+C 14 NOV 05 - DGF - DYNAM. ALLOCATE PCM ARRAYS; VARIOUS PCM IMPROVEMENTS
+C 19 SEP 05 - HL  - CCMBEM,CCMFIX: INCREASE ASC CUTOFF
+C  5 JUL 05 - HL  - TESIN: FIX QM/EFP/PCM MATRIX INVERSION
+C 13 FEB 05 - MWS - PAD COMMON BLOCK NSHEL, ROOT
+C  3 JUN 04 - HL  - PEDFST: DON'T SKIP COMPUTE VOLUME AND AREA
+C 19 MAY 04 - MWS - CHANGE DEFAULT TO GEPOL-AS TESSELATION
+C  7 APR 04 - HL  - ADD GEPOL-AS, FIX C-PCM GRADIENT BUG ,
+C                   PCM GRADIENTS FOR ALL TYPES OF WAVEFUNCTION
+C 12 DEC 03 - MWS - SYNCH COMMON BLOCK RUNOPT
+C 17 JUN 03 - HL  - NEW MODULE FOR GEPOL-RT AND C-PCM/IEF-PCM GRADIENTS
+C
+C*MODULE PCMCV2  *DECK TESIN
+      SUBROUTINE TESIN(NAT,XE,YE,ZE,ALPHA,RIN,INITS,METHOD)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      PARAMETER (MXATM=2000)
+C
+      LOGICAL GOPARR,DSKWRK,MASWRK
+C
+      DIMENSION IFROZA(MXATM),IFROZB(MXATM),XE(*),YE(*),ZE(*),ALPHA(*),
+     *          RIN(*),INITS(*),METHOD(*)
+C
+      COMMON /FRZCRT/ IFZCRT(3*MXATM),NFZCRT
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMPAR/ IPCM,NFT26,NFT27,IKREP,IEF,IP_F,NFMOPCM
+      COMMON /PCMPLY/ STOT,VOL,CCX,CCY,CCZ,RDIF,NESF,NESFP,NESFF,I_NESF,
+     *                L_AST
+      COMMON /PCMOPT/ RABI,RASC,REFPOL,THRSLS,DENSLS,WB,WA,ETA2,GD,EVAC,
+     *                RHOW,PM,AREATL,AREAKP,BONDRY,OMEGA,RET,FRO,EPSINF,
+     *                EPS,DR,RSOLV,VMOL,TCE,STEN,DSTEN,CMF,TABS,IDIRCT,
+     *                IPCDER,IDP,ICOMP,IFIELD,ICAV,IDISP,IPRINT,IRETCAV,
+     *                ICENT,IFAST,NEVAL,IEFPOL,KEEPSM,IMGABI,IMGASC,NADD
+C
+      PARAMETER (TOANGS=0.52917724924D+00)
+C
+      PARAMETER (NNAM=11)
+      DIMENSION QNAM(NNAM),KQNAM(NNAM)
+      DATA TESCAV/8HTESCAV  /
+      DATA QNAM /8HINITS   ,8HNTSALL  ,8HMETHOD  ,
+     *           8HMTHALL  ,8HMTHAUT  ,8HAREATL  ,8HNTSFRZ  ,
+     *           8HKEEPSM  ,8HAREAKP  ,8HAUTFRE  ,8HBONDRY  /
+      DATA KQNAM/-1,1,-1,1,1,3,1,1,3,3,3/
+C
+      KQNAM(1)=10*MXSP+1
+      KQNAM(3)=10*MXSP+1
+C
+C     INPUT FOR TESSELLATION CONTROL
+C
+C     NTSALL  =  60 OR 240 OR 960, THE NUMBERS IN THE ARRAY INITS
+C     MTHALL  =  THE VALUES IN THE ARRAY METHOD, 1 OR 2 OR 3 OR 4
+C
+C     MTHAUT  =  0 OR 1, AUTOMATIC GENERATION OF ARRAY METHOD
+C                IT WILL OVERWRITE THAT FROM THE MTHALL
+C
+C     INITS   =  60, INITIAL NUMBER OF TESSERAE ON A SPHERE
+C               240, INITIAL NUMBER OF TESSERAE ON A SPHERE
+C               960, INITIAL NUMBER OF TESSERAE ON A SPHERE
+C
+C     METHOD  = 1, GEPOL-GB
+C               2, GEPOL-AS
+C               3, GEPOL-RT
+C               4, FIXPVA
+C
+C     AREATL  = THE AREA CRITERION (A^2) FOR STOPPING GEPOL-RT
+C
+C     NTSFRZ  = 60 OR 240 OR 960, INITIAL TESSERA NUMBER FOR
+C               THE FROZEN ATOMS WHEN MTHAUT=1
+C
+C     KEEPSM  = 0, DO NOT KEEP SMALL TESSERAE CLOSE TO BOUNDARY
+C               1, KEEP SMALL TESSERAE CLOSE TO BOUNDARY AND
+C               COMPUTE THEIR ARES BY GEPOL-GB
+C               ONLY WORK FOR GEPOL-RT AND IPCDER=0,2 (NOT 1)
+C
+C     AREAKP  = FROM 0.0 TO 1.0, THE "AREATL" SCALING FACTOR IN GEPOL-GB
+C               WHEN KEEPSM=1 FOR GEPOL-RT, THE DEFAULT=10.0 MEANS
+C               NOT KEEPING THE SMALL TESSERAE (I.E. KEEPSM=0)
+C
+C     AUTFRE  = DISTANCE (A) FOR FROZEN ATOMS TO BE TREATED AS FREE
+C               WHEN MTHAUT=1. DEFAULT=2.0 A.
+C
+C     BONDRY  = SCALES THE DISTANCE WITHIN WHICH TESSERAE ARE CONSIDERED
+C               AS CLOSE TO THE BOUNDARY AND WILL BE DEVIDED FURTHER.
+C               THE DEFAULT=1.0 MEANS THE
+C               DISTANCE WILL BE THE SQRT OF THE TESSERA AREA.
+C               LARGE BONDRY (SAY 100.0) WILL CAUSE FINE TESSELLATION
+C               OF ALL THE SURFACE WITH ALL AREAS SMALLER THAN "AREATL".
+C
+C     NAT IN THIS SUBROUTINE IS NOT ALWAYS THE SAME AS NAT IN INFOA!
+C            (I.E., IN FMO-PCM NAT HERE IS NATFMO).
+C
+      NERR=0
+C
+      NTSALL = 60
+      MTHALL =  4
+      MTHAUT =  0
+      AREATL = 0.010D+00
+      NTSFRZ = 60
+      KEEPSM =  0
+      AREAKP = 1.0D+01
+      AUTFRE = 2.0D+00
+      BONDRY = 1.0D+00
+C
+C     READ THE TESCAV NAMELIST
+C
+      JRET=0
+      CALL NAMEIO(IR,JRET,TESCAV,NNAM,QNAM,KQNAM,
+     *            INITS,NTSALL,METHOD,MTHALL,MTHAUT,AREATL,NTSFRZ,
+     *            KEEPSM,AREAKP,AUTFRE,BONDRY,
+     *   0,0,0,
+     *   0,0,0,0,0,  0,0,0,0,0,
+     *   0,0,0,0,0,  0,0,0,0,0,   0,0,0,0,0,  0,0,0,0,0,
+     *   0,0,0,0,0,  0,0,0,0,0,   0,0,0,0,0,  0,0,0,0,0)
+      IF(JRET.EQ.2) THEN
+         IF(MASWRK) WRITE(IW,*)'**** ERROR IN $TESCAV INPUT'
+         CALL ABRT
+      END IF
+C
+      IF((NTSALL.NE.60.AND.NTSALL.NE.240.AND.
+     *    NTSALL.NE.960).OR.(NTSFRZ.NE.60.AND.
+     *    NTSFRZ.NE.240.AND.NTSFRZ.NE.960)) THEN
+           IF(MASWRK) WRITE(IW,*)
+     *       'NTSALL OR NTSFRZ MUST BE 60 OR 240 OR 960'
+           NERR=NERR+1
+      END IF
+      IF(AREATL.LT.1.0D-06) THEN
+           IF(MASWRK) WRITE(IW,*) 'AREATL MUST BE > 0.000001'
+           NERR=NERR+1
+      END IF
+      IF(MTHALL.NE.1.AND.MTHALL.NE.2.AND.MTHALL.NE.3.AND.
+     *   MTHALL.NE.4)THEN
+           IF(MASWRK) WRITE(IW,*) 'MTHALL MUST BE 1, 2, 3, OR 4'
+           NERR=NERR+1
+      END IF
+      IF(MTHAUT.NE.0.AND.MTHAUT.NE.1) THEN
+           IF(MASWRK) WRITE(IW,*) 'MTHAUT MUST BE 0 OR 1'
+           NERR=NERR+1
+      END IF
+      IF(MTHAUT.EQ.1.AND.AUTFRE.LT.0.0D+00) THEN
+           IF(MASWRK) WRITE(IW,*)
+     *       'AUTFRE MUST >= 0.0 WHEN MTHAUT=1'
+           NERR=NERR+1
+      END IF
+      IF(KEEPSM.NE.0.AND.KEEPSM.NE.1) THEN
+           IF(MASWRK) WRITE(IW,*) 'KEEPSM MUST BE 0 OR 1'
+           NERR=NERR+1
+      END IF
+      IF(KEEPSM.EQ.1.AND.(AREAKP.LT.0.0D+00.OR.
+     *                    AREAKP.GT.1.0D+00)) THEN
+           IF(MASWRK) WRITE(IW,*)
+     *       'AREAKP MUST BE >0.0 AND <1.0 WHEN KEEPSM=1'
+           NERR=NERR+1
+      END IF
+      IF(BONDRY.LT.0.0D+00) THEN
+           IF(MASWRK) WRITE(IW,*) 'BONDRY MUST >0.0'
+           NERR=NERR+1
+      END IF
+C
+      DO I = 1, MXSP
+         INITS(I)  = NTSALL
+         METHOD(I) = MTHALL
+      END DO
+C
+C     USE GEPOL-GB FOR FROZEN ATOMS.
+C     FROZEN ATOMS CONNECT OR CLOSE TO UNFROZEN ATOMS ARE
+C     TREATED AS UNFROZEN BECAUSE THEIR SURFACES CHANGE OR
+C     'WILL' CHANGE.
+C     PRESENTLY, IT WORKS ONLY FOR RET=100
+C
+      IF(MTHAUT.EQ.1) THEN
+        IF(RET.LT.99.9D+00) THEN
+         IF(MASWRK) WRITE(IW,*)
+     *     'MTHAUT=1 WORKS ONLY FOR RET=100.0'
+         NERR=NERR+1
+        END IF
+C       --CHANGE UNITS--
+        DO IAT = 1, NAT
+           XE(IAT)=XE(IAT)*TOANGS
+           YE(IAT)=YE(IAT)*TOANGS
+           ZE(IAT)=ZE(IAT)*TOANGS
+        END DO
+        DO IAT = 1, MXATM
+           IFROZA(IAT)=0
+           IFROZB(IAT)=0
+        END DO
+        DO III = 1, NFZCRT
+           JAT = (IFZCRT(III)-1)/3 + 1
+           IFROZA(JAT)=1
+           IFROZB(JAT)=1
+        END DO
+        DO 200 IAT = 1, NAT
+           IF(RIN(IAT).LT.2.0D-02) GO TO 200
+           DO 300 JAT = 1, NAT
+              IF(JAT.NE.IAT) THEN
+                DIST=(XE(IAT)-XE(JAT))**2 +
+     *               (YE(IAT)-YE(JAT))**2 +
+     *               (ZE(IAT)-ZE(JAT))**2
+                DIST=SQRT(DIST)
+                IF(DIST.LT.(RIN(IAT)*ALPHA(IAT)+
+     *                      RIN(JAT)*ALPHA(JAT)+AUTFRE)) THEN
+                  IF(IFROZA(JAT).EQ.0)IFROZB(IAT)=0
+                END IF
+              END IF
+ 300       CONTINUE
+ 200    CONTINUE
+        DO IAT = 1, NAT
+           IF(IFROZB(IAT).EQ.1) THEN
+             METHOD(IAT) =  1
+             INITS(IAT)  =  NTSFRZ
+           END IF
+        END DO
+C       --CHANGE UNITS BACK--
+        DO IAT = 1, NAT
+           XE(IAT)=XE(IAT)/TOANGS
+           YE(IAT)=YE(IAT)/TOANGS
+           ZE(IAT)=ZE(IAT)/TOANGS
+        END DO
+      END IF
+C
+      JRET=0
+      CALL NAMEIO(IR,JRET,TESCAV,NNAM,QNAM,KQNAM,
+     *            INITS,NTSALL,METHOD,MTHALL,MTHAUT,AREATL,NTSFRZ,
+     *            KEEPSM,AREAKP,AUTFRE,BONDRY,
+     *            0,0,0,
+     *   0,0,0,0,0,  0,0,0,0,0,
+     *   0,0,0,0,0,  0,0,0,0,0,   0,0,0,0,0,  0,0,0,0,0,
+     *   0,0,0,0,0,  0,0,0,0,0,   0,0,0,0,0,  0,0,0,0,0)
+      IF(JRET.EQ.2) THEN
+         IF(MASWRK) WRITE(IW,*)'**** ERROR IN $TESCAV INPUT'
+         CALL ABRT
+      END IF
+      IF(MASWRK) WRITE(IW,9000) NTSALL,MTHALL,MTHAUT,
+     *   AUTFRE,NTSFRZ,KEEPSM,AREAKP,BONDRY,AREATL
+C
+C     - ENFORCE FIXPVA - IF USED, ALL SPHERES MUST BE TILED THIS WAY
+C
+      DO I = 1, MXSP
+         IF(METHOD(I).EQ.4) MTHALL = 4
+      END DO
+      IF(MTHALL.EQ.4) THEN
+         DO I = 1, MXSP
+            METHOD(I) = 4
+         END DO
+      END IF
+C
+C       KILL SOME OPTIONS THAT AREN'T YET FINISHED CODING
+C       IT IS INTERESTING THAT IDISP=1 SEEMINGLY WORKS WITH MTHALL=4.
+C
+      IF(MTHALL.EQ.4) THEN
+         IF(IDP.GT.0 .OR. IKREP.GT.0) THEN
+            NERR=NERR+1
+            IF(MASWRK) WRITE(IW,8002)
+         END IF
+      END IF
+ 8002 FORMAT(/1X,'*** ERROR ***'/
+     *        1X,'THE NEW MTHALL=4 TESSELATION (PREFERRED TESSELATION)'/
+     *        1X,'IS INCOMPATIBLE WITH IDP=1 AND/OR IREP=1 AT PRESENT'/
+     *        1X,'PLEASE CHOOSE AN ALTERNATE TESSELATION,'/
+     *        1X,'OR REMOVE THOSE INCOMPATIBLE OPTIONS FROM YOUR INPUT')
+C
+      DO I = 1, I_NESF
+         IF(INITS(I).NE. 60.AND.
+     *      INITS(I).NE.240.AND.
+     *      INITS(I).NE.960    )INITS(1)=-1
+         IF(METHOD(I).NE.1.AND.
+     *      METHOD(I).NE.2.AND.
+     *      METHOD(I).NE.3.AND.
+     *      METHOD(I).NE.4    )METHOD(1)=-1
+      END DO
+      IF(INITS(1).EQ.-1) THEN
+           IF(MASWRK) WRITE(IW,*)
+     *       'NUMBERS IN INITS MUST BE 60, 240 OR 960'
+           NERR=NERR+1
+      END IF
+      IF(METHOD(1).EQ.-1) THEN
+           IF(MASWRK) WRITE(IW,*)
+     *       'NUMBERS IN METHOD MUST BE 1 OR 2 OR 3 OR 4'
+           NERR=NERR+1
+      END IF
+C
+      IF(NERR.GT.0) THEN
+        IF(MASWRK) WRITE(IW,*)'PLEASE FIX THE ERROR(S) IN $TESCAV'
+        CALL ABRT
+        STOP
+      END IF
+C
+      IF(MASWRK) THEN
+        DO I = 1, I_NESF
+          IF(METHOD(I).EQ.1) WRITE(IW,9010) I,INITS(I),'GEPOL-GB'
+          IF(METHOD(I).EQ.2) WRITE(IW,9010) I,INITS(I),'GEPOL-AS'
+          IF(METHOD(I).EQ.3) WRITE(IW,9010) I,INITS(I),'GEPOL-RT'
+          IF(METHOD(I).EQ.4) WRITE(IW,9010) I,INITS(I),'  FIXPVA'
+        ENDDO
+      END IF
+C
+      IF(MXTS.EQ.0) THEN
+C       VERY SMALL MOLECULES DO NOT HAVE MUCH REDUCTION OF TESSERAE
+C       RELATIVE TO THE MAXIMUM VALUE OF NAT*NTSALL.
+C       WRITE(6,*) 'WWWSPH',NESF,NESFP,NESFF,I_NESF,L_AST
+        NTESALL=NTSALL
+        IF(MTHALL.EQ.3) NTESALL=MAX(NTESALL,960)
+C       GEPOL-RT ALWAYS GENERATES 960 TES/SPH?!!!
+C       EVEN THAT IS INSUFFICIENT.
+        IF(I_NESF.LE.20) THEN
+          MXTS=I_NESF*NTESALL
+        ELSE IF(I_NESF.LE.2000) THEN
+          MXTS=(I_NESF*NTESALL*2)/3
+        ELSE IF(I_NESF.LE.10000) THEN
+          MXTS=(I_NESF*NTESALL)/3
+        ELSE
+          MXTS=(I_NESF*NTESALL)/4
+        ENDIF
+      ENDIF
+      RETURN
+C
+ 9000 FORMAT(/5X,28(1H-)/
+     *   5X,'INPUT FOR TESSERA DEFINITION'/5X,28(1H-)/
+     *   5X,'NTSALL  =',I10,    5X,'MTHALL  =',I10/
+     *   5X,'MTHAUT  =',I10,    5X,'AUTFRE  =',F10.4/
+     *   5X,'NTSFRZ  =',I10,    5X,'KEEPSM  =',I10/
+     *   5X,'AREAKP  =',F10.4,  5X,'BONDRY  =',F10.4/
+     *   5X,'AREATL  =',F10.4//
+     *   5X,'SPHERE     INITS       METHOD')
+ 9010 FORMAT(5X,I6,5X,I5,5X,A)
+      END
+C*MODULE PCMCV2  *DECK CPCMMV
+      SUBROUTINE CPCMMV(DMATM1,WORK,IPVT,XCTS,YCTS,ZCTS,AS)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      DIMENSION DMATM1(NTS,NTS),WORK(NTS),IPVT(NTS),
+     *          XCTS(*),YCTS(*),ZCTS(*),AS(*)
+C
+      DIMENSION DET(2)
+C
+      LOGICAL GOPARR, DSKWRK, MASWRK
+C
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMOPT/ RABI,RASC,REFPOL,THRSLS,DENSLS,WB,WA,ETA2,GD,EVAC,
+     *                RHOW,PM,AREATL,AREAKP,BONDRY,OMEGA,RET,FRO,EPSINF,
+     *                EPS,DR,RSOLV,VMOL,TCE,STEN,DSTEN,CMF,TABS,IDIRCT,
+     *                IPCDER,IDP,ICOMP,IFIELD,ICAV,IDISP,IPRINT,IRETCAV,
+     *                ICENT,IFAST,NEVAL,IEFPOL,KEEPSM,IMGABI,IMGASC,NADD
+C
+      DATA FPI/12.56637061D+00/
+C
+C        COMPUTE THE C AND THEN C-INVERSE MATRIX FOR C-PCM
+C
+         IF(MASWRK) WRITE(IW,*) ' -------------------'
+         IF(MASWRK) WRITE(IW,*) ' -- MATRIX C^(-1) --'
+         IF(MASWRK) WRITE(IW,*) ' -------------------'
+C
+C   COMPUTE THE C MATRIX, STORED AT -DMATM1-
+C   C-PCM
+C
+      IF(MASWRK) WRITE(IW,*)' '
+      IF(MASWRK) CALL TIMIT(1)
+      IF(MASWRK) WRITE(IW,*)'STEP 1: COMPUTING MATRIX C '
+C
+      DMATM1(NTS,NTS)=-1.070D+00*SQRT(FPI*AS(NTS))
+      DO 200 I=1,NTS-1
+        DMATM1(I,I)=-1.070D+00*SQRT(FPI*AS(I))
+C
+C       INITIALIZE PARALLEL
+C       IPCOUNT = ME - 1
+C       CALL VCLR(DDIMT1,1,NTS)
+C
+        DO 210 J=I+1,NTS
+C         GO PARALLEL!
+C         IF(GOPARR) THEN
+C         IPCOUNT = IPCOUNT + 1
+C         IF(MOD(IPCOUNT,NPROC).NE.0) GO TO 210
+C         END IF
+C
+          XI=XCTS(I)
+          YI=YCTS(I)
+          ZI=ZCTS(I)
+          XJ=XCTS(J)
+          YJ=YCTS(J)
+          ZJ=ZCTS(J)
+          DRIJ=SQRT((XI-XJ)**2+(YI-YJ)**2+(ZI-ZJ)**2)
+          DMATM1(I,J)=-AS(J)/DRIJ
+          DMATM1(J,I)=-AS(I)/DRIJ
+ 210    CONTINUE
+ 200  CONTINUE
+C
+C   SUM UP
+C     IF(GOPARR) THEN
+C       CALL DDI_GSUMF(2405,DDIMT1,NTS)
+C     END IF
+C
+      IF(IPRINT.EQ.1 .AND. MASWRK) THEN
+         WRITE(IW,*) ' CPCMMV: THE C MATRIX IS'
+         CALL PRSQ(DMATM1,NTS,NTS,NTS)
+      END IF
+C
+      IF(MASWRK) WRITE(IW,*)' '
+      IF(MASWRK) CALL TIMIT(1)
+      IF(MASWRK) WRITE(IW,*)'STEP 2: COMPUTING MATRIX C^(-1) '
+C
+      INFO=0
+      CALL DGEFA(DMATM1,NTS,NTS,IPVT,INFO)
+      IF(INFO.NE.0) THEN
+         IF(MASWRK) WRITE(IW,*) ' THE C MATRIX IS SINGULAR'
+         CALL ABRT
+         STOP
+      END IF
+C
+      CALL DGEDI(DMATM1,NTS,NTS,IPVT,DET,WORK,01)
+C
+      IF(IPRINT.EQ.1 .AND. MASWRK) THEN
+         WRITE(IW,*) ' CPCMMV: THE C INVERSE MATRIX IS'
+         CALL PRSQ(DMATM1,NTS,NTS,NTS)
+      END IF
+C
+      RETURN
+      END
+C*MODULE PCMCV2  *DECK DERCCMX
+      SUBROUTINE DERCCMX(XCTS,YCTS,ZCTS,AS,QSN,QSE,QSND,QSED,
+     *                   Q_FS,Q_IND,Q2,
+     *                   XE,YE,ZE,RE,ISPHE,PCMCDR)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      PARAMETER (MXATM=2000, MXFRG=1050,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      LOGICAL GOPARR, DSKWRK, MASWRK, TDDFT, MP2PCM
+C
+      DIMENSION XCTS(*),YCTS(*),ZCTS(*),AS(*),QSN(*),QSE(*),
+     *          QSND(*),QSED(*),Q_FS(*),
+     *          Q_IND(*),Q2(*),XE(*),YE(*),ZE(*),RE(*),ISPHE(*),
+     *          PCMCDR(3,*)
+C
+      COMMON /FMCOM / XX(1)
+      COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
+      COMMON /FMOPNT/ LICHFG,LMULFG,LIDMREC,LFRGNAM,LLAYFRG,LINDAT,
+     *                LNCBS,LFMOZAN,LFMOC,LFMOMAS,LIZBAS,LIAGLOB,LIBDGH,
+     *                LIABDFG,LJABDFG,LNCAO,LIDXCAO,LIAPRJO,LJAPRJO,
+     *                LCOREAO,LOCCCOR,LSHIFTB,LIODFMO,LFMODA,LFMODB,
+     *                LFMOESPA,LFMOESPB,LLOCFMO,LSCFFRG,LFMOSCF,LRIJ,
+     *                LPOPMUL,LPOPMAT,LIALOC,LINDBD,LIATFRG,LINDFRG,
+     *                LINDGFRG,LNATFRG,LNAT0FRG,LIANFRG,LZANFRG,LCFRG,
+     *                LLIBISH,LLIBNSH,LLIBNG,LINDATG,LFMOBUF(3),LFMODE,
+     *                LNUMFRG,LLOCTAT,LIAOGLOB,LLOADM,LFMOGE,LDGRID,
+     *                LIODCFMO,LJOB2GRP,LFMOPG,LEMOCDR,LUNTXYZ,LUNTROT,
+     *                LSTONEP,LMAPSU,LFRGMUL,LCLMO,LIALMO,LINDLMO,
+     *                LATCLMO,LLMOBDF,LFGFLMO,LNFGLMO,LLFGLMO,LPFGLMO,
+     *                LPOPDMAT
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /MACHIN/ NWDVAR,MAXFM,MAXSM,LIMFM,LIMSM
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMITR/ RCUT(2),THRES,IPCMIT,IMUL,MXDIIS,NREG,MXITR1,
+     *                MXITR2,MODPAP
+      COMMON /PCMOPT/ RABI,RASC,REFPOL,THRSLS,DENSLS,WB,WA,ETA2,GD,EVAC,
+     *                RHOW,PM,AREATL,AREAKP,BONDRY,OMEGA,RET,FRO,EPSINF,
+     *                EPS,DR,RSOLV,VMOL,TCE,STEN,DSTEN,CMF,TABS,IDIRCT,
+     *                IPCDER,IDP,ICOMP,IFIELD,ICAV,IDISP,IPRINT,IRETCAV,
+     *                ICENT,IFAST,NEVAL,IEFPOL,KEEPSM,IMGABI,IMGASC,NADD
+      COMMON /PCMPAR/ IPCM,NFT26,NFT27,IKREP,IEF,IP_F,NFMOPCM
+      COMMON /PCMPNT/ LXYZRE,LSSFE,LLIST,LALPCM,LRINPCM,LINAPCM,LINFPCM,
+     *                LINIPCM,LMEPCM,LAXYZCT,LXYZCT2,LNVERT,LQSN,LQSE,
+     *                LQFS,LQIND,LISPHE,LVAD,LQOR,LVECMUL,LAIPRJ,LFIPRJ,
+     *                LPEL,LPCMCDR,LDAI,LIDDAI,LQSND,LQSED
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+      COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
+     *                MPLEVL,MPCTYP
+C
+      DATA CHECK,RNONE/8HCHECK   ,8HNONE    /
+C
+C     ----- C-PCM AND IEF-PCM GRADIENT CORRECTIONS -----
+C
+      TDDFT=.FALSE.
+      IF(TDDFTYP.NE.RNONE) TDDFT=.TRUE.
+      MP2PCM=MPLEVL.EQ.2
+      L1 = NUM
+      L2 = (NUM*NUM+NUM)/2
+C
+      IF(TDDFT.OR.MP2PCM) THEN
+         NTSPAR=(NTS-1)/NPROC+1
+         MXDII1=MXDIIS+1
+      ENDIF
+C
+      LFIXPV = 0
+      IF(IPCDER.EQ.3) LFIXPV = 3*20*MXTS
+      LFIXPV2 = 0
+      IF(IPCDER.EQ.3) LFIXPV2= 21*MXTS/NWDVAR + 1
+C
+      CALL VALFM(LOADFM)
+      LD     = LOADFM + 1
+      LSCR   = LD     + L2
+      LFLD   = LSCR   + L2
+      LFLW   = LFLD   + 3*L2
+      LSOLEF = LFLW   + 3*225
+      LSOLQM = LSOLEF + 6*NFRG
+      LFEQ   = LSOLQM + 3*NAT
+      LFEQWRK= LFEQ   + 3*NAT*NTS
+      LQT    = LFEQWRK+ 3*NAT*NTS
+      LVECTMP= LQT    + NTS
+      LFFRGQ = LVECTMP+ NTS
+      LAST   = LFFRGQ + 6*NFRG*NTS
+C
+      IF(TDDFT) THEN
+         LQPOTXY= LAST
+         LQPOTMN= LQPOTXY+ NTS
+         LQ0    = LQPOTMN+ NTS
+         LQ1    = LQ0    + NTS
+         LQ3    = LQ1    + NTS
+         LD0    = LQ3    + NTS
+         LQA    = LD0    + NTS
+         LDIMAT = LQA    + NTS
+         LQREP  = LDIMAT + MXDII1*MXDII1
+         LTMP0  = LQREP  + NTSPAR*MXDII1*2
+         LTMP1  = LTMP0  + NTS*3
+         LTMP2  = LTMP1  + MXDII1
+         LIPVT  = LTMP2  + MXDII1*MXDII1
+         LRMUL  = LIPVT  + MXDII1
+         LQSEXY = LRMUL  + MXSP*10
+         LQSEMN = LQSEXY + NTS
+         LTA    = LQSEMN + NTS
+         LV1    = LTA    + L2
+         LDTEMP = LV1    + L2
+         LAST   = LDTEMP + L1*L1
+      ELSE
+         LTA    = LAST
+         LV1    = LAST
+         LQSEXY = LAST
+         LQSEMN = LAST
+      ENDIF
+      IF(MP2PCM) THEN
+         LQPOTMP= LAST
+         LQ0    = LQPOTMP+ NTS
+         LQ1    = LQ0    + NTS
+         LQ3    = LQ1    + NTS
+         LD0    = LQ3    + NTS
+         LQA    = LD0    + NTS
+         LDIMAT = LQA    + NTS
+         LQREP  = LDIMAT + MXDII1*MXDII1
+         LTMP0  = LQREP  + NTSPAR*MXDII1*2
+         LTMP1  = LTMP0  + NTS*3
+         LTMP2  = LTMP1  + MXDII1
+         LIPVT  = LTMP2  + MXDII1*MXDII1
+         LRMUL  = LIPVT  + MXDII1
+         LQSEMP = LRMUL  + MXSP*10
+         LPMP   = LQSEMP + NTS
+         LAST   = LPMP   + L2
+      ELSE
+         LPMP   = LAST
+         LQSEMP = LAST
+      ENDIF
+      IF(NFMOPCM.EQ.0) THEN
+C       ELSE ALREADY ALLOCATED IN PCMMEM2
+        LDAI=LAST
+        LIDDAI = LDAI   + LFIXPV
+        LAST   = LIDDAI + LFIXPV2
+      ENDIF
+      NEED   = LAST   - LOADFM -1
+      CALL GETFM(NEED)
+      IF(EXETYP.EQ.CHECK) GO TO 600
+C
+      IF(IPCDER.EQ.2.OR.IPCDER.EQ.3) THEN
+        LEXT1=LAST
+        LEXT2=LAST
+C       LFMOPG AND LIAGLOB ARE ONLY DEFINED FOR FMO!
+        IF(NFG.NE.0) THEN
+          LEXT1=LFMOPG
+          LEXT2=LIAGLOB
+        ENDIF
+C
+        IF(IPCDER.EQ.3.AND.NFMOPCM.EQ.0) THEN
+          CALL DAREAD(IDAF,IODA,XX(LDAI),LFIXPV,334,0)
+          CALL DAREAD(IDAF,IODA,XX(LIDDAI),LFIXPV2,335,1)
+        ENDIF
+C
+        IF(TDDFT) THEN
+           CALL TDDFTQ(XX(LQPOTXY),XX(LQPOTMN),XX(LQ0),XX(LQ1),Q2,
+     *              XX(LQ3),XX(LD0),XX(LQA),XX(LDIMAT),XX(LQREP),
+     *              XX(LTMP0),XX(LTMP1),XX(LTMP2),XX(LIPVT),
+     *              XX(LRMUL),NTSPAR,XCTS,YCTS,ZCTS,AS,
+     *              XX(LQSEXY),XX(LQSEMN),XE,YE,ZE,RE,ISPHE,
+     *              XX(LLIST),XX(LTA),XX(LV1),L1,L2,MXDII1,XX(LDTEMP))
+        END IF
+C
+        IF(MP2PCM) THEN
+           CALL MP2CHG(XX(LQPOTMP),XX(LQ0),XX(LQ1),Q2,
+     *              XX(LQ3),XX(LD0),XX(LQA),XX(LDIMAT),XX(LQREP),
+     *              XX(LTMP0),XX(LTMP1),XX(LTMP2),XX(LIPVT),
+     *              XX(LRMUL),NTSPAR,XCTS,YCTS,ZCTS,AS,
+     *              XX(LQSEMP),XE,YE,ZE,RE,ISPHE,
+     *              XX(LLIST),XX(LPMP),L2,MXDII1)
+        END IF
+C
+        CALL CCMBEM(XX(LD),XX(LSOLEF),XX(LSOLQM),
+     *              XX(LFEQ),XX(LFFRGQ),XX(LQT),XX(LVECTMP),L2,NAT,
+     *              XCTS,YCTS,ZCTS,AS,QSN,QSE,QSND,QSED,Q_FS,
+     *              Q_IND,Q2,XE,YE,ZE,RE,ISPHE,
+     *              PCMCDR,XX(LEXT1),XX(LEXT2),XX(LDAI),XX(LIDDAI),
+     *              XX(LTA),XX(LV1),XX(LQSEXY),XX(LQSEMN),XX(LFEQWRK),
+     *              XX(LQSEMP),XX(LPMP))
+      END IF
+C
+  600 CONTINUE
+      CALL RETFM(NEED)
+C
+      IF(MASWRK.AND.NPRINT.NE.817) WRITE(IW,*)
+      IF(MASWRK.AND.NPRINT.NE.817) WRITE(IW,*)
+     *      '.... DONE WITH PCM CONTRIBUTION TO GRADIENT ....'
+C
+      CALL TIMIT(1)
+      RETURN
+      END
+C*MODULE PCMCV2  *DECK CCMBEM
+      SUBROUTINE CCMBEM(DEN,DSOLEF,DSOLQM,FEQ,FFRGQ,QT,VECTMP,
+     *                  L2,NATM,XCTS,YCTS,ZCTS,AS,QSN,QSE,QSND,QSED,
+     *                  Q_FS,Q_IND,
+     *                  Q2,XE,YE,ZE,RE,ISPHE,PCMCDR,FMOPG,IAGLOB,DAI,
+     *                  IDDAI,TA,V1,QSEXY,QSEMN,FEQWRK,QSEMP,PMP)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      PARAMETER (MXATM=2000, MXFRG=1050, MXFGPT=12000,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      LOGICAL GOPARR, DSKWRK, MASWRK, TDDFT, MP2PCM
+C
+      DIMENSION DEN(L2),DSOLEF(6,NFRG),DSOLQM(3,NATM),
+     *          FEQ(3,NATM,NTS),FFRGQ(6,NFRG,NTS),
+     *          QT(NTS),VECTMP(*),
+     *          XCTS(*),YCTS(*),ZCTS(*),AS(*),QSN(*),QSE(*),
+     *          QSND(*),QSED(*),Q_FS(*),
+     *          Q_IND(*),Q2(*),XE(*),YE(*),ZE(*),RE(*),ISPHE(*),
+     *          PCMCDR(3,*),FMOPG(3,*),IAGLOB(*),
+     *          TA(*),V1(*),QSEXY(*),QSEMN(*),FEQWRK(3,NATM,NTS),
+     *          QSEMP(*),PMP(*)
+      DIMENSION DAI(3,20,MXTS),IDDAI(21,MXTS)
+C
+      COMMON /FMCOM / XX(1)
+      COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
+     *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
+     *                ATORQ(3,MXFRG)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMEPS/ EPSHET(MXATM),IHET
+      COMMON /PCMOPT/ RABI,RASC,REFPOL,THRSLS,DENSLS,WB,WA,ETA2,GD,EVAC,
+     *                RHOW,PM,AREATL,AREAKP,BONDRY,OMEGA,RET,FRO,EPSINF,
+     *                EPS,DR,RSOLV,VMOL,TCE,STEN,DSTEN,CMF,TABS,IDIRCT,
+     *                IPCDER,IDP,ICOMP,IFIELD,ICAV,IDISP,IPRINT,IRETCAV,
+     *                ICENT,IFAST,NEVAL,IEFPOL,KEEPSM,IMGABI,IMGASC,NADD
+      COMMON /PCMPAR/ IPCM,NFT26,NFT27,IKREP,IEF,IP_F,NFMOPCM
+      COMMON /PCMPLY/ STOT,VOL,CCX,CCY,CCZ,RDIF,NESF,NESFP,NESFF,I_NESF,
+     *                L_AST
+      COMMON /PCMTMP/ IDSP(MXATM+MXFRG*5),DPCMFRG(6,MXFRG),
+     *                EGPCM(3,MXATM)
+      COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
+     *                MPLEVL,MPCTYP
+C
+      DATA ZERO, ONE /0.0D+00, 1.0D+00/
+      DATA PT5/0.5D+00/
+      DATA FPI/12.56637062D+00/
+      DATA UHF,ROHF,GVB/8HUHF     ,8HROHF    ,8HGVB     /
+      DATA RNONE  /8HNONE    /
+C---------------------------------------------------------------------
+C     COMPUTE THE C-PCM AND IEF-PCM GRADIENTS
+C     HUI LI
+C     UNIVERSITY OF IOWA
+C     MAR 27TH, 2003
+C---------------------------------------------------------------------
+C
+C     IN AN QM/EFP/PCM RUN, AN EFP(EFPA) AND ITS
+C     ASC(ASCA) EXPERIENCE THE FOLLOWING FORCES/TORQUES:
+C        EFPA <-- OTHER ASC
+C        ASCA <-- OTHER ASC, OTHER EFP, QM ATOMS
+C     FOR AN QM ATOM(ATOMB) AND ITS ASC(ASCB):
+C        ATOMB <-- OTHER ASC
+C        ASCB  <-- OTHER ASC, OTHER QM ATOMS, EFP
+C     ***********************************************
+C
+      TDDFT = TDDFTYP.NE.RNONE
+      MP2PCM= MPLEVL.EQ.2
+C
+      IF(NFMOPCM.NE.0) CALL VCLR(FMOPG,1,3*NATFMO)
+C
+C     -- READ DENSITY MATRIX
+C
+      IF(NAT.GT.0) THEN
+         IF(TDDFT.OR.MP2PCM) THEN
+            CALL DAREAD(IDAF,IODA,DEN,L2,308,0)
+         ELSE
+            CALL DAREAD(IDAF,IODA,DEN,L2,16,0)
+         END IF
+         IF(SCFTYP.EQ.ROHF .OR. SCFTYP.EQ.UHF
+     *                     .OR. SCFTYP.EQ.GVB) THEN
+            CALL VALFM(LOADFM)
+            LDENB = LOADFM + 1
+            LAST  = LDENB  + L2
+            NEED  = LAST - LOADFM - 1
+            CALL GETFM(NEED)
+            CALL DENDD1(DEN,XX(LDENB),L2)
+            CALL RETFM(NEED)
+         END IF
+      END IF
+C
+C     -- COMBINE THE SURFACE CHARGES
+C
+      DO ITS=1,NTS
+         QT(ITS)=QSE(ITS)+QSN(ITS)+Q_FS(ITS)+Q_IND(ITS)
+      ENDDO
+C
+C     -- ZERO OUT Q2 FOR IEF=10
+C
+      IF(IEF.EQ.10) THEN
+         DO ITS=1,NTS
+            Q2(ITS)=ZERO
+         END DO
+      END IF
+C
+C     -- COMPUTE THE FORCE IMPOSED ON ELECTRONS BY ASC
+C        THE PAIRS OF FORCES STORED IN FEQ
+C
+      IF(NAT.GT.0) CALL FELECQ(DEN,QT,FEQ,L2,XCTS,YCTS,ZCTS)
+C
+C     -- ADD TDDFT CONTRIBUTION TO FEQ
+C
+      IF(TDDFT) THEN
+         CALL FELECQ(DEN,QSEMN,FEQWRK,L2,XCTS,YCTS,ZCTS)
+         CALL VADD(FEQWRK,1,FEQ,1,FEQ,1,3*NATM*NTS)
+         CALL FELECQ(TA,QSE,FEQWRK,L2,XCTS,YCTS,ZCTS)
+         CALL VADD(FEQWRK,1,FEQ,1,FEQ,1,3*NATM*NTS)
+         CALL FELECQ(V1,QSEXY,FEQWRK,L2,XCTS,YCTS,ZCTS)
+         CALL VADD(FEQWRK,1,FEQ,1,FEQ,1,3*NATM*NTS)
+         CALL VADD(FEQWRK,1,FEQ,1,FEQ,1,3*NATM*NTS)
+      ENDIF
+C
+C     -- ADD MP2 CONTRIBUTION TO FEQ
+      IF(MP2PCM) THEN
+         CALL FELECQ(DEN,QSEMP,FEQWRK,L2,XCTS,YCTS,ZCTS)
+         CALL VADD(FEQWRK,1,FEQ,1,FEQ,1,3*NATM*NTS)
+         CALL FELECQ(PMP,QSE,FEQWRK,L2,XCTS,YCTS,ZCTS)
+         CALL VADD(FEQWRK,1,FEQ,1,FEQ,1,3*NATM*NTS)
+      ENDIF
+C
+C     -- COMPUTE THE FORCE IMPOSED ON EACH EFP BY ASC ON EACH TESSERAE
+C        THE PAIRS OF FORCES STORED IN FFRGQ
+C
+      CALL FFRAGQ(FFRGQ,QT,XCTS,YCTS,ZCTS)
+C
+C     -- COMPUTE THE VECTOR A^(-1)*S*A^(-1)*Q2 STORE IN VECTMP
+C
+      IF(IEF.EQ.3) THEN
+      DO I = 1, NTS
+          VECTMP(I)=ZERO
+          XI=XCTS(I)
+          YI=YCTS(I)
+          ZI=ZCTS(I)
+          DO J = 1, NTS
+            IF(J.EQ.I) THEN
+              SIJ=1.070D+00*SQRT(FPI/AS(I))
+            ELSE
+              XJ=XCTS(J)
+              YJ=YCTS(J)
+              ZJ=ZCTS(J)
+              DRIJ=SQRT((XI-XJ)**2+(YI-YJ)**2+(ZI-ZJ)**2)
+              SIJ=1/DRIJ
+            END IF
+            VECTMP(I)=VECTMP(I)+SIJ*Q2(J)
+          END DO
+      END DO
+      END IF
+C
+C
+C     *****************************************
+C      COMPUTE THE GRADIENTS FOR EACH QM ATOM
+C     *****************************************
+C
+      CALL VCLR(DSOLQM,1,3*NATM)
+C
+C     - INITIALIZE PARALLEL -
+C
+      IPCOUNT = ME - 1
+C
+      DO 100 IAT = 1, NAT
+C        GO PARALLEL!
+         IF(GOPARR) THEN
+           IPCOUNT = IPCOUNT + 1
+           IF(MOD(IPCOUNT,NPROC).NE.0) GO TO 100
+         END IF
+C
+         IATGLB = IAT
+         IF(NFMOPCM.GT.0) IATGLB = IAGLOB(IAT)
+C
+C        TERM 1. FORCE IMPOSED ON ELE(IAT) AND NUC(IAT) BY OTHER ASC
+C
+         FELEQX = ZERO
+         FELEQY = ZERO
+         FELEQZ = ZERO
+         FNUCQX = ZERO
+         FNUCQY = ZERO
+         FNUCQZ = ZERO
+         DO ITS = 1, NTS
+            IF(ISPHE(ITS).NE.IATGLB) THEN
+C              - ELECTRONS -
+               FELEQX=FELEQX+FEQ(1,IAT,ITS)
+               FELEQY=FELEQY+FEQ(2,IAT,ITS)
+               FELEQZ=FELEQZ+FEQ(3,IAT,ITS)
+C              - NUCLEUS -
+               XI = XCTS(ITS)
+               YI = YCTS(ITS)
+               ZI = ZCTS(ITS)
+               XN = C(1,IAT)
+               YN = C(2,IAT)
+               ZN = C(3,IAT)
+               R2 = (XN-XI)**2+(YN-YI)**2+(ZN-ZI)**2
+               R  = SQRT(R2)
+               R3 = R*R2
+               DUM = ZAN(IAT)*QT(ITS)/R3
+               IF(TDDFT) DUM = DUM +ZAN(IAT)*QSEMN(ITS)/R3
+               IF(MP2PCM)DUM = DUM +ZAN(IAT)*QSEMP(ITS)/R3
+               FNUCQX = FNUCQX + DUM*(XI-XN)
+               FNUCQY = FNUCQY + DUM*(YI-YN)
+               FNUCQZ = FNUCQZ + DUM*(ZI-ZN)
+C
+C              - STORE THE FORCE ON OTHER ASC BY IAT
+C                FOR FMO-PCM GRADIENTS
+C                (ONLY FOR ASC OF ATOMS NOT BELONG TO CURRENT FMO)
+               IF(NFMOPCM.GT.0) THEN
+                  IATTS=ISPHE(ITS)
+                  DO JAT =1, NAT
+                     IF(IATTS.EQ.IAGLOB(JAT)) GOTO 90
+                  END DO
+                FMOPG(1,IATTS)=FMOPG(1,IATTS)-FEQ(1,IAT,ITS)-DUM*(XI-XN)
+                FMOPG(2,IATTS)=FMOPG(2,IATTS)-FEQ(2,IAT,ITS)-DUM*(YI-YN)
+                FMOPG(3,IATTS)=FMOPG(3,IATTS)-FEQ(3,IAT,ITS)-DUM*(ZI-ZN)
+  90             CONTINUE
+               END IF
+            END IF
+         END DO
+C
+C        TERM 2.A FORCE IMPOSED ON ASC(IAT) BY OTHER ASC
+C
+         FQQX  = ZERO
+         FQQY  = ZERO
+         FQQZ  = ZERO
+         FQ2QX = ZERO
+         FQ2QY = ZERO
+         FQ2QZ = ZERO
+         DO ITS = 1, NTS
+            IF(ISPHE(ITS).EQ.IATGLB) THEN
+               XI = XCTS(ITS)
+               YI = YCTS(ITS)
+               ZI = ZCTS(ITS)
+               DO JTS = 1, NTS
+                  IF(ISPHE(JTS).NE.IATGLB) THEN
+                     XJ = XCTS(JTS)
+                     YJ = YCTS(JTS)
+                     ZJ = ZCTS(JTS)
+                     R2 = (XJ-XI)**2+(YJ-YI)**2+(ZJ-ZI)**2
+                     R  = SQRT(R2)
+                     R3 = R*R2
+                     IF(IEF.EQ.10) THEN
+                        EI=EPSHET(ISPHE(ITS))/(EPSHET(ISPHE(ITS))-ONE)
+                        EJ=EPSHET(ISPHE(JTS))/(EPSHET(ISPHE(JTS))-ONE)
+                        QTIJTS=QSE(JTS)+QSE(JTS)-QSED(JTS)
+     *                        +QSN(JTS)+QSN(JTS)-QSND(JTS)
+     *                                            +Q_FS(JTS)+Q_IND(JTS)
+                        QTIITS=QSE(ITS)+QSE(ITS)-QSED(ITS)
+     *                        +QSN(ITS)+QSN(ITS)-QSND(ITS)
+     *                                            +Q_FS(ITS)+Q_IND(ITS)
+                        QTDJTS=QSED(JTS)+QSND(JTS)+Q_FS(JTS)+Q_IND(JTS)
+                        QTDITS=QSED(ITS)+QSND(ITS)+Q_FS(ITS)+Q_IND(ITS)
+                        FT = PT5*(QTDITS*EJ*QTIJTS+QTIITS*EI*QTDJTS)/R3
+C
+                        IF(TDDFT) THEN
+                           SCALE = EPS/(EPS-ONE)
+                           FT=FT+SCALE*(2.0D+00*QSEXY(ITS)*QSEXY(JTS)/R3
+     *                                + QTIJTS*QSEMN(ITS)/R3
+     *                                + QTIITS*QSEMN(JTS)/R3)
+                        END IF
+                        IF(MP2PCM)THEN
+                           SCALE = EPS/(EPS-ONE)
+                           FT=FT+SCALE*(QTIJTS*QSEMP(ITS)/R3
+     *                                + QTIITS*QSEMP(JTS)/R3)
+                        END IF
+C
+C                           ALL IEF OTHER THAN CPCM:
+                     ELSE
+                        FT = QT(ITS)*QT(JTS)/R3
+                     END IF
+C
+                     FQQX = FQQX - (XI-XJ)*FT
+                     FQQY = FQQY - (YI-YJ)*FT
+                     FQQZ = FQQZ - (ZI-ZJ)*FT
+C
+                     IF(IEF.EQ.3) THEN
+                        FT2= -Q2(ITS)*QT(JTS)/R3
+                        FQ2QX = FQ2QX - (XI-XJ)*FT2
+                        FQ2QY = FQ2QY - (YI-YJ)*FT2
+                        FQ2QZ = FQ2QZ - (ZI-ZJ)*FT2
+                     END IF
+                  END IF
+               END DO
+            END IF
+         END DO
+C
+C
+C
+C        TERM 2.B FORCE OF Q2Q2 FOR IEF-PCM PHASE 2
+C
+         FQ2Q2X=ZERO
+         FQ2Q2Y=ZERO
+         FQ2Q2Z=ZERO
+         IF(IEF.EQ.3) THEN
+            DO I = 1, NTS
+               XI=XCTS(I)
+               YI=YCTS(I)
+               ZI=ZCTS(I)
+               RIX=ZERO
+               RIY=ZERO
+               RIZ=ZERO
+               IF(ISPHE(I).EQ.IATGLB) THEN
+                  RIX=ONE
+                  RIY=ONE
+                  RIZ=ONE
+               END IF
+               DO J = 1, NTS
+                  AJ=AS(J)
+                  LJ=ISPHE(J)
+                  RJ=RE(LJ)
+                  XJ=XCTS(J)
+                  YJ=YCTS(J)
+                  ZJ=ZCTS(J)
+                  XCJ=(XJ-XE(LJ))/RJ
+                  YCJ=(YJ-YE(LJ))/RJ
+                  ZCJ=(ZJ-ZE(LJ))/RJ
+                  RJX=ZERO
+                  RJY=ZERO
+                  RJZ=ZERO
+                  IF(ISPHE(J).EQ.IATGLB) THEN
+                     RJX=ONE
+                     RJY=ONE
+                     RJZ=ONE
+                  END IF
+                  IF(J.EQ.I) THEN
+                     FT=ZERO
+                  ELSE
+                     DRIJ=SQRT((XI-XJ)**2+(YI-YJ)**2+(ZI-ZJ)**2)
+                     DRIJ3=DRIJ**3
+                     FT=-(EPS-ONE)*Q2(I)*AJ/FPI/DRIJ3*VECTMP(J)
+                  END IF
+                  FQ2Q2X=FQ2Q2X+(RIX-RJX)*XCJ*FT
+                  FQ2Q2Y=FQ2Q2Y+(RIY-RJY)*YCJ*FT
+                  FQ2Q2Z=FQ2Q2Z+(RIZ-RJZ)*ZCJ*FT
+               END DO
+            END DO
+         END IF
+C
+C        TERM 3. FORCE IMPOSED ON ASC(IAT) BY OTHER ELEC/NUC
+C
+         FQELEX = ZERO
+         FQELEY = ZERO
+         FQELEZ = ZERO
+         FQNUCX = ZERO
+         FQNUCY = ZERO
+         FQNUCZ = ZERO
+         DO ITS = 1, NTS
+            IF(ISPHE(ITS).EQ.IATGLB) THEN
+               DO JAT = 1, NAT
+                  IF(JAT.NE.IAT) THEN
+C                    - OTHER ELECTRONS -
+                     FQELEX=FQELEX - FEQ(1,JAT,ITS)
+                     FQELEY=FQELEY - FEQ(2,JAT,ITS)
+                     FQELEZ=FQELEZ - FEQ(3,JAT,ITS)
+C                    - OTHER NUCLEI -
+                     XI = XCTS(ITS)
+                     YI = YCTS(ITS)
+                     ZI = ZCTS(ITS)
+                     XN = C(1,JAT)
+                     YN = C(2,JAT)
+                     ZN = C(3,JAT)
+                     R2 = (XN-XI)**2+(YN-YI)**2+(ZN-ZI)**2
+                     R  = SQRT(R2)
+                     R3 = R*R2
+C
+                     DUM = ZAN(JAT)*QT(ITS)/R3
+                     IF (TDDFT) DUM = DUM+ZAN(JAT)*QSEMN(ITS)/R3
+                     IF (MP2PCM)DUM = DUM+ZAN(JAT)*QSEMP(ITS)/R3
+C
+                     FQNUCX = FQNUCX + DUM*(XN-XI)
+                     FQNUCY = FQNUCY + DUM*(YN-YI)
+                     FQNUCZ = FQNUCZ + DUM*(ZN-ZI)
+                  END IF
+               END DO
+            END IF
+         END DO
+C
+C        TERM 4. FORCE IMPOSED ON ASC(IAT) BY EFPS
+C
+         FQEFPX = ZERO
+         FQEFPY = ZERO
+         FQEFPZ = ZERO
+         DO ITS = 1, NTS
+            IF(ISPHE(ITS).EQ.IATGLB) THEN
+               DO IFRG = 1, NFRG
+                  FQEFPX = FQEFPX - FFRGQ(1,IFRG,ITS)
+                  FQEFPY = FQEFPY - FFRGQ(2,IFRG,ITS)
+                  FQEFPZ = FQEFPZ - FFRGQ(3,IFRG,ITS)
+               END DO
+            END IF
+         END DO
+C
+C        TERM 5. FORCE DUE TO TESSARA AREA CHANGE (FIXPVA)
+C
+         FAX = ZERO
+         FAY = ZERO
+         FAZ = ZERO
+         IF(IPCDER.EQ.3) THEN
+         SQRTPI = SQRT(3.1415926535897932D+00)
+         DO ITS = 1, NTS
+            DO III = 1, IDDAI(21,ITS)
+               IF(IATGLB.EQ.IDDAI(III,ITS)) THEN
+                  IF(IEF.EQ.10) THEN
+                     QTIITS=QSE(ITS)+QSE(ITS)-QSED(ITS)
+     *                     +QSN(ITS)+QSN(ITS)-QSND(ITS)
+     *                                         +Q_FS(ITS)+Q_IND(ITS)
+                     QTDITS=QSED(ITS)+QSND(ITS)+Q_FS(ITS)+Q_IND(ITS)
+                     DUM=-1.07D+00*SQRTPI/SQRT(AS(ITS)**3)*
+     *                    0.5D+00*QTDITS*QTIITS
+C
+                     IF(TDDFT) THEN
+                        DUM = DUM -1.07D+00*SQRTPI/SQRT(AS(ITS)**3)*
+     *                     (QSEXY(ITS)*QSEXY(ITS)+QTIITS*QSEMN(ITS))
+                     END IF
+                     IF(MP2PCM)THEN
+                        DUM = DUM -1.07D+00*SQRTPI/SQRT(AS(ITS)**3)*
+     *                     (QTIITS*QSEMP(ITS))
+                     END IF
+C
+                     SCALE=EPSHET(ISPHE(ITS))/(EPSHET(ISPHE(ITS))-ONE)
+                     FAX=FAX+DUM*DAI(1,III,ITS)*SCALE
+                     FAY=FAY+DUM*DAI(2,III,ITS)*SCALE
+                     FAZ=FAZ+DUM*DAI(3,III,ITS)*SCALE
+                  ELSE
+                     DUM=-1.07D+00*SQRTPI/SQRT(AS(ITS)**3)*
+     *                    0.5D+00*QT(ITS)*QT(ITS)
+                     FAX=FAX+DUM*DAI(1,III,ITS)
+                     FAY=FAY+DUM*DAI(2,III,ITS)
+                     FAZ=FAZ+DUM*DAI(3,III,ITS)
+                  ENDIF
+               END IF
+            ENDDO
+         ENDDO
+         END IF
+C
+C
+C        COMBINE THE FORCES
+C
+         DSOLQM(1,IAT) = FELEQX + FNUCQX + FQQX   + FQ2QX
+     *                 + FQ2Q2X + FQELEX + FQNUCX + FQEFPX
+     *                 + FAX
+         DSOLQM(2,IAT) = FELEQY + FNUCQY + FQQY   + FQ2QY
+     *                 + FQ2Q2Y + FQELEY + FQNUCY + FQEFPY
+     *                 + FAY
+         DSOLQM(3,IAT) = FELEQZ + FNUCQZ + FQQZ   + FQ2QZ
+     *                 + FQ2Q2Z + FQELEZ + FQNUCZ + FQEFPZ
+     *                 + FAZ
+ 100  CONTINUE
+C
+C     - SUM UP -
+      IF(GOPARR) THEN
+         CALL DDI_GSUMF(2461,DSOLQM,3*NAT)
+          IF(NFMOPCM.NE.0) CALL DDI_GSUMF(2462,FMOPG,3*NATFMO)
+      END IF
+C
+C     ******************************************
+C      COMPUTE THE GRADIENTS FOR EACH FRAGMENT
+C     ******************************************
+C
+      DO 200 IFRG = 1, NFRG
+C
+C        TERM 1. FORCE/TORQUE IMPOSED ON EFP(IFRG) BY ALL ASC
+C
+         FEFPQX = ZERO
+         FEFPQY = ZERO
+         FEFPQZ = ZERO
+         TEFPQX = ZERO
+         TEFPQY = ZERO
+         TEFPQZ = ZERO
+         DO ITS = 1, NTS
+            FEFPQX = FEFPQX + FFRGQ(1,IFRG,ITS)
+            FEFPQY = FEFPQY + FFRGQ(2,IFRG,ITS)
+            FEFPQZ = FEFPQZ + FFRGQ(3,IFRG,ITS)
+            TEFPQX = TEFPQX + FFRGQ(4,IFRG,ITS)
+            TEFPQY = TEFPQY + FFRGQ(5,IFRG,ITS)
+            TEFPQZ = TEFPQZ + FFRGQ(6,IFRG,ITS)
+         END DO
+C
+C        TERM 2.A FORCE/TORQUE IMPOSED ON ASC(IFRG) BY OTHER ASC
+C
+         FQQX = ZERO
+         FQQY = ZERO
+         FQQZ = ZERO
+         TQQX = ZERO
+         TQQY = ZERO
+         TQQZ = ZERO
+         FQ2QX = ZERO
+         FQ2QY = ZERO
+         FQ2QZ = ZERO
+         TQ2QX = ZERO
+         TQ2QY = ZERO
+         TQ2QZ = ZERO
+         DO ITS = 1, NTS
+            IF(IDSP(ISPHE(ITS)).EQ.IFRG) THEN
+               XI = XCTS(ITS)
+               YI = YCTS(ITS)
+               ZI = ZCTS(ITS)
+               XEI= XE(ISPHE(ITS))
+               YEI= YE(ISPHE(ITS))
+               ZEI= ZE(ISPHE(ITS))
+               QTITS=QT(ITS)
+               DO JTS = 1, NTS
+                  IF(IDSP(ISPHE(JTS)).NE.IFRG) THEN
+                     XJ = XCTS(JTS)
+                     YJ = YCTS(JTS)
+                     ZJ = ZCTS(JTS)
+                     QTJTS=QT(JTS)
+                     R2= (XJ-XI)**2+(YJ-YI)**2+(ZJ-ZI)**2
+                     R = SQRT(R2)
+                     R3= R*R2
+                     FT = QTITS*QTJTS/R3
+                     FQQX = FQQX - (XI-XJ)*FT
+                     FQQY = FQQY - (YI-YJ)*FT
+                     FQQZ = FQQZ - (ZI-ZJ)*FT
+                     TQQX = TQQX + (YI-YJ)*FT*(ZEI-EFCENT(3,IFRG))
+     *                           - (ZI-ZJ)*FT*(YEI-EFCENT(2,IFRG))
+                     TQQY = TQQY + (ZI-ZJ)*FT*(XEI-EFCENT(1,IFRG))
+     *                           - (XI-XJ)*FT*(ZEI-EFCENT(3,IFRG))
+                     TQQZ = TQQZ + (XI-XJ)*FT*(YEI-EFCENT(2,IFRG))
+     *                           - (YI-YJ)*FT*(XEI-EFCENT(1,IFRG))
+                     IF(IEF.EQ.3) THEN
+                        FT2= -Q2(ITS)*QT(JTS)/ R3
+                        FQ2QX = FQ2QX - (XI-XJ)*FT2
+                        FQ2QY = FQ2QY - (YI-YJ)*FT2
+                        FQ2QZ = FQ2QZ - (ZI-ZJ)*FT2
+                        TQ2QX = TQ2QX + (YI-YJ)*FT2*(ZEI-EFCENT(3,IFRG))
+     *                                - (ZI-ZJ)*FT2*(YEI-EFCENT(2,IFRG))
+                        TQ2QY = TQ2QY + (ZI-ZJ)*FT2*(XEI-EFCENT(1,IFRG))
+     *                                - (XI-XJ)*FT2*(ZEI-EFCENT(3,IFRG))
+                        TQ2QZ = TQ2QZ + (XI-XJ)*FT2*(YEI-EFCENT(2,IFRG))
+     *                                - (YI-YJ)*FT2*(XEI-EFCENT(1,IFRG))
+                     END IF
+                  END IF
+               END DO
+            END IF
+         END DO
+C
+C        SCALE FOR C-PCM
+         IF(IEF.EQ.10)THEN
+            SCALE=EPS/(EPS-ONE)
+            FQQX=FQQX*SCALE
+            FQQY=FQQY*SCALE
+            FQQZ=FQQZ*SCALE
+            TQQX=TQQX*SCALE
+            TQQY=TQQY*SCALE
+            TQQZ=TQQZ*SCALE
+         END IF
+C
+C        TERM 2.B FORCE/TORQUE OF Q2Q2 FOR IEF-PCM PHASE 2
+C
+         FQ2Q2X = ZERO
+         FQ2Q2Y = ZERO
+         FQ2Q2Z = ZERO
+         TQ2Q2X = ZERO
+         TQ2Q2Y = ZERO
+         TQ2Q2Z = ZERO
+         IF(IEF.EQ.3) THEN
+            DO I = 1, NTS
+               XI=XCTS(I)
+               YI=YCTS(I)
+               ZI=ZCTS(I)
+               XEI= XE(ISPHE(I))
+               YEI= YE(ISPHE(I))
+               ZEI= ZE(ISPHE(I))
+               RIX=ZERO
+               RIY=ZERO
+               RIZ=ZERO
+               IF(IDSP(ISPHE(I)).EQ.IFRG) THEN
+                  RIX=ONE
+                  RIY=ONE
+                  RIZ=ONE
+               END IF
+               DO J = 1, NTS
+                  AJ=AS(J)
+                  LJ=ISPHE(J)
+                  RJ=RE(LJ)
+                  XJ=XCTS(J)
+                  YJ=YCTS(J)
+                  ZJ=ZCTS(J)
+                  XCJ=(XJ-XE(LJ))/RJ
+                  YCJ=(YJ-YE(LJ))/RJ
+                  ZCJ=(ZJ-ZE(LJ))/RJ
+                  RJX=ZERO
+                  RJY=ZERO
+                  RJZ=ZERO
+                  IF(IDSP(ISPHE(J)).EQ.IFRG) THEN
+                     RJX=ONE
+                     RJY=ONE
+                     RJZ=ONE
+                  END IF
+                  IF(J.EQ.I) THEN
+                     FT=ZERO
+                  ELSE
+                     DRIJ=SQRT((XI-XJ)**2+(YI-YJ)**2+(ZI-ZJ)**2)
+                     DRIJ3=DRIJ**3
+                     FT=-(EPS-ONE)*Q2(I)*AJ/FPI/DRIJ3*VECTMP(J)
+                  END IF
+                  FQ2Q2X=FQ2Q2X+(RIX-RJX)*XCJ*FT
+                  FQ2Q2Y=FQ2Q2Y+(RIY-RJY)*YCJ*FT
+                  FQ2Q2Z=FQ2Q2Z+(RIZ-RJZ)*ZCJ*FT
+                  TQ2Q2X=TQ2Q2X-(RIY-RJY)*YCJ*FT*(ZEI-EFCENT(3,IFRG))
+     *                         +(RIZ-RJZ)*ZCJ*FT*(YEI-EFCENT(2,IFRG))
+                  TQ2Q2Y=TQ2Q2Y-(RIZ-RJZ)*ZCJ*FT*(XEI-EFCENT(1,IFRG))
+     *                         +(RIX-RJX)*XCJ*FT*(ZEI-EFCENT(3,IFRG))
+                  TQ2Q2Z=TQ2Q2Z-(RIX-RJX)*XCJ*FT*(YEI-EFCENT(2,IFRG))
+     *                         +(RIY-RJY)*YCJ*FT*(XEI-EFCENT(1,IFRG))
+               END DO
+            END DO
+         END IF
+C
+C
+C        TERM 3.FORCE/TORQUE IMPOSED ON ASC(IFRG) BY QM ELECTRONS/NUCLEI
+C
+         FQELEX = ZERO
+         FQELEY = ZERO
+         FQELEZ = ZERO
+         TQELEX = ZERO
+         TQELEY = ZERO
+         TQELEZ = ZERO
+         FQNUCX = ZERO
+         FQNUCY = ZERO
+         FQNUCZ = ZERO
+         TQNUCX = ZERO
+         TQNUCY = ZERO
+         TQNUCZ = ZERO
+         IF(NAT.GT.0) THEN
+            DO ITS = 1, NTS
+               IF(IDSP(ISPHE(ITS)).EQ.IFRG) THEN
+                  XI = XCTS(ITS)
+                  YI = YCTS(ITS)
+                  ZI = ZCTS(ITS)
+                  XEI= XE(ISPHE(ITS))
+                  YEI= YE(ISPHE(ITS))
+                  ZEI= ZE(ISPHE(ITS))
+                  DO JAT = 1, NAT
+                     FQELEX = FQELEX - FEQ(1,JAT,ITS)
+                     FQELEY = FQELEY - FEQ(2,JAT,ITS)
+                     FQELEZ = FQELEZ - FEQ(3,JAT,ITS)
+                     TQELEX = TQELEX
+     *                      + FEQ(2,JAT,ITS)*(ZEI-EFCENT(3,IFRG))
+     *                      - FEQ(3,JAT,ITS)*(YEI-EFCENT(2,IFRG))
+                     TQELEY = TQELEY
+     *                      + FEQ(3,JAT,ITS)*(XEI-EFCENT(1,IFRG))
+     *                      - FEQ(1,JAT,ITS)*(ZEI-EFCENT(3,IFRG))
+                     TQELEZ = TQELEZ
+     *                      + FEQ(1,JAT,ITS)*(YEI-EFCENT(2,IFRG))
+     *                      - FEQ(2,JAT,ITS)*(XEI-EFCENT(1,IFRG))
+C
+                     XN = C(1,JAT)
+                     YN = C(2,JAT)
+                     ZN = C(3,JAT)
+                     R2 = (XN-XI)**2+(YN-YI)**2+(ZN-ZI)**2
+                     R  = SQRT(R2)
+                     R3 = R*R2
+                     DUM = ZAN(JAT) * QT(ITS) /R3
+                     FQNUCX = FQNUCX + DUM*(XN-XI)
+                     FQNUCY = FQNUCY + DUM*(YN-YI)
+                     FQNUCZ = FQNUCZ + DUM*(ZN-ZI)
+                     TQNUCX = TQNUCX - DUM*(YN-YI)*(ZEI-EFCENT(3,IFRG))
+     *                               + DUM*(ZN-ZI)*(YEI-EFCENT(2,IFRG))
+                     TQNUCY = TQNUCY - DUM*(ZN-ZI)*(XEI-EFCENT(1,IFRG))
+     *                               + DUM*(XN-XI)*(ZEI-EFCENT(3,IFRG))
+                     TQNUCZ = TQNUCZ - DUM*(XN-XI)*(YEI-EFCENT(2,IFRG))
+     *                               + DUM*(YN-YI)*(XEI-EFCENT(1,IFRG))
+                  END DO
+               END IF
+            END DO
+         END IF
+C
+C        TERM 4. FORCE/TORQUE IMPOSED ON ASC(IFRG) BY ALL EFPS
+C
+         FQEFPX = ZERO
+         FQEFPY = ZERO
+         FQEFPZ = ZERO
+         TQEFPX = ZERO
+         TQEFPY = ZERO
+         TQEFPZ = ZERO
+         DO ITS = 1, NTS
+            IF(IDSP(ISPHE(ITS)).EQ.IFRG) THEN
+               XI = XCTS(ITS)
+               YI = YCTS(ITS)
+               ZI = ZCTS(ITS)
+               XEI= XE(ISPHE(ITS))
+               YEI= YE(ISPHE(ITS))
+               ZEI= ZE(ISPHE(ITS))
+               DO JFRG = 1, NFRG
+                  FQEFPX = FQEFPX - FFRGQ(1,JFRG,ITS)
+                  FQEFPY = FQEFPY - FFRGQ(2,JFRG,ITS)
+                  FQEFPZ = FQEFPZ - FFRGQ(3,JFRG,ITS)
+                  TQEFPX = TQEFPX
+     *                   + FFRGQ(2,JFRG,ITS)*(ZEI-EFCENT(3,IFRG))
+     *                   - FFRGQ(3,JFRG,ITS)*(YEI-EFCENT(2,IFRG))
+                  TQEFPY = TQEFPY
+     *                   + FFRGQ(3,JFRG,ITS)*(XEI-EFCENT(1,IFRG))
+     *                   - FFRGQ(1,JFRG,ITS)*(ZEI-EFCENT(3,IFRG))
+                  TQEFPZ = TQEFPZ
+     *                   + FFRGQ(1,JFRG,ITS)*(YEI-EFCENT(2,IFRG))
+     *                   - FFRGQ(2,JFRG,ITS)*(XEI-EFCENT(1,IFRG))
+               END DO
+            END IF
+         END DO
+C
+C        TERM 5. FORCE/TORQE DUE TO TESSARA AREA CHANGE (FIXPVA)
+C
+         FAX = ZERO
+         FAY = ZERO
+         FAZ = ZERO
+         TAX = ZERO
+         TAY = ZERO
+         TAZ = ZERO
+         IF(IPCDER.EQ.3) THEN
+         SQRTPI = SQRT(3.1415926535897932D+00)
+         DO ISP = 1, I_NESF
+            IF(IDSP(ISP).EQ.IFRG)THEN
+               XEI= XE(ISP)
+               YEI= YE(ISP)
+               ZEI= ZE(ISP)
+               DO ITS = 1, NTS
+                  DO III = 1, IDDAI(21,ITS)
+                     IF(ISP.EQ.IDDAI(III,ITS)) THEN
+                        DUM=-1.07D+00*SQRTPI/
+     *                      SQRT(AS(ITS)**3)*0.5D+00*QT(ITS)*QT(ITS)
+                        FAX=FAX+DUM*DAI(1,III,ITS)
+                        FAY=FAY+DUM*DAI(2,III,ITS)
+                        FAZ=FAZ+DUM*DAI(3,III,ITS)
+                        TAX=TAX-DUM*DAI(2,III,ITS)*(ZEI-EFCENT(3,IFRG))
+     *                         +DUM*DAI(3,III,ITS)*(YEI-EFCENT(2,IFRG))
+                        TAY=TAY-DUM*DAI(3,III,ITS)*(XEI-EFCENT(1,IFRG))
+     *                         +DUM*DAI(1,III,ITS)*(ZEI-EFCENT(3,IFRG))
+                        TAZ=TAZ-DUM*DAI(1,III,ITS)*(YEI-EFCENT(2,IFRG))
+     *                         +DUM*DAI(2,III,ITS)*(XEI-EFCENT(1,IFRG))
+                     END IF
+                  ENDDO
+               END DO
+            END IF
+         ENDDO
+C        SCALE FOR C-PCM
+         IF(IEF.EQ.10)THEN
+            SCALE=EPS/(EPS-ONE)
+            FAX=FAX*SCALE
+            FAY=FAY*SCALE
+            FAZ=FAZ*SCALE
+            TAX=TAX*SCALE
+            TAY=TAY*SCALE
+            TAZ=TAZ*SCALE
+         END IF
+         END IF
+C
+C
+C
+C        COMBINE THE FORCES/TORQUES
+C
+         DSOLEF(1,IFRG) = FEFPQX + FQQX   + FQ2QX  + FAX
+     *                  + FQ2Q2X + FQELEX + FQNUCX + FQEFPX
+         DSOLEF(2,IFRG) = FEFPQY + FQQY   + FQ2QY  + FAY
+     *                  + FQ2Q2Y + FQELEY + FQNUCY + FQEFPY
+         DSOLEF(3,IFRG) = FEFPQZ + FQQZ   + FQ2QZ  + FAZ
+     *                  + FQ2Q2Z + FQELEZ + FQNUCZ + FQEFPZ
+         DSOLEF(4,IFRG) = TEFPQX + TQQX   + TQ2QX  + TAX
+     *                  + TQ2Q2X + TQELEX + TQNUCX + TQEFPX
+         DSOLEF(5,IFRG) = TEFPQY + TQQY   + TQ2QY  + TAY
+     *                  + TQ2Q2Y + TQELEY + TQNUCY + TQEFPY
+         DSOLEF(6,IFRG) = TEFPQZ + TQQZ   + TQ2QZ  + TAZ
+     *                  + TQ2Q2Z + TQELEZ + TQNUCZ + TQEFPZ
+ 200  CONTINUE
+C
+C
+C     -- CAVITATION, DISPERSION AND REPULSION CONTRIBUTIONS
+C        THEY HAVE BEEN CALCULATED AND STORED IN PCMCDR AND DPCMFRG
+C        IN FMO-PCM, PCMCDR IS GLOBAL, EGPCM IS FRAGMENTAL
+C
+C
+      DO IAT=1,NAT
+        IATGLB = IAT
+        IF(NFMOPCM.GT.0) IATGLB = IAGLOB(IAT)
+        DO IXYZ=1,3
+          IF(ICAV.EQ.1 .OR. IDISP.EQ.1) THEN
+             EGPCM(IXYZ,IAT)=DSOLQM(IXYZ,IAT)+PCMCDR(IXYZ,IATGLB)
+          ELSE
+             EGPCM(IXYZ,IAT)=DSOLQM(IXYZ,IAT)
+          END IF
+        END DO
+      END DO
+C
+      DO IFRG=1,NFRG
+        DO IXYZ=1,6
+          IF(ICAV.EQ.1 .OR. IDISP.EQ.1) THEN
+             DPCMFRG(IXYZ,IFRG)=DSOLEF(IXYZ,IFRG)+DPCMFRG(IXYZ,IFRG)
+          ELSE
+             DPCMFRG(IXYZ,IFRG)=DSOLEF(IXYZ,IFRG)
+          END IF
+        END DO
+      END DO
+C
+      RETURN
+      END
+C*MODULE PCMCV2  *DECK FELECQ
+      SUBROUTINE FELECQ(DM,QS,FEQ,L2,XCTS,YCTS,ZCTS)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL NORM, NXT, DOSCR
+      LOGICAL GOPARR, DSKWRK, MASWRK
+C
+      PARAMETER (MXSH=5000, MXGTOT=20000, MXATM=2000, MXAO=8192)
+C
+      COMMON /IJPAIR/ IA(MXAO)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /STV   / XINT,YINT,ZINT,T,X0,Y0,Z0,XI,YI,ZI,XJ,
+     *                YJ,ZJ,NI,NJ
+      COMMON /ROOT  / XX,U(13),W(13),NROOTS
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMPAR/ IPCM,NFT26,NFT27,IKREP,IEF,IP_F,NFMOPCM
+C
+      DIMENSION DM(L2),QS(NTS),FEQ(3,NAT,NTS)
+      DIMENSION DIJ(225),IJX(35),IJY(35),IJZ(35),
+     *          XS(6,5,5),YS(6,5,5),ZS(6,5,5),
+     *          DXSDI(5,5,5),DYSDI(5,5,5),DZSDI(5,5,5),
+     *          XCTS(*),YCTS(*),ZCTS(*)
+C
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00)
+      PARAMETER (RLN10=2.30258D+00)
+      PARAMETER (PI212=1.12837916709550D+00)
+      PARAMETER (SQRT3=1.73205080756888D+00)
+      PARAMETER (SQRT5=2.23606797749979D+00)
+      PARAMETER (SQRT7=2.64575131106459D+00)
+C
+      DATA IJX    / 1, 2, 1, 1, 3, 1, 1, 2, 2, 1,
+     1              4, 1, 1, 3, 3, 2, 1, 2, 1, 2,
+     2              5, 1, 1, 4, 4, 2, 1, 2, 1, 3,
+     3              3, 1, 3, 2, 2/
+      DATA IJY    / 1, 1, 2, 1, 1, 3, 1, 2, 1, 2,
+     1              1, 4, 1, 2, 1, 3, 3, 1, 2, 2,
+     2              1, 5, 1, 2, 1, 4, 4, 1, 2, 3,
+     3              1, 3, 2, 3, 2/
+      DATA IJZ    / 1, 1, 1, 2, 1, 1, 3, 1, 2, 2,
+     1              1, 1, 4, 1, 2, 1, 2, 3, 3, 2,
+     2              1, 1, 5, 1, 2, 1, 2, 4, 4, 1,
+     3              3, 3, 2, 2, 3/
+C
+      CALL DERCHK(MAXDER)
+      IF(MAXDER.EQ.0) RETURN
+C
+      CALL VCLR(FEQ,1,3*NAT*NTS)
+C
+C     ITOL0=ITOL
+      ITOL0=MIN(ITOL,18)
+C
+      TOL = RLN10*ITOL0
+      NORM = NORMF .NE. 1 .OR. NORMP .NE. 1
+C
+C     ----- CALCULATE FIELD DERIVATIVES -----
+C
+      NDER=1
+      DOSCR=NFMOPCM.NE.0
+      SCRTHR=1.0D-09
+C     THIS IS A TIGHT THRESHOLD DESIGNED TO PRODUCE
+C     A GRADIENT ACCURATE TO 1E-9...1E-10 A.U./BOHR
+C     FOR EACH ELEMENT, WITH THE MAX ERROR OBSERVED OF 1E-8.
+      NDONE=0
+      NSKEPT=0
+C
+C     ----- ISHELL -----
+C
+C             INITIALIZE PARALLEL
+C
+      NXT = IBTYP.EQ.1
+      NEXT  = -1
+      KOUNT = -1
+C
+      DO 9000 II=1,NSHELL
+C
+C             GO PARALLEL!
+      IF(GOPARR) THEN
+        KOUNT=KOUNT+1
+        IF(NXT) THEN
+          IF(KOUNT.GT.NEXT) CALL DDI_DLBNEXT(NEXT)
+          IF(NEXT.NE.KOUNT) GOTO 9000
+        ELSE
+          IF(MOD(KOUNT,NPROC).NE.ME) GOTO 9000
+        ENDIF
+      ENDIF
+C
+      I=KATOM(II)
+      XI=C(1,I)
+      YI=C(2,I)
+      ZI=C(3,I)
+      I1=KSTART(II)
+      I2=I1+KNG(II)-1
+      LIT=KTYPE(II)
+      MINI=KMIN(II)
+      MAXI=KMAX(II)
+      LOCI=KLOC(II)-MINI
+C
+      LITDER=LIT+NDER
+      IAT=I
+C
+C     ----- JSHELL -----
+C
+      DO 8000 JJ=1,NSHELL
+C
+      J=KATOM(JJ)
+      XJ=C(1,J)
+      YJ=C(2,J)
+      ZJ=C(3,J)
+      J1=KSTART(JJ)
+      J2=J1+KNG(JJ)-1
+      LJT=KTYPE(JJ)
+      MINJ=KMIN(JJ)
+      MAXJ=KMAX(JJ)
+      LOCJ=KLOC(JJ)-MINJ
+C
+      RR=(XI-XJ)**2+(YI-YJ)**2+(ZI-ZJ)**2
+      NROOTS=(LIT+LJT+NDER-2)/2+1
+C
+C     ----- I PRIMITIVE -----
+C
+      DO 7000 IG=I1,I2
+      AI=EX(IG)
+      ARRI=AI*RR
+      AXI=AI*XI
+      AYI=AI*YI
+      AZI=AI*ZI
+      CSI=CS(IG)
+      CPI=CP(IG)
+      CDI=CD(IG)
+      CFI=CF(IG)
+      CGI=CG(IG)
+C
+C     ----- J PRIMITIVE -----
+C
+      DO 6000 JG=J1,J2
+      AJ=EX(JG)
+      AA =AI+AJ
+      AA1=ONE/AA
+      DUM=AJ*ARRI*AA1
+      IF(DUM.GT.TOL) GO TO 6000
+      FAC= EXP(-DUM)
+      CSJ=CS(JG)
+      CPJ=CP(JG)
+      CDJ=CD(JG)
+      CFJ=CF(JG)
+      CGJ=CG(JG)
+      AX=(AXI+AJ*XJ)*AA1
+      AY=(AYI+AJ*YJ)*AA1
+      AZ=(AZI+AJ*ZJ)*AA1
+C
+C     ----- DENSITY FACTOR -----
+C
+      IJ=0
+      DO 360 I=MINI,MAXI
+      GO TO (110,120,220,220,130,220,220,140,220,220,
+     1       150,220,220,160,220,220,220,220,220,170,
+     2       180,220,220,190,220,220,220,220,220,200,
+     3       220,220,210,220,220),I
+  110 DUM1=CSI*FAC
+      GO TO 220
+  120 DUM1=CPI*FAC
+      GO TO 220
+  130 DUM1=CDI*FAC
+      GO TO 220
+  140 IF(NORM) DUM1=DUM1*SQRT3
+      GO TO 220
+  150 DUM1=CFI*FAC
+      GO TO 220
+  160 IF(NORM) DUM1=DUM1*SQRT5
+      GO TO 220
+  170 IF(NORM) DUM1=DUM1*SQRT3
+      GO TO 220
+  180 DUM1=CGI*FAC
+      GO TO 220
+  190 IF(NORM) DUM1=DUM1*SQRT7
+      GO TO 220
+  200 IF(NORM) DUM1=DUM1*SQRT5/SQRT3
+      GO TO 220
+  210 IF(NORM) DUM1=DUM1*SQRT3
+  220 CONTINUE
+C
+      DO 360 J=MINJ,MAXJ
+      GO TO (230,250,350,350,260,350,350,270,350,350,
+     1       280,350,350,290,350,350,350,350,350,300,
+     2       310,350,350,320,350,350,350,350,350,330,
+     3       350,350,340,350,350),J
+  230 DUM2=DUM1*CSJ
+      GO TO 350
+  250 DUM2=DUM1*CPJ
+      GO TO 350
+  260 DUM2=DUM1*CDJ
+      GO TO 350
+  270 IF(NORM) DUM2=DUM2*SQRT3
+      GO TO 350
+  280 DUM2=DUM1*CFJ
+      GO TO 350
+  290 IF(NORM) DUM2=DUM2*SQRT5
+      GO TO 350
+  300 IF(NORM) DUM2=DUM2*SQRT3
+      GO TO 350
+  310 DUM2=DUM1*CGJ
+      GO TO 350
+  320 IF(NORM) DUM2=DUM2*SQRT7
+      GO TO 350
+  330 IF(NORM) DUM2=DUM2*SQRT5/SQRT3
+      GO TO 350
+  340 IF(NORM) DUM2=DUM2*SQRT3
+  350 CONTINUE
+C
+      NN=IA(MAX0(LOCI+I,LOCJ+J))
+     1  +   MIN0(LOCI+I,LOCJ+J)
+      DEN=DM(NN)
+      DEN=DEN+DEN
+      IJ=IJ+1
+  360 DIJ(IJ)=DUM2*DEN
+C
+C     ----- -FLD- DERIVATIVES -----
+C
+      AAX=AA*AX
+      AAY=AA*AY
+      AAZ=AA*AZ
+      DO 500 IC=1,NTS
+      ZNUC = -QS(IC)
+      XC = XCTS(IC)
+      YC = YCTS(IC)
+      ZC = ZCTS(IC)
+      IF(DOSCR) THEN
+        VVAL=ZNUC/SQRT((XI-XC)*(XI-XC)+(YI-YC)*(YI-YC)+(ZI-ZC)*(ZI-ZC))
+        IF(ABS(VVAL).LT.SCRTHR) THEN
+           NSKEPT=NSKEPT+1
+           GOTO 500
+        ENDIF
+        NDONE=NDONE+1
+      ENDIF
+      XX=AA*((AX-XC)**2+(AY-YC)**2+(AZ-ZC)**2)
+      IF (NROOTS.LE.3) CALL RT123
+      IF (NROOTS.EQ.4) CALL ROOT4
+      IF (NROOTS.EQ.5) CALL ROOT5
+C
+C       LOOP OVER ROOTS OF RYS POLYNOMIAL TO CALCULATE INTEGRALS
+C
+      DO 420  K=1,NROOTS
+      UU = AA*U(K)
+      WW = W(K)*ZNUC
+      TT = ONE/(AA+UU)
+      T  = SQRT(TT)
+      X0 = (AAX + UU*XC)*TT
+      Y0 = (AAY + UU*YC)*TT
+      Z0 = (AAZ + UU*ZC)*TT
+C
+      DO 370 J=1,LJT
+      NJ=J
+      DO 370 I=1,LITDER
+      NI=I
+      CALL DSXYZ
+      XS(I,J,K)=XINT
+      YS(I,J,K)=YINT
+      ZS(I,J,K)=ZINT*WW
+  370 CONTINUE
+C
+      CALL DERI(DXSDI(1,1,K),DYSDI(1,1,K),DZSDI(1,1,K),
+     *                XS(1,1,K),YS(1,1,K),ZS(1,1,K),LIT,LJT,AI)
+  420 CONTINUE
+C
+      DUMSX=ZERO
+      DUMSY=ZERO
+      DUMSZ=ZERO
+      IJ=0
+      DO 390 I=MINI,MAXI
+      IX=IJX(I)
+      IY=IJY(I)
+      IZ=IJZ(I)
+      DO 380 J=MINJ,MAXJ
+      JX=IJX(J)
+      JY=IJY(J)
+      JZ=IJZ(J)
+      DUMX=ZERO
+      DUMY=ZERO
+      DUMZ=ZERO
+C
+      DO 430 IROOT=1,NROOTS
+      DUMX=DUMX+DXSDI(IX,JX,IROOT)*YS(IY,JY,IROOT)*ZS(IZ,JZ,IROOT)
+      DUMY=DUMY+DYSDI(IY,JY,IROOT)*XS(IX,JX,IROOT)*ZS(IZ,JZ,IROOT)
+  430 DUMZ=DUMZ+DZSDI(IZ,JZ,IROOT)*YS(IY,JY,IROOT)*XS(IX,JX,IROOT)
+      IJ=IJ+1
+C
+      DUMIJ=AA1*PI212*DIJ(IJ)
+      DUMSX=DUMSX+DUMX*DUMIJ
+      DUMSY=DUMSY+DUMY*DUMIJ
+      DUMSZ=DUMSZ+DUMZ*DUMIJ
+  380 CONTINUE
+  390 CONTINUE
+      FEQ(1,IAT,IC)=FEQ(1,IAT,IC)+DUMSX
+      FEQ(2,IAT,IC)=FEQ(2,IAT,IC)+DUMSY
+      FEQ(3,IAT,IC)=FEQ(3,IAT,IC)+DUMSZ
+  500 CONTINUE
+C
+C     ----- END LOOPS OVER PRIMITVES AND SHELLS -----
+C
+ 6000 CONTINUE
+ 7000 CONTINUE
+ 8000 CONTINUE
+ 9000 CONTINUE
+C
+C          SUM UP
+      IF(GOPARR) THEN
+         IF(NXT) CALL DDI_DLBRESET
+         CALL DDI_GSUMF(2450,FEQ,3*NAT*NTS)
+      END IF
+C
+      IF(DOSCR.AND.MASWRK) WRITE(IW,*) 'DONE',NDONE,', SKEPT',NSKEPT
+C
+      RETURN
+      END
+C*MODULE PCMCV2  *DECK TESSID
+      SUBROUTINE TESSID(ID,NS,PTS,TEST,XE,YE,ZE,RE)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      PARAMETER (MXVRT=20)
+C
+      DIMENSION PTS(3,MXVRT),XE(*),YE(*),ZE(*),RE(*)
+C
+      COMMON /PCMPLY/ STOT,VOL,CCX,CCY,CCZ,RDIF,NESF,NESFP,NESFF,I_NESF,
+     *                L_AST
+C
+      ID = -1
+C
+      DO 150 NSFE1=1,I_NESF
+C
+      IF(NSFE1.EQ.NS .OR. RE(NSFE1).LT.0.020D+00)    GO TO 150
+      IF(ABS(XE(NS)-XE(NSFE1)).GT.
+     *  (TEST+RE(NS)+RE(NSFE1))) GO TO 150
+      IF(ABS(YE(NS)-YE(NSFE1)).GT.
+     *  (TEST+RE(NS)+RE(NSFE1))) GO TO 150
+      IF(ABS(ZE(NS)-ZE(NSFE1)).GT.
+     *  (TEST+RE(NS)+RE(NSFE1))) GO TO 150
+C
+      R12 = SQRT((XE(NS)-XE(NSFE1))**2 +
+     *           (YE(NS)-YE(NSFE1))**2 +
+     *           (ZE(NS)-ZE(NSFE1))**2  )
+      IF(R12.GE.(TEST+RE(NS)+RE(NSFE1))) GO TO 150
+      IF(R12.LE.ABS(RE(NS)-RE(NSFE1)) .AND.
+     *   RE(NSFE1).LT.RE(NS))            GO TO 150
+      IF(R12.LE.ABS(RE(NS)-RE(NSFE1)) .AND.
+     *   RE(NSFE1).GT.RE(NS)) THEN
+        ID = 0
+        RETURN
+      END IF
+C
+C     IF ANY VERTEX IS CUT BY ANY ONE OF
+C     THE OTHER SPHERE, RETURN
+C
+      ICOP = 0
+      DO 200 I=1,3
+        DELR2=(PTS(1,I)-XE(NSFE1))**2+(PTS(2,I)-YE(NSFE1))**2+
+     *  (PTS(3,I)-ZE(NSFE1))**2
+        DELR=SQRT(DELR2)
+        IF(DELR.LT.RE(NSFE1)) THEN
+          ICOP = ICOP+1
+          ID=1
+        ELSE IF(DELR.LT.TEST+RE(NSFE1)) THEN
+          IF(ID.EQ.-1)ID=2
+        END IF
+ 200  CONTINUE
+      IF(ICOP.EQ.3) THEN
+        ID = 0
+        RETURN
+      END IF
+C
+ 150  CONTINUE
+C
+      RETURN
+      END
+C*MODULE PCMCV2  *DECK PCMGIN
+      SUBROUTINE PCMGIN(METHOD)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      LOGICAL GOPARR,DSKWRK,MASWRK
+C
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMITR/ RCUT(2),THRES,IPCMIT,IMUL,MXDIIS,NREG,MXITR1,
+     *                MXITR2,MODPAP
+      COMMON /PCMOPT/ RABI,RASC,REFPOL,THRSLS,DENSLS,WB,WA,ETA2,GD,EVAC,
+     *                RHOW,PM,AREATL,AREAKP,BONDRY,OMEGA,RET,FRO,EPSINF,
+     *                EPS,DR,RSOLV,VMOL,TCE,STEN,DSTEN,CMF,TABS,IDIRCT,
+     *                IPCDER,IDP,ICOMP,IFIELD,ICAV,IDISP,IPRINT,IRETCAV,
+     *                ICENT,IFAST,NEVAL,IEFPOL,KEEPSM,IMGABI,IMGASC,NADD
+      COMMON /PCMPAR/ IPCM,NFT26,NFT27,IKREP,IEF,IP_F,NFMOPCM
+C
+      PARAMETER (NNAM=2)
+      DIMENSION QNAM(NNAM),KQNAM(NNAM),METHOD(*)
+      DATA PCMGRD/8HPCMGRD  /
+      DATA QNAM /8HIPCDER  ,8HIFAST   /
+      DATA KQNAM/1,1/
+C
+C     INPUT FOR PCM GRADIENT CONTROL
+C
+C     IPCDER  = 0, FIXED-CAVITY APPROXIMATION FOR C-PCM AND IEF-PCM
+C                  NOT WORK FOR D-PCM
+C               1, UX(Q) APPROXIMATION FOR C-PCM AND IEF-PCM
+C                  THE CHARGE DERIVATIVE METHOD FOR D-PCM (DEFAULT)
+C               2, VARIABLE-TESSERA-NUMBER EQUATIONS BY HUI & JAN
+C                  THE DEFAULT AND THE MOST ACCURATE ONE FOR
+C                  C-PCM, IEF-PCM (ITERATIVE)
+C                  NOT WORK FOR D-PCM
+C               3, FIXPVA, EXACT GRADIENTS (DEFAULT FOR C-PCM)
+C
+C     IFAST   = 0, DO PCM FOR EVERY SCF CYCLE WHEN RUNTYP=OPT (DEFAULT)
+C               1, DO PCM FOR SELECTED SCF CYCLE WHEN RYNTYP=OPT
+C                  USEFUL WHEN NTS IS LARGE
+C
+      NERR=0
+C
+      IPCDER = 2
+      IF(IEF.EQ.0) IPCDER=1
+      IF(IEF.EQ.3) IPCDER=2
+      DO I = 1, MXSP
+         IF(METHOD(I).EQ.4) IPCDER=3
+      END DO
+C
+      IFAST  =  0
+C
+C     READ THE PCMGRD NAMELIST
+C
+      JRET=0
+      CALL NAMEIO(IR,JRET,PCMGRD,NNAM,QNAM,KQNAM,
+     *            IPCDER,IFAST,
+     *      0,0,
+     *   0,0,0,0,0,  0,0,0,0,0,   0,0,0,0,0,  0,0,0,0,0,
+     *   0,0,0,0,0,  0,0,0,0,0,   0,0,0,0,0,  0,0,0,0,0,
+     *   0,0,0,0,0,  0,0,0,0,0,   0,0,0,0,0,  0,0,0,0,0)
+      IF(JRET.EQ.2) THEN
+         IF(MASWRK) WRITE(IW,*)'**** ERROR IN $PCMGRD INPUT'
+         CALL ABRT
+      END IF
+C
+C     - IN CASE IPCDER<3 IS INPUT, ENFORCE IPCDER=3 IF METHOD=4
+C
+      DO I = 1, MXSP
+         IF(METHOD(I).EQ.4) IPCDER=3
+      END DO
+C
+C     - IF IPCDER=3, SET ALL METHOD=4
+C
+      IF(IPCDER.EQ.3) THEN
+         DO I = 1, MXSP
+            METHOD(I) = 4
+         END DO
+      END IF
+C
+      IF(MASWRK) THEN
+        WRITE(IW,9000) IPCDER,IFAST
+        IF(IPCDER.EQ.0) WRITE(IW,*)
+     *      '    FIXED-CAVITY GRADIENT APPROXIMATION'
+        IF(IPCDER.EQ.1.AND.(IEF.EQ.3.OR.IEF.EQ.10)) WRITE(IW,*)
+     *      '    UX(Q) GRADIENT APPROXIMATION'
+        IF(IPCDER.EQ.1.AND.IEF.EQ.0) WRITE(IW,*)
+     *      '    D-PCM GRADIENT EQUATIONS'
+        IF(IPCDER.EQ.2) WRITE(IW,*)
+     *      '    VARIABLE-TESSERA-NUMBER GRADIENT EQUATIONS'
+        IF(IPCDER.EQ.3) WRITE(IW,*)
+     *      '    FIXPVA GRADIENTS BY PEIFENG SU AND HUI LI'
+        WRITE(IW,*)' '
+      END IF
+C
+C        CHECK THAT INPUT FOR BOOBOOS
+C
+      IF(IPCDER.LT.0.OR.IPCDER.GT.3) THEN
+         IF(MASWRK) WRITE(IW,*)
+     *     'IPCDER MUST BE 0, 1 , 2, OR 3'
+         NERR=NERR+1
+      END IF
+C
+      IF((IPCDER.EQ.0.OR.IPCDER.EQ.1) .AND. IP_F.EQ.1) THEN
+         IF(MASWRK) WRITE(IW,*)
+     *     'ONLY VTN AND FIXPVA GRADIENTS RUN FOR COMBINED EFP/PCM'
+         NERR=NERR+1
+      END IF
+C
+      IF(IFAST.NE.0.AND.IFAST.NE.1) THEN
+         IF(MASWRK) WRITE(IW,*)
+     *     'IFAST MUST BE 0 OR 1'
+         NERR=NERR+1
+      END IF
+C
+      IF((IPCDER.EQ.2.OR.IPCDER.EQ.3) .AND. RET.LT.99.9D+00) THEN
+         IF(MASWRK) WRITE(IW,*) 'IPCDER=2 OR 3 WORKS ONLY FOR RET=100.0'
+         NERR=NERR+1
+      END IF
+C
+      IF(IPCDER.EQ.1.AND.KEEPSM.EQ.1) THEN
+         DO I = 1, MXSP
+           IF(METHOD(I).EQ.3) METHOD(1)=3
+         END DO
+         IF(METHOD(1).EQ.3) THEN
+           IF(MASWRK) WRITE(IW,*)
+     *       'IPCDER=1 WORKS ONLY FOR KEEPSM=0'
+           NERR=NERR+1
+         END IF
+      END IF
+C
+      IF(IPCDER.NE.1.AND.IEF.EQ.0) THEN
+         IF(MASWRK) WRITE(IW,*)
+     *     'IEF=0 (D-PCM) REQUIRES IPCDER=1'
+         NERR=NERR+1
+      END IF
+C
+      IF(IPCDER.EQ.2.AND.IEF.EQ.3.AND.IPCMIT.EQ.0) THEN
+         IF(MASWRK) WRITE(IW,*)
+     *     'IPCDER=2 DOESN''T WORK FOR IEF=3, ONLY FOR IEF=-3'
+         NERR=NERR+1
+      END IF
+C
+      IF(IPCDER.EQ.3.AND.IEF.EQ.3) THEN
+         IF(MASWRK) WRITE(IW,*)
+     *     'IPCDER=3 DOESN''T WORK FOR IEF=-3 OR 3, ONLY FOR -10 OR 10'
+         NERR=NERR+1
+      END IF
+C
+      IF(NERR.GT.0) THEN
+         IF(MASWRK) WRITE(IW,*) 'PLEASE FIX THE ERROR(S) IN $PCMGRD'
+         CALL ABRT
+         STOP
+      END IF
+C
+C
+      RETURN
+ 9000 FORMAT(/5X,29(1H-)/
+     *   5X,'INPUT FOR PCM GRADIENT METHOD'/5X,29(1H-)/
+     *   5X,'IPCDER  =',I10,    5X,'IFAST   =',I10)
+      END
+C*MODULE PCMCV2  *DECK PEDFSM
+      SUBROUTINE PEDFSM(XCTS,YCTS,ZCTS,AS,NVERT,XE,YE,ZE,RE,SSFE,ISPHE,
+     *                  RIN)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      PARAMETER (MXVRT=20)
+C
+      LOGICAL GOPARR, DSKWRK, MASWRK
+      DIMENSION XCTS(*),YCTS(*),ZCTS(*),AS(*),NVERT(*),XE(*),YE(*),
+     *          ZE(*),RE(*),SSFE(*),ISPHE(*),RIN(*)
+C
+      COMMON /FMCOM / X(1)
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /MACHIN/ NWDVAR,MAXFM,MAXSM,LIMFM,LIMSM
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMPAR/ IPCM,NFT26,NFT27,IRPPCM,IEFPCM,IP_F,NFMOPCM
+C
+C     ----- SET MEMORY POINTERS FOR POLYHEDRA SETUP -----
+C
+C     MAXIMUM NUMBER OF TESSALATIONS IS NOT KNOWN, TAKE WORST CASE
+C     MAXIMUM NUMBER OF SPHERES IS NOT KNOWN, TAKE WORST CASE
+C
+      CALL VALFM(LOADFM)
+      IF(NFMOPCM.EQ.0) THEN
+        LINTSP = LOADFM + 1
+        LVERT  = LINTSP + (MXTS*MXVRT-1)/NWDVAR+1
+        LCENTR = LVERT  + MXTS*MXVRT*3
+        LAST   = LCENTR + MXTS*MXVRT*3
+      ELSE
+        LAST=LOADFM + 1
+        LINTSP = LAST
+        LVERT  = LAST
+        LCENTR = LAST
+      ENDIF
+      LX     = LAST
+      LY     = LX     + MXTS
+      LZ     = LY     + MXTS
+      LAST   = LZ     + MXTS
+      NEED = LAST - LOADFM - 1
+      IF(MASWRK.AND.NPRINT.NE.817) WRITE(IW,910) NEED
+      CALL GETFM(NEED)
+C
+      CALL PEDFST(X(LINTSP),X(LVERT),X(LCENTR),X(LX),X(LY),X(LZ),
+     *            XCTS,YCTS,ZCTS,AS,NVERT,XE,YE,ZE,RE,SSFE,ISPHE,RIN)
+C
+      CALL RETFM(NEED)
+      RETURN
+C
+  910 FORMAT(/1X,'MEMORY USED TO GENERATE CAVITY=',I10/)
+      END
+C*MODULE PCMCV2  *DECK PEDFST
+      SUBROUTINE PEDFST(INTSPH,VERT,CENTR,XVAL,YVAL,ZVAL,XCTS,
+     *                  YCTS,ZCTS,AS,NVERT,XE,YE,ZE,RE,SSFE,ISPHE,RIN)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL GOPARR, DSKWRK, MASWRK
+C
+      PARAMETER (MXVRT=20)
+C
+      DIMENSION INTSPH(MXTS,MXVRT),VERT(MXTS,MXVRT,3),
+     *          CENTR(MXTS,MXVRT,3),XVAL(MXTS),YVAL(MXTS),ZVAL(MXTS),
+     *          XCTS(*),YCTS(*),ZCTS(*),AS(*),NVERT(*),
+     *          XE(*),YE(*),ZE(*),RE(*),SSFE(*),ISPHE(*),RIN(*)
+      DIMENSION INTSPT(60,MXVRT),VERTT(60,MXVRT,3),CENTRT(60,MXVRT,3),
+     *          XVALT(60),YVALT(60),ZVALT(60),AST(60),XCTST(60),
+     *          YCTST(60),ZCTST(60),ISPHET(60),NVERTT(60)
+      DIMENSION IDUM(360),THEV(24),FIV(24),JVT1(6,60),PP(3),PP1(3),
+     *          PTS(3,MXVRT),CCC(3,MXVRT),CV(122,3),INTSPHT(MXVRT)
+C
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMOPT/ RABI,RASC,REFPOL,THRSLS,DENSLS,WB,WA,ETA2,GD,EVAC,
+     *                RHOW,PM,AREATL,AREAKP,BONDRY,OMEGA,RET,FRO,EPSINF,
+     *                EPS,DR,RSOLV,VMOL,TCE,STEN,DSTEN,CMF,TABS,IDIRCT,
+     *                IPCDER,IDP,ICOMP,IFIELD,ICAV,IDISP,IPRINT,IRETCAV,
+     *                ICENT,IFAST,NEVAL,IEFPOL,KEEPSM,IMGABI,IMGASC,NADD
+      COMMON /PCMPLY/ STOT,VOL,CCX,CCY,CCZ,RDIF,NESF,NESFP,NESFF,I_NESF,
+     *                L_AST
+      COMMON /PCMPAR/ IPCM,NFT26,NFT27,IRPPCM,IEFPCM,IP_F,NFMOPCM
+C
+      EQUIVALENCE (IDUM(1),JVT1(1,1))
+C
+      PARAMETER (TOANGS=0.52917724924D+00, ANTOAU=1.0D+00/TOANGS)
+C
+      DATA ZERO/0.0D+00/
+C
+C     ANGOLI CHE INDIVIDUANO I CENTRI E I VERTICI DI UN POLIEDRO
+C     INSCRITTO IN UNA SFERA DI RAGGIO UNITARIO CENTRATA NELL'ORIGINE
+C
+      DATA THEV/0.6523581398D+00,1.107148718D+00,1.382085796D+00,
+     *          1.759506858D+00,2.034443936D+00,2.489234514D+00,
+     *                         0.3261790699D+00,0.5535743589D+00,
+     *          0.8559571251D+00,0.8559571251D+00,1.017221968D+00,
+     *          1.229116717D+00,1.229116717D+00,1.433327788D+00,
+     *          1.570796327D+00,1.570796327D+00,1.708264866D+00,
+     *          1.912475937D+00,1.912475937D+00,2.124370686D+00,
+     *          2.285635528D+00,2.285635528D+00,2.588018295D+00,
+     *          2.815413584D+00/
+      DATA FIV/               0.6283185307D+00,0.0000000000D+00,
+     *         0.6283185307D+00,0.0000000000D+00,0.6283185307D+00,
+     *         0.0000000000D+00,0.6283185307D+00,0.0000000000D+00,
+     *         0.2520539002D+00,1.004583161D+00,0.6283185307D+00,
+     *         0.3293628477D+00,0.9272742138D+00,0.0000000000D+00,
+     *         0.3141592654D+00,0.9424777961D+00,0.6283185307D+00,
+     *         0.2989556830D+00,0.9576813784D+00,0.0000000000D+00,
+     *         0.3762646305D+00,0.8803724309D+00,0.6283188307D+00,
+     *         0.0000000000D+00/
+      DATA FIR/1.256637061D+00/
+C
+C     IL VETTORE IDUM, RIPRESO NELLA MATRICE JVT1, INDICA QUALI SONO
+C     I VERTICI DELLE VARIE TESSERE (USING LESS THAN 19 CONTINUATIONS)
+C
+      DATA (IDUM(III),III=1,280)/
+     *   1, 6, 2, 32, 36, 37, 1, 2, 3, 33, 32, 38, 1, 3, 4, 34,
+     *   33, 39, 1, 4, 5, 35, 34, 40, 1, 5, 6, 36, 35, 41, 7, 2, 6, 51,
+     *   42, 37, 8, 3, 2, 47, 43, 38, 9, 4, 3, 48, 44, 39, 10, 5, 4,
+     *   49, 45, 40, 11, 6, 5, 50, 46, 41, 8, 2, 12, 62, 47, 52, 9,
+     *   3, 13, 63, 48, 53, 10, 4, 14, 64, 49, 54, 11, 5, 15, 65, 50,
+     *   55, 7, 6, 16, 66, 51, 56, 7, 12, 2, 42, 57, 52, 8, 13, 3,
+     *   43, 58, 53, 9, 14, 4, 44, 59, 54, 10, 15, 5, 45, 60, 55, 11,
+     *   16, 6, 46, 61, 56, 8, 12, 18, 68, 62, 77, 9, 13, 19, 69, 63,
+     *   78, 10, 14, 20, 70, 64, 79, 11, 15, 21, 71, 65, 80, 7, 16,
+     *   17, 67, 66, 81, 7, 17, 12, 57, 67, 72, 8, 18, 13, 58, 68, 73,
+     *   9, 19, 14, 59, 69, 74, 10, 20, 15, 60, 70, 75, 11, 21, 16,
+     *   61, 71, 76, 22, 12, 17, 87, 82, 72, 23, 13, 18, 88, 83, 73,
+     *   24, 14, 19, 89, 84, 74, 25, 15, 20, 90, 85, 75, 26, 16, 21,
+     *   91, 86, 76, 22, 18, 12, 82, 92, 77, 23, 19, 13, 83, 93, 78,
+     *   24, 20, 14, 84, 94, 79, 25, 21, 15, 85, 95, 80, 26, 17, 16,
+     *   86, 96, 81, 22, 17, 27, 102, 87, 97, 23, 18, 28, 103, 88, 98,
+     *   24, 19, 29, 104, 89, 99, 25, 20, 30, 105, 90, 100, 26, 21,
+     *   31, 106, 91, 101, 22, 28, 18, 92, 107, 98, 23, 29, 19, 93/
+      DATA (IDUM(III),III=281,360)/
+     *   108, 99, 24, 30, 20, 94, 109, 100, 25, 31, 21, 95, 110, 101,
+     *   26, 27, 17, 96, 111, 97, 22, 27, 28, 107, 102, 112, 23, 28,
+     *   29, 108, 103, 113, 24, 29, 30, 109, 104, 114, 25, 30, 31,
+     *   110, 105, 115, 26, 31, 27, 111, 106, 116, 122, 28, 27, 117,
+     *   118, 112, 122, 29, 28, 118, 119, 113, 122, 30, 29, 119, 120,
+     *   114, 122, 31, 30, 120, 121, 115, 122, 27, 31, 121, 117, 116 /
+C
+C     IT DEFINES THE SOLUTE'S CAVITY AND CALCULATES VERTICES,
+C     REPRESENTATIVE POINTS AND AREAS OF TESSERAE WITH THE
+C     GAUSS BONNET THEOREM.
+C
+C     THIS ROUTINE WANTS TO WORK IN ANGSTROM UNITS - ALEX GRANOVSKY
+C
+C
+        DO J=1,I_NESF
+          RE(J) = RIN(J)
+          XE(J)=XE(J)/ANTOAU
+          YE(J)=YE(J)/ANTOAU
+          ZE(J)=ZE(J)/ANTOAU
+        ENDDO
+        IF (IDISP.EQ.2) THEN
+          DO I = 1,I_NESF
+            RE(I) = RE(I) + RDIF
+          ENDDO
+        END IF
+C
+C
+C
+C     ----- PARTITION OF THE CAVITY SURFACE INTO TESSERAE -----
+C
+C
+C*****COORDINATES OF VERTICES OF TESSERAE IN A SPHERE WITH UNIT RADIUS.
+C
+C
+C                                    1
+C
+C                                 4     5
+C
+C                              3     6     2
+C
+      CV(1,1)=0.0D+00
+      CV(1,2)=0.0D+00
+      CV(1,3)=1.0D+00
+      CV(122,1)=0.0D+00
+      CV(122,2)=0.0D+00
+      CV(122,3)=-1.0D+00
+      II=1
+      DO 200 I=1,24
+      TH=THEV(I)
+      FI=FIV(I)
+      CTH=COS(TH)
+      STH=SIN(TH)
+      DO 210 J=1,5
+      FI=FI+FIR
+      IF(J.EQ.1) FI=FIV(I)
+      II=II+1
+      CV(II,1)=STH*COS(FI)
+      CV(II,2)=STH*SIN(FI)
+      CV(II,3)=CTH
+  210 CONTINUE
+  200 CONTINUE
+C
+      IF(MASWRK.AND.NPRINT.NE.817)
+     * WRITE(IW,*)'GEPOL-GB: GENERATING TESSERAE'
+C
+      NN = 0
+      DO 300 NSFE = 1, I_NESF
+      XEN = XE(NSFE)
+      YEN = YE(NSFE)
+      ZEN = ZE(NSFE)
+      REN = RE(NSFE)
+C
+C
+C     --- USE 60 TESSERAE FOR EACH SPHERE ---
+C
+      DO ITS=1,60
+      XCTST(ITS) = ZERO
+      YCTST(ITS) = ZERO
+      ZCTST(ITS) = ZERO
+      XVALT(ITS) = ZERO
+      YVALT(ITS) = ZERO
+      ZVALT(ITS) = ZERO
+      AST(ITS) = ZERO
+      ISPHET(ITS) = 0
+      NVERTT(ITS) = 0
+      DO IV = 1, MXVRT
+         DO JJ = 1, 3
+            VERTT(ITS,IV,JJ) = ZERO
+            CENTRT(ITS,IV,JJ) = ZERO
+         ENDDO
+      ENDDO
+      DO IV = 1, MXVRT
+         INTSPT(ITS,IV) = 0
+      ENDDO
+      ENDDO
+C
+      DO 310 ITS = 1, 60
+C
+      N1 = JVT1(1,ITS)
+      N2 = JVT1(2,ITS)
+      N3 = JVT1(3,ITS)
+      PTS(1,1)=CV(N1,1)*REN+XEN
+      PTS(2,1)=CV(N1,2)*REN+YEN
+      PTS(3,1)=CV(N1,3)*REN+ZEN
+      PTS(1,2)=CV(N2,1)*REN+XEN
+      PTS(2,2)=CV(N2,2)*REN+YEN
+      PTS(3,2)=CV(N2,3)*REN+ZEN
+      PTS(1,3)=CV(N3,1)*REN+XEN
+      PTS(2,3)=CV(N3,2)*REN+YEN
+      PTS(3,3)=CV(N3,3)*REN+ZEN
+      NV=3
+      DO JJ = 1, 3
+        PP(JJ) = ZERO
+        PP1(JJ) = ZERO
+      ENDDO
+C
+C     PER CIASCUNA TESSERA, TROVA LA PORZIONE SCOPERTA E NE
+C     CALCOLA L'AREA CON IL TEOREMA DI GAUSS-BONNET; IL PUNTO
+C     RAPPRESENTATIVO E' DEFINITO COME MEDIA DEI VERTICI DELLA
+C     PORZIONE SCOPERTA DI TESSERA E PASSATO IN PP (MENTRE IN PP1
+C     CI SONO LE COORDINATE DEL PUNTO SULLA NORMALE INTERNA).
+C
+C     I VERTICI DI CIASCUNA TESSERA SONO CONSERVATI IN
+C     VERT(MXTS,MXVRT,3), IL NUMERO DI VERTICI DI CIASCUNA TESSERA
+C     E' IN NVERT(MXTS), E I CENTRI DEI CERCHI DI CIASCUN LATO SONO
+C     IN CENTR(MXTS,MXVRT,3).  IN INTSPH(MXTS,MXVRT) SONO REGISTRATE
+C     LE SFERE A CUI APPARTENGONO I LATI DELLE TESSERE.
+C
+      NSFECPY = NSFE
+      CALL TESSERA(NSFECPY,NV,PTS,CCC,PP,PP1,AREA,INTSPHT,XE,YE,ZE,RE)
+C
+      IF(AREA.EQ.ZERO) GO TO 310
+      XCTST(ITS) = PP(1)
+      YCTST(ITS) = PP(2)
+      ZCTST(ITS) = PP(3)
+      XVALT(ITS) = PP1(1)
+      YVALT(ITS) = PP1(2)
+      ZVALT(ITS) = PP1(3)
+      AST(ITS) = AREA
+      ISPHET(ITS) = NSFE
+      NVERTT(ITS) = NV
+      DO IV = 1, NV
+         DO JJ = 1, 3
+            VERTT(ITS,IV,JJ) = PTS(JJ,IV)
+            CENTRT(ITS,IV,JJ) = CCC(JJ,IV)
+         ENDDO
+      ENDDO
+      DO IV = 1, NV
+         INTSPT(ITS,IV) = INTSPHT(IV)
+      ENDDO
+ 310  CONTINUE
+C
+C
+C
+      DO 320 ITS=1,60
+      IF(AST(ITS).EQ.0.0D+00) GO TO 320
+      NN = NN + 1
+C
+C     CHECK ON THE TOTAL NUMBER OF TESSERA
+C
+      IF(NN.GT.MXTS) THEN
+         IF(MASWRK) WRITE(IW,9080) MXTS
+         CALL ABRT
+         STOP
+      END IF
+C
+      XCTS(NN) = XCTST(ITS)
+      YCTS(NN) = YCTST(ITS)
+      ZCTS(NN) = ZCTST(ITS)
+      XVAL(NN) = XVALT(ITS)
+      YVAL(NN) = YVALT(ITS)
+      ZVAL(NN) = ZVALT(ITS)
+      AS(NN) = AST(ITS)
+      ISPHE(NN) = ISPHET(ITS)
+      NVERT(NN) = NVERTT(ITS)
+      IF(NFMOPCM.EQ.0) THEN
+      DO IV = 1, NVERT(NN)
+         DO JJ = 1, 3
+            VERT(NN,IV,JJ) = VERTT(ITS,IV,JJ)
+            CENTR(NN,IV,JJ) = CENTRT(ITS,IV,JJ)
+         ENDDO
+      ENDDO
+      DO IV = 1, NVERT(NN)
+         INTSPH(NN,IV) = INTSPT(ITS,IV)
+      ENDDO
+      ENDIF
+ 320  CONTINUE
+C     --- END OF 60 TESSERAE ---
+C
+C
+C
+ 300  CONTINUE
+      NTS = NN
+C
+      IF(MASWRK.AND.NPRINT.NE.817) CALL TIMIT(1)
+      IF(MASWRK.AND.NPRINT.NE.817)
+     * WRITE(IW,*)'TESSERAE GENERATED'
+C
+C     --- CALCULATE VOLUME, AREA AND PRINT OUT
+C
+      VOL = ZERO
+      DO ITS = 1, NTS
+         NSFE = ISPHE(ITS)
+         XN = (XCTS(ITS) - XE(NSFE)) / RE(NSFE)
+         YN = (YCTS(ITS) - YE(NSFE)) / RE(NSFE)
+         ZN = (ZCTS(ITS) - ZE(NSFE)) / RE(NSFE)
+         PROD = XCTS(ITS)*XN + YCTS(ITS)*YN + ZCTS(ITS)*ZN
+         VOL = VOL + AS(ITS) * PROD / 3.0D+00
+      ENDDO
+C
+      STOT=ZERO
+      DO I=1,I_NESF
+         SSFE(I)=ZERO
+      ENDDO
+      DO I=1,NTS
+         K=ISPHE(I)
+         SSFE(K)=SSFE(K)+AS(I)
+      ENDDO
+C
+      IF(MASWRK  .AND.  NPRINT.NE.817) WRITE(IW,9020) I_NESF
+      DO I=1,I_NESF
+         IF(MASWRK  .AND.  NPRINT.NE.817)
+     *        WRITE(IW,9030) I,XE(I),YE(I),ZE(I),RE(I),SSFE(I)
+         STOT=STOT+SSFE(I)
+      ENDDO
+      IF(MASWRK  .AND.  NPRINT.NE.817) WRITE(IW,9040) NTS,STOT,VOL
+C
+C
+      DO I=1,I_NESF
+         RE(I)=RE(I)*ANTOAU
+         XE(I)=XE(I)*ANTOAU
+         YE(I)=YE(I)*ANTOAU
+         ZE(I)=ZE(I)*ANTOAU
+      ENDDO
+      DO I=1,NTS
+         AS(I)=AS(I)*ANTOAU*ANTOAU
+         XCTS(I)=XCTS(I)*ANTOAU
+         YCTS(I)=YCTS(I)*ANTOAU
+         ZCTS(I)=ZCTS(I)*ANTOAU
+      ENDDO
+      IRETCAV = 0
+      IF (IDISP.EQ.2) IDISP = 1
+      RETURN
+C
+ 9020 FORMAT(/1X,'TOTAL NUMBER OF SPHERES=',I6/
+     *        1X,'SPHERE           CENTER  (X,Y,Z) (A)            ',
+     *           '   RADIUS (A)      AREA(A*A)')
+ 9030 FORMAT(I6,4F14.9,F14.9)
+ 9040 FORMAT(/1X,'TOTAL NUMBER OF TESSERAE=',I8/
+     *        1X,'SURFACE AREA=',F15.8,'(A**2)',4X,'CAVITY VOLUME=',
+     *            F16.8,' (A**3)')
+ 9080 FORMAT(/1X,'*** TOO MANY TESSERAE NEEDED, CURRENT MXTS=',I10/
+     *       1X,'PLEASE ADJUST -MXTS- IN $PCM INPUT UPWARDS.'/)
+      END
+C*MODULE PCMCV2  *DECK PEDGB
+      SUBROUTINE PEDGB(NSPTES,NSFE,XEN,YEN,ZEN,REN,NN,JVT1,
+     *                 CV,PTS,CCC,PP,PP1,INTSPH,XCTST,YCTST,ZCTST,XVALT,
+     *                 YVALT,ZVALT,AST,ISPHET,NVERTT,VERTT,CENTRT,INTSPT
+     *                ,XVAL,YVAL,ZVAL,VERT,CENTR,XCTS,YCTS,ZCTS,AS,
+     *                 NVERT,XE,YE,ZE,RE,ISPHE)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL GOPARR, DSKWRK, MASWRK, GOPA
+C
+      PARAMETER (MXVRT=20)
+C
+      DIMENSION INTSPH(MXTS,MXVRT),VERT(MXTS,MXVRT,3),
+     *          CENTR(MXTS,MXVRT,3),XVAL(MXTS),YVAL(MXTS),
+     *          ZVAL(MXTS),XCTS(*),YCTS(*),ZCTS(*),AS(*),NVERT(*),
+     *          XE(*),YE(*),ZE(*),RE(*),ISPHE(*)
+      DIMENSION INTSPT(NSPTES,MXVRT),VERTT(NSPTES,MXVRT,3),
+     *          CENTRT(NSPTES,MXVRT,3),XVALT(NSPTES),YVALT(NSPTES),
+     *          ZVALT(NSPTES),AST(NSPTES),XCTST(NSPTES),YCTST(NSPTES),
+     *          ZCTST(NSPTES),ISPHET(NSPTES),NVERTT(NSPTES)
+      DIMENSION JVT1(6,60),PP(3),PP1(3),PTS(3,MXVRT),CCC(3,MXVRT),
+     *          CV(122,3),INTSPHT(MXVRT)
+C
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMPAR/ IPCM,NFT26,NFT27,IRPPCM,IEFPCM,IP_F,NFMOPCM
+      COMMON /PCMITR/ RCUT(2),THRES,IPCMIT,IMUL,MXDIIS,NREG,MXITR1,
+     *                MXITR2,MODPAP
+C
+      DATA ZERO/0.0D+00/
+C
+C     ----- PARTITION OF THE CAVITY SURFACE INTO TESSERAE -----
+C     THIS ROUTINE HAS VERY SIMILAR SECTIONS FOR 60, 240, 960 TESSERA.
+C
+      GOPA=GOPARR
+      IF(IAND(MODPAP,1).NE.0) GOPA=.FALSE.
+C
+C     --- USE 60 TESSERAE FOR EACH SPHERE ---
+C
+C     IF(INITS(NSFE).EQ.60) THEN
+      IF(NSPTES.EQ.60) THEN
+C
+      IPCOUNT = ME - 1
+      DO ITS=1,NSPTES
+         XCTST(ITS) = ZERO
+         YCTST(ITS) = ZERO
+         ZCTST(ITS) = ZERO
+         XVALT(ITS) = ZERO
+         YVALT(ITS) = ZERO
+         ZVALT(ITS) = ZERO
+         AST(ITS) = ZERO
+         ISPHET(ITS) = 0
+         NVERTT(ITS) = 0
+         DO IV = 1, MXVRT
+            DO JJ = 1, 3
+               VERTT(ITS,IV,JJ) = ZERO
+               CENTRT(ITS,IV,JJ) = ZERO
+            ENDDO
+         ENDDO
+         DO IV = 1, MXVRT
+            INTSPT(ITS,IV) = 0
+         ENDDO
+      ENDDO
+C
+      DO 310 ITS = 1, NSPTES
+C
+C            GO PARALLEL!
+        IF(GOPA) THEN
+          IPCOUNT = IPCOUNT + 1
+          IF(MOD(IPCOUNT,NPROC).NE.0) GO TO 310
+        END IF
+C
+      N1 = JVT1(1,ITS)
+      N2 = JVT1(2,ITS)
+      N3 = JVT1(3,ITS)
+      PTS(1,1)=CV(N1,1)*REN+XEN
+      PTS(2,1)=CV(N1,2)*REN+YEN
+      PTS(3,1)=CV(N1,3)*REN+ZEN
+      PTS(1,2)=CV(N2,1)*REN+XEN
+      PTS(2,2)=CV(N2,2)*REN+YEN
+      PTS(3,2)=CV(N2,3)*REN+ZEN
+      PTS(1,3)=CV(N3,1)*REN+XEN
+      PTS(2,3)=CV(N3,2)*REN+YEN
+      PTS(3,3)=CV(N3,3)*REN+ZEN
+      NV=3
+      DO JJ = 1, 3
+        PP(JJ) = ZERO
+        PP1(JJ) = ZERO
+      ENDDO
+C
+C     PER CIASCUNA TESSERA, TROVA LA PORZIONE SCOPERTA E NE
+C     CALCOLA L'AREA CON IL TEOREMA DI GAUSS-BONNET; IL PUNTO
+C     RAPPRESENTATIVO E' DEFINITO COME MEDIA DEI VERTICI DELLA
+C     PORZIONE SCOPERTA DI TESSERA E PASSATO IN PP (MENTRE IN PP1
+C     CI SONO LE COORDINATE DEL PUNTO SULLA NORMALE INTERNA).
+C
+C     I VERTICI DI CIASCUNA TESSERA SONO CONSERVATI IN
+C     VERT(MXTS,MXVRT,3), IL NUMERO DI VERTICI DI CIASCUNA TESSERA
+C     E' IN NVERT(MXTS), E I CENTRI DEI CERCHI DI CIASCUN LATO SONO
+C     IN CENTR(MXTS,MXVRT,3).  IN INTSPH(MXTS,MXVRT) SONO REGISTRATE
+C     LE SFERE A CUI APPARTENGONO I LATI DELLE TESSERE.
+C
+      CALL TESSERA(NSFE,NV,PTS,CCC,PP,PP1,AREA,INTSPHT,XE,YE,ZE,RE)
+C
+      IF(AREA.EQ.ZERO) GO TO 310
+      XCTST(ITS) = PP(1)
+      YCTST(ITS) = PP(2)
+      ZCTST(ITS) = PP(3)
+      XVALT(ITS) = PP1(1)
+      YVALT(ITS) = PP1(2)
+      ZVALT(ITS) = PP1(3)
+      AST(ITS) = AREA
+      ISPHET(ITS) = NSFE
+      NVERTT(ITS) = NV
+      DO IV = 1, NV
+         DO JJ = 1, 3
+            VERTT(ITS,IV,JJ) = PTS(JJ,IV)
+            CENTRT(ITS,IV,JJ) = CCC(JJ,IV)
+         ENDDO
+      ENDDO
+      DO IV = 1, NV
+         INTSPT(ITS,IV) = INTSPHT(IV)
+      ENDDO
+ 310  CONTINUE
+C
+C          SUM UP
+        IF(GOPA) THEN
+          CALL DDI_GSUMF(2420,XCTST,NSPTES)
+          CALL DDI_GSUMF(2421,YCTST,NSPTES)
+          CALL DDI_GSUMF(2422,ZCTST,NSPTES)
+          CALL DDI_GSUMF(2423,XVALT,NSPTES)
+          CALL DDI_GSUMF(2424,YVALT,NSPTES)
+          CALL DDI_GSUMF(2425,ZVALT,NSPTES)
+          CALL DDI_GSUMF(2426,AST,NSPTES)
+          CALL DDI_GSUMI(2427,ISPHET,NSPTES)
+          CALL DDI_GSUMI(2428,NVERTT,NSPTES)
+          CALL DDI_GSUMF(2429,VERTT,NSPTES*MXVRT*3)
+          CALL DDI_GSUMF(2430,CENTRT,NSPTES*MXVRT*3)
+          CALL DDI_GSUMI(2431,INTSPT,NSPTES*MXVRT)
+        END IF
+C
+C
+C
+      DO 320 ITS=1,NSPTES
+      IF(AST(ITS).EQ.0.0D+00) GO TO 320
+      NN = NN + 1
+C
+C     CHECK ON THE TOTAL NUMBER OF TESSERA
+C
+      IF(NN.GT.MXTS) THEN
+         IF(MASWRK) WRITE(IW,9080) MXTS
+         CALL ABRT
+         STOP
+      END IF
+C
+      XCTS(NN) = XCTST(ITS)
+      YCTS(NN) = YCTST(ITS)
+      ZCTS(NN) = ZCTST(ITS)
+      XVAL(NN) = XVALT(ITS)
+      YVAL(NN) = YVALT(ITS)
+      ZVAL(NN) = ZVALT(ITS)
+      AS(NN) = AST(ITS)
+      ISPHE(NN) = ISPHET(ITS)
+      NVERT(NN) = NVERTT(ITS)
+      IF(NFMOPCM.EQ.0) THEN
+      DO IV = 1, NVERT(NN)
+         DO JJ = 1, 3
+            VERT(NN,IV,JJ) = VERTT(ITS,IV,JJ)
+            CENTR(NN,IV,JJ) = CENTRT(ITS,IV,JJ)
+         ENDDO
+      ENDDO
+      DO IV = 1, NVERT(NN)
+         INTSPH(NN,IV) = INTSPT(ITS,IV)
+      ENDDO
+      ENDIF
+ 320  CONTINUE
+C     --- END OF 60 TESSERAE ---
+      END IF
+C
+C     --- USE 240 TESSERAE FOR EACH SPHERE ---
+C
+C     IF(INITS(NSFE).EQ.240) THEN
+      IF(NSPTES.EQ.240) THEN
+C
+C
+C           INITIALIZE PARALLEL
+      IPCOUNT = ME - 1
+C
+      DO ITS=1,NSPTES
+      XCTST(ITS) = ZERO
+      YCTST(ITS) = ZERO
+      ZCTST(ITS) = ZERO
+      XVALT(ITS) = ZERO
+      YVALT(ITS) = ZERO
+      ZVALT(ITS) = ZERO
+      AST(ITS) = ZERO
+      ISPHET(ITS) = 0
+      NVERTT(ITS) = 0
+      DO IV = 1, MXVRT
+         DO JJ = 1, 3
+            VERTT(ITS,IV,JJ) = ZERO
+            CENTRT(ITS,IV,JJ) = ZERO
+         ENDDO
+      ENDDO
+      DO IV = 1, MXVRT
+         INTSPT(ITS,IV) = 0
+      ENDDO
+      ENDDO
+C
+      DO 350 KTS = 1, 60
+C
+C            GO PARALLEL!
+        IF(GOPA) THEN
+          IPCOUNT = IPCOUNT + 1
+          IF(MOD(IPCOUNT,NPROC).NE.0) GO TO 350
+        END IF
+C
+      DO 360 JTS = 1, 4
+         ITS = (KTS-1)*4 + JTS
+         IF(JTS.EQ.1) THEN
+            N1 = JVT1(1,KTS)
+            N2 = JVT1(4,KTS)
+            N3 = JVT1(5,KTS)
+         END IF
+         IF(JTS.EQ.2) THEN
+            N1 = JVT1(6,KTS)
+            N2 = JVT1(4,KTS)
+            N3 = JVT1(5,KTS)
+         END IF
+         IF(JTS.EQ.3) THEN
+            N1 = JVT1(3,KTS)
+            N2 = JVT1(4,KTS)
+            N3 = JVT1(6,KTS)
+         END IF
+         IF(JTS.EQ.4) THEN
+            N1 = JVT1(2,KTS)
+            N2 = JVT1(6,KTS)
+            N3 = JVT1(5,KTS)
+         END IF
+      PTS(1,1)=CV(N1,1)*REN+XEN
+      PTS(2,1)=CV(N1,2)*REN+YEN
+      PTS(3,1)=CV(N1,3)*REN+ZEN
+      PTS(1,2)=CV(N2,1)*REN+XEN
+      PTS(2,2)=CV(N2,2)*REN+YEN
+      PTS(3,2)=CV(N2,3)*REN+ZEN
+      PTS(1,3)=CV(N3,1)*REN+XEN
+      PTS(2,3)=CV(N3,2)*REN+YEN
+      PTS(3,3)=CV(N3,3)*REN+ZEN
+      NV=3
+      DO JJ = 1, 3
+        PP(JJ) = ZERO
+        PP1(JJ) = ZERO
+      ENDDO
+C
+      CALL TESSERA(NSFE,NV,PTS,CCC,PP,PP1,AREA,INTSPHT,XE,YE,ZE,RE)
+C
+      IF(AREA.EQ.ZERO) GO TO 360
+      XCTST(ITS) = PP(1)
+      YCTST(ITS) = PP(2)
+      ZCTST(ITS) = PP(3)
+      XVALT(ITS) = PP1(1)
+      YVALT(ITS) = PP1(2)
+      ZVALT(ITS) = PP1(3)
+      AST(ITS) = AREA
+      ISPHET(ITS) = NSFE
+      NVERTT(ITS) = NV
+      DO IV = 1, NV
+         DO JJ = 1, 3
+            VERTT(ITS,IV,JJ) = PTS(JJ,IV)
+            CENTRT(ITS,IV,JJ) = CCC(JJ,IV)
+         ENDDO
+      ENDDO
+      DO IV = 1, NV
+         INTSPT(ITS,IV) = INTSPHT(IV)
+      ENDDO
+ 360  CONTINUE
+ 350  CONTINUE
+C
+C          SUM UP
+        IF(GOPA) THEN
+          CALL DDI_GSUMF(2420,XCTST,NSPTES)
+          CALL DDI_GSUMF(2421,YCTST,NSPTES)
+          CALL DDI_GSUMF(2422,ZCTST,NSPTES)
+          CALL DDI_GSUMF(2423,XVALT,NSPTES)
+          CALL DDI_GSUMF(2424,YVALT,NSPTES)
+          CALL DDI_GSUMF(2425,ZVALT,NSPTES)
+          CALL DDI_GSUMF(2426,AST,NSPTES)
+          CALL DDI_GSUMI(2427,ISPHET,NSPTES)
+          CALL DDI_GSUMI(2428,NVERTT,NSPTES)
+          CALL DDI_GSUMF(2429,VERTT,NSPTES*MXVRT*3)
+          CALL DDI_GSUMF(2430,CENTRT,NSPTES*MXVRT*3)
+          CALL DDI_GSUMI(2431,INTSPT,NSPTES*MXVRT)
+        END IF
+C
+C
+C
+      DO 370 ITS=1,NSPTES
+      IF(AST(ITS).EQ.0.0D+00) GO TO 370
+      NN = NN + 1
+C
+C     CHECK ON THE TOTAL NUMBER OF TESSERA
+C
+      IF(NN.GT.MXTS) THEN
+         IF(MASWRK) WRITE(IW,9080) MXTS
+         CALL ABRT
+         STOP
+      END IF
+C
+      XCTS(NN) = XCTST(ITS)
+      YCTS(NN) = YCTST(ITS)
+      ZCTS(NN) = ZCTST(ITS)
+      XVAL(NN) = XVALT(ITS)
+      YVAL(NN) = YVALT(ITS)
+      ZVAL(NN) = ZVALT(ITS)
+      AS(NN) = AST(ITS)
+      ISPHE(NN) = ISPHET(ITS)
+      NVERT(NN) = NVERTT(ITS)
+      IF(NFMOPCM.EQ.0) THEN
+      DO IV = 1, NVERT(NN)
+         DO JJ = 1, 3
+            VERT(NN,IV,JJ) = VERTT(ITS,IV,JJ)
+            CENTR(NN,IV,JJ) = CENTRT(ITS,IV,JJ)
+         ENDDO
+      ENDDO
+      DO IV = 1, NVERT(NN)
+         INTSPH(NN,IV) = INTSPT(ITS,IV)
+      ENDDO
+      ENDIF
+ 370  CONTINUE
+C
+C
+C
+C
+C    --- END OF 240 TESSERAE ---
+      END IF
+C
+C
+C
+C
+C
+C
+C     --- USE 960 TESSERAE FOR EACH SPHERE ---
+C
+C     IF(INITS(NSFE).EQ.960) THEN
+      IF(NSPTES.EQ.960) THEN
+C
+C
+C           INITIALIZE PARALLEL
+      IPCOUNT = ME - 1
+C
+      DO ITS=1,NSPTES
+      XCTST(ITS) = ZERO
+      YCTST(ITS) = ZERO
+      ZCTST(ITS) = ZERO
+      XVALT(ITS) = ZERO
+      YVALT(ITS) = ZERO
+      ZVALT(ITS) = ZERO
+      AST(ITS) = ZERO
+      ISPHET(ITS) = 0
+      NVERTT(ITS) = 0
+      DO IV = 1, MXVRT
+         DO JJ = 1, 3
+            VERTT(ITS,IV,JJ) = ZERO
+            CENTRT(ITS,IV,JJ) = ZERO
+         ENDDO
+      ENDDO
+      DO IV = 1, MXVRT
+         INTSPT(ITS,IV) = 0
+      ENDDO
+      ENDDO
+C
+      DO 380 KTS = 1, 60
+C
+C            GO PARALLEL!
+        IF(GOPA) THEN
+          IPCOUNT = IPCOUNT + 1
+          IF(MOD(IPCOUNT,NPROC).NE.0) GO TO 380
+        END IF
+C
+      DO 381 JTS = 1, 4
+         IF(JTS.EQ.1) THEN
+            N1 = JVT1(1,KTS)
+            N2 = JVT1(4,KTS)
+            N3 = JVT1(5,KTS)
+         END IF
+         IF(JTS.EQ.2) THEN
+            N1 = JVT1(6,KTS)
+            N2 = JVT1(4,KTS)
+            N3 = JVT1(5,KTS)
+         END IF
+         IF(JTS.EQ.3) THEN
+            N1 = JVT1(3,KTS)
+            N2 = JVT1(4,KTS)
+            N3 = JVT1(6,KTS)
+         END IF
+         IF(JTS.EQ.4) THEN
+            N1 = JVT1(2,KTS)
+            N2 = JVT1(6,KTS)
+            N3 = JVT1(5,KTS)
+         END IF
+         P1X = CV(N1,1)*REN+XEN
+         P1Y = CV(N1,2)*REN+YEN
+         P1Z = CV(N1,3)*REN+ZEN
+         P2X = CV(N2,1)*REN+XEN
+         P2Y = CV(N2,2)*REN+YEN
+         P2Z = CV(N2,3)*REN+ZEN
+         P3X = CV(N3,1)*REN+XEN
+         P3Y = CV(N3,2)*REN+YEN
+         P3Z = CV(N3,3)*REN+ZEN
+C           COMPUTE THE COORDINATES OF POINTS 4, 5, 6
+C
+C                          1
+C
+C                       4     5
+C
+C                    3     6     2
+C
+C
+         P4X = P1X+P3X-XEN-XEN
+         P4Y = P1Y+P3Y-YEN-YEN
+         P4Z = P1Z+P3Z-ZEN-ZEN
+         P5X = P1X+P2X-XEN-XEN
+         P5Y = P1Y+P2Y-YEN-YEN
+         P5Z = P1Z+P2Z-ZEN-ZEN
+         P6X = P2X+P3X-XEN-XEN
+         P6Y = P2Y+P3Y-YEN-YEN
+         P6Z = P2Z+P3Z-ZEN-ZEN
+C
+         DNORM4 = P4X**2+P4Y**2+P4Z**2
+         DNORM5 = P5X**2+P5Y**2+P5Z**2
+         DNORM6 = P6X**2+P6Y**2+P6Z**2
+         SCALE4 = REN/SQRT(DNORM4)
+         SCALE5 = REN/SQRT(DNORM5)
+         SCALE6 = REN/SQRT(DNORM6)
+         P4X = XEN + P4X*SCALE4
+         P4Y = YEN + P4Y*SCALE4
+         P4Z = ZEN + P4Z*SCALE4
+         P5X = XEN + P5X*SCALE5
+         P5Y = YEN + P5Y*SCALE5
+         P5Z = ZEN + P5Z*SCALE5
+         P6X = XEN + P6X*SCALE6
+         P6Y = YEN + P6Y*SCALE6
+         P6Z = ZEN + P6Z*SCALE6
+C
+      DO 382 LTS = 1, 4
+         ITS = ((KTS-1)*4 + JTS-1)*4 + LTS
+         IF(LTS.EQ.1) THEN
+           PTS(1,1)=P1X
+           PTS(2,1)=P1Y
+           PTS(3,1)=P1Z
+           PTS(1,2)=P4X
+           PTS(2,2)=P4Y
+           PTS(3,2)=P4Z
+           PTS(1,3)=P5X
+           PTS(2,3)=P5Y
+           PTS(3,3)=P5Z
+         ELSE IF(LTS.EQ.2) THEN
+           PTS(1,1)=P6X
+           PTS(2,1)=P6Y
+           PTS(3,1)=P6Z
+           PTS(1,2)=P4X
+           PTS(2,2)=P4Y
+           PTS(3,2)=P4Z
+           PTS(1,3)=P5X
+           PTS(2,3)=P5Y
+           PTS(3,3)=P5Z
+         ELSE IF(LTS.EQ.3) THEN
+           PTS(1,1)=P3X
+           PTS(2,1)=P3Y
+           PTS(3,1)=P3Z
+           PTS(1,2)=P4X
+           PTS(2,2)=P4Y
+           PTS(3,2)=P4Z
+           PTS(1,3)=P6X
+           PTS(2,3)=P6Y
+           PTS(3,3)=P6Z
+         ELSE IF(LTS.EQ.4) THEN
+           PTS(1,1)=P2X
+           PTS(2,1)=P2Y
+           PTS(3,1)=P2Z
+           PTS(1,2)=P6X
+           PTS(2,2)=P6Y
+           PTS(3,2)=P6Z
+           PTS(1,3)=P5X
+           PTS(2,3)=P5Y
+           PTS(3,3)=P5Z
+         END IF
+      NV=3
+      DO JJ = 1, 3
+        PP(JJ) = ZERO
+        PP1(JJ) = ZERO
+      ENDDO
+C
+C
+      CALL TESSERA(NSFE,NV,PTS,CCC,PP,PP1,AREA,INTSPHT,XE,YE,ZE,RE)
+C
+      IF(AREA.EQ.ZERO) GO TO 382
+      XCTST(ITS) = PP(1)
+      YCTST(ITS) = PP(2)
+      ZCTST(ITS) = PP(3)
+      XVALT(ITS) = PP1(1)
+      YVALT(ITS) = PP1(2)
+      ZVALT(ITS) = PP1(3)
+      AST(ITS) = AREA
+      ISPHET(ITS) = NSFE
+      NVERTT(ITS) = NV
+      DO IV = 1, NV
+         DO JJ = 1, 3
+            VERTT(ITS,IV,JJ) = PTS(JJ,IV)
+            CENTRT(ITS,IV,JJ) = CCC(JJ,IV)
+         ENDDO
+      ENDDO
+      DO IV = 1, NV
+         INTSPT(ITS,IV) = INTSPHT(IV)
+      ENDDO
+ 382  CONTINUE
+ 381  CONTINUE
+ 380  CONTINUE
+C
+C          SUM UP
+        IF(GOPA) THEN
+          CALL DDI_GSUMF(2420,XCTST,NSPTES)
+          CALL DDI_GSUMF(2421,YCTST,NSPTES)
+          CALL DDI_GSUMF(2422,ZCTST,NSPTES)
+          CALL DDI_GSUMF(2423,XVALT,NSPTES)
+          CALL DDI_GSUMF(2424,YVALT,NSPTES)
+          CALL DDI_GSUMF(2425,ZVALT,NSPTES)
+          CALL DDI_GSUMF(2426,AST,NSPTES)
+          CALL DDI_GSUMI(2427,ISPHET,NSPTES)
+          CALL DDI_GSUMI(2428,NVERTT,NSPTES)
+          CALL DDI_GSUMF(2429,VERTT,NSPTES*MXVRT*3)
+          CALL DDI_GSUMF(2430,CENTRT,NSPTES*MXVRT*3)
+          CALL DDI_GSUMI(2431,INTSPT,NSPTES*MXVRT)
+        END IF
+C
+C
+C
+      DO 383 ITS=1,NSPTES
+      IF(AST(ITS).EQ.0.0D+00) GO TO 383
+      NN = NN + 1
+C
+C     CHECK ON THE TOTAL NUMBER OF TESSERA
+C
+      IF(NN.GT.MXTS) THEN
+         IF(MASWRK) WRITE(IW,9080) MXTS
+         CALL ABRT
+         STOP
+      END IF
+C
+      XCTS(NN) = XCTST(ITS)
+      YCTS(NN) = YCTST(ITS)
+      ZCTS(NN) = ZCTST(ITS)
+      XVAL(NN) = XVALT(ITS)
+      YVAL(NN) = YVALT(ITS)
+      ZVAL(NN) = ZVALT(ITS)
+      AS(NN) = AST(ITS)
+      ISPHE(NN) = ISPHET(ITS)
+      NVERT(NN) = NVERTT(ITS)
+      IF(NFMOPCM.EQ.0) THEN
+      DO IV = 1, NVERT(NN)
+         DO JJ = 1, 3
+            VERT(NN,IV,JJ) = VERTT(ITS,IV,JJ)
+            CENTR(NN,IV,JJ) = CENTRT(ITS,IV,JJ)
+         ENDDO
+      ENDDO
+      DO IV = 1, NVERT(NN)
+         INTSPH(NN,IV) = INTSPT(ITS,IV)
+      ENDDO
+      ENDIF
+ 383  CONTINUE
+C
+C    --- END OF 960 TESSERAE ---
+C
+      END IF
+      RETURN
+C
+ 9080 FORMAT(/1X,'*** TOO MANY TESSERAE NEEDED, CURRENT MXTS=',I10/
+     *       1X,'PLEASE ADJUST -MXTS- IN $PCM INPUT UPWARDS.'/)
+      END
+C*MODULE PCMCV2  *DECK PEDRT
+      SUBROUTINE PEDRT(NSPTES,NSFE,XEN,YEN,ZEN,REN,NN,JVT1,
+     *                 CV,PTS,CCC,PP,PP1,INTSPH,XVAL,YVAL,ZVAL,VERT,
+     *                 CENTR,TESTMP,MXTS1,XCTS,YCTS,ZCTS,AS,NVERT,
+     *                 XE,YE,ZE,RE,ISPHE)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL GOPARR, DSKWRK, MASWRK
+C
+      PARAMETER (MXVRT=20)
+C
+      DIMENSION INTSPH(MXTS,MXVRT),VERT(MXTS,MXVRT,3),
+     *          CENTR(MXTS,MXVRT,3),XVAL(MXTS),YVAL(MXTS),
+     *          ZVAL(MXTS),XCTS(*),YCTS(*),ZCTS(*),AS(*),NVERT(*),
+     *          XE(*),YE(*),ZE(*),RE(*),ISPHE(*)
+      DIMENSION JVT1(6,60),PP(3),PP1(3),PTS(3,MXVRT),CCC(3,MXVRT),
+     *          CV(122,3),TESTMP(MXTS1,10),INTSPHT(MXVRT)
+C
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMOPT/ RABI,RASC,REFPOL,THRSLS,DENSLS,WB,WA,ETA2,GD,EVAC,
+     *                RHOW,PM,AREATL,AREAKP,BONDRY,OMEGA,RET,FRO,EPSINF,
+     *                EPS,DR,RSOLV,VMOL,TCE,STEN,DSTEN,CMF,TABS,IDIRCT,
+     *                IPCDER,IDP,ICOMP,IFIELD,ICAV,IDISP,IPRINT,IRETCAV,
+     *                ICENT,IFAST,NEVAL,IEFPOL,KEEPSM,IMGABI,IMGASC,NADD
+      COMMON /PCMPAR/ IPCM,NFT26,NFT27,IRPPCM,IEFPCM,IP_F,NFMOPCM
+C
+      DATA ZERO/0.0D+00/
+      DATA FPI/12.56637061D+00/
+C
+C
+C     ----- PARTITION OF THE CAVITY SURFACE INTO TESSERAE -----
+C
+C     --- USE 60 TESSERAE FOR EACH SPHERE ---
+C
+      IF(NSPTES.EQ.60) THEN
+C
+      AREATS=FPI*REN**2/60.0D+00
+      DO 1310 ITS = 1, 60
+C
+        CALL VCLR(TESTMP,1,MXTS1*10)
+C
+C       THIS IS THE INITIAL TRIANGLE
+C
+        N1 = JVT1(1,ITS)
+        N2 = JVT1(2,ITS)
+        N3 = JVT1(3,ITS)
+        TESTMP(1,1) = CV(N1,1)*REN+XEN
+        TESTMP(1,2) = CV(N1,2)*REN+YEN
+        TESTMP(1,3) = CV(N1,3)*REN+ZEN
+        TESTMP(1,4) = CV(N2,1)*REN+XEN
+        TESTMP(1,5) = CV(N2,2)*REN+YEN
+        TESTMP(1,6) = CV(N2,3)*REN+ZEN
+        TESTMP(1,7) = CV(N3,1)*REN+XEN
+        TESTMP(1,8) = CV(N3,2)*REN+YEN
+        TESTMP(1,9) = CV(N3,3)*REN+ZEN
+        TESTMP(1,10)= AREATS
+C
+        NTMP=1
+ 1321   CONTINUE
+        DO 1320 ITMP=1, NTMP
+          IF(TESTMP(ITMP,10).LE.ZERO) GO TO 1320
+C
+C       TEST IF THE TRIANLGE IS CUT BY ANY ONE OF THE OTHER SPHERES
+C       IF NOT, SAVE THE TRIANGLE AS A TESSERA BY SETTING AREA NEGATIVE
+C       IF CUT, GO TO THE NEXT GENERATION OF TRIANGLES, QUATER THE AREA
+C       IF FULLY COVERED, SET THE AREA ZERO
+C
+C
+          DO IVER=1,3
+          I3=(IVER-1)*3
+          PTS(1,IVER)=TESTMP(ITMP,I3+1)
+          PTS(2,IVER)=TESTMP(ITMP,I3+2)
+          PTS(3,IVER)=TESTMP(ITMP,I3+3)
+          END DO
+          TEST=BONDRY*SQRT(TESTMP(ITMP,10))
+C
+          CALL TESSID(ID,NSFE,PTS,TEST,XE,YE,ZE,RE)
+C
+          IF(ID.EQ.-1) THEN
+            TESTMP(ITMP,10)= -TESTMP(ITMP,10)
+          ELSE IF(ID.EQ.0) THEN
+            TESTMP(ITMP,10)= ZERO
+          ELSE IF(ID.EQ.1.OR.ID.EQ.2) THEN
+            IF(TESTMP(ITMP,10).LE.AREATL) THEN
+              IF(ID.EQ.2) THEN
+                TESTMP(ITMP,10)=-TESTMP(ITMP,10)
+              ELSE IF(ID.EQ.1) THEN
+                IF(KEEPSM.EQ.1) THEN
+                  NV=3
+                  DO JJ = 1, 3
+                    PP(JJ) = ZERO
+                    PP1(JJ) = ZERO
+                  ENDDO
+                  CALL TESSERA(NSFE,NV,PTS,CCC,PP,PP1,AREA,INTSPHT,
+     *                         XE,YE,ZE,RE)
+                  IF(NV.LE.4.AND.
+     *            AREA.GT.AREATL*AREAKP) THEN
+                    DO JJ = 1, 3
+                      TESTMP(ITMP,JJ)=PP(JJ)
+                      TESTMP(ITMP,JJ+3)=PP(JJ)
+                      TESTMP(ITMP,JJ+6)=PP(JJ)
+                    END DO
+                    TESTMP(ITMP,10)=-AREA
+                  ELSE
+                    TESTMP(ITMP,10)=ZERO
+                  END IF
+                ELSE IF(KEEPSM.EQ.0) THEN
+                  TESTMP(ITMP,10)=ZERO
+                END IF
+              END IF
+              GO TO 1320
+            END IF
+C           COMPUTE THE COORDINATES OF POINTS 4, 5, 6
+C
+C                          1
+C
+C                       4     5
+C
+C                    3     6     2
+C
+            DO IPTS = 4, 6
+              PTS(1,IPTS) = ZERO
+              PTS(2,IPTS) = ZERO
+              PTS(3,IPTS) = ZERO
+            END DO
+C
+            PTS(1,4) = (PTS(1,1)-XEN)+(PTS(1,3)-XEN)
+            PTS(2,4) = (PTS(2,1)-YEN)+(PTS(2,3)-YEN)
+            PTS(3,4) = (PTS(3,1)-ZEN)+(PTS(3,3)-ZEN)
+            PTS(1,5) = (PTS(1,1)-XEN)+(PTS(1,2)-XEN)
+            PTS(2,5) = (PTS(2,1)-YEN)+(PTS(2,2)-YEN)
+            PTS(3,5) = (PTS(3,1)-ZEN)+(PTS(3,2)-ZEN)
+            PTS(1,6) = (PTS(1,2)-XEN)+(PTS(1,3)-XEN)
+            PTS(2,6) = (PTS(2,2)-YEN)+(PTS(2,3)-YEN)
+            PTS(3,6) = (PTS(3,2)-ZEN)+(PTS(3,3)-ZEN)
+C
+            DNORM4 = PTS(1,4)**2+PTS(2,4)**2+PTS(3,4)**2
+            DNORM5 = PTS(1,5)**2+PTS(2,5)**2+PTS(3,5)**2
+            DNORM6 = PTS(1,6)**2+PTS(2,6)**2+PTS(3,6)**2
+            SCALE4 = REN / SQRT(DNORM4)
+            SCALE5 = REN / SQRT(DNORM5)
+            SCALE6 = REN / SQRT(DNORM6)
+            PTS(1,4) = XEN + PTS(1,4) * SCALE4
+            PTS(2,4) = YEN + PTS(2,4) * SCALE4
+            PTS(3,4) = ZEN + PTS(3,4) * SCALE4
+            PTS(1,5) = XEN + PTS(1,5) * SCALE5
+            PTS(2,5) = YEN + PTS(2,5) * SCALE5
+            PTS(3,5) = ZEN + PTS(3,5) * SCALE5
+            PTS(1,6) = XEN + PTS(1,6) * SCALE6
+            PTS(2,6) = YEN + PTS(2,6) * SCALE6
+            PTS(3,6) = ZEN + PTS(3,6) * SCALE6
+C
+            TESTMP(ITMP,10)= TESTMP(ITMP,10)/4.0D+00
+            TESTMP(NTMP+1,10) = TESTMP(ITMP,10)
+            TESTMP(NTMP+2,10) = TESTMP(ITMP,10)
+            TESTMP(NTMP+3,10) = TESTMP(ITMP,10)
+C
+            TESTMP(ITMP,1) = PTS(1,1)
+            TESTMP(ITMP,2) = PTS(2,1)
+            TESTMP(ITMP,3) = PTS(3,1)
+            TESTMP(ITMP,4) = PTS(1,5)
+            TESTMP(ITMP,5) = PTS(2,5)
+            TESTMP(ITMP,6) = PTS(3,5)
+            TESTMP(ITMP,7) = PTS(1,4)
+            TESTMP(ITMP,8) = PTS(2,4)
+            TESTMP(ITMP,9) = PTS(3,4)
+C
+            TESTMP(NTMP+1,1) = PTS(1,5)
+            TESTMP(NTMP+1,2) = PTS(2,5)
+            TESTMP(NTMP+1,3) = PTS(3,5)
+            TESTMP(NTMP+1,4) = PTS(1,2)
+            TESTMP(NTMP+1,5) = PTS(2,2)
+            TESTMP(NTMP+1,6) = PTS(3,2)
+            TESTMP(NTMP+1,7) = PTS(1,6)
+            TESTMP(NTMP+1,8) = PTS(2,6)
+            TESTMP(NTMP+1,9) = PTS(3,6)
+C
+            TESTMP(NTMP+2,1) = PTS(1,4)
+            TESTMP(NTMP+2,2) = PTS(2,4)
+            TESTMP(NTMP+2,3) = PTS(3,4)
+            TESTMP(NTMP+2,4) = PTS(1,6)
+            TESTMP(NTMP+2,5) = PTS(2,6)
+            TESTMP(NTMP+2,6) = PTS(3,6)
+            TESTMP(NTMP+2,7) = PTS(1,3)
+            TESTMP(NTMP+2,8) = PTS(2,3)
+            TESTMP(NTMP+2,9) = PTS(3,3)
+C
+            TESTMP(NTMP+3,1) = PTS(1,4)
+            TESTMP(NTMP+3,2) = PTS(2,4)
+            TESTMP(NTMP+3,3) = PTS(3,4)
+            TESTMP(NTMP+3,4) = PTS(1,5)
+            TESTMP(NTMP+3,5) = PTS(2,5)
+            TESTMP(NTMP+3,6) = PTS(3,5)
+            TESTMP(NTMP+3,7) = PTS(1,6)
+            TESTMP(NTMP+3,8) = PTS(2,6)
+            TESTMP(NTMP+3,9) = PTS(3,6)
+C
+            NTMP=NTMP+3
+            IF(NTMP.GT.MXTS1-3-1) CALL ABRT
+            GO TO 1321
+          END IF
+ 1320   CONTINUE
+C
+C
+      DO 1330 KTS=1,MXTS1
+      IF(TESTMP(KTS,10).GE.ZERO) GO TO 1330
+      NN = NN + 1
+C
+C     CHECK ON THE TOTAL NUMBER OF TESSERA
+C
+      IF(NN.GT.MXTS) THEN
+         IF(MASWRK) WRITE(IW,9080) MXTS
+         CALL ABRT
+         STOP
+      END IF
+C
+C     COMPUTE THE CENTER POINT COORDINATES
+C
+      PP(1) = ZERO
+      PP(2) = ZERO
+      PP(3) = ZERO
+C
+      DO I = 1, 3
+      I3=(I-1)*3
+      PP(1) = PP(1) + (TESTMP(KTS,I3+1)-XEN)
+      PP(2) = PP(2) + (TESTMP(KTS,I3+2)-YEN)
+      PP(3) = PP(3) + (TESTMP(KTS,I3+3)-ZEN)
+      ENDDO
+C
+      DNORM = PP(1)**2 + PP(2)**2 + PP(3)**2
+      SCALE = REN / SQRT(DNORM)
+      PP(1) = XEN + PP(1) * SCALE
+      PP(2) = YEN + PP(2) * SCALE
+      PP(3) = ZEN + PP(3) * SCALE
+C
+      XCTS(NN) = PP(1)
+      YCTS(NN) = PP(2)
+      ZCTS(NN) = PP(3)
+      AS(NN)   = -TESTMP(KTS,10)
+      ISPHE(NN) = NSFE
+C
+C     FILL IN XVAL+YVAL+ZVAL,NVERT,VERT,CENTR,INTSPH
+C
+      XVAL(NN) = XEN + (PP(1)-XEN)*(REN-DR)/REN
+      YVAL(NN) = YEN + (PP(2)-YEN)*(REN-DR)/REN
+      ZVAL(NN) = ZEN + (PP(3)-ZEN)*(REN-DR)/REN
+      NVERT(NN)=3
+      IF(NFMOPCM.EQ.0) THEN
+      DO I = 1,3
+        DO J = 1,3
+          VERT(NN,I,J)  = TESTMP(KTS,(I-1)*3+J)
+          CENTR(NN,I,J) = NSFE
+        ENDDO
+        INTSPH(NN,I)= NSFE
+      ENDDO
+      ENDIF
+C
+ 1330 CONTINUE
+C
+ 1310 CONTINUE
+C
+C
+C     --- END OF 60 TESSERAE ---
+      END IF
+C
+C
+C
+C     --- USE 240 TESSERAE FOR EACH SPHERE ---
+C
+      IF(NSPTES.EQ.240) THEN
+C
+      DO 1350 ITS = 1, 60
+C
+      DO 1360 JTS = 1, 4
+C
+        CALL VCLR(TESTMP,1,MXTS1*10)
+C
+         IF(JTS.EQ.1) THEN
+            N1 = JVT1(1,ITS)
+            N2 = JVT1(4,ITS)
+            N3 = JVT1(5,ITS)
+         END IF
+         IF(JTS.EQ.2) THEN
+            N1 = JVT1(6,ITS)
+            N2 = JVT1(4,ITS)
+            N3 = JVT1(5,ITS)
+         END IF
+         IF(JTS.EQ.3) THEN
+            N1 = JVT1(3,ITS)
+            N2 = JVT1(4,ITS)
+            N3 = JVT1(6,ITS)
+         END IF
+         IF(JTS.EQ.4) THEN
+            N1 = JVT1(2,ITS)
+            N2 = JVT1(6,ITS)
+            N3 = JVT1(5,ITS)
+         END IF
+C
+C       THIS IS THE INITIAL TRIANGLE
+C
+        TESTMP(1,1) = CV(N1,1)*REN+XEN
+        TESTMP(1,2) = CV(N1,2)*REN+YEN
+        TESTMP(1,3) = CV(N1,3)*REN+ZEN
+        TESTMP(1,4) = CV(N2,1)*REN+XEN
+        TESTMP(1,5) = CV(N2,2)*REN+YEN
+        TESTMP(1,6) = CV(N2,3)*REN+ZEN
+        TESTMP(1,7) = CV(N3,1)*REN+XEN
+        TESTMP(1,8) = CV(N3,2)*REN+YEN
+        TESTMP(1,9) = CV(N3,3)*REN+ZEN
+C
+C       COMPUTE THE AREA
+C       NOTE: THE AREAS ARE NOT EQUAL
+C
+        AREA=ZERO
+        DO IVER=1,3
+          I3=(IVER-1)*3
+          PTS(1,IVER)=TESTMP(1,I3+1)
+          PTS(2,IVER)=TESTMP(1,I3+2)
+          PTS(3,IVER)=TESTMP(1,I3+3)
+        END DO
+        DO J=1, 3
+          CCC(1,J) = XEN
+          CCC(2,J) = YEN
+          CCC(3,J) = ZEN
+        ENDDO
+        DO N = 1, 3
+          INTSPHT(N) = NSFE
+        ENDDO
+        NV=3
+        DO JJ = 1, 3
+          PP(JJ) = ZERO
+          PP1(JJ) = ZERO
+        ENDDO
+        CALL GAUBON(NV,NSFE,PTS,CCC,PP,PP1,AREA,INTSPHT,XE,YE,ZE,RE)
+        TESTMP(1,10)= AREA
+C
+        NTMP=1
+ 1371   CONTINUE
+        DO 1370 ITMP=1, NTMP
+          IF(TESTMP(ITMP,10).LE.ZERO) GO TO 1370
+C
+C       TEST IF THE TRIANLGE IS CUT BY ANY ONE OF THE OTHER SPHERES
+C       IF NOT, SAVE THE TRIANGLE AS A TESSERA BY SETTING AREA NEGATIVE
+C       IF CUT, GO TO THE NEXT GENERATION OF TRIANGLES, QUATER THE AREA
+C       IF FULLY COVERED, SET THE AREA ZERO
+C
+C
+          DO IVER=1,3
+          I3=(IVER-1)*3
+          PTS(1,IVER)=TESTMP(ITMP,I3+1)
+          PTS(2,IVER)=TESTMP(ITMP,I3+2)
+          PTS(3,IVER)=TESTMP(ITMP,I3+3)
+          END DO
+          TEST=BONDRY*SQRT(TESTMP(ITMP,10))
+C
+          CALL TESSID(ID,NSFE,PTS,TEST,XE,YE,ZE,RE)
+C
+          IF(ID.EQ.-1) THEN
+            TESTMP(ITMP,10)= -TESTMP(ITMP,10)
+          ELSE IF(ID.EQ.0) THEN
+            TESTMP(ITMP,10)= ZERO
+          ELSE IF(ID.EQ.1.OR.ID.EQ.2) THEN
+            IF(TESTMP(ITMP,10).LE.AREATL) THEN
+              IF(ID.EQ.2) THEN
+                TESTMP(ITMP,10)=-TESTMP(ITMP,10)
+              ELSE IF(ID.EQ.1) THEN
+                IF(KEEPSM.EQ.1) THEN
+                  NV=3
+                  DO JJ = 1, 3
+                    PP(JJ) = ZERO
+                    PP1(JJ) = ZERO
+                  ENDDO
+                  CALL TESSERA(NSFE,NV,PTS,CCC,PP,PP1,AREA,INTSPHT,
+     *                         XE,YE,ZE,RE)
+                  IF(NV.LE.4.AND.
+     *            AREA.GT.AREATL*AREAKP) THEN
+                    DO JJ = 1, 3
+                      TESTMP(ITMP,JJ)=PP(JJ)
+                      TESTMP(ITMP,JJ+3)=PP(JJ)
+                      TESTMP(ITMP,JJ+6)=PP(JJ)
+                    END DO
+                    TESTMP(ITMP,10)=-AREA
+                  ELSE
+                    TESTMP(ITMP,10)=ZERO
+                  END IF
+                ELSE IF(KEEPSM.EQ.0) THEN
+                  TESTMP(ITMP,10)=ZERO
+                END IF
+              END IF
+              GO TO 1370
+            END IF
+C           COMPUTE THE COORDINATES OF POINTS 4, 5, 6
+C
+C                          1
+C
+C                       4     5
+C
+C                    3     6     2
+C
+            DO IPTS = 4, 6
+              PTS(1,IPTS) = ZERO
+              PTS(2,IPTS) = ZERO
+              PTS(3,IPTS) = ZERO
+            END DO
+C
+            PTS(1,4) = (PTS(1,1)-XEN)+(PTS(1,3)-XEN)
+            PTS(2,4) = (PTS(2,1)-YEN)+(PTS(2,3)-YEN)
+            PTS(3,4) = (PTS(3,1)-ZEN)+(PTS(3,3)-ZEN)
+            PTS(1,5) = (PTS(1,1)-XEN)+(PTS(1,2)-XEN)
+            PTS(2,5) = (PTS(2,1)-YEN)+(PTS(2,2)-YEN)
+            PTS(3,5) = (PTS(3,1)-ZEN)+(PTS(3,2)-ZEN)
+            PTS(1,6) = (PTS(1,2)-XEN)+(PTS(1,3)-XEN)
+            PTS(2,6) = (PTS(2,2)-YEN)+(PTS(2,3)-YEN)
+            PTS(3,6) = (PTS(3,2)-ZEN)+(PTS(3,3)-ZEN)
+C
+            DNORM4 = PTS(1,4)**2+PTS(2,4)**2+PTS(3,4)**2
+            DNORM5 = PTS(1,5)**2+PTS(2,5)**2+PTS(3,5)**2
+            DNORM6 = PTS(1,6)**2+PTS(2,6)**2+PTS(3,6)**2
+            SCALE4 = REN / SQRT(DNORM4)
+            SCALE5 = REN / SQRT(DNORM5)
+            SCALE6 = REN / SQRT(DNORM6)
+            PTS(1,4) = XEN + PTS(1,4) * SCALE4
+            PTS(2,4) = YEN + PTS(2,4) * SCALE4
+            PTS(3,4) = ZEN + PTS(3,4) * SCALE4
+            PTS(1,5) = XEN + PTS(1,5) * SCALE5
+            PTS(2,5) = YEN + PTS(2,5) * SCALE5
+            PTS(3,5) = ZEN + PTS(3,5) * SCALE5
+            PTS(1,6) = XEN + PTS(1,6) * SCALE6
+            PTS(2,6) = YEN + PTS(2,6) * SCALE6
+            PTS(3,6) = ZEN + PTS(3,6) * SCALE6
+C
+C           BUT HERE WE CAN USE THE EQUAL AREA SAFELY
+C
+            TESTMP(ITMP,10)= TESTMP(ITMP,10)/4.0D+00
+            TESTMP(NTMP+1,10) = TESTMP(ITMP,10)
+            TESTMP(NTMP+2,10) = TESTMP(ITMP,10)
+            TESTMP(NTMP+3,10) = TESTMP(ITMP,10)
+C
+            TESTMP(ITMP,1) = PTS(1,1)
+            TESTMP(ITMP,2) = PTS(2,1)
+            TESTMP(ITMP,3) = PTS(3,1)
+            TESTMP(ITMP,4) = PTS(1,5)
+            TESTMP(ITMP,5) = PTS(2,5)
+            TESTMP(ITMP,6) = PTS(3,5)
+            TESTMP(ITMP,7) = PTS(1,4)
+            TESTMP(ITMP,8) = PTS(2,4)
+            TESTMP(ITMP,9) = PTS(3,4)
+C
+            TESTMP(NTMP+1,1) = PTS(1,5)
+            TESTMP(NTMP+1,2) = PTS(2,5)
+            TESTMP(NTMP+1,3) = PTS(3,5)
+            TESTMP(NTMP+1,4) = PTS(1,2)
+            TESTMP(NTMP+1,5) = PTS(2,2)
+            TESTMP(NTMP+1,6) = PTS(3,2)
+            TESTMP(NTMP+1,7) = PTS(1,6)
+            TESTMP(NTMP+1,8) = PTS(2,6)
+            TESTMP(NTMP+1,9) = PTS(3,6)
+C
+            TESTMP(NTMP+2,1) = PTS(1,4)
+            TESTMP(NTMP+2,2) = PTS(2,4)
+            TESTMP(NTMP+2,3) = PTS(3,4)
+            TESTMP(NTMP+2,4) = PTS(1,6)
+            TESTMP(NTMP+2,5) = PTS(2,6)
+            TESTMP(NTMP+2,6) = PTS(3,6)
+            TESTMP(NTMP+2,7) = PTS(1,3)
+            TESTMP(NTMP+2,8) = PTS(2,3)
+            TESTMP(NTMP+2,9) = PTS(3,3)
+C
+            TESTMP(NTMP+3,1) = PTS(1,4)
+            TESTMP(NTMP+3,2) = PTS(2,4)
+            TESTMP(NTMP+3,3) = PTS(3,4)
+            TESTMP(NTMP+3,4) = PTS(1,5)
+            TESTMP(NTMP+3,5) = PTS(2,5)
+            TESTMP(NTMP+3,6) = PTS(3,5)
+            TESTMP(NTMP+3,7) = PTS(1,6)
+            TESTMP(NTMP+3,8) = PTS(2,6)
+            TESTMP(NTMP+3,9) = PTS(3,6)
+C
+            NTMP=NTMP+3
+            IF(NTMP.GT.MXTS1-3-1) CALL ABRT
+            GO TO 1371
+          END IF
+ 1370    CONTINUE
+C
+C
+      DO 1380 KTS=1,MXTS1
+      IF(TESTMP(KTS,10).GE.ZERO) GO TO 1380
+      NN = NN + 1
+C
+C     CHECK ON THE TOTAL NUMBER OF TESSERA
+C
+      IF(NN.GT.MXTS) THEN
+         IF(MASWRK) WRITE(IW,9080) MXTS
+         CALL ABRT
+         STOP
+      END IF
+C
+C     COMPUTE THE CENTER POINT COORDINATES
+C
+      PP(1) = ZERO
+      PP(2) = ZERO
+      PP(3) = ZERO
+C
+      DO I = 1, 3
+      I3=(I-1)*3
+      PP(1) = PP(1) + (TESTMP(KTS,I3+1)-XEN)
+      PP(2) = PP(2) + (TESTMP(KTS,I3+2)-YEN)
+      PP(3) = PP(3) + (TESTMP(KTS,I3+3)-ZEN)
+      ENDDO
+C
+      DNORM = PP(1)**2 + PP(2)**2 + PP(3)**2
+      SCALE = REN / SQRT(DNORM)
+      PP(1) = XEN + PP(1) * SCALE
+      PP(2) = YEN + PP(2) * SCALE
+      PP(3) = ZEN + PP(3) * SCALE
+C
+      XCTS(NN) = PP(1)
+      YCTS(NN) = PP(2)
+      ZCTS(NN) = PP(3)
+      AS(NN)   = -TESTMP(KTS,10)
+      ISPHE(NN) = NSFE
+C
+C     FILL IN XVAL+YVAL+ZVAL,NVERT,VERT,CENTR,INTSPH
+C
+      XVAL(NN) = XEN + (PP(1)-XEN)*(REN-DR)/REN
+      YVAL(NN) = YEN + (PP(2)-YEN)*(REN-DR)/REN
+      ZVAL(NN) = ZEN + (PP(3)-ZEN)*(REN-DR)/REN
+      NVERT(NN)=3
+      IF(NFMOPCM.EQ.0) THEN
+      DO I = 1,3
+        DO J = 1,3
+          VERT(NN,I,J)  = TESTMP(KTS,(I-1)*3+J)
+          CENTR(NN,I,J) = NSFE
+        ENDDO
+        INTSPH(NN,I)= NSFE
+      ENDDO
+      ENDIF
+C
+ 1380 CONTINUE
+C
+ 1360 CONTINUE
+ 1350 CONTINUE
+C
+C
+C
+C    --- END OF 240 TESSERAE ---
+      END IF
+C
+C
+C
+C
+C     --- USE 960 TESSERAE FOR EACH SPHERE ---
+C
+      IF(NSPTES.EQ.960) THEN
+C
+      DO 1390 ITS = 1, 60
+C
+      DO 1391 JTS = 1, 4
+C
+         IF(JTS.EQ.1) THEN
+            N1 = JVT1(1,ITS)
+            N2 = JVT1(4,ITS)
+            N3 = JVT1(5,ITS)
+         END IF
+         IF(JTS.EQ.2) THEN
+            N1 = JVT1(6,ITS)
+            N2 = JVT1(4,ITS)
+            N3 = JVT1(5,ITS)
+         END IF
+         IF(JTS.EQ.3) THEN
+            N1 = JVT1(3,ITS)
+            N2 = JVT1(4,ITS)
+            N3 = JVT1(6,ITS)
+         END IF
+         IF(JTS.EQ.4) THEN
+            N1 = JVT1(2,ITS)
+            N2 = JVT1(6,ITS)
+            N3 = JVT1(5,ITS)
+         END IF
+         P1X = CV(N1,1)*REN+XEN
+         P1Y = CV(N1,2)*REN+YEN
+         P1Z = CV(N1,3)*REN+ZEN
+         P2X = CV(N2,1)*REN+XEN
+         P2Y = CV(N2,2)*REN+YEN
+         P2Z = CV(N2,3)*REN+ZEN
+         P3X = CV(N3,1)*REN+XEN
+         P3Y = CV(N3,2)*REN+YEN
+         P3Z = CV(N3,3)*REN+ZEN
+C           COMPUTE THE COORDINATES OF POINTS 4, 5, 6
+C
+C                          1
+C
+C                       4     5
+C
+C                    3     6     2
+C
+C
+         P4X = P1X+P3X-XEN-XEN
+         P4Y = P1Y+P3Y-YEN-YEN
+         P4Z = P1Z+P3Z-ZEN-ZEN
+         P5X = P1X+P2X-XEN-XEN
+         P5Y = P1Y+P2Y-YEN-YEN
+         P5Z = P1Z+P2Z-ZEN-ZEN
+         P6X = P2X+P3X-XEN-XEN
+         P6Y = P2Y+P3Y-YEN-YEN
+         P6Z = P2Z+P3Z-ZEN-ZEN
+C
+         DNORM4 = P4X**2+P4Y**2+P4Z**2
+         DNORM5 = P5X**2+P5Y**2+P5Z**2
+         DNORM6 = P6X**2+P6Y**2+P6Z**2
+         SCALE4 = REN/SQRT(DNORM4)
+         SCALE5 = REN/SQRT(DNORM5)
+         SCALE6 = REN/SQRT(DNORM6)
+         P4X = XEN + P4X*SCALE4
+         P4Y = YEN + P4Y*SCALE4
+         P4Z = ZEN + P4Z*SCALE4
+         P5X = XEN + P5X*SCALE5
+         P5Y = YEN + P5Y*SCALE5
+         P5Z = ZEN + P5Z*SCALE5
+         P6X = XEN + P6X*SCALE6
+         P6Y = YEN + P6Y*SCALE6
+         P6Z = ZEN + P6Z*SCALE6
+C
+      DO 1392 LTS = 1, 4
+C
+        CALL VCLR(TESTMP,1,MXTS1*10)
+C
+C       THIS IS THE INITIAL TRIANGLE
+C
+         IF(LTS.EQ.1) THEN
+           TESTMP(1,1)=P1X
+           TESTMP(1,2)=P1Y
+           TESTMP(1,3)=P1Z
+           TESTMP(1,4)=P4X
+           TESTMP(1,5)=P4Y
+           TESTMP(1,6)=P4Z
+           TESTMP(1,7)=P5X
+           TESTMP(1,8)=P5Y
+           TESTMP(1,9)=P5Z
+         ELSE IF(LTS.EQ.2) THEN
+           TESTMP(1,1)=P6X
+           TESTMP(1,2)=P6Y
+           TESTMP(1,3)=P6Z
+           TESTMP(1,4)=P4X
+           TESTMP(1,5)=P4Y
+           TESTMP(1,6)=P4Z
+           TESTMP(1,7)=P5X
+           TESTMP(1,8)=P5Y
+           TESTMP(1,9)=P5Z
+         ELSE IF(LTS.EQ.3) THEN
+           TESTMP(1,1)=P3X
+           TESTMP(1,2)=P3Y
+           TESTMP(1,3)=P3Z
+           TESTMP(1,4)=P4X
+           TESTMP(1,5)=P4Y
+           TESTMP(1,6)=P4Z
+           TESTMP(1,7)=P6X
+           TESTMP(1,8)=P6Y
+           TESTMP(1,9)=P6Z
+         ELSE IF(LTS.EQ.4) THEN
+           TESTMP(1,1)=P2X
+           TESTMP(1,2)=P2Y
+           TESTMP(1,3)=P2Z
+           TESTMP(1,4)=P6X
+           TESTMP(1,5)=P6Y
+           TESTMP(1,6)=P6Z
+           TESTMP(1,7)=P5X
+           TESTMP(1,8)=P5Y
+           TESTMP(1,9)=P5Z
+         END IF
+C
+C       COMPUTE THE AREA
+C       NOTE: THE AREAS ARE NOT EQUAL
+C
+        AREA=ZERO
+        DO IVER=1,3
+          I3=(IVER-1)*3
+          PTS(1,IVER)=TESTMP(1,I3+1)
+          PTS(2,IVER)=TESTMP(1,I3+2)
+          PTS(3,IVER)=TESTMP(1,I3+3)
+        END DO
+        DO J=1, 3
+          CCC(1,J) = XEN
+          CCC(2,J) = YEN
+          CCC(3,J) = ZEN
+        ENDDO
+        DO N = 1, 3
+          INTSPHT(N) = NSFE
+        ENDDO
+        NV=3
+        DO JJ = 1, 3
+          PP(JJ) = ZERO
+          PP1(JJ) = ZERO
+        ENDDO
+        CALL GAUBON(NV,NSFE,PTS,CCC,PP,PP1,AREA,INTSPHT,XE,YE,ZE,RE)
+        TESTMP(1,10)= AREA
+C
+C
+        NTMP=1
+ 1394   CONTINUE
+        DO 1393 ITMP=1, NTMP
+          IF(TESTMP(ITMP,10).LE.ZERO) GO TO 1393
+C
+C       TEST IF THE TRIANGLE IS CUT BY ANY ONE OF THE OTHER SPHERES
+C       IF NOT, SAVE THE TRIANGLE AS A TESSERA BY SETTING AREA NEGATIVE
+C       IF CUT, GO TO THE NEXT GENERATION OF TRIANGLES, QUATER THE AREA
+C       IF FULLY COVERED, SET THE AREA ZERO
+C
+C
+          DO IVER=1,3
+          I3=(IVER-1)*3
+          PTS(1,IVER)=TESTMP(ITMP,I3+1)
+          PTS(2,IVER)=TESTMP(ITMP,I3+2)
+          PTS(3,IVER)=TESTMP(ITMP,I3+3)
+          END DO
+          TEST=BONDRY*SQRT(TESTMP(ITMP,10))
+C
+          CALL TESSID(ID,NSFE,PTS,TEST,XE,YE,ZE,RE)
+C
+          IF(ID.EQ.-1) THEN
+            TESTMP(ITMP,10)= -TESTMP(ITMP,10)
+          ELSE IF(ID.EQ.0) THEN
+            TESTMP(ITMP,10)= ZERO
+          ELSE IF(ID.EQ.1.OR.ID.EQ.2) THEN
+            IF(TESTMP(ITMP,10).LE.AREATL) THEN
+              IF(ID.EQ.2) THEN
+                TESTMP(ITMP,10)=-TESTMP(ITMP,10)
+              ELSE IF(ID.EQ.1) THEN
+                IF(KEEPSM.EQ.1) THEN
+                  NV=3
+                  DO JJ = 1, 3
+                    PP(JJ) = ZERO
+                    PP1(JJ) = ZERO
+                  ENDDO
+                  CALL TESSERA(NSFE,NV,PTS,CCC,PP,PP1,AREA,INTSPHT,
+     *                         XE,YE,ZE,RE)
+                  IF(NV.LE.4.AND.
+     *            AREA.GT.AREATL*AREAKP) THEN
+                    DO JJ = 1, 3
+                      TESTMP(ITMP,JJ)=PP(JJ)
+                      TESTMP(ITMP,JJ+3)=PP(JJ)
+                      TESTMP(ITMP,JJ+6)=PP(JJ)
+                    END DO
+                    TESTMP(ITMP,10)=-AREA
+                  ELSE
+                    TESTMP(ITMP,10)=ZERO
+                  END IF
+                ELSE IF(KEEPSM.EQ.0) THEN
+                  TESTMP(ITMP,10)=ZERO
+                END IF
+              END IF
+              GO TO 1393
+            END IF
+C           COMPUTE THE COORDINATES OF POINTS 4, 5, 6
+C
+C                          1
+C
+C                       4     5
+C
+C                    3     6     2
+C
+            DO IPTS = 4, 6
+              PTS(1,IPTS) = ZERO
+              PTS(2,IPTS) = ZERO
+              PTS(3,IPTS) = ZERO
+            END DO
+C
+            PTS(1,4) = (PTS(1,1)-XEN)+(PTS(1,3)-XEN)
+            PTS(2,4) = (PTS(2,1)-YEN)+(PTS(2,3)-YEN)
+            PTS(3,4) = (PTS(3,1)-ZEN)+(PTS(3,3)-ZEN)
+            PTS(1,5) = (PTS(1,1)-XEN)+(PTS(1,2)-XEN)
+            PTS(2,5) = (PTS(2,1)-YEN)+(PTS(2,2)-YEN)
+            PTS(3,5) = (PTS(3,1)-ZEN)+(PTS(3,2)-ZEN)
+            PTS(1,6) = (PTS(1,2)-XEN)+(PTS(1,3)-XEN)
+            PTS(2,6) = (PTS(2,2)-YEN)+(PTS(2,3)-YEN)
+            PTS(3,6) = (PTS(3,2)-ZEN)+(PTS(3,3)-ZEN)
+C
+            DNORM4 = PTS(1,4)**2+PTS(2,4)**2+PTS(3,4)**2
+            DNORM5 = PTS(1,5)**2+PTS(2,5)**2+PTS(3,5)**2
+            DNORM6 = PTS(1,6)**2+PTS(2,6)**2+PTS(3,6)**2
+            SCALE4 = REN / SQRT(DNORM4)
+            SCALE5 = REN / SQRT(DNORM5)
+            SCALE6 = REN / SQRT(DNORM6)
+            PTS(1,4) = XEN + PTS(1,4) * SCALE4
+            PTS(2,4) = YEN + PTS(2,4) * SCALE4
+            PTS(3,4) = ZEN + PTS(3,4) * SCALE4
+            PTS(1,5) = XEN + PTS(1,5) * SCALE5
+            PTS(2,5) = YEN + PTS(2,5) * SCALE5
+            PTS(3,5) = ZEN + PTS(3,5) * SCALE5
+            PTS(1,6) = XEN + PTS(1,6) * SCALE6
+            PTS(2,6) = YEN + PTS(2,6) * SCALE6
+            PTS(3,6) = ZEN + PTS(3,6) * SCALE6
+C
+C           USE EQUAL AREAS
+C
+            TESTMP(ITMP,10)= TESTMP(ITMP,10)/4.0D+00
+            TESTMP(NTMP+1,10) = TESTMP(ITMP,10)
+            TESTMP(NTMP+2,10) = TESTMP(ITMP,10)
+            TESTMP(NTMP+3,10) = TESTMP(ITMP,10)
+C
+            TESTMP(ITMP,1) = PTS(1,1)
+            TESTMP(ITMP,2) = PTS(2,1)
+            TESTMP(ITMP,3) = PTS(3,1)
+            TESTMP(ITMP,4) = PTS(1,5)
+            TESTMP(ITMP,5) = PTS(2,5)
+            TESTMP(ITMP,6) = PTS(3,5)
+            TESTMP(ITMP,7) = PTS(1,4)
+            TESTMP(ITMP,8) = PTS(2,4)
+            TESTMP(ITMP,9) = PTS(3,4)
+C
+            TESTMP(NTMP+1,1) = PTS(1,5)
+            TESTMP(NTMP+1,2) = PTS(2,5)
+            TESTMP(NTMP+1,3) = PTS(3,5)
+            TESTMP(NTMP+1,4) = PTS(1,2)
+            TESTMP(NTMP+1,5) = PTS(2,2)
+            TESTMP(NTMP+1,6) = PTS(3,2)
+            TESTMP(NTMP+1,7) = PTS(1,6)
+            TESTMP(NTMP+1,8) = PTS(2,6)
+            TESTMP(NTMP+1,9) = PTS(3,6)
+C
+            TESTMP(NTMP+2,1) = PTS(1,4)
+            TESTMP(NTMP+2,2) = PTS(2,4)
+            TESTMP(NTMP+2,3) = PTS(3,4)
+            TESTMP(NTMP+2,4) = PTS(1,6)
+            TESTMP(NTMP+2,5) = PTS(2,6)
+            TESTMP(NTMP+2,6) = PTS(3,6)
+            TESTMP(NTMP+2,7) = PTS(1,3)
+            TESTMP(NTMP+2,8) = PTS(2,3)
+            TESTMP(NTMP+2,9) = PTS(3,3)
+C
+            TESTMP(NTMP+3,1) = PTS(1,4)
+            TESTMP(NTMP+3,2) = PTS(2,4)
+            TESTMP(NTMP+3,3) = PTS(3,4)
+            TESTMP(NTMP+3,4) = PTS(1,5)
+            TESTMP(NTMP+3,5) = PTS(2,5)
+            TESTMP(NTMP+3,6) = PTS(3,5)
+            TESTMP(NTMP+3,7) = PTS(1,6)
+            TESTMP(NTMP+3,8) = PTS(2,6)
+            TESTMP(NTMP+3,9) = PTS(3,6)
+C
+            NTMP=NTMP+3
+            IF(NTMP.GT.MXTS1-3-1) CALL ABRT
+            GO TO 1394
+          END IF
+ 1393   CONTINUE
+C
+C
+      DO 1395 KTS=1,MXTS1
+      IF(TESTMP(KTS,10).GE.ZERO) GO TO 1395
+      NN = NN + 1
+C
+C     CHECK ON THE TOTAL NUMBER OF TESSERA
+C
+      IF(NN.GT.MXTS) THEN
+         IF(MASWRK) WRITE(IW,9080) MXTS
+         CALL ABRT
+         STOP
+      END IF
+C
+C     COMPUTE THE CENTER POINT COORDINATES
+C
+      PP(1) = ZERO
+      PP(2) = ZERO
+      PP(3) = ZERO
+C
+      DO I = 1, 3
+      I3=(I-1)*3
+      PP(1) = PP(1) + (TESTMP(KTS,I3+1)-XEN)
+      PP(2) = PP(2) + (TESTMP(KTS,I3+2)-YEN)
+      PP(3) = PP(3) + (TESTMP(KTS,I3+3)-ZEN)
+      ENDDO
+C
+      DNORM = PP(1)**2 + PP(2)**2 + PP(3)**2
+      SCALE = REN / SQRT(DNORM)
+      PP(1) = XEN + PP(1) * SCALE
+      PP(2) = YEN + PP(2) * SCALE
+      PP(3) = ZEN + PP(3) * SCALE
+C
+      XCTS(NN) = PP(1)
+      YCTS(NN) = PP(2)
+      ZCTS(NN) = PP(3)
+      AS(NN)   = -TESTMP(KTS,10)
+      ISPHE(NN) = NSFE
+C
+C     FILL IN XVAL+YVAL+ZVAL,NVERT,VERT,CENTR,INTSPH
+C
+      XVAL(NN) = XEN + (PP(1)-XEN)*(REN-DR)/REN
+      YVAL(NN) = YEN + (PP(2)-YEN)*(REN-DR)/REN
+      ZVAL(NN) = ZEN + (PP(3)-ZEN)*(REN-DR)/REN
+      NVERT(NN)=3
+      IF(NFMOPCM.EQ.0) THEN
+      DO I = 1,3
+        DO J = 1,3
+          VERT(NN,I,J)  = TESTMP(KTS,(I-1)*3+J)
+          CENTR(NN,I,J) = NSFE
+        ENDDO
+        INTSPH(NN,I)= NSFE
+      ENDDO
+      ENDIF
+C
+ 1395 CONTINUE
+C
+ 1392 CONTINUE
+ 1391 CONTINUE
+ 1390 CONTINUE
+C
+C    --- END OF 960 TESSERAE ---
+C
+      END IF
+      RETURN
+C
+ 9080 FORMAT(/1X,'*** TOO MANY TESSERAE NEEDED, CURRENT MXTS=',I10/
+     *       1X,'PLEASE ADJUST -MXTS- IN $PCM INPUT UPWARDS.'/)
+      END
+C*MODULE PCMCV2  *DECK FFRAGQ
+      SUBROUTINE FFRAGQ(FFRGQ,QT,XCTS,YCTS,ZCTS)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      CHARACTER*8 FRGNME,POLNAM,DPOLNAM
+C
+      PARAMETER (MXFRG=1050, MXFGPT=12000, MXIFRQ=12,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      COMMON /EFMULT/ EFC(3,MXFGPT),EFCHG(2,MXFGPT),EFATRM(MXFGPT),
+     *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
+     *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
+     *                EFOCT(10,MXFGPT),FRGNME(MXFGPT)
+      COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
+     *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
+     *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
+     *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ*MXFGPT),
+     *                POLSCR(MXFGPT),IPLSCR,INDSCR
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
+     *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
+     *                ATORQ(3,MXFRG)
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+C
+      DIMENSION FFRGQ(6,NFRG,NTS), QT(NTS), XCTS(*),YCTS(*),ZCTS(*)
+C
+      DATA TWO, THREE, FIVE /2.0D+00, 3.0D+00, 5.0D+00/
+C---------------------------------------------------------------------
+C     COMPUTE THE FORCE/TORQUE ON EFP BY TESSERAE
+C     HUI LI
+C     JULY 27TH, 2005
+C---------------------------------------------------------------------
+C
+      CALL VCLR(FFRGQ,1,6*NFRG*NTS)
+      DO ITS = 1, NTS
+         XI = XCTS(ITS)
+         YI = YCTS(ITS)
+         ZI = ZCTS(ITS)
+         QTITS= QT(ITS)
+         IPT= 0
+         IDP= 0
+         DO IFRG = 1, NFRG
+            DO III = 1, NMPTS(IFRG)
+               IPT = IPT + 1
+               XN = EFC(1,IPT)
+               YN = EFC(2,IPT)
+               ZN = EFC(3,IPT)
+               CHG1=EFCHG(1,IPT)
+               CHG2=EFCHG(2,IPT)
+               DIPX=EFDIP(1,IPT)
+               DIPY=EFDIP(2,IPT)
+               DIPZ=EFDIP(3,IPT)
+               XX=EFQAD(1,IPT)
+               YY=EFQAD(2,IPT)
+               ZZ=EFQAD(3,IPT)
+               XY=EFQAD(4,IPT)
+               XZ=EFQAD(5,IPT)
+               YZ=EFQAD(6,IPT)
+               DUM=XX+YY+ZZ
+               QXX=(THREE*XX-DUM)/TWO
+               QYY=(THREE*YY-DUM)/TWO
+               QZZ=(THREE*ZZ-DUM)/TWO
+               QXY=1.50D+00*XY
+               QXZ=1.50D+00*XZ
+               QYZ=1.50D+00*YZ
+               DX = XN-XI
+               DY = YN-YI
+               DZ = ZN-ZI
+               R2 = DX**2+DY**2+DZ**2
+               R  = SQRT(R2)
+               R3 = R2*R
+               R5 = R2*R3
+               R7 = R2*R5
+               DUMCHG = (CHG1+CHG2)*QTITS/R3
+               DUMDIP1= QTITS/R3
+               DUMDIP2= THREE*(DIPX*DX+DIPY*DY+DIPZ*DZ)*QTITS/R5
+               DUMQUA1= TWO*QTITS/R5
+               TMX    = (QXX*DX + QXY*DY + QXZ*DZ)*DUMQUA1
+               TMY    = (QXY*DX + QYY*DY + QYZ*DZ)*DUMQUA1
+               TMZ    = (QXZ*DX + QYZ*DY + QZZ*DZ)*DUMQUA1
+               DUMQUA2= FIVE*QTITS/R7/THREE
+               CFXX = (THREE*DX*DX-R2)*DUMQUA2
+               CFYY = (THREE*DY*DY-R2)*DUMQUA2
+               CFZZ = (THREE*DZ*DZ-R2)*DUMQUA2
+               CFXY = THREE*DX*DY*DUMQUA2
+               CFXZ = THREE*DX*DZ*DUMQUA2
+               CFYZ = THREE*DY*DZ*DUMQUA2
+               DUMQUA3= QXX*CFXX + QYY*CFYY + QZZ*CFZZ +
+     *                  TWO*(QXY*CFXY + QXZ*CFXZ + QYZ*CFYZ)
+               FORCEX = -DUMCHG*DX - DUMDIP1*DIPX + DUMDIP2*DX
+     *                  +TMX - DUMQUA3*DX
+               FORCEY = -DUMCHG*DY - DUMDIP1*DIPY + DUMDIP2*DY
+     *                  +TMY - DUMQUA3*DY
+               FORCEZ = -DUMCHG*DZ - DUMDIP1*DIPZ + DUMDIP2*DZ
+     *                  +TMZ - DUMQUA3*DZ
+               FFRGQ(1,IFRG,ITS) = FFRGQ(1,IFRG,ITS) + FORCEX
+               FFRGQ(2,IFRG,ITS) = FFRGQ(2,IFRG,ITS) + FORCEY
+               FFRGQ(3,IFRG,ITS) = FFRGQ(3,IFRG,ITS) + FORCEZ
+               FFRGQ(4,IFRG,ITS) = FFRGQ(4,IFRG,ITS)
+     *                             - FORCEY*(ZN-EFCENT(3,IFRG))
+     *                             + FORCEZ*(YN-EFCENT(2,IFRG))
+     *                             - DUMDIP1*(DIPY*DZ - DIPZ*DY)
+     *                             - TMZ*DY + TMY*DZ
+               FFRGQ(5,IFRG,ITS) = FFRGQ(5,IFRG,ITS)
+     *                             - FORCEZ*(XN-EFCENT(1,IFRG))
+     *                             + FORCEX*(ZN-EFCENT(3,IFRG))
+     *                             - DUMDIP1*(DIPZ*DX - DIPX*DZ)
+     *                             - TMX*DZ + TMZ*DX
+               FFRGQ(6,IFRG,ITS) = FFRGQ(6,IFRG,ITS)
+     *                             - FORCEX*(YN-EFCENT(2,IFRG))
+     *                             + FORCEY*(XN-EFCENT(1,IFRG))
+     *                             - DUMDIP1*(DIPX*DY - DIPY*DX)
+     *                             - TMY*DX + TMX*DY
+            END DO
+            DO III = 1, NPPTS(IFRG)
+               IDP = IDP + 1
+               XN = EFP(1,IDP)
+               YN = EFP(2,IDP)
+               ZN = EFP(3,IDP)
+               DIPX=0.5D+00*(DIND(1,IDP)+DINDD(1,IDP))
+               DIPY=0.5D+00*(DIND(2,IDP)+DINDD(2,IDP))
+               DIPZ=0.5D+00*(DIND(3,IDP)+DINDD(3,IDP))
+               DX = XN-XI
+               DY = YN-YI
+               DZ = ZN-ZI
+               R2 = DX**2+DY**2+DZ**2
+               R  = SQRT(R2)
+               R3 = R2*R
+               R5 = R2*R3
+               DUMDIP1= QTITS/R3
+               DUMDIP2= THREE*(DIPX*DX+DIPY*DY+DIPZ*DZ)*QTITS/R5
+               FORCEX = - DUMDIP1*DIPX + DUMDIP2*DX
+               FORCEY = - DUMDIP1*DIPY + DUMDIP2*DY
+               FORCEZ = - DUMDIP1*DIPZ + DUMDIP2*DZ
+               FFRGQ(1,IFRG,ITS) = FFRGQ(1,IFRG,ITS) + FORCEX
+               FFRGQ(2,IFRG,ITS) = FFRGQ(2,IFRG,ITS) + FORCEY
+               FFRGQ(3,IFRG,ITS) = FFRGQ(3,IFRG,ITS) + FORCEZ
+               FFRGQ(4,IFRG,ITS) = FFRGQ(4,IFRG,ITS)
+     *                             - FORCEY*(ZN-EFCENT(3,IFRG))
+     *                             + FORCEZ*(YN-EFCENT(2,IFRG))
+     *                             - DUMDIP1*(DIPY*DZ - DIPZ*DY)
+               FFRGQ(5,IFRG,ITS) = FFRGQ(5,IFRG,ITS)
+     *                             - FORCEZ*(XN-EFCENT(1,IFRG))
+     *                             + FORCEX*(ZN-EFCENT(3,IFRG))
+     *                             - DUMDIP1*(DIPZ*DX - DIPX*DZ)
+               FFRGQ(6,IFRG,ITS) = FFRGQ(6,IFRG,ITS)
+     *                             - FORCEX*(YN-EFCENT(2,IFRG))
+     *                             + FORCEY*(XN-EFCENT(1,IFRG))
+     *                             - DUMDIP1*(DIPX*DY - DIPY*DX)
+            END DO
+         END DO
+      END DO
+C
+      RETURN
+      END
+C*MODULE PCMCV2  *DECK FIXPVA
+      SUBROUTINE FIXPVA(NSPTES,NSFE,XEN,YEN,ZEN,REN,NN,JVT1,
+     *                 CV,XCTST,YCTST,ZCTST,AST,
+     *                 XCTS,YCTS,ZCTS,AS,XE,YE,ZE,RE,ISPHE,
+     *                 DAI,IDDAI,DAIT,IDTMP,TMP)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL GOPARR, DSKWRK, MASWRK, GOPA
+C
+      DIMENSION XCTS(*),YCTS(*),ZCTS(*),AS(*),
+     *          XE(*),YE(*),ZE(*),RE(*),ISPHE(*)
+      DIMENSION JVT1(6,60),AST(NSPTES),XCTST(NSPTES),YCTST(NSPTES),
+     *          ZCTST(NSPTES),CV(122,3)
+C
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMITR/ RCUT(2),THRES,IPCMIT,IMUL,MXDIIS,NREG,MXITR1,
+     *                MXITR2,MODPAP
+      COMMON /PCMPLY/ STOT,VOL,CCX,CCY,CCZ,RDIF,NESF,NESFP,NESFF,I_NESF,
+     *                L_AST
+      DIMENSION DAIT(3,20,960),DAI(3,20,MXTS),IDDAI(21,MXTS),
+     *          TMP(3,I_NESF),IDTMP(21,960)
+C
+      PARAMETER (TOANGS=0.52917724924D+00, ANTOAU=1.0D+00/TOANGS)
+C
+      DATA ZERO, PI /0.0D+00, 3.1415926535897932D+00/
+C
+C     ----- PARTITION OF THE CAVITY SURFACE INTO TESSERAE -----
+C
+      CALL DERCHK(MAXDER)
+C
+C        HUI LI'S ADVICE: PARALLEL TURNED OFF BELOW 1000 ATOMS (3/29/10)
+      GOPA=GOPARR
+      IF(IAND(MODPAP,1).NE.0) GOPA=.FALSE.
+      IF(I_NESF.LE.1000)      GOPA=.FALSE.
+      IF(MAXDER.GT.0) CALL VICLR(IDTMP,1,21*960)
+C
+C     --- USE 60 TESSERAE FOR EACH SPHERE ---
+C
+      IF(NSPTES.EQ.60) THEN
+C     - INITIALIZE PARALLEL
+      IPCOUNT = ME - 1
+C
+      AREA0 = PI*REN*REN/15.0D+00
+      DO ITS=1,NSPTES
+         XCTST(ITS) = ZERO
+         YCTST(ITS) = ZERO
+         ZCTST(ITS) = ZERO
+         AST(ITS)   = ZERO
+      ENDDO
+C
+      IF(MAXDER.GT.0) CALL VCLR(DAIT,1,3*20*960)
+C
+      DO 310 ITS = 1, NSPTES
+C
+C               GO PARALLEL!
+         IF(GOPA) THEN
+           IPCOUNT = IPCOUNT + 1
+           IF(MOD(IPCOUNT,NPROC).NE.0) GO TO 310
+         END IF
+C
+         N1 = JVT1(1,ITS)
+         N2 = JVT1(2,ITS)
+         N3 = JVT1(3,ITS)
+         P4X = (CV(N1,1)+CV(N2,1)+CV(N3,1))/3.0D+00
+         P4Y = (CV(N1,2)+CV(N2,2)+CV(N3,2))/3.0D+00
+         P4Z = (CV(N1,3)+CV(N2,3)+CV(N3,3))/3.0D+00
+         DNORM4 = P4X**2+P4Y**2+P4Z**2
+         SCALE4 = 1.0D+00/SQRT(DNORM4)
+         XCTST(ITS) = XEN + P4X*SCALE4*REN
+         YCTST(ITS) = YEN + P4Y*SCALE4*REN
+         ZCTST(ITS) = ZEN + P4Z*SCALE4*REN
+         AST(ITS)   = AREA0
+C
+         IF(MAXDER.GT.0) CALL VCLR(TMP,1,3*I_NESF)
+         CALL PVASWITCH(NSFE,XCTST(ITS),YCTST(ITS),ZCTST(ITS),
+     *                  AST(ITS),XE,YE,ZE,RE,TMP)
+         IF(MAXDER.GT.0) THEN
+         DO ISPH = 1, I_NESF
+            DUMMY=ABS(TMP(1,ISPH))+ABS(TMP(2,ISPH))+ABS(TMP(3,ISPH))
+            IF(DUMMY.GT.ZERO .AND. AST(ITS).GT.ZERO) THEN
+C              - IDTMP(21,ITS) STARTS AT 0 -
+               IDTMP(21,ITS) = IDTMP(21,ITS) + 1
+               III = IDTMP(21,ITS)
+               IF(III.EQ.21) THEN
+                  IF(MASWRK) WRITE(IW,*) 'IDTMP IN FIXPVA EXCEEDS 20'
+                  CALL ABRT
+                  STOP
+               END IF
+               IDTMP(III,ITS)  = ISPH
+               DAIT(1,III,ITS) = TMP(1,ISPH)
+               DAIT(2,III,ITS) = TMP(2,ISPH)
+               DAIT(3,III,ITS) = TMP(3,ISPH)
+            END IF
+         ENDDO
+         END IF
+ 310  CONTINUE
+C
+C     SUM UP
+      IF(GOPA) THEN
+         CALL DDI_GSUMF(2420,XCTST, NSPTES)
+         CALL DDI_GSUMF(2421,YCTST, NSPTES)
+         CALL DDI_GSUMF(2422,ZCTST, NSPTES)
+         IF(MAXDER.GT.0) THEN
+         CALL DDI_GSUMF(2423,DAIT , 3*20*60)
+         CALL DDI_GSUMI(2424,IDTMP,21*60)
+         END IF
+         CALL DDI_GSUMF(2426,AST  , NSPTES)
+      END IF
+C
+      DO 320 ITS=1,NSPTES
+         IF(AST(ITS).EQ.0.0D+00) GO TO 320
+         NN = NN + 1
+C
+C        CHECK ON THE TOTAL NUMBER OF TESSERA
+C
+         IF(NN.GT.MXTS) THEN
+            IF(MASWRK) WRITE(IW,9080) MXTS
+            CALL ABRT
+            STOP
+         END IF
+C
+         XCTS(NN) = XCTST(ITS)
+         YCTS(NN) = YCTST(ITS)
+         ZCTS(NN) = ZCTST(ITS)
+         AS(NN) = AST(ITS)
+         ISPHE(NN) = NSFE
+C
+         IF(MAXDER.GT.0) THEN
+         IDDAI(21,NN) = IDTMP(21,ITS)
+         DO JJJ = 1, IDTMP(21,ITS)
+            IDDAI(JJJ,NN) = IDTMP(JJJ,ITS)
+            DAI(1,JJJ,NN) = DAIT(1,JJJ,ITS)*ANTOAU
+            DAI(2,JJJ,NN) = DAIT(2,JJJ,ITS)*ANTOAU
+            DAI(3,JJJ,NN) = DAIT(3,JJJ,ITS)*ANTOAU
+         ENDDO
+         END IF
+ 320  CONTINUE
+C     --- END OF 60 TESSERAE ---
+      END IF
+C
+C
+C
+C
+C     --- USE 240 TESSERAE FOR EACH SPHERE ---
+C
+      IF(NSPTES.EQ.240) THEN
+C
+C
+C     - INITIALIZE PARALLEL
+      IPCOUNT = ME - 1
+C
+      AREA0 = PI*REN*REN/60.0D+00
+      DO ITS=1,NSPTES
+         XCTST(ITS) = ZERO
+         YCTST(ITS) = ZERO
+         ZCTST(ITS) = ZERO
+         AST(ITS)   = ZERO
+      ENDDO
+      IF(MAXDER.GT.0) CALL VCLR(DAIT,1,3*20*960)
+C
+      DO 350 KTS = 1, 60
+C
+C        GO PARALLEL!
+         IF(GOPA) THEN
+           IPCOUNT = IPCOUNT + 1
+           IF(MOD(IPCOUNT,NPROC).NE.0) GO TO 350
+         END IF
+C
+      DO 360 JTS = 1, 4
+         ITS = (KTS-1)*4 + JTS
+         IF(JTS.EQ.1) THEN
+            N1 = JVT1(1,KTS)
+            N2 = JVT1(4,KTS)
+            N3 = JVT1(5,KTS)
+         END IF
+         IF(JTS.EQ.2) THEN
+            N1 = JVT1(6,KTS)
+            N2 = JVT1(4,KTS)
+            N3 = JVT1(5,KTS)
+         END IF
+         IF(JTS.EQ.3) THEN
+            N1 = JVT1(3,KTS)
+            N2 = JVT1(4,KTS)
+            N3 = JVT1(6,KTS)
+         END IF
+         IF(JTS.EQ.4) THEN
+            N1 = JVT1(2,KTS)
+            N2 = JVT1(6,KTS)
+            N3 = JVT1(5,KTS)
+         END IF
+         P4X = (CV(N1,1)+CV(N2,1)+CV(N3,1))/3.0D+00
+         P4Y = (CV(N1,2)+CV(N2,2)+CV(N3,2))/3.0D+00
+         P4Z = (CV(N1,3)+CV(N2,3)+CV(N3,3))/3.0D+00
+         DNORM4 = P4X**2+P4Y**2+P4Z**2
+         SCALE4 = 1.0D+00/SQRT(DNORM4)
+         XCTST(ITS) = XEN + P4X*SCALE4*REN
+         YCTST(ITS) = YEN + P4Y*SCALE4*REN
+         ZCTST(ITS) = ZEN + P4Z*SCALE4*REN
+         KKK = MOD(ITS,4)
+         IF(KKK.EQ.1) FACTOR = 0.97527227808D+00
+         IF(KKK.EQ.2) FACTOR = 1.04680294088D+00
+         IF(KKK.EQ.3) FACTOR = 0.98896281888D+00
+         IF(KKK.EQ.0) FACTOR = 0.98896281888D+00
+         AST(ITS)   = AREA0*FACTOR
+C
+         IF(MAXDER.GT.0) CALL VCLR(TMP,1,3*I_NESF)
+         CALL PVASWITCH(NSFE,XCTST(ITS),YCTST(ITS),ZCTST(ITS),
+     *                  AST(ITS),XE,YE,ZE,RE,TMP)
+         IF(MAXDER.GT.0) THEN
+         DO ISPH = 1, I_NESF
+            DUMMY=ABS(TMP(1,ISPH))+ABS(TMP(2,ISPH))+ABS(TMP(3,ISPH))
+            IF(DUMMY.GT.ZERO .AND. AST(ITS).GT.ZERO) THEN
+C              - IDTMP(21,ITS) STARTS AT 0 -
+               IDTMP(21,ITS) = IDTMP(21,ITS) + 1
+               III = IDTMP(21,ITS)
+               IF(III.EQ.21) THEN
+                  IF(MASWRK) WRITE(IW,*) 'IDTMP IN FIXPVA EXCEEDS 20'
+                  CALL ABRT
+                  STOP
+               END IF
+               IDTMP(III,ITS)  = ISPH
+               DAIT(1,III,ITS) = TMP(1,ISPH)
+               DAIT(2,III,ITS) = TMP(2,ISPH)
+               DAIT(3,III,ITS) = TMP(3,ISPH)
+            END IF
+         ENDDO
+         END IF
+C
+ 360  CONTINUE
+ 350  CONTINUE
+C
+C     - SUM UP
+      IF(GOPA) THEN
+         CALL DDI_GSUMF(2420,XCTST,NSPTES)
+         CALL DDI_GSUMF(2421,YCTST,NSPTES)
+         CALL DDI_GSUMF(2422,ZCTST,NSPTES)
+         IF(MAXDER.GT.0) THEN
+         CALL DDI_GSUMF(2423,DAIT , 3*20*240)
+         CALL DDI_GSUMI(2424,IDTMP,21*240)
+         END IF
+         CALL DDI_GSUMF(2426,AST,NSPTES)
+      END IF
+C
+C
+C
+      DO 370 ITS=1,NSPTES
+         IF(AST(ITS).EQ.0.0D+00) GO TO 370
+         NN = NN + 1
+C
+C        CHECK ON THE TOTAL NUMBER OF TESSERA
+C
+         IF(NN.GT.MXTS) THEN
+            IF(MASWRK) WRITE(IW,9080) MXTS
+            CALL ABRT
+            STOP
+         END IF
+C
+         XCTS(NN) = XCTST(ITS)
+         YCTS(NN) = YCTST(ITS)
+         ZCTS(NN) = ZCTST(ITS)
+         AS(NN)   = AST(ITS)
+         ISPHE(NN) = NSFE
+C
+         IF(MAXDER.GT.0) THEN
+         IDDAI(21,NN) = IDTMP(21,ITS)
+         DO JJJ = 1, IDTMP(21,ITS)
+            IDDAI(JJJ,NN) = IDTMP(JJJ,ITS)
+            DAI(1,JJJ,NN) = DAIT(1,JJJ,ITS)*ANTOAU
+            DAI(2,JJJ,NN) = DAIT(2,JJJ,ITS)*ANTOAU
+            DAI(3,JJJ,NN) = DAIT(3,JJJ,ITS)*ANTOAU
+         ENDDO
+         END IF
+ 370  CONTINUE
+C
+C
+C    --- END OF 240 TESSERAE ---
+      END IF
+C
+C
+C
+C
+C
+C
+C     --- USE 960 TESSERAE FOR EACH SPHERE ---
+C
+      IF(NSPTES.EQ.960) THEN
+C
+C
+C     - INITIALIZE PARALLEL
+      IPCOUNT = ME - 1
+C
+      AREA0 = PI*REN*REN/240.0D+00
+      DO ITS=1,NSPTES
+      XCTST(ITS) = ZERO
+      YCTST(ITS) = ZERO
+      ZCTST(ITS) = ZERO
+      AST(ITS)   = ZERO
+      ENDDO
+      IF(MAXDER.GT.0) CALL VCLR(DAIT,1,3*20*960)
+C
+      DO 380 KTS = 1, 60
+C
+C            GO PARALLEL!
+        IF(GOPA) THEN
+          IPCOUNT = IPCOUNT + 1
+          IF(MOD(IPCOUNT,NPROC).NE.0) GO TO 380
+        END IF
+C
+      DO 381 JTS = 1, 4
+         IF(JTS.EQ.1) THEN
+            N1 = JVT1(1,KTS)
+            N2 = JVT1(4,KTS)
+            N3 = JVT1(5,KTS)
+         END IF
+         IF(JTS.EQ.2) THEN
+            N1 = JVT1(6,KTS)
+            N2 = JVT1(4,KTS)
+            N3 = JVT1(5,KTS)
+         END IF
+         IF(JTS.EQ.3) THEN
+            N1 = JVT1(3,KTS)
+            N2 = JVT1(4,KTS)
+            N3 = JVT1(6,KTS)
+         END IF
+         IF(JTS.EQ.4) THEN
+            N1 = JVT1(2,KTS)
+            N2 = JVT1(6,KTS)
+            N3 = JVT1(5,KTS)
+         END IF
+         P1X = CV(N1,1)
+         P1Y = CV(N1,2)
+         P1Z = CV(N1,3)
+         P2X = CV(N2,1)
+         P2Y = CV(N2,2)
+         P2Z = CV(N2,3)
+         P3X = CV(N3,1)
+         P3Y = CV(N3,2)
+         P3Z = CV(N3,3)
+C           COMPUTE THE COORDINATES OF POINTS 4, 5, 6
+C
+C                          1
+C
+C                       4     5
+C
+C                    3     6     2
+C
+C
+         P4X = (P1X+P3X)/2.0D+00
+         P4Y = (P1Y+P3Y)/2.0D+00
+         P4Z = (P1Z+P3Z)/2.0D+00
+         P5X = (P1X+P2X)/2.0D+00
+         P5Y = (P1Y+P2Y)/2.0D+00
+         P5Z = (P1Z+P2Z)/2.0D+00
+         P6X = (P2X+P3X)/2.0D+00
+         P6Y = (P2Y+P3Y)/2.0D+00
+         P6Z = (P2Z+P3Z)/2.0D+00
+C
+         DNORM4 = P4X**2+P4Y**2+P4Z**2
+         DNORM5 = P5X**2+P5Y**2+P5Z**2
+         DNORM6 = P6X**2+P6Y**2+P6Z**2
+         SCALE4 = 1.0D+00/SQRT(DNORM4)
+         SCALE5 = 1.0D+00/SQRT(DNORM5)
+         SCALE6 = 1.0D+00/SQRT(DNORM6)
+         P4X = P4X*SCALE4
+         P4Y = P4Y*SCALE4
+         P4Z = P4Z*SCALE4
+         P5X = P5X*SCALE5
+         P5Y = P5Y*SCALE5
+         P5Z = P5Z*SCALE5
+         P6X = P6X*SCALE6
+         P6Y = P6Y*SCALE6
+         P6Z = P6Z*SCALE6
+C
+      DO 382 LTS = 1, 4
+         ITS = ((KTS-1)*4 + JTS-1)*4 + LTS
+         IF(LTS.EQ.1) THEN
+           PTS11=P1X
+           PTS21=P1Y
+           PTS31=P1Z
+           PTS12=P4X
+           PTS22=P4Y
+           PTS32=P4Z
+           PTS13=P5X
+           PTS23=P5Y
+           PTS33=P5Z
+         ELSE IF(LTS.EQ.2) THEN
+           PTS11=P6X
+           PTS21=P6Y
+           PTS31=P6Z
+           PTS12=P4X
+           PTS22=P4Y
+           PTS32=P4Z
+           PTS13=P5X
+           PTS23=P5Y
+           PTS33=P5Z
+         ELSE IF(LTS.EQ.3) THEN
+           PTS11=P3X
+           PTS21=P3Y
+           PTS31=P3Z
+           PTS12=P4X
+           PTS22=P4Y
+           PTS32=P4Z
+           PTS13=P6X
+           PTS23=P6Y
+           PTS33=P6Z
+         ELSE IF(LTS.EQ.4) THEN
+           PTS11=P2X
+           PTS21=P2Y
+           PTS31=P2Z
+           PTS12=P6X
+           PTS22=P6Y
+           PTS32=P6Z
+           PTS13=P5X
+           PTS23=P5Y
+           PTS33=P5Z
+         END IF
+C
+         P7X = (PTS11+PTS12+PTS13)/3.0D+00
+         P7Y = (PTS21+PTS22+PTS23)/3.0D+00
+         P7Z = (PTS31+PTS32+PTS33)/3.0D+00
+         DNORM7 = P7X**2+P7Y**2+P7Z**2
+         SCALE7 = 1.0D+00/SQRT(DNORM7)
+         XCTST(ITS) = XEN + P7X*SCALE7*REN
+         YCTST(ITS) = YEN + P7Y*SCALE7*REN
+         ZCTST(ITS) = ZEN + P7Z*SCALE7*REN
+         KKK = MOD(ITS,16)
+         IF(KKK.EQ. 1) FACTOR = 0.96853843384D+00
+         IF(KKK.EQ. 2) FACTOR = 0.98634758299D+00
+         IF(KKK.EQ. 3) FACTOR = 0.97310155328D+00
+         IF(KKK.EQ. 4) FACTOR = 0.97310155328D+00
+         IF(KKK.EQ. 5) FACTOR = 1.04026074020D+00
+         IF(KKK.EQ. 6) FACTOR = 1.05941468448D+00
+         IF(KKK.EQ. 7) FACTOR = 1.04376817374D+00
+         IF(KKK.EQ. 8) FACTOR = 1.04376817369D+00
+         IF(KKK.EQ. 9) FACTOR = 0.98544774054D+00
+         IF(KKK.EQ.10) FACTOR = 1.00020007354D+00
+         IF(KKK.EQ.11) FACTOR = 0.98676349755D+00
+         IF(KKK.EQ.12) FACTOR = 0.98343824680D+00
+         IF(KKK.EQ.13) FACTOR = 0.98544774307D+00
+         IF(KKK.EQ.14) FACTOR = 1.00020007615D+00
+         IF(KKK.EQ.15) FACTOR = 0.98343824928D+00
+         IF(KKK.EQ. 0) FACTOR = 0.98676350013D+00
+         AST(ITS)   = AREA0*FACTOR
+C
+         IF(MAXDER.GT.0) CALL VCLR(TMP,1,3*I_NESF)
+         CALL PVASWITCH(NSFE,XCTST(ITS),YCTST(ITS),ZCTST(ITS),
+     *                  AST(ITS),XE,YE,ZE,RE,TMP)
+         IF(MAXDER.GT.0) THEN
+         DO ISPH = 1, I_NESF
+            DUMMY=ABS(TMP(1,ISPH))+ABS(TMP(2,ISPH))+ABS(TMP(3,ISPH))
+            IF(DUMMY.GT.ZERO .AND. AST(ITS).GT.ZERO) THEN
+C              - IDTMP(21,ITS) STARTS AT 0 -
+               IDTMP(21,ITS) = IDTMP(21,ITS) + 1
+               III = IDTMP(21,ITS)
+               IF(III.EQ.21) THEN
+                  IF(MASWRK) WRITE(IW,*) 'IDTMP IN FIXPVA EXCEEDS 20'
+                  CALL ABRT
+                  STOP
+               END IF
+               IDTMP(III,ITS)  = ISPH
+               DAIT(1,III,ITS) = TMP(1,ISPH)
+               DAIT(2,III,ITS) = TMP(2,ISPH)
+               DAIT(3,III,ITS) = TMP(3,ISPH)
+            END IF
+         ENDDO
+         END IF
+C
+C
+ 382  CONTINUE
+ 381  CONTINUE
+ 380  CONTINUE
+C
+C          SUM UP
+        IF(GOPA) THEN
+          CALL DDI_GSUMF(2420,XCTST,NSPTES)
+          CALL DDI_GSUMF(2421,YCTST,NSPTES)
+          CALL DDI_GSUMF(2422,ZCTST,NSPTES)
+          IF(MAXDER.GT.0) THEN
+          CALL DDI_GSUMF(2423,DAIT , 3*20*960)
+          CALL DDI_GSUMI(2424,IDTMP,21*960)
+          END IF
+          CALL DDI_GSUMF(2426,AST,NSPTES)
+        END IF
+C
+C
+C
+      DO 383 ITS=1,NSPTES
+      IF(AST(ITS).EQ.0.0D+00) GO TO 383
+      NN = NN + 1
+C
+C     CHECK ON THE TOTAL NUMBER OF TESSERA
+C
+      IF(NN.GT.MXTS) THEN
+         IF(MASWRK) WRITE(IW,9080) MXTS
+         CALL ABRT
+         STOP
+      END IF
+C
+      XCTS(NN) = XCTST(ITS)
+      YCTS(NN) = YCTST(ITS)
+      ZCTS(NN) = ZCTST(ITS)
+      AS(NN) = AST(ITS)
+      ISPHE(NN) = NSFE
+C
+      IF(MAXDER.GT.0) THEN
+      IDDAI(21,NN) = IDTMP(21,ITS)
+      DO JJJ = 1, IDTMP(21,ITS)
+         IDDAI(JJJ,NN) = IDTMP(JJJ,ITS)
+         DAI(1,JJJ,NN) = DAIT(1,JJJ,ITS)*ANTOAU
+         DAI(2,JJJ,NN) = DAIT(2,JJJ,ITS)*ANTOAU
+         DAI(3,JJJ,NN) = DAIT(3,JJJ,ITS)*ANTOAU
+      ENDDO
+      END IF
+ 383  CONTINUE
+C
+C    --- END OF 960 TESSERAE ---
+C
+      END IF
+      RETURN
+C
+ 9080 FORMAT(/1X,'*** TOO MANY TESSERAE NEEDED, CURRENT MXTS=',I10/
+     *       1X,'PLEASE ADJUST -MXTS- IN $PCM INPUT UPWARDS.'/)
+      END
+C*MODULE PCMCAV  *DECK PVASWITCH
+      SUBROUTINE PVASWITCH(NS,X1,Y1,Z1,AREA,XE,YE,ZE,RE,TMP)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      DIMENSION XE(*),YE(*),ZE(*),RE(*)
+C
+      COMMON /PCMOPT/ RABI,RASC,REFPOL,THRSLS,DENSLS,WB,WA,ETA2,GD,EVAC,
+     *                RHOW,PM,AREATL,AREAKP,BONDRY,OMEGA,RET,FRO,EPSINF,
+     *                EPS,DR,RSOLV,VMOL,TCE,STEN,DSTEN,CMF,TABS,IDIRCT,
+     *                IPCDER,IDP,ICOMP,IFIELD,ICAV,IDISP,IPRINT,IRETCAV,
+     *                ICENT,IFAST,NEVAL,IEFPOL,KEEPSM,IMGABI,IMGASC,NADD
+      COMMON /PCMPLY/ STOT,VOL,CCX,CCY,CCZ,RDIF,NESF,NESFP,NESFF,I_NESF,
+     *                L_AST
+C
+      DIMENSION TMP(3,I_NESF)
+      DATA ZERO, ONE, TWO /0.0D+00, 1.0D+00, 2.0D+00/
+C
+C     - DETERMINE THE AREA AND AREA DERIVATIVES FOR A TESSERA -
+C     - BY PEIFENG SU & HUI LI -
+C
+C     P1 = X1, Y1, Z1 (THE CURRENT TESSERA)
+C     P2 = X2, Y2, Z2 (THE CENTER OF THE SPHERE OF THE TESSERA)
+C     P3 = X3, Y3, Z3 (THE CENTER OF A NEIGHBORING SPHERE)
+C
+      CALL DERCHK(MAXDER)
+C
+      DISM1 = 0.02D+00
+      DISM2 = 0.30D+00
+      DISN1 = 1.00D+00
+      DISN2 = 1.50D+00
+      IF(IRETCAV.EQ.1) THEN
+         DISN1 = 0.50D+00
+         DISN2 = 1.00D+00
+      ENDIF
+C
+      X2 = XE(NS)
+      Y2 = YE(NS)
+      Z2 = ZE(NS)
+      RA = RE(NS)
+      DO 150 NSFE1=1,I_NESF
+C
+C        IF AREA=0, RETURN
+C        SKIP DISTANT SPHERES
+C
+         IF(NSFE1.EQ.NS .OR. RE(NSFE1).LT.0.10D+00) GOTO 150
+         X3 = XE(NSFE1)
+         Y3 = YE(NSFE1)
+         Z3 = ZE(NSFE1)
+         RB = RE(NSFE1)
+         IF(IRETCAV.EQ.1) RB = RE(NSFE1)-0.16D+00
+         IF(IDISP.EQ.2)   RB = RE(NSFE1)-0.11D+00
+         IF(ABS(X2-X3).GT.(RA+RB+DISN2)) GOTO 150
+         IF(ABS(Y2-Y3).GT.(RA+RB+DISN2)) GOTO 150
+         IF(ABS(Z2-Z3).GT.(RA+RB+DISN2)) GOTO 150
+         DISC2 = (X2-X3)**2 + (Y2-Y3)**2 + (Z2-Z3)**2
+         IF(DISC2.GE.(RA+RB+DISN2)**2) GO TO 150
+         IF(DISC2.LE.(RA-RB)**2 .AND. RB.LT.RA) GO TO 150
+         IF(DISC2.LE.(RA-RB)**2 .AND. RB.GT.RA) THEN
+            AREA = ZERO
+            RETURN
+         END IF
+         DISC   = SQRT(DISC2)
+         DISC3  = DISC*DISC2
+         DIS132 = (X1-X3)**2+(Y1-Y3)**2+(Z1-Z3)**2
+         DIS13  = SQRT(DIS132)
+         IF(DIS13.LE.RB) THEN
+            AREA = ZERO
+            RETURN
+         END IF
+C
+         DUM = RB/DISC
+         X5  = X3 + (X2-X3)*DUM
+         Y5  = Y3 + (Y2-Y3)*DUM
+         Z5  = Z3 + (Z2-Z3)*DUM
+         DISN = SQRT((X1-X5)**2+(Y1-Y5)**2+(Z1-Z5)**2)
+         IF(DISN.GE.DISN2 .OR. DISC.LE.RB) THEN
+            SWF2   = ONE
+            DSWF2X = ZERO
+            DSWF2Y = ZERO
+            DSWF2Z = ZERO
+         ELSE IF (DISN.LE.DISN1) THEN
+            AREA   = ZERO
+            RETURN
+         ELSE
+            DUW  = (DISN**2 - DISN1**2)/(DISN2**2-DISN1**2)
+            SWF2 = 10.0D+00*DUW**3 - 15.0D+00*DUW**4 + 6.0D+00*DUW**5
+            IF(MAXDER.GT.0) THEN
+            DUM    = RB/DISC3
+            DX5DX3 = ONE - RB/DISC + DUM*(X2-X3)*(X2-X3)
+            DY5DX3 =                 DUM*(Y2-Y3)*(X2-X3)
+            DZ5DX3 =                 DUM*(Z2-Z3)*(X2-X3)
+            DX5DY3 =                 DUM*(X2-X3)*(Y2-Y3)
+            DY5DY3 = ONE - RB/DISC + DUM*(Y2-Y3)*(Y2-Y3)
+            DZ5DY3 =                 DUM*(Z2-Z3)*(Y2-Y3)
+            DX5DZ3 =                 DUM*(X2-X3)*(Z2-Z3)
+            DY5DZ3 =                 DUM*(Y2-Y3)*(Z2-Z3)
+            DZ5DZ3 = ONE - RB/DISC + DUM*(Z2-Z3)*(Z2-Z3)
+            DDISN2X=-TWO*((X1-X5)*DX5DX3+(Y1-Y5)*DY5DX3+(Z1-Z5)*DZ5DX3)
+            DDISN2Y=-TWO*((X1-X5)*DX5DY3+(Y1-Y5)*DY5DY3+(Z1-Z5)*DZ5DY3)
+            DDISN2Z=-TWO*((X1-X5)*DX5DZ3+(Y1-Y5)*DY5DZ3+(Z1-Z5)*DZ5DZ3)
+            DUM = (30.0D+00*DUW**2-60.0D+00*DUW**3+30.0D+00*DUW**4)/
+     *            (DISN2**2-DISN1**2)
+            DSWF2X = DUM*DDISN2X
+            DSWF2Y = DUM*DDISN2Y
+            DSWF2Z = DUM*DDISN2Z
+            END IF
+         END IF
+C
+C
+         IF(DISC.GE.(RA+RB)) THEN
+            SWF1   = ONE
+            DSWF1X = ZERO
+            DSWF1Y = ZERO
+            DSWF1Z = ZERO
+         ELSE
+            DISD = DIS13
+            FB =  RA**2 + DISC2 - DISD**2
+            FA =  RA**2 + DISC2 - RB**2
+            R1 =  RA    + DISC  + DISD
+            R2 =  RA    + DISC  - DISD
+            R3 =  RA    - DISC  + DISD
+            R4 = -RA    + DISC  + DISD
+            R5 =  RA    + DISC  + RB
+            R6 =  RA    + DISC  - RB
+            R7 =  RA    - DISC  + RB
+            R8 = -RA    + DISC  + RB
+            FAB = SQRT(R1*R2*R3*R4*R5*R6*R7*R8)
+            DISM = SQRT(TWO*RA**2 - (FA*FB + FAB)/(TWO*DISC2))
+            IF(DISM.GE.DISM2) THEN
+               SWF1   = ONE
+               DSWF1X = ZERO
+               DSWF1Y = ZERO
+               DSWF1Z = ZERO
+            ELSE IF (DISM.LE.DISM1) THEN
+               AREA   = ZERO
+               RETURN
+            ELSE
+               DUW  = (DISM**2 - DISM1**2)/(DISM2**2-DISM1**2)
+               SWF1 = 10.0D+00*DUW**3 - 15.0D+00*DUW**4 + 6.0D+00*DUW**5
+               IF(MAXDER.GT.0) THEN
+               CX3 =  (X3-X2)/DISC
+               CY3 =  (Y3-Y2)/DISC
+               CZ3 =  (Z3-Z2)/DISC
+               DX3 =  (X3-X1)/DISD
+               DY3 =  (Y3-Y1)/DISD
+               DZ3 =  (Z3-Z1)/DISD
+               R1X =  CX3 + DX3
+               R1Y =  CY3 + DY3
+               R1Z =  CZ3 + DZ3
+               R2X =  CX3 - DX3
+               R2Y =  CY3 - DY3
+               R2Z =  CZ3 - DZ3
+               R3X = -CX3 + DX3
+               R3Y = -CY3 + DY3
+               R3Z = -CZ3 + DZ3
+               R4X =  CX3 + DX3
+               R4Y =  CY3 + DY3
+               R4Z =  CZ3 + DZ3
+               R5X =  CX3
+               R5Y =  CY3
+               R5Z =  CZ3
+               R6X =  CX3
+               R6Y =  CY3
+               R6Z =  CZ3
+               R7X = -CX3
+               R7Y = -CY3
+               R7Z = -CZ3
+               R8X =  CX3
+               R8Y =  CY3
+               R8Z =  CZ3
+               FABX = (R1X*R2*R3*R4*R5*R6*R7*R8+
+     *                 R1*R2X*R3*R4*R5*R6*R7*R8+
+     *                 R1*R2*R3X*R4*R5*R6*R7*R8+
+     *                 R1*R2*R3*R4X*R5*R6*R7*R8+
+     *                 R1*R2*R3*R4*R5X*R6*R7*R8+
+     *                 R1*R2*R3*R4*R5*R6X*R7*R8+
+     *                 R1*R2*R3*R4*R5*R6*R7X*R8+
+     *                 R1*R2*R3*R4*R5*R6*R7*R8X)/FAB/TWO
+               FABY = (R1Y*R2*R3*R4*R5*R6*R7*R8+
+     *                 R1*R2Y*R3*R4*R5*R6*R7*R8+
+     *                 R1*R2*R3Y*R4*R5*R6*R7*R8+
+     *                 R1*R2*R3*R4Y*R5*R6*R7*R8+
+     *                 R1*R2*R3*R4*R5Y*R6*R7*R8+
+     *                 R1*R2*R3*R4*R5*R6Y*R7*R8+
+     *                 R1*R2*R3*R4*R5*R6*R7Y*R8+
+     *                 R1*R2*R3*R4*R5*R6*R7*R8Y)/FAB/TWO
+               FABZ = (R1Z*R2*R3*R4*R5*R6*R7*R8+
+     *                 R1*R2Z*R3*R4*R5*R6*R7*R8+
+     *                 R1*R2*R3Z*R4*R5*R6*R7*R8+
+     *                 R1*R2*R3*R4Z*R5*R6*R7*R8+
+     *                 R1*R2*R3*R4*R5Z*R6*R7*R8+
+     *                 R1*R2*R3*R4*R5*R6Z*R7*R8+
+     *                 R1*R2*R3*R4*R5*R6*R7Z*R8+
+     *                 R1*R2*R3*R4*R5*R6*R7*R8Z)/FAB/TWO
+               TEMP = (FA*FB + FAB)/DISC2**2
+               DDISM2X= (X3-X2)*TEMP
+     *                 -((X1-X2)*FA+(X3-X2)*FB)/DISC2
+     *                 -FABX/DISC2/TWO
+               DDISM2Y= (Y3-Y2)*TEMP
+     *                 -((Y1-Y2)*FA+(Y3-Y2)*FB)/DISC2
+     *                 -FABY/DISC2/TWO
+               DDISM2Z= (Z3-Z2)*TEMP
+     *                 -((Z1-Z2)*FA+(Z3-Z2)*FB)/DISC2
+     *                 -FABZ/DISC2/TWO
+               DUM = (30.0D+00*DUW**2-60.0D+00*DUW**3+30.0D+00*DUW**4)/
+     *               (DISM2**2-DISM1**2)
+               DSWF1X = DUM*DDISM2X
+               DSWF1Y = DUM*DDISM2Y
+               DSWF1Z = DUM*DDISM2Z
+               END IF
+            END IF
+         END IF
+C
+C        - NOTE: LOOP 150 MEANS MULTI-SPHERE SCALING
+C                AREA MUST BE SCALED AFTER AREA DERIVATIVES
+C
+         IF(MAXDER.GT.0)THEN
+         TMP(1,NSFE1) = AREA*(SWF1*DSWF2X + SWF2*DSWF1X)
+         TMP(2,NSFE1) = AREA*(SWF1*DSWF2Y + SWF2*DSWF1Y)
+         TMP(3,NSFE1) = AREA*(SWF1*DSWF2Z + SWF2*DSWF1Z)
+         IF(NSFE1.GE.2) THEN
+            DO KSF = 1, NSFE1-1
+               TMP(1,KSF) = TMP(1,KSF)*SWF1*SWF2
+               TMP(2,KSF) = TMP(2,KSF)*SWF1*SWF2
+               TMP(3,KSF) = TMP(3,KSF)*SWF1*SWF2
+            ENDDO
+         END IF
+         END IF
+         AREA = AREA*SWF1*SWF2
+         IF(AREA.EQ.ZERO) RETURN
+ 150  CONTINUE
+C
+C
+      IF(MAXDER.GT.0)THEN
+      DO KSF = 1,I_NESF
+         IF(KSF.NE.NS) THEN
+            TMP(1,NS) = TMP(1,NS) - TMP(1,KSF)
+            TMP(2,NS) = TMP(2,NS) - TMP(2,KSF)
+            TMP(3,NS) = TMP(3,NS) - TMP(3,KSF)
+         END IF
+      ENDDO
+      END IF
+C
+      RETURN
+      END
