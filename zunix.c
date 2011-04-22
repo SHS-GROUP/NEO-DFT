@@ -1,4 +1,4 @@
-/*  4 May 2010
+/* 13 May 2010
 
    Interface from FORTRAN/GAMESS to C/system calls
    ===============================================
@@ -26,9 +26,9 @@
    Other routines are present only because of inadequate system libraries.
 */
 
-/*--------------- Compaq (aka Digital) --------------*/
+/*--------------- Digital/Compaq/HP "alpha" --------------*/
 
-#ifdef COMPAQ
+#ifdef AXP64
 #include <stdlib.h>
 
 long memget_(nwords) long *nwords;
@@ -43,11 +43,12 @@ void naptime_(nptime) int *nptime;
 
 #endif
  
-/*--------------------------- Cray --------------------------*/
-/*   note: XT models use standard 'linux 64 bit' code   */
+
+/*-------------------- Cray --------------------------*/
+/*      the Cray XT uses the 64 bit Linux clause,     */
+/*  which makes everything here pretty much obsolete  */
 
 /*  --  Cray PVP or T3E --   */
-
 #ifdef CRAY
 
 int MEMGET(nwords) int *nwords;
@@ -66,7 +67,6 @@ void NAPTIME(nptime) int *nptime;
 #endif
 
 /*  --  Cray X1 --   */
-
 #ifdef CRAYX1
 
 #include <unistd.h>
@@ -86,7 +86,6 @@ void naptime_(nptime) int *nptime;
 #endif
 
 /*  --  Cray XD1 --   */
-
 #ifdef CRAYXD1
    
 #include <stdlib.h>
@@ -106,6 +105,48 @@ void naptime_(nptime) FORTINT *nptime;
    { sleep((unsigned int) *nptime); }
 
 #endif
+
+
+/*  --  Cray XT3 --   */
+#ifdef CRAYXT3
+
+#include <stdlib.h>
+#include <mpp/shmem.h>
+#define FORTINT long
+
+FORTINT memget_(nwords) FORTINT *nwords;
+   { size_t nbytes;
+     nbytes = (*nwords+2)*8;
+     return (FORTINT) shmalloc(nbytes); }
+
+void memrel_(locmem) FORTINT *locmem;
+   { shfree((void*)*locmem); }
+
+#include <unistd.h>
+void naptime_(nptime) FORTINT *nptime;
+   { sleep((unsigned int) *nptime); }
+
+#endif
+
+/*    we used this with MPI and data servers, above is for SHMEM-type DDI
+#include <stdlib.h>
+#include <malloc.h>
+#define FORTINT long
+
+FORTINT memget_(nwords) FORTINT *nwords;
+   { size_t nbytes;
+     nbytes = (*nwords+2)*8;
+     return (FORTINT) malloc(nbytes); }
+
+void memrel_(locmem) FORTINT *locmem;
+   { free((void*)*locmem); }
+
+#include <unistd.h>
+void naptime_(nptime) FORTINT *nptime;
+   { sleep((unsigned int) *nptime); }
+
+#endif
+*/
 
 
 /*-------------- Fujitsu VPP and AP ---------------*/
@@ -129,10 +170,10 @@ int laddrs_(arg) int arg;
 
 #endif
 
+
 /*--------------------- Hewlett-Packard --------------------------*/
 /*    this version uses FORTRAN callable library routines only    */
 /*                 no need to compile this file                   */
-
 
 
 /*----------------- International Business Machines ----------------*/
@@ -390,6 +431,7 @@ void fdate_(char *cht, int cht_len)
 
 /*----------------- 64 bit systems running Linux -----------------*/
 /*    This is tested for Itanium2, and Opteron based machines.    */
+/*    This also used by Cray XT systems' Compute Node Linux.      */
 
 /*    For more information, see 32 bit equivalent just above.     */
 /*    Note that so far, -laddrs- has not been copied here.        */
@@ -457,80 +499,8 @@ double etime_(float *a)
    }
 
 #endif
-
-
-/*   a clone of 64-bit Linux clause, tickled for use with SHMEM   */
-/*         this came from "company number 3" during TI-09         */
-/*   At a guess, this is meant to be used on modern SGI systems,  */
-/*   if and only if the matching ddio3k.src is used to partially  */
-/*   implement DDI.   Using MPI-1 for full DDI is better!         */
-
-#ifdef SHMEM64
-
-#include <stdlib.h>
-#include <malloc.h>
-#include <mpp/shmem.h>
-
-#define FORTINT long
-
-FORTINT memget_(nwords) FORTINT *nwords;
-   { size_t nbytes;
-     nbytes = (*nwords+2)*8;
-     return (FORTINT) shmalloc(nbytes); }
-
-void memrel_(locmem) FORTINT *locmem;
-   { shfree((void*)*locmem); }
-
-#include <unistd.h>
-void naptime_(nptime) FORTINT *nptime;
-   { sleep((unsigned int) *nptime); }
-
-/*  
-     The 64 bit version of the etime clone was revised March 2007, after
-     looking at "man 2 times".  This was motivated by Suse Enterprise 10,
-     which is using a clock tick of 250, not 100!  Probably most Linux
-     systems running at 64 bit were installed since 'times' was updated.
-
-     The 32 bit routine was left untouched, for it gives us no trouble.
-     Some of these systems may be quite a bit older, and the code has
-     worked on everything we tried for many years, so let the dog sleep.
-
-     See the 32 bit version of ETIME for more information about using
-     it from FORTRAN.  Args here are identical to the 32 bit code.
-
-     The structure 'tms' is set up in <sys/time.h>, as
-        struct tms {clock_t tms_utime;   namely, user time
-                    clock_t tms_stime;   namely, system time
-                    clock_t tms_cutime;  namely, user time of children
-                    clock_t tms_cstime;  namely, system time of children
-     The return value of the function times, which also sets the structure,
-     is the number of clock ticks since an arbitrary time in the past:
-        # include <sys/times.h>
-        clock_t times(struct tms *buf);
-*/
-#include <time.h>
-#include <sys/times.h>
-#include <unistd.h>
-
-double etime_(float *a)
-   { double        elapsed;
-     clock_t       elapticks;
-     struct tms    buf;
-     long          sysconf(int name);
-     long          POSIX_CLK_TCK;
-
-     elapticks = times(&buf);
-     POSIX_CLK_TCK = sysconf(_SC_CLK_TCK);
-
-     elapsed= (double) elapticks/ (double) POSIX_CLK_TCK;
-     a[0] = (float) (buf.tms_utime + buf.tms_cutime) / (float) POSIX_CLK_TCK;
-     a[1] = (float) (buf.tms_stime + buf.tms_cstime) / (float) POSIX_CLK_TCK;
-     return(elapsed);
-   }
-
-#endif
-
  
+
 /*----------------- NEC SX series -----------------*/
 
 #ifdef NECSX
@@ -561,7 +531,9 @@ void naptime_(long *nptime)
 
 #endif
 
+
 /*-------------- Silicon Graphics, Incorporated --------------*/
+/*                 ancient MIPS systems, only                 */
 
 #ifdef SGI32
 #define FORTINT int
@@ -585,6 +557,7 @@ void naptime_(FORTINT *nptime)
    { sginap((long) *nptime); }
 
 #endif
+
 
 /*----------------- SUN -----------------*/
 
@@ -612,4 +585,80 @@ void naptime_(nptime) FORTINT *nptime;
      delay = (unsigned int) *nptime;
      istat = sleep(delay); }
 
+#endif
+
+
+/*-------------- Windows --------------*/
+
+#ifdef WINDOWS32
+
+#include <stdlib.h>
+
+int memget_(nwords) int *nwords;
+   { int nbytes;
+     nbytes = (*nwords+2)*8;
+     return (int) malloc(nbytes); }
+
+void memrel_(locmem) int *locmem;
+   { free((void*) *locmem); }
+
+int laddrs_(arg) int arg;
+   { return(arg); }
+
+#include <Windows.h>
+void naptime_(nptime) int *nptime;
+   { Sleep((DWORD) *nptime*1000); }
+
+#include <mpi.h>
+double windowstimer_(double *a) 
+{
+  /* 
+     Visit this webpage for more information on what is being done
+     http://cplus.about.com/od/howtodothingsin1/a/timing.htm
+  */
+  
+  LARGE_INTEGER clockticks;
+  LARGE_INTEGER frequency;
+  QueryPerformanceFrequency( &frequency );
+  QueryPerformanceCounter( &clockticks );
+  *a = MPI_Wtime();
+  return ((double)clockticks.QuadPart/(double)frequency.QuadPart);
+}
+
+#endif
+
+#ifdef WINDOWS64
+
+#include <stdlib.h>
+#include <malloc.h>
+
+#define FORTINT __int64
+
+FORTINT memget_(nwords) FORTINT *nwords;
+   { size_t nbytes;
+     nbytes = (*nwords+2)*8;
+     return (FORTINT) malloc(nbytes); }
+
+void memrel_(locmem) FORTINT *locmem;
+   { free((void*) *locmem); }
+
+#include <Windows.h>
+void naptime_(nptime) FORTINT *nptime;
+   { Sleep((DWORD) *nptime*1000); }
+
+#include <mpi.h>
+double windowstimer_(double *a) 
+{
+  /* 
+     Visit this webpage for more information on what is being done
+     http://cplus.about.com/od/howtodothingsin1/a/timing.htm
+  */
+  
+  LARGE_INTEGER clockticks;
+  LARGE_INTEGER frequency;
+  QueryPerformanceFrequency( &frequency );
+  QueryPerformanceCounter( &clockticks );
+  *a = MPI_Wtime();
+  return ((double)clockticks.QuadPart/(double)frequency.QuadPart);
+}
 #endif
