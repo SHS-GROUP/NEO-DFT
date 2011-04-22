@@ -1,3 +1,4 @@
+C 15 APR 11 - MK,MK - ALLOW IMS-MP2, AO/MO CUTOFFS, TRANSPOS. SPEEDUPS
 C 11 AUG 10 - DGF - SYNCH COMMON BLOCK ENRGYS
 C 25 MAR 10 - MK  - SAVE SCS-MP2 ENERGY IN /ENRGMP/, CODE=DDI NOW WORKS
 C 14 OCT 09 - DGF - PAD ENRGMP
@@ -7,6 +8,8 @@ C*MODULE DCMP2   *DECK MP2DC
       SUBROUTINE MP2DC
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      DOUBLE PRECISION IMS
 C
       LOGICAL DBUG,OUTPUT,TDSKWRK
       LOGICAL DODCCR,ONLYOC,RMKORB,FZCORE,DOMP1,HFFRM
@@ -49,7 +52,7 @@ C
       COMMON /IODC  / IDCSUB,IDCVEC,IDCDM,IDCQ,IDCDMO,IDCEIG,IDCW,IDCEDM
       COMMON /INFOLC/ LOC2TA(MXLATM),LOC2TS(MXLSHL),LCKLOC(MXLSHL),
      *                NLAT,NLATC,NLSH,NLSHC,LNUM,LNUMC
-      COMMON /SUBSP / ILCST1(MXATM),NLC1,LNUMMX
+      COMMON /SUBSP / ILCST1(MXATM),NLC1,LNUMMX,ILATST(MXATM),NLCAT1
 C
 C     SCS PARAMETER IN THE LITERATURE
 C     (J. CHEM. PHYS. 118, 9095 (2003))
@@ -58,14 +61,16 @@ C
       DATA DBUGME,DEBUG /8HMP2DC   ,8HDEBUG   /
       DATA RHF/8HRHF     /
       DATA DDI/8HDDI     /
+      DATA IMS/8HIMS     /
       DATA ANONE/8HNONE    /
 C
       PARAMETER (ZERO=0.0D+00, ONE=1.0D+00, UNITS=0.52917724924D+00)
       PARAMETER (TWO=2.0D+00, VLN10=2.30258509299405D+00)
 C
 C     --------------------------------------------
-C     DIVIDE-AND-CONQUER SUBSYSTEM MP2 CALCULATION
-C                            CODED BY M. KOBAYASHI
+C     DIVIDE-AND-CONQUER SUBSYSTEM MP2 CALCULATION 
+C               CODED BY M. KOBAYASHI (SERIAL/DDI)
+C                        M. KATOUDA (IMS)
 C     --------------------------------------------
 C
       DBUG   = MASWRK .AND. (EXETYP.EQ.DEBUG .OR. EXETYP.EQ.DBUGME)
@@ -104,6 +109,20 @@ C
       IF(MPPROP.EQ.1) THEN
          IF(MASWRK) WRITE(IW,9900)
          MPPROP=0
+      END IF
+C
+C  IMS-MP2 IS AVAILABLE ONLY IN DIRECT CALCULATIONS
+C
+      IF((.NOT.DIRSCF) .AND. (CODEMP.EQ.IMS)) THEN
+         IF(MASWRK) WRITE(IW,9950)
+         CALL ABRT
+      END IF
+C
+C  AT PRESENT, IMS-MP2 IS ONLY AVAILABLE WHEN ONLYOC=.TRUE.
+C
+      IF((.NOT.ONLYOC) .AND. (CODEMP.EQ.IMS)) THEN
+         IF(MASWRK) WRITE(IW,9960)
+         CALL ABRT
       END IF
 C
 C  IF RMKORB=.TRUE. RECONSTRUCT DC SUBSYSTEMS
@@ -184,10 +203,11 @@ C
 C
       IF(RMKORB) THEN
 C
-C  RECONSTRUCTION OF SUBSYSTEM ORBITALS
+C  RECONSTRUCTION OF SUBSYSTEM ORBITALS 
 C
          FRMOLD=FRMLVA
-         CALL ORBRMK(X(LST),X(LFT),X(LEIGT),NUM1,NUM2,NLC1,NSUBS,DBUG)
+         CALL ORBRMK(X(LST),X(LFT),DUMMY,X(LEIGT),DUMMY,NUM1,NUM2,
+     *               NLC1,NSUBS,DBUG,0)
 C
          IF(DOMP1) THEN
 C     *** CONSTRUCT DENSITY MATRIX IF DOMP1 ***
@@ -200,7 +220,7 @@ C
 CPA               LTSKDC=ISUB-1
 CPA               IF (DLBDC) THEN
 CPA                 DTSKDC = LTSKDC.EQ.MTSKDC
-CPA               ELSE
+CPA               ELSE 
 CPA                 DTSKDC = MOD(LTSKDC,NPROC).EQ.ME
 CPA               END IF
 C
@@ -337,6 +357,10 @@ C
 C
       NOATMP=NOA
       NACORT=NACORE
+C-ADD(YOSHI), BUT THESE ARE NEVER USED.
+C     NOBTMP=NOB
+C     NBCORT=NBCORE
+C-END
       NOTMP=NO
       NBFTMP=NBF
       NQMTTP=NQMT
@@ -354,7 +378,7 @@ C
       CALL SEQREW(IDCQ)
 C
 C  SUBSYSTEM LOOP
-C     THIS LOOP SHOULD BE PARALLELIZE BY DDI
+C     THIS LOOP SHOULD BE PARALLELIZE BY GDDI
 C
       CALL TSECND(TIM1)
       DO ISUB=1, NSUBS
@@ -402,11 +426,32 @@ C
             IF(X(LEIG+I-1).LE.FRMLVA) NOA=NOA+1
          END DO
 C
+         IF(DOMP1) THEN
+            CALL TRT2LC(X(LFT),X(LF),NUM1,NUM2,L1,L2,'FOCK    ')
+            CALL MP2DC1(X(LCO),X(LEIG),X(LF),L1,L2,
+     *                  E1SUB,E1OSUB,E1VSUB)
+C
+            X(LESUB +ISUB-1)=X(LESUB +ISUB-1)+E1SUB
+            X(LESOC1+ISUB-1)=E1OSUB
+            X(LESVI1+ISUB-1)=E1VSUB
+            X(LESSCS+ISUB-1)=X(LESSCS+ISUB-1)+E1SUB
+C
+            E2OCSG=E2OCSG+E1OSUB
+            E2VISG=E2VISG+E1VSUB
+            E2SG  =E2SG  +E1SUB
+            IF(MASWRK) THEN
+               WRITE(IW  ,9510) E1OSUB,E1VSUB,E1SUB
+               WRITE(IDMP,9555) E1OSUB,E1VSUB,E1SUB
+            END IF
+         END IF
+C
          E2OOLD=E2OPOS
          E2POLD=E2PARA
          IF(CODEMP.EQ.DDI) THEN
            CALL MP2DDIDC(X(LCO),X(LEIG),X(LQ),X(LS),L1,L2,
      *                   E2SUB,E2OSUB,E2VSUB)
+         ELSE IF(CODEMP.EQ.IMS) THEN
+           CALL MP2IMSDC(X(LCO),X(LEIG),E2SUB,E2OSUB,E2VSUB)
          ELSE
            CALL MP2NDC(X(LCO),X(LEIG),X(LQ),X(LS),L1,L2,
      *                 E2SUB,E2OSUB,E2VSUB)
@@ -415,7 +460,14 @@ C
          X(LESUB +ISUB-1)=E2SUB
          X(LESOCC+ISUB-1)=E2OSUB
          X(LESVIR+ISUB-1)=E2VSUB
-         E2SSCS=(E2PARA-E2POLD)*FPARA+(E2OPOS-E2OOLD)*FOPOS
+C
+         EPARA=E2PARA-E2POLD
+         EOPOS=E2OPOS-E2OOLD
+         IF(GOPARR) THEN
+            CALL DDI_GSUMF(11011,EPARA,1)
+            CALL DDI_GSUMF(11012,EOPOS,1)
+         END IF
+         E2SSCS=EPARA*FPARA+EOPOS*FOPOS
          X(LESSCS+ISUB-1)=E2SSCS
 C
          ECORMP=ECORMP+E2SUB
@@ -427,26 +479,6 @@ C
          END IF
 C
          IF(DOMP1) THEN
-            CALL TRT2LC(X(LFT),X(LF),NUM1,NUM2,L1,L2,'FOCK    ')
-            CALL MP2DC1(X(LCO),X(LEIG),X(LF),L1,L2,
-     *                  E1SUB,E1OSUB,E1VSUB)
-C
-            X(LESUB +ISUB-1)=X(LESUB +ISUB-1)+E1SUB
-            X(LESOC1+ISUB-1)=E1OSUB
-            X(LESVI1+ISUB-1)=E1VSUB
-            X(LESSCS+ISUB-1)=X(LESSCS+ISUB-1)+E1SUB
-C
-            ECORMP=ECORMP+E1SUB
-            E2OC  =E2OC  +E1OSUB
-            E2VI  =E2VI  +E1VSUB
-            E2OCSG=E2OCSG+E1OSUB
-            E2VISG=E2VISG+E1VSUB
-            E2SG  =E2SG  +E1SUB
-            IF(MASWRK) THEN
-               WRITE(IW  ,9510) E1OSUB,E1VSUB,E1SUB
-               WRITE(IDMP,9555) E1OSUB,E1VSUB,E1SUB
-            END IF
-C
             E2SUB =E2SUB +E1SUB
             E2OSUB=E2OSUB+E1OSUB
             E2VSUB=E2VSUB+E1VSUB
@@ -468,9 +500,17 @@ C
   100    CONTINUE
 C
          CALL RETFM(NEED0)
-      END DO
+      END DO                    !END SUBSYSTEM LOOP
       IF(MASWRK) WRITE(IDMP, FMT='(5H $END)')
 C
+      IF(GOPARR) THEN
+         CALL DDI_GSUMF(1201,E2PARA,1)
+         CALL DDI_GSUMF(1202,E2OPOS,1)
+      END IF
+C
+      ECORMP=ECORMP+E2SG
+      E2OC  =E2OC  +E2OCSG
+      E2VI  =E2VI  +E2VISG
       E2  =ECORMP
       EHF =ESCF
       EMP2=EHF+E2
@@ -494,11 +534,6 @@ C
             END IF
          ENDIF
       END IF
-      IF(GOPARR) THEN
-         CALL DDI_GSUMF(1201,E2PARA,1)
-         CALL DDI_GSUMF(1202,E2OPOS,1)
-         CALL DDI_GSUMF(1203,SCSE2 ,1)
-      END IF
       ESCSMP2 = EHF + SCSE2
       IF(MASWRK) WRITE(IW,9350) E2OPOS,E2PARA,SCSE2,ESCSMP2
       EMP2A=ESCSMP2
@@ -513,14 +548,15 @@ C
          DO ILOOP=1,NSUBS
            WRITE(IW,9410) ILOOP, X(LESUB+ILOOP-1), X(LESSCS+ILOOP-1)
          END DO
-         WRITE(IW,*)
+         WRITE(IW,*)   
       END IF
 C
 C  IF RMKORB=.TRUE. RESTORE DC SUBSYSTEMS
 C
-      IF(RMKORB .AND. DCFLG) THEN
+      IF(RMKORB .AND. DCFLG) THEN 
          CALL DFLCST(0,.FALSE.)
-         CALL ORBRMK(X(LST),X(LFT),X(LEIGT),NUM1,NUM2,NLC1,NSUBS,DBUG)
+         CALL ORBRMK(X(LST),X(LFT),DUMMY,X(LEIGT),DUMMY,NUM1,NUM2,
+     *               NLC1,NSUBS,DBUG,0)
          FRMLVA = FRMOLD
       ENDIF
 C
@@ -577,6 +613,8 @@ C
  9600 FORMAT(/1X,I8,'-TH SUBSYSTEM MP2 TOOK ',F10.2,' SECONDS.')
  9900 FORMAT(/1X,'*** WARNING ***'/
      *        1X,'MP2PRP=.T. IS NOT SUPPORTED IN DC. FORCE DISABLED.'/)
+ 9950 FORMAT(/1X,'ERROR: CODE=IMS MUST BE USED WITH DIRSCF=.TRUE.')
+ 9960 FORMAT(/1X,'ERROR: CODE=IMS CAN WORK ONLY WITH ONLYOC=.TRUE.')
       END
 C
 C*MODULE DCMP2   *DECK MP2NDC
@@ -1530,28 +1568,28 @@ C
       DO 140 MJ=1,NOC
          VAL1S=VAL1*CO(MS,MJ)
          XPQRJ(MJ,MPQ,MR-MINR+1)=XPQRJ(MJ,MPQ,MR-MINR+1)+VAL1S
-         IF(MS.LE.LNUMC)
+         IF(MS.LE.LNUMC) 
      *      XPQRJI(MJ,MPQ,MR-MINR+1) = XPQRJI(MJ,MPQ,MR-MINR+1) + VAL1S
   140 CONTINUE
   141 IF(SKIPS) GO TO 143
       DO 142 MJ=1,NOC
          VAL1R=VAL1*CO(MR,MJ)
          XPQRJ(MJ,MPQ,MS-MINR+1)=XPQRJ(MJ,MPQ,MS-MINR+1)+VAL1R
-         IF(MR.LE.LNUMC)
+         IF(MR.LE.LNUMC) 
      *      XPQRJI(MJ,MPQ,MS-MINR+1) = XPQRJI(MJ,MPQ,MS-MINR+1) + VAL1R
   142 CONTINUE
   143 IF(SKIPP) GO TO 145
       DO 144 MJ=1,NOC
          VAL3Q=VAL3*CO(MQ,MJ)
          XPQRJ(MJ,MRS,MP-MINR+1)=XPQRJ(MJ,MRS,MP-MINR+1)+VAL3Q
-         IF(MQ.LE.LNUMC)
+         IF(MQ.LE.LNUMC) 
      *      XPQRJI(MJ,MRS,MP-MINR+1) = XPQRJI(MJ,MRS,MP-MINR+1) + VAL3Q
   144 CONTINUE
   145 IF(SKIPQ) GO TO 150
       DO 146 MJ=1,NOC
          VAL3P=VAL3*CO(MP,MJ)
          XPQRJ(MJ,MRS,MQ-MINR+1)=XPQRJ(MJ,MRS,MQ-MINR+1)+VAL3P
-         IF(MP.LE.LNUMC)
+         IF(MP.LE.LNUMC) 
      *      XPQRJI(MJ,MRS,MQ-MINR+1) = XPQRJI(MJ,MRS,MQ-MINR+1) + VAL3P
   146 CONTINUE
 C
@@ -1935,6 +1973,8 @@ C
 C
       DIMENSION NCORES(103)
 C
+      DOUBLE PRECISION LMOEDA
+C
       LOGICAL GOPARR,DSKWRK,MASWRK
 C
       COMMON /ECP2  / CLP(400),ZLP(400),NLP(400),KFIRST(MXATM,6),
@@ -1944,10 +1984,12 @@ C
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NEX,NA,NB,
      *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
 C
       COMMON /INFOLC/ LOC2TA(MXLATM),LOC2TS(MXLSHL),LCKLOC(MXLSHL),
      *                NLAT,NLATC,NLSH,NLSHC,LNUM,LNUMC
 C
+      DATA LMOEDA /8HLMOEDA  /
       DATA NCORES /2*0,
      *             2*1,                     6*1,
      *             2*5,                     6*5,
@@ -1996,6 +2038,7 @@ C
          I=LOC2TA(I0)
          IZ = INT(ZAN(I)) + IZCORE(I)
          IF(IZ.LE.0) GO TO 100
+         IF(RUNTYP.EQ.LMOEDA .AND. INT(ZAN(I)).EQ.0) GO TO 100
          IF((IZ.GT.103) .AND. MASWRK) WRITE(IW,*)
      *          'Z.GT.103 IN SETTING CORE COUNT'
          IF(IZ.GT.103) CALL ABRT
@@ -2003,200 +2046,6 @@ C
   100 CONTINUE
 C
       NUMCORDC = NCORE
-      RETURN
-      END
-C
-C*MODULE DCMP2   *DECK ONETFD
-C        MODIFIED FROM ONETRF
-      SUBROUTINE ONETFD(XPQRJ,XPQRJI,CO,NDIM,NUM,NOC,XX,IX,NXX,NPACKIC,
-     *                  IDCMOD)
-C
-      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
-C
-      PARAMETER (MXAO=8192, MXLATM=200, MXLSHL=700)
-C
-      DIMENSION XPQRJ(NOC,NDIM,*),XPQRJI(NOC,NDIM,*),CO(NUM,*),
-     *          XX(*),IX(*)
-C
-      COMMON /IJPAIR/ IA(MXAO)
-      COMMON /PCKLAB/ LABSIZ
-C
-      COMMON /INFOLC/ LOC2TA(MXLATM),LOC2TS(MXLSHL),LCKLOC(MXLSHL),
-     *                NLAT,NLATC,NLSH,NLSHC,LNUM,LNUMC
-      COMMON /TO2LC / IT2LOC(MXAO)
-C
-      NINT = ABS(NXX)
-C
-      IF(LABSIZ.GE.2) THEN
-C
-C     ----- TWO BYTES PER LABEL -----
-C
-         DO 20 M=1,NINT
-                       NPACK = NPACKIC+M
-            VAL1 = XX(NPACK)
-            VAL3 = VAL1
-C
-*I32                     LABEL = IX( 2*NPACK - 1 )
-*I32                     IPACK = ISHFT( LABEL, -16 )
-*I32                     JPACK = IAND(  LABEL, 65535 )
-*I32                     LABEL = IX( 2*NPACK     )
-*I32                     KPACK = ISHFT( LABEL, -16 )
-*I32                     LPACK = IAND(  LABEL, 65535 )
-*I64                     LABEL = IX(NPACK)
-*I64                     IPACK = ISHFT( LABEL, -48 )
-*I64                     JPACK = IAND( ISHFT( LABEL, -32 ), 65535 )
-*I64                     KPACK = IAND( ISHFT( LABEL, -16 ), 65535 )
-*I64                     LPACK = IAND( LABEL, 65535 )
-                       MPT = IPACK
-                       MQT = JPACK
-                       MRT = KPACK
-                       MST = LPACK
-C
-            MP=IT2LOC(MPT)
-            MQ=IT2LOC(MQT)
-            MR=IT2LOC(MRT)
-            MS=IT2LOC(MST)
-            ITEST=MP*MQ*MR*MS
-            IF(ITEST.EQ.0) GO TO 20
-C
-            IF(MP.LT.MQ) THEN
-               ITP=MP
-               MP=MQ
-               MQ=ITP
-            END IF
-            IF(MR.LT.MS) THEN
-               ITP=MR
-               MR=MS
-               MS=ITP
-            END IF
-            IF(MP.LT.MR .OR. (MP.EQ.MR .AND. MQ.LT.MS)) THEN
-               ITP=MP
-               MP=MR
-               MR=ITP
-               ITP=MQ
-               MQ=MS
-               MS=ITP
-            END IF
-C
-            MPQ= IA(MP)+MQ
-            MRS= IA(MR)+MS
-            IF(MP.EQ.MQ) VAL1 = VAL1+VAL1
-            IF(MR.EQ.MS) VAL3 = VAL3+VAL3
-            DO 10 MJ=1,NOC
-               VAL1S=VAL1*CO(MS,MJ)
-               VAL1R=VAL1*CO(MR,MJ)
-               VAL3Q=VAL3*CO(MQ,MJ)
-               VAL3P=VAL3*CO(MP,MJ)
-               IF(IDCMOD.GE.2) THEN
-                  IF(MS.LE.LNUMC) XPQRJI(MJ,MPQ,MR) = XPQRJI(MJ,MPQ,MR)
-     *                                              + VAL1S
-                  IF(MR.LE.LNUMC) XPQRJI(MJ,MPQ,MS) = XPQRJI(MJ,MPQ,MS)
-     *                                              + VAL1R
-                  IF(MQ.LE.LNUMC) XPQRJI(MJ,MRS,MP) = XPQRJI(MJ,MRS,MP)
-     *                                              + VAL3Q
-                  IF(MP.LE.LNUMC) XPQRJI(MJ,MRS,MQ) = XPQRJI(MJ,MRS,MQ)
-     *                                              + VAL3P
-               ENDIF
-               IF(IDCMOD.EQ.1 .OR. IDCMOD.EQ.3) THEN
-                  XPQRJ(MJ,MPQ,MR) = XPQRJ(MJ,MPQ,MR) + VAL1S
-                  XPQRJ(MJ,MPQ,MS) = XPQRJ(MJ,MPQ,MS) + VAL1R
-                  XPQRJ(MJ,MRS,MP) = XPQRJ(MJ,MRS,MP) + VAL3Q
-                  XPQRJ(MJ,MRS,MQ) = XPQRJ(MJ,MRS,MQ) + VAL3P
-               ENDIF
-   10       CONTINUE
-C
-   20    CONTINUE
-C
-      ELSE
-C
-C     ----- ONE BYTE PER LABEL -----
-C
-*VDIR NODIVLOOP
-         DO 40 M=1,NINT
-                       NPACK = NPACKIC+M
-            VAL1 = XX(NPACK)
-            VAL3 = VAL1
-C
-*I32                     LABEL = IX(NPACK)
-*I32                     IPACK = ISHFT( LABEL, -24 )
-*I32                     JPACK = IAND( ISHFT( LABEL, -16 ), 255 )
-*I32                     KPACK = IAND( ISHFT( LABEL,  -8 ), 255 )
-*I32                     LPACK = IAND( LABEL, 255 )
-*I64                     IF ( MOD(NPACK,2) .EQ. 0 ) THEN
-*I64                       LABEL = IX( NPACK/2 )
-*I64                       IPACK = IAND( ISHFT( LABEL, -24 ), 255 )
-*I64                       JPACK = IAND( ISHFT( LABEL, -16 ), 255 )
-*I64                       KPACK = IAND( ISHFT( LABEL,  -8 ), 255 )
-*I64                       LPACK = IAND( LABEL, 255 )
-*I64                     ELSE
-*I64                       LABEL = IX( (NPACK/2)+1 )
-*I64                       IPACK = ISHFT( LABEL, -56 )
-*I64                       JPACK = IAND( ISHFT( LABEL, -48 ), 255 )
-*I64                       KPACK = IAND( ISHFT( LABEL, -40 ), 255 )
-*I64                       LPACK = IAND( ISHFT( LABEL, -32 ), 255 )
-*I64                     END IF
-                       MPT = IPACK
-                       MQT = JPACK
-                       MRT = KPACK
-                       MST = LPACK
-C
-            MP=IT2LOC(MPT)
-            MQ=IT2LOC(MQT)
-            MR=IT2LOC(MRT)
-            MS=IT2LOC(MST)
-            ITEST=MP*MQ*MR*MS
-            IF(ITEST.EQ.0) GO TO 40
-C
-            IF(MP.LT.MQ) THEN
-               ITP=MP
-               MP=MQ
-               MQ=ITP
-            END IF
-            IF(MR.LT.MS) THEN
-               ITP=MR
-               MR=MS
-               MS=ITP
-            END IF
-            IF(MP.LT.MR .OR. (MP.EQ.MR .AND. MQ.LT.MS)) THEN
-               ITP=MP
-               MP=MR
-               MR=ITP
-               ITP=MQ
-               MQ=MS
-               MS=ITP
-            END IF
-C
-            MPQ= IA(MP)+MQ
-            MRS= IA(MR)+MS
-            IF(MP.EQ.MQ) VAL1 = VAL1+VAL1
-            IF(MR.EQ.MS) VAL3 = VAL3+VAL3
-            DO 30 MJ=1,NOC
-               VAL1S=VAL1*CO(MS,MJ)
-               VAL1R=VAL1*CO(MR,MJ)
-               VAL3Q=VAL3*CO(MQ,MJ)
-               VAL3P=VAL3*CO(MP,MJ)
-               IF(IDCMOD.GE.2)THEN
-                  IF(MS.LE.LNUMC) XPQRJI(MJ,MPQ,MR) = XPQRJI(MJ,MPQ,MR)
-     *                                              + VAL1S
-                  IF(MR.LE.LNUMC) XPQRJI(MJ,MPQ,MS) = XPQRJI(MJ,MPQ,MS)
-     *                                              + VAL1R
-                  IF(MQ.LE.LNUMC) XPQRJI(MJ,MRS,MP) = XPQRJI(MJ,MRS,MP)
-     *                                              + VAL3Q
-                  IF(MP.LE.LNUMC) XPQRJI(MJ,MRS,MQ) = XPQRJI(MJ,MRS,MQ)
-     *                                              + VAL3P
-               ENDIF
-               IF(IDCMOD.EQ.1 .OR. IDCMOD.EQ.3)THEN
-                  XPQRJ(MJ,MPQ,MR) = XPQRJ(MJ,MPQ,MR) + VAL1S
-                  XPQRJ(MJ,MPQ,MS) = XPQRJ(MJ,MPQ,MS) + VAL1R
-                  XPQRJ(MJ,MRS,MP) = XPQRJ(MJ,MRS,MP) + VAL3Q
-                  XPQRJ(MJ,MRS,MQ) = XPQRJ(MJ,MRS,MQ) + VAL3P
-               ENDIF
-   30       CONTINUE
-C
-   40    CONTINUE
-C
-      END IF
-C
       RETURN
       END
 C
@@ -2272,7 +2121,7 @@ C
       RETURN
 C
   300 CONTINUE
-      IF (MASWRK) WRITE(IW,9200)
+      IF (MASWRK) WRITE(IW,9200) 
       CALL ABRT
       STOP
 C
@@ -2804,13 +2653,14 @@ C
          RETURN
       END IF
 C
-C  FORM MP2 1-PARTICLE DENSITY MATRICES
-C
       CALL DERCHK(NDER)
       IF(RUNTYP.EQ.G3MP2) THEN
          IF(ICXBAS.EQ.1) NDER=1
          IF(ICXBAS.EQ.2) NDER=0
       END IF
+C
+C  FORM SECOND ORDER CORRECTION TO DENSITY MATRIX
+C
       IF((NDER.GT.0  .OR.  MPPROP.EQ.1)  .AND.  .NOT.EONLY) THEN
          IF(UMP2GD) THEN
            CALL UPAR1PDM(XX(IVECS),XX(IVECSB),XX(IVALS),XX(IVALSB),
@@ -2883,7 +2733,7 @@ C
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
      *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
       COMMON /INTOPT/ ISCHWZ,IECP,NECP,IEFLD
-      COMMON /IOFILE/ IR,IW,IP,IJK,IPK,IDAF,NAV,IODA(950)
+      COMMON /IOFILE/ IR,IW,IP,IJK,IJKT,IDAF,NAV,IODA(950)
       COMMON /MP2XTR/ NBF,NACORE,NBSQ,NBTR,NSTR,MXSHL,NACT,NOCC
      *,               NVIR,NOV,NOSQ,NVSQ,NOTR,NVTR,NCP1,NOP1
      *,               NATR,ICHANL,OUTPUT,MP2ENG,IOST,NMOS,UMP2GD
@@ -2986,7 +2836,7 @@ C        MODIFIED FROM MOINTS
 C
 C -----------------------------------------------------------------
 C  DRIVER FOR PARALLEL 4-INDEX TRANSFORMATION USING DDI
-C  (PSETUP,MOINTS,PARTRAN,SYMIJ,SYMIJKL,PARSHEL,TRAN1,TRAN1_P,
+C  (PSETUP,MOINTS,PARTRAN,SYMIJ,SYMIJKL,PARSHEL,TRAN1_H,TRAN1_P,
 C   TRAN2,TRAN3,TRAN34,PEMP2,ZAPTE)
 C -----------------------------------------------------------------
 C
@@ -3027,9 +2877,12 @@ C
 C
       DATA ZAPT/8HZAPT    /
 C
+C          NOTE THAT THERE IS ADDITIONAL MEMORY INSIDE -PARTRAN-
+C
       CALL VALFM(LOADFM)
       IGOUT = 1     + LOADFM
       ITRAN = IGOUT + MXSHL**4
+C
       CALL DDI_DISTRIB( D_VOVO , 0, ILO, IHI, JLO, JHI )
       IF (MP2ENG) THEN
         ITMP1 = ITRAN + MXSHL*MXSHL*NBF*NACT
@@ -3043,24 +2896,21 @@ C
         IDDIJ = ITMP2 + MAX0(NBSQ,JHI*MXSHL*NVIR)
         ITMP3 = ITMP1
       END IF
+C
       ITRANB  = IDDIJ + 49*MXG2
-      ITMP1B  = ITRANB
-      ITMP2B  = ITRANB
+C
       IF (UMP2GD) THEN
         CALL DDI_DISTRIB( D_VOVOAB, 0, ILO, IHI, JLO, JHI )
         IF (MP2ENG) THEN
-          ITRANB= IDDIJ + 49*MXG2
           ITMP1B= ITRANB+ MXSHL*MXSHL*NBF*NACTB
           ITMP2B= ITMP1B+ MAX0(NBSQ,JHI*MXSHL*NVIRB)
           LAST  = ITMP2B+ JHI*MXSHL*NVIRB
         ELSE
-          ITRANB= IDDIJ + 49*MXG2
           ITMP1B= ITRANB+ MXSHL*MXSHL*NBF*NOCCB
           ITMP2B= ITMP1B+ MAX0(NBSQ,JHI*MXSHL*NVIRB)
           LAST  = ITMP2B+ JHI*MXSHL*NVIRB
         END IF
       ELSE
-        ITRANB= IDDIJ + 49*MXG2
         ITMP1B= ITRANB
         ITMP2B= ITRANB
         LAST  = ITRANB
@@ -3112,12 +2962,18 @@ C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
       PARAMETER (MXSH=5000, MXGTOT=20000, MXAO=8192)
       PARAMETER (ZERO=0.0D+00, ONE=1.0D+00)
-      LOGICAL POPLE,PACK2E,IANDJ,KANDL,SAME,OUT,GOPARR,DSKWRK
-     *,       MASWRK,OUTPUT,MP2ENG,UMP2GD,DLB,DOTASK
-      DOUBLE PRECISION GOUT(*),SCHWA(*),CMO(NBF,*),CMOB(NBF,*)
-     *,                TRAN(NBF,MXSHL*MXSHL,*),TMP1(*),TMP2(*),DDIJ(*)
-     *,                TRANB(NBF,MXSHL*MXSHL,*),TMP1B(*),TMP2B(*)
-      INTEGER MOLABS(*),MOLABSB(*)
+C
+      DIMENSION GOUT(*),SCHWA(*),CMO(NBF,*),CMOB(NBF,*),
+     *          TRAN(NBF,MXSHL*MXSHL,*),TMP1(*),TMP2(*),DDIJ(*),
+     *          TRANB(NBF,MXSHL*MXSHL,*),TMP1B(*),TMP2B(*),
+     *          MOLABS(*),MOLABSB(*)
+C
+      LOGICAL POPLE,PACK2E,IANDJ,KANDL,SAME,OUT,GOPARR,DSKWRK,
+     *        MASWRK,OUTPUT,MP2ENG,UMP2GD,DLB,DOTASK
+C
+      INTEGER XDIM,XDIMB
+C
+      COMMON /FMCOM / XX(1)
       COMMON /IJPAIR/ IA(MXAO)
       COMMON /MISC  / IANDJ,KANDL,SAME
       COMMON /GOUT  / GPOPLE(768),NORG
@@ -3144,6 +3000,28 @@ C
       COMMON /INFOLC/ LOC2TA(MXLATM),LOC2TS(MXLSHL),LCKLOC(MXLSHL),
      *                NLAT,NLATC,NLSH,NLSHC,LNUM,LNUMC
 C
+C        FOR EFFICIENCY, WORK WITH TRANSPOSED ARRAYS, E OR GRAD RUNS.
+C            UHF TO THE UPPER CLAUSE, RHF/ZAPT TO THE LOWER CLAUSE
+C
+      CALL VALFM(LOADFM)
+      IF (UMP2GD) THEN
+        LCMOT   = LOADFM  + 1
+        LCMOBT  = LCMOT   + NBF*NBF
+        LTRANT  = LCMOBT  + NBF*NBF
+        LTRANBT = LTRANT  + NOCC *NBF*MXSHL*MXSHL
+        LAST    = LTRANBT + NOCCB*NBF*MXSHL*MXSHL
+        NEED    = LAST    - LOADFM
+      ELSE
+        LCMOT   = LOADFM  + 1
+        LTRANT  = LCMOT   + NBF*NBF
+        LAST    = LTRANT  + NOCC*NBF*MXSHL*MXSHL
+        NEED    = LAST    - LOADFM
+      END IF
+      CALL GETFM(NEED)
+C
+                  CALL TRPOSE(CMO ,XX(LCMOT) ,NBF,NBF,0)
+      IF (UMP2GD) CALL TRPOSE(CMOB,XX(LCMOBT),NBF,NBF,0)
+C
       IF (OUTPUT) THEN
         WRITE(ICHANL,1)
         CALL FLSHBF(ICHANL)
@@ -3152,17 +3030,14 @@ C
 C  INITIALIZE PARAMETERS
 C
       IF (MP2ENG) THEN
-        LTRAN = NACT*NBF*MXSHL*MXSHL
+        XDIM =NACT
+        XDIMB=NACTB
       ELSE
-        LTRAN = NOCC*NBF*MXSHL*MXSHL
+        XDIM =NOCC
+        XDIMB=NOCCB
       END IF
-      IF (UMP2GD) THEN
-        IF (MP2ENG) THEN
-          LTRANB = NACTB*NBF*MXSHL*MXSHL
-        ELSE
-          LTRANB = NOCCB*NBF*MXSHL*MXSHL
-        END IF
-      END IF
+      LTRAN  = XDIM *NBF*MXSHL*MXSHL
+      LTRANB = XDIMB*NBF*MXSHL*MXSHL
       MXSHL4  = MXSHL**4
       IANDJ   = .FALSE.
       KANDL   = .FALSE.
@@ -3208,8 +3083,8 @@ C
 C
          IF (DOTASK) THEN
          IANDJ = II.EQ.JJ
-                    CALL DCOPY(LTRAN ,ZERO,0,TRAN ,1)
-         IF(UMP2GD) CALL DCOPY(LTRANB,ZERO,0,TRANB,1)
+                    CALL VCLR(XX(LTRANT), 1,LTRAN )
+         IF(UMP2GD) CALL VCLR(XX(LTRANBT),1,LTRANB)
 C
 C  K-SHELL,L-SHELL
 C
@@ -3251,12 +3126,13 @@ C
              LSHELL = LLT
 C
              IF (POPLE) THEN
-              CALL DCOPY(256,ZERO,0,GPOPLE,1)
+              CALL VCLR(GPOPLE,1,256)
               CALL GENR70(1,.FALSE.)
               CALL DCOPY(256,GPOPLE,1,GOUT,1)
-              CALL TRAN1DC_P(GOUT,CMO,TRAN,CMOB,TRANB)
+              CALL TRAN1DC_P(GOUT,XX(LCMOT),XX(LTRANT),XX(LCMOBT),
+     *                       XX(LTRANBT),XDIM,XDIMB)
              ELSE
-              CALL DCOPY(MXSHL4,ZERO,0,GOUT,1)
+              CALL VCLR(GOUT,1,MXSHL4)
               KANDL = KK.EQ.LL
               CALL PARSHEL(1,IIT,JJT,IIT,JJT)
               CALL IJPRIM(DDIJ)
@@ -3267,7 +3143,8 @@ C
               ELSE
                 CALL GENRAL(GOUT,DDIJ)
               END IF
-              CALL TRAN1DC(GOUT,CMO,TRAN,CMOB,TRANB)
+              CALL TRAN1DC_H(GOUT,XX(LCMOT),XX(LTRANT),XX(LCMOBT),
+     *                       XX(LTRANBT),XDIM,XDIMB)
              END IF   ! POPLE
              END IF   ! SCHWARZ
            END IF     ! SYM IJKL
@@ -3279,8 +3156,11 @@ C
          ISHELL = IIT
          JSHELL = JJT
          IF(UMP2GD) THEN
+            CALL TRPOS13(XX(LTRANT) ,TRAN ,XDIM ,MXSHL*MXSHL,NBF)
+            CALL TRPOS13(XX(LTRANBT),TRANB,XDIMB,MXSHL*MXSHL,NBF)
             CALL UTRAN2(CMO,CMOB,TRAN,TRANB,TMP1,IJSHL,NOFFIJ)
          ELSE
+            CALL TRPOS13(XX(LTRANT) ,TRAN ,XDIM ,MXSHL*MXSHL,NBF)
             CALL TRAN2(CMO,TRAN,TMP1,IJSHL,NOFFIJ)
          END IF
          IF(UMP2GD) THEN
@@ -3315,24 +3195,26 @@ C
         WRITE(ICHANL,3) NSCHWZ
         CALL FLSHBF(ICHANL)
       END IF
+      CALL RETFM(NEED)
       RETURN
 1     FORMAT(/,6X,'DIRECT 4-INDEX TRANSFORMATION ')
 3     FORMAT(6X,'SCHWARZ INEQUALITY TEST SKIPPED ',I10,
      * ' INTEGRAL BLOCKS')
       END
-C*MODULE MP2DDI  *DECK TRAN1DC
-C        MODIFIED FROM TRAN1
-      SUBROUTINE TRAN1DC(GOUT,CMO,TRAN,CMOB,TRANB)
+C*MODULE MP2DDI  *DECK TRAN1DC_H
+C        MODIFIED FROM TRAN1_H
+      SUBROUTINE TRAN1DC_H(GOUT,CMOT,TRAN,CMOBT,TRANB,XDIM,XDIMB)
 C
 C -----------------------------------------------------------------
 C  FIRST TRANSFORMATION - HONDO INTEGRAL INDEXING
 C -----------------------------------------------------------------
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      INTEGER XDIM,XDIMB
       PARAMETER (MXSH=5000, MXGTOT=20000)
       LOGICAL IANDJ,KANDL,SAME,OUTPUT,MP2ENG,UMP2GD
-      DOUBLE PRECISION GOUT(*),CMO(NBF,*),TRAN(NBF,MXSHL*MXSHL,*)
-      DOUBLE PRECISION CMOB(NBF,*),TRANB(NBF,MXSHL*MXSHL,*)
+      DOUBLE PRECISION GOUT(*),CMOT(NBF,*),TRAN(XDIM,MXSHL*MXSHL,NBF)
+      DOUBLE PRECISION CMOBT(NBF,*),TRANB(XDIMB,MXSHL*MXSHL,NBF)
       COMMON /MISC  / IANDJ,KANDL,SAME
       COMMON /SHLG70/ ISHELL,JSHELL,KSHELL,LSHELL,INEW,JNEW,KNEW,LNEW
       COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
@@ -3380,19 +3262,19 @@ C
               ICNT = 0
               DO IOCC = IOST, NOCC
                  ICNT = ICNT + 1
-                 TRAN(I3,IJN,ICNT) = TRAN(I3,IJN,ICNT)
-     *                             + VAL*CMO(I4,IOCC)
-                 TRAN(I4,IJN,ICNT) = TRAN(I4,IJN,ICNT)
-     *                             + VAL*CMO(I3,IOCC)
+                 TRAN(ICNT,IJN,I3) = TRAN(ICNT,IJN,I3)
+     *                             + VAL*CMOT(IOCC,I4)
+                 TRAN(ICNT,IJN,I4) = TRAN(ICNT,IJN,I4)
+     *                             + VAL*CMOT(IOCC,I3)
               END DO
               IF(UMP2GD) THEN
                 ICNT = 0
                 DO IOCC = IOSTB, NOCCB
                  ICNT = ICNT + 1
-                 TRANB(I3,IJN,ICNT) = TRANB(I3,IJN,ICNT)
-     *                             + VAL*CMOB(I4,IOCC)
-                 TRANB(I4,IJN,ICNT) = TRANB(I4,IJN,ICNT)
-     *                             + VAL*CMOB(I3,IOCC)
+                 TRANB(ICNT,IJN,I3) = TRANB(ICNT,IJN,I3)
+     *                              + VAL*CMOBT(IOCC,I4)
+                 TRANB(ICNT,IJN,I4) = TRANB(ICNT,IJN,I4)
+     *                              + VAL*CMOBT(IOCC,I3)
                 END DO
               END IF
             END DO
@@ -3403,17 +3285,18 @@ C
       END
 C*MODULE MP2DDI  *DECK TRAN1DC_P
 C        MODIFIED FROM TRAN1_P
-      SUBROUTINE TRAN1DC_P(GOUT,CMO,TRAN,CMOB,TRANB)
+      SUBROUTINE TRAN1DC_P(GOUT,CMOT,TRAN,CMOBT,TRANB,XDIM,XDIMB)
 C
 C -----------------------------------------------------------------
 C  FIRST TRANSFORMATION - POPLE VERSION
 C -----------------------------------------------------------------
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      INTEGER XDIM,XDIMB
       PARAMETER (MXSH=5000, MXGTOT=20000)
       LOGICAL IANDJ,KANDL,OUTPUT,MP2ENG,UMP2GD
-      DOUBLE PRECISION GOUT(*),CMO(NBF,*),TRAN(NBF,MXSHL*MXSHL,*)
-      DOUBLE PRECISION CMOB(NBF,*),TRANB(NBF,MXSHL*MXSHL,*)
+      DOUBLE PRECISION GOUT(*),CMOT(NBF,*),TRAN(XDIM,MXSHL*MXSHL,NBF)
+      DOUBLE PRECISION CMOBT(NBF,*),TRANB(XDIMB,MXSHL*MXSHL,NBF)
       COMMON /SHLG70/ ISHELL,JSHELL,KSHELL,LSHELL,INEW,JNEW,KNEW,LNEW
       COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
      *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
@@ -3462,19 +3345,19 @@ C
               ICNT = 0
               DO IOCC = IOST, NOCC
                  ICNT = ICNT + 1
-                 TRAN(I3,IJN,ICNT) = TRAN(I3,IJN,ICNT)
-     *                             + VAL*CMO(I4,IOCC)
-                 TRAN(I4,IJN,ICNT) = TRAN(I4,IJN,ICNT)
-     *                             + VAL*CMO(I3,IOCC)
+                 TRAN(ICNT,IJN,I3) = TRAN(ICNT,IJN,I3)
+     *                             + VAL*CMOT(IOCC,I4)
+                 TRAN(ICNT,IJN,I4) = TRAN(ICNT,IJN,I4)
+     *                             + VAL*CMOT(IOCC,I3)
               END DO
               IF(UMP2GD) THEN
                 ICNT = 0
                 DO IOCC = IOSTB, NOCCB
                  ICNT = ICNT + 1
-                 TRANB(I3,IJN,ICNT) = TRANB(I3,IJN,ICNT)
-     *                             + VAL*CMOB(I4,IOCC)
-                 TRANB(I4,IJN,ICNT) = TRANB(I4,IJN,ICNT)
-     *                             + VAL*CMOB(I3,IOCC)
+                 TRANB(ICNT,IJN,I3) = TRANB(ICNT,IJN,I3)
+     *                             + VAL*CMOBT(IOCC,I4)
+                 TRANB(ICNT,IJN,I4) = TRANB(ICNT,IJN,I4)
+     *                             + VAL*CMOBT(IOCC,I3)
                 END DO
               END IF
             END DO
@@ -3492,7 +3375,7 @@ C  THIRD TRANSFORMATION FOR (VO|VO) INTEGRALS
 C -----------------------------------------------------------------
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
-      PARAMETER (MXSH=5000, MXGTOT=20000, ZERO=0.0D+00)
+      PARAMETER (MXSH=5000, MXGTOT=20000)
       LOGICAL OUTPUT,MP2ENG,IANJ,UMP2GD
 C
       DOUBLE PRECISION CMO(NBF,*),TRAN(NBF,MXSHL*MXSHL,*)
@@ -3556,8 +3439,8 @@ C
       CALL DDI_NPROC( NPROC, ME )
       DO IP = 0, NPROC-1
         CALL DDI_DISTRIB( D_VOVO, IP, ILO, IHI, JLO, JHI )
-        CALL DCOPY(NVIR*(JHI-JLO+1)*ISHL,ZERO,0,TMP1,1)
-        CALL DCOPY(NVIR*(JHI-JLO+1)*JSHL,ZERO,0,TMP2,1)
+        CALL VCLR(TMP1,1,NVIR*(JHI-JLO+1)*ISHL)
+        CALL VCLR(TMP2,1,NVIR*(JHI-JLO+1)*JSHL)
         IJP  = 0
         IJ   = 0
         ICNT = 0
@@ -3987,6 +3870,7 @@ C
       EPARA = ZERO
       EOPOSA= ZERO
       EPARAA= ZERO
+C
       IJN  = 0
       DO I = NCP1, NOCC
         DO J = NCP1, NOCC
@@ -4032,3 +3916,1552 @@ C
       END IF
       RETURN
       END
+C*MODULE DCMPIM  *DECK MOCHNGDC
+      SUBROUTINE MOCHNGDC(VECV,VECV2,NVIR,NLOOP,ILOOP)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL GOPARR,DSKWRK,MASWRK
+C
+      PARAMETER (MXSH=5000, MXGTOT=20000)
+      PARAMETER (MXLATM=200, MXLSHL=700)
+C
+      COMMON /INFOLC/ LOC2TA(MXLATM),LOC2TS(MXLSHL),LCKLOC(MXLSHL),
+     *                NLAT,NLATC,NLSH,NLSHC,LNUM,LNUMC
+      COMMON /MP2PAR/ OSPT,CODEMP,SCSPT,TOL,METHOD,NWDMP2,MEMPRI,MPPROP,
+     *                NACORE,NBCORE,NOA,NOB,NO,NBF,NOMIT,MOCPHF,MAXITC
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+C
+      DIMENSION VECV(NBF,*),VECV2(NBF,*)
+      DIMENSION NLOOP(2,NPROC),ILOOP(NLSH,NPROC)
+C
+C     EXCHANGE VIRTUAL MO COEFFICIENTS BEFORE 4TH TRANSFORMATION
+C
+      IF(GOPARR.AND.IBTYP.EQ.1) THEN
+         N=0
+         DO 110 I=1,NPROC
+            DO 110 J=1,NLOOP(1,I)
+               ISHS= ILOOP(J,I)
+               ISH= LOC2TS(ISHS)
+               MINI= KMIN(ISH)
+               MAXI= KMAX(ISH)
+               LCKLOCI= LCKLOC(ISHS)-MINI
+               DO 110 K=MINI,MAXI
+                  N=N+1
+                  DO 110 L=1,NVIR
+                     VECV2(N,L)=VECV(K+LCKLOCI,L)
+  110    CONTINUE
+      ELSE
+         CALL DCOPY(NVIR*NBF,VECV,1,VECV2,1)
+      ENDIF
+      RETURN
+      END
+C
+C
+C*MODULE DCMPIM  *DECK MP2E2ACDC
+      SUBROUTINE MP2E2ACDC(ENG,PTR4,PTR4I,EIJ,TOL,NOA,NVIR,NBF,E2S,E2T)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      DIMENSION ENG(NBF),PTR4(NVIR,*),PTR4I(NVIR,*)
+C
+      PARAMETER (ONE=1.0D+00)
+C
+      DO MOA= 1,NVIR
+         EMO1= ENG(MOA+NOA)-EIJ
+         DO MOB= 1,NVIR
+            XAB= PTR4(MOB,MOA)
+            XABI= PTR4I(MOB,MOA)
+            IF(ABS(XAB).LT.TOL .OR. ABS(XABI).LT.TOL) GO TO 100
+            XBA = PTR4(MOA,MOB)
+            EMO2= ONE/(EMO1+ENG(MOB+NOA))
+C            WRITE(6,'(2I3,4F15.8)') MOA,MOB,XABI,XAB,XBA,EMO2
+            TEMP1= XABI*EMO2
+            E2S = E2S-XAB*TEMP1
+            E2T = E2T-(XAB-XBA)*TEMP1
+C            WRITE(6,*) 'E2S=',E2S,'E2T=',E2T,'EMP2=',EMO2
+ 100        CONTINUE
+         END DO
+      END DO
+C
+      RETURN
+      END
+C*MODULE DCMPIM  *DECK MP2IMSDC
+      SUBROUTINE MP2IMSDC(VEC,ENG,E2SUB,E2OSUB,E2VSUB)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      PARAMETER (MXLATM=200, MXLSHL=700)
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      COMMON /FMCOM / XX(1)
+      COMMON /INFOLC/ LOC2TA(MXLATM),LOC2TS(MXLSHL),LCKLOC(MXLSHL),
+     *                NLAT,NLATC,NLSH,NLSHC,LNUM,LNUMC
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+      DIMENSION VEC(*),ENG(*)
+C
+      CALL VALFM(LOADFM)
+      LNUMP  = LOADFM + 1
+      LNLOOP = LNUMP  + NPROC + 1
+      LILOOP = LNLOOP + NPROC*2
+      LIJEND = LILOOP + NLSH*NPROC
+      LILEN  = LIJEND + NPROC
+      LIRECV = LILEN  + NPROC
+      LAST   = LIRECV + NPROC
+      NEED = LAST - LOADFM - 1
+      CALL GETFM(NEED)
+C
+      NCPU = NPROC
+      CALL MP2IMSXDC(VEC,ENG,XX(LNUMP),XX(LNLOOP),XX(LILOOP),XX(LIJEND),
+     *               XX(LILEN),XX(LIRECV),NCPU,E2SUB,E2OSUB,E2VSUB)
+C
+      CALL RETFM(NEED)
+      RETURN
+      END
+C*MODULE DCMPIM  *DECK MP2IMSXDC
+      SUBROUTINE MP2IMSXDC(VEC,ENG,NUMP,NLOOP,ILOOP,IJEND,ILEN,IRECV,
+     *     NCPU,E2SUB,E2OSUB,E2VSUB)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL ISGDDI,PAROUT,INITGDDI,ABEL,ABELPT,
+     *        GOPARR,DSKWRK,MASWRK,DSKSAV,DLB,SLB,DIVANG
+      LOGICAL DODCCR,ONLYOC,RMKORB,FZCORE,DOMP1,HFFRM
+      PARAMETER (MXUNIT=299)
+      CHARACTER*1   NULL
+      CHARACTER*256 PATHNM,PATHNM2,ENVBUF
+C      CHARACTER*256 PATHNM1
+      COMMON /ENVIR / ENVBUF(-5:MXUNIT)
+      COMMON /OPNNFT/ NFTOPN(MXUNIT),NODEXT(MXUNIT),IOSMP(2)
+C
+      PARAMETER (MXSH=5000, MXGTOT=20000, MXATM=2000)
+      PARAMETER (MXAO=8192)
+      PARAMETER (MXLATM=200, MXLSHL=700)
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00, TEN=10.0D+00)
+C
+C        NOTE THAT -NCPU- IS AN ALIAS FOR -NPROC-
+      DIMENSION VEC(*),ENG(*),NUMP(0:NCPU),NLOOP(2,NCPU),
+     *          ILOOP(NLSH,NCPU),IJEND(NCPU),ILEN(NCPU),IRECV(NCPU)
+C
+      COMMON /INFOLC/ LOC2TA(MXLATM),LOC2TS(MXLSHL),LCKLOC(MXLSHL),
+     *                NLAT,NLATC,NLSH,NLSHC,LNUM,LNUMC
+      COMMON /COMPE2/ E2PARA,E2OPOS
+      COMMON /DCCORR/ RBUFCR,WOCC,ISTCOR,ITPART,DODCCR,ONLYOC,RMKORB,
+     *                FZCORE,DOMP1,HFFRM
+      COMMON /IJPAIR/ IA(MXAO)
+      COMMON /DIRMEM/ LPQRJ,IVEC,IDEN,IFCK,NUM,NOCC,NDIM,MINPQ,MAXPQ
+      COMMON /FMCOM / X(1)
+      COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
+      COMMON /FMORUN/ ESPSCF,E0SCF(2),EMP2S,IDAFMO,ICURFG,JCURFG,KCURFG,
+     *                ICURLAY,ICURUNT,NAT1E,NCURSH,NGAU,ICURPOP,IFMOSTP,
+     *                MONCOR,NEEDR,MODRST,NORBPROJ,NUNESP,ISKIPESP,
+     *                IESDPPC,IDOPROP,MP2RUN,ICURIT,IDMFMO,IDDFMO,
+     *                IDDCUR,NDDLEFT,IVMFMO
+      COMMON /GDDI/   ISCOPE,NGROUPS,MYGROUP,MEGLOB,NPGLOB,NNGLOB,JBTYP,
+     *                ISGDDI,PAROUT,INITGDDI
+      COMMON /INTOPT/ ISCHWZ,IECP,NECP,IEFLD
+      COMMON /IOFILE/ IR,IW,IP,IJK,IPK,IDAF,NAV,IODA(950)
+      COMMON /MP2PAR/ OSPT,CODEMP,SCSPT,TOL,METHOD,NWDMP2,MEMPRI,MPPROP,
+     *                NACORE,NBCORE,NOA,NOB,NO,NBF,NOMIT,MOCPHF,MAXITC
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+      COMMON /SHLNOS/ QQ4,LIT,LJT,LKT,LLT,LOCI,LOCJ,LOCK,LOCL,
+     *                MINI,MINJ,MINK,MINL,MAXI,MAXJ,MAXK,MAXL,
+     *                NIJ,IJ,KL,IJKL
+      COMMON /SYMTRY/ MAPSHL(MXSH,48),MAPCTR(MXATM,48),
+     *                TSYM(432),INVT(48),NT
+C
+      DATA CHECK/8HCHECK   /
+C
+C     ----- MAIN CLOSED-SHELL SEMI-DIRECT MP2 ENERGY DRIVER -----
+C
+      DSKSAV= DSKWRK
+      DSKWRK= .TRUE.
+      DLB = IBTYP.EQ.1
+      SLB = .NOT.DLB
+C
+C        THE INTEGRAL TRANSFORMATION CAN EXPLOIT ABELIAN GROUPS
+C
+      ABEL=ABELPT()
+      IF(.NOT.ABEL) CALL SYMOFF
+C
+      E2SO= ZERO
+      E2TO= ZERO
+      E2SV= ZERO
+      E2TV= ZERO
+      QQ4=ONE
+C
+C     SUBTRACT FMO PROJECTED OUT ORBITALS.
+C
+      IF(NFG.NE.0) NO = NO - NORBPROJ
+C
+      CALL SETFMPI(MEMPRI)
+C
+C    ----- VARIABLES FOR MP2 ENERGY -----
+C
+C NO       : NUMBER OF CANONICAL MOLECULAR ORBITALS
+C NBF      : NUMBER OF BASIS FUNCTIONS
+C NSHELL   : NUMBER OF SHELLS
+C NOA      : NUMBER OF OCCUPIED ORBITALS
+C NACORE   : NUMBER OF CORE ORBITALS
+C NOC      : NUMBER OF CORRELATED ORBITALS
+C NVIR     : NUMBER OF VIRTUAL ORBITALS
+C NORB     : NUMBER OF ACTIVE ORBITALS
+C NOC2     : NUMBER OF IJ PAIR
+C NIJ3     : NUMBER OF IJ PAIR IN A BATCH AT 3RD TRANS.
+C NIJ4     : NUMBER OF IJ PAIR IN A BATCH AT 4TH TRANS.
+C
+      NOC  = NOA - NACORE
+      NVIR = NO  - NOA
+C---  NOC2 =(NOC*NOC+NOC)/2
+      NOC3 = NOC*NOC
+      NBF2 = NBF*NBF
+      NBF3 =(NBF*NBF+NBF)/2
+      NSH2 =(NSHELL*NSHELL+NSHELL)/2
+C
+      NUM  = NBF
+      IDEN = 0
+      IFCK = 0
+C
+      CALL BASCHK(LMAX)
+                    NANGM =  4
+      IF(LMAX.EQ.2) NANGM =  6
+      IF(LMAX.EQ.3) NANGM = 10
+      IF(LMAX.EQ.4) NANGM = 15
+      IF(LMAX.EQ.5) NANGM = 21
+      IF(LMAX.EQ.6) NANGM = 28
+      MAXG = NANGM**4
+C
+C    ----- SIZE OF DISK CACHE -----
+C
+      NCACHE= 1000000
+      NIJ3 = NCACHE/NVIR
+      IF(NIJ3.GT.NOC3) NIJ3= NOC3
+C
+C        RUN THROUGH THE PROGRAM AS A SIMULATED 'CHECK' RUN,
+C        THEN COME BACK TO THIS POINT IF IT IS A REAL RUN.
+C
+      EXESAV = EXETYP
+      EXETYP = CHECK
+      ICHKPASS=0
+   50 CONTINUE
+      ICHKPASS=ICHKPASS+1
+C
+C    ----- MEMORY POINTERS FOR MP2 ENERGY -----
+C
+C IVEC    : MATRIX OF MO COEFFICIENTS        NBF*NBF
+C IVECO   : TRANSPOSED MATRIX OF             NOC*NBF
+C           OCCUPIED MO COEEFICIENTS
+C IVECV   : TRANSPOSED MATRIX OF             NVIR*NBF
+C           VIRTUAL MO COEEFICIENTS
+C IENG    : ORBITAL ENERGIES                 NBF
+C ILAB    : MOSLAB    |                      NBF
+C IIRP    : MOSIRP    |---> SEE SYM          NBF
+C IDEG    : MOSDEG    |                      NBF
+C IGHND   : AO INTEGRALS FOR D,F,G           MAXG --> NANGM**4
+C IXINT   : EXCHANGE INTEGRALS               (NSHELL**2 + NSHELL)/2
+C
+C IINT    : AO INTEGRALS                     (NANGM**3)*NBF
+C IPTR1   : PARTIALLY TRANSFORMED INTEGRAL   (NANGM**3)*NOC
+C IPTR2   : PARTIALLY TRANSFORMED INTEGRAL   NANGM*NOC2*NBF
+C IPTR3   : PARTIALLY TRANSFORMED INTEGRAL   NANGM*NVIR*NIJ3
+C
+C IDDIS   : WORK SPACE FOR SEND
+C                                  NIJ4*NVIR*MXP*NPROC(~=NIJ4*NVIR*NBF)
+C JPTR3   : PARTIALLY TRANSFORMED INTEGRAL   NIJ4*NVIR*NBF
+C IENGO   : I+J MO ENERGIES                  NOC2
+C
+      CALL VALFMP(LOADFM)
+      IVEC  = 1     + LOADFM
+      IVECO = IVEC  + NBF2
+      IVECV = IVECO + NOC*NBF
+      IVECV2= IVECV + NVIR*NBF
+      IENG  = IVECV2+ NVIR*NBF
+      ILAB  = IENG  + NBF
+      IIRP  = ILAB  + NBF
+      IDEG  = IIRP  + NBF
+      INSYM = IDEG  + NBF
+      IISYM = INSYM + NT
+      LAST  = IISYM + NT*NVIR
+      NEEDA = LAST  - LOADFM -1
+      CALL GETFMP(NEEDA)
+C
+      CALL VALFMP(LOADFM)
+      IGHND = 1     + LOADFM
+      IXINT = IGHND + MAXG
+      IINT  = IXINT + NSH2
+      IPTR1 = IINT  +(NANGM**3)*NBF
+      IPTR1I= IPTR1 +(NANGM**3)*NOC
+      IPTR3 = IPTR1I+(NANGM**3)*NOC
+      IWORK = IPTR3 + NVIR*NIJ3
+      LAST  = IWORK + NBF*NIJ3
+      NEEDB = LAST  - LOADFM -1
+      CALL GETFMP(NEEDB)
+C
+C     ----- DISTRIBUTE P OF (PQ|RS) -----
+C     ----- STATIC LOAD BALANCING -----
+C
+      MXP=NBF/NPROC
+      IF(SLB .AND. GOPARR) THEN
+         IPROC= 1
+         IFUNC= NBF/NPROC
+         NUMP(0)= 0
+         DO I=1,NPROC
+            NUMP(I)= NLSH
+            NLOOP(2,I)= 0
+         ENDDO
+         DO I=1,NLSH
+            IF(LCKLOC(I)-1.GE.IFUNC) THEN
+               NUMP(IPROC)= I-1
+               IPROC= IPROC+1
+               IFUNC= NBF*IPROC/NPROC
+            ENDIF
+         ENDDO
+         IF(NUMP(IPROC-1).NE.NLSH) THEN
+            MXP=NBF-LCKLOC(NUMP(IPROC-1)+1)+1
+            NLOOP(2,IPROC)=MXP
+         ENDIF
+         DO I=1,IPROC-1
+            IF(NUMP(I).NE.NLSH) THEN
+               IMXP= LCKLOC(NUMP(I)+1)-LCKLOC(NUMP(I-1)+1)
+               NLOOP(2,I)=IMXP
+               IF(IMXP.GT.MXP) MXP= IMXP
+            ELSE
+               NLOOP(2,I)=0
+            ENDIF
+         ENDDO
+C
+C            DYNAMIC LOAD BALANCING SETS REAL NLOOP VALUES IN -MP2SDI-
+C            SERIAL DOESN'T SEEM TO NEED TO HAVE NLOOP SET TO ANYTHING
+C
+      ELSE
+         DO IPROC=1,NPROC
+            DO I=1,2
+               NLOOP(I,IPROC) = 0
+            ENDDO
+         ENDDO
+      ENDIF
+C
+C     ----- PRINT OUT NEEDED MEMORY AND DISK SPACE -----
+C     THE MEMORY REQUIREMENTS JUST BELOW DON'T MATCH THE ACTUAL CODE.
+C
+C---      MXNEED= NEEDA+NEEDB+NANGM*NOC2*NBF
+C---      MINEED= NEEDA+NEEDB+NOC2*NBF
+C---      DMXNEED=(NOC2*NVIR)/125000.0D+00
+C---      IF(GOPARR) THEN
+C---C        MXDISK= REAL(NOC2)*REAL(NVIR)*REAL(MXP)/125000.0
+C---         MXDISK= INT(DMXNEED*MXP)
+C---      ELSE
+C---C        MXDISK= REAL(NOC2)*REAL(NVIR)*REAL(NBF)/125000.0
+C---         MXDISK= INT(DMXNEED*NBF)
+C---      ENDIF
+C---      IF(MASWRK) WRITE(IW,8) MXNEED,MINEED,MXDISK
+C---    8 FORMAT(/1X,'MEMORY AND DISK REQUIREMENTS FOR SEMI-
+C---     *        'DIRECT MP2 TRANSFORMATION'/
+C---     *        '  MAXIMUM MEMORY=',I15,' WORDS'/
+C---     *        '  MINIMUM MEMORY=',I15,' WORDS'/
+C---     *        '  REQUIRED DISK =',I15,' MBYTES')
+C
+C        TOTAL DISK SPACE IS NOC * NOC * NVIR * NBF, AVOID OVERFLOWING
+C
+      DMXNEED = NOC3*NVIR
+      DMXNEED = DMXNEED/125000.0D+00
+      MXDISK  = INT(2*NBF*DMXNEED)
+      MXDISKP = INT(2*NBF*DMXNEED/NPROC)
+C
+C     ----- READ MO COEFFICIENTS AND MO ENERGIES ------
+C
+C      CALL DAREAD(IDAF,IODA,X(IVEC),NBF2,15,0)
+C      CALL DAREAD(IDAF,IODA,X(IENG),NBF ,17,0)
+      CALL DCOPY(NBF2,VEC,1,X(IVEC),1)
+      CALL DCOPY(NBF, ENG,1,X(IENG),1)
+C
+      MAXC = IDAMAX(NBF*NO,X(IVEC),1)
+      VMAX = ABS(X(IVEC+MAXC-1))
+C
+      CUTOFFAO=TEN**(-ICUT)
+      IF(VMAX.LT.ONE) VMAX=ONE
+      CUTOFFMO=CUTOFFAO/(VMAX*VMAX)
+C
+      IF(MASWRK  .AND.  ICHKPASS.EQ.1) THEN
+         WRITE(IW,9000) NOA,NOA-NACORE,NO-NOA,NBF,NSHELL,
+     *                  CUTOFFAO,CUTOFFMO
+         IF(NFG.NE.0.AND.NORBPROJ.NE.0) WRITE(IW,9010) NORBPROJ
+         WRITE(IW,9020) MXDISK,MXDISKP,NPROC
+         IF(VMAX.GT.1.0D+02) THEN
+            MAXM = 1 + MAXC/NBF
+            MAXA = MAXC - NBF*(MAXM-1)
+            IF(MASWRK) WRITE(IW,9030) ABS(X(IVEC+MAXC-1)),MAXA,MAXM
+         END IF
+      END IF
+      IF(ABS(X(IVEC+MAXC-1)).GT.1.0D+02) THEN
+         MAXM = 1 + MAXC/NBF
+         MAXA = MAXC - NBF*(MAXM-1)
+         IF(MASWRK) WRITE(IW,9030) ABS(X(IVEC+MAXC-1)),MAXA,MAXM
+      END IF
+C
+C     ----- READ SCHWARTZ INEQUALITY INFORMATION -----
+C
+      IF(EXETYP.EQ.CHECK) THEN
+         CALL VCLR(X(IXINT),1,NSH2)
+      ELSE
+         IF(ISCHWZ.EQ.1) THEN
+            CALL DAREAD(IDAF,IODA,X(IXINT),NSH2,54,0)
+         ELSE
+            CALL DCOPY(NSH2,1.0D+01,0,X(IXINT),1)
+         END IF
+      END IF
+C
+C     ----- ASSIGN -IRREP- LABEL TO MO'S -----
+C
+      CALL VALFMP(LOADFM)
+      IWRK  = 1     + LOADFM
+      IWRK2 = IWRK  + NBF3
+      IWRK3 = IWRK2 + NBF2
+      LAST  = IWRK3 + NBF
+      NEEDC = LAST -LOADFM - 1
+      CALL GETFMP(NEEDC)
+      IF(ICHKPASS.EQ.1) GO TO 100
+C
+      CALL DAREAD(IDAF,IODA,X(IWRK),NBF3,12,0)
+      CALL DAREAD(IDAF,IODA,X(IWRK2),NBF2,45,0)
+      CALL TRFSYM(X(ILAB),X(IIRP),X(IDEG),X(IWRK2),X(IWRK),
+     *            X(IVEC),X(IWRK3),IA,NO,NBF,NO,NBF)
+C
+  100 CONTINUE
+      CALL RETFMP(NEEDC)
+C
+C     ----- TRANSPOSE MO COEFFICIENTS AND REORDER VIRTUAL MOS ------
+C
+      CALL MOTRN(X(IVEC),X(IVECO),X(IVECV),X(IIRP),X(INSYM),X(IISYM),
+     *           NOC,NVIR)
+C
+C     ----- ALLOCATE MEMORY FOR 2ND TRANSFORMATION -----
+C
+      CALL GOTFMP(NGOTMX)
+C      JPTR2  = NANGM*NOC2*NBF
+      JPTR2  = NANGM*NOC3*NBF
+      JPTR2I = NANGM*NOC3*NBF
+      DIVANG=.FALSE.
+      IF(NGOTMX.LT.(JPTR2+JPTR2I)) THEN
+         DO 110 I=1, NANGM-1
+            MXANGM= NANGM-I
+C            JPTR2 = MXANGM*NOC2*NBF
+            JPTR2 = MXANGM*NOC3*NBF
+            JPTR2I= MXANGM*NOC3*NBF
+            IF(NGOTMX.GE.(JPTR2+JPTR2I)) GOTO 120
+  110    CONTINUE
+         IF(MASWRK) WRITE(IW,9040) NEEDA+JPTR2+JPTR2I
+         CALL ABRT
+  120    DIVANG=.TRUE.
+         IF(MASWRK) WRITE(IW,9050) MXANGM
+      ENDIF
+      CALL VALFMP(LOADFM)
+      IPTR2   = 1       + LOADFM
+      IPTR2I  = IPTR2   + JPTR2
+      LLBLINT = IPTR2I  + JPTR2I
+      LNUMINT = LLBLINT + NBF*NANGM**3
+      LAST    = LNUMINT + NANGM**3
+      NEEDD = LAST - LOADFM -1
+C
+      NEED123 = NEEDA + NEEDB + NEEDD
+      IF(MASWRK) THEN
+         IF(ICHKPASS.EQ.1) WRITE(IW,9060) NEED123
+         IF(ICHKPASS.EQ.2) WRITE(IW,9065)
+         CALL FLSHBF(6)
+      END IF
+C
+      CALL GETFMP(NEEDD)
+      IF(EXETYP.EQ.CHECK) GO TO 130
+C
+C     ----- OPEN DIRECT ACCESS FILE(S) ON EACH NODE -----
+C
+      IDAF20= 20
+      IDAF21= 301
+C      PATHNM1= 'DASORT1.DAT'
+      PATHNM2= 'DASORT2.DAT'
+      WRITE(UNIT=PATHNM2(12:15),FMT='(1H.,I3.3)') ME
+      IF(MASWRK) CALL GMS_GETENV('DASORT',PATHNM)
+      IF(ISGDDI) THEN
+        PATHNM=ENVBUF(IDAF20)
+        IF(PAROUT.AND.NODEXT(IDAF20).EQ.0) 
+     *    CALL ADDNANODE(PATHNM,MEGLOB,IDAF20)
+      ELSE
+         CALL PARENV('DASORT',PATHNM,IOUT)
+      ENDIF
+      NULL = CHAR(0)
+      DO 3 KOL=1,256
+         IF(PATHNM(KOL:KOL).EQ.' '  .OR.
+     *      PATHNM(KOL:KOL).EQ.NULL) GO TO 4
+    3 CONTINUE
+      KOL=257
+    4 CONTINUE
+      IF(KOL.EQ.1) THEN
+         WRITE(IW,1) 'DASORT'
+         CALL ABRT
+    1 FORMAT(1X,'YOU MUST ASSIGN GENERIC NAME ',A,' WITH A SETENV.')
+      END IF
+      KOL=KOL-1
+      OPEN(UNIT=IDAF20,FILE=PATHNM(1:KOL),STATUS='UNKNOWN',
+     *     ACCESS='DIRECT', FORM='UNFORMATTED', RECL=8*NVIR)
+      DO 5 KOL=1,256
+         IF(PATHNM2(KOL:KOL).EQ.' '  .OR.
+     *      PATHNM2(KOL:KOL).EQ.NULL) GO TO 6
+ 5        CONTINUE
+      KOL=257
+ 6     CONTINUE
+      IF(KOL.EQ.1) THEN
+         WRITE(IW,1) 'DASORT2'
+         CALL ABRT
+      END IF
+      KOL=KOL-1
+      OPEN(UNIT=IDAF21,FILE=PATHNM2(1:KOL),STATUS='UNKNOWN',
+     *     ACCESS='DIRECT', FORM='UNFORMATTED', RECL=8*NVIR)
+C
+C     ----- CARRY OUT 1ST, 2ND, AND 3RD INDEX TRANSFORMATIONS -----
+C
+      CALL MP2SD1DC(X(IVECO),X(IVECV),X(IGHND),
+     *              X(IXINT),X(IINT),X(IPTR1),X(IPTR1I),X(IPTR2),
+     *              X(IPTR2I),X(IPTR3),X(IWORK),
+     *              X(LLBLINT),X(LNUMINT),
+     *              NUMP,NOC,NVIR,NOC3,NANGM,CUTOFFAO,CUTOFFMO,
+     *              NLOOP,ILOOP,DIVANG,MXANGM,NIJ3,IDAF20,IDAF21)
+C
+  130 CONTINUE
+      CALL RETFMP(NEEDD)
+      CALL RETFMP(NEEDB)
+C
+C     ----- ALLOCATE MEMORY FOR 4TH TRANSFORMATION -----
+C
+      CALL GOTFMP(NGOTMX)
+      NGOTMX = NGOTMX - 2*NVIR*NVIR - NOC3 - NVIR*NBF
+      IF(GOPARR) THEN
+         IF(ICHKPASS.EQ.1) THEN
+            MXP=NBF/NPROC
+         ELSE
+         IF(DLB) THEN
+            MXP=0
+            DO I= 1,NPROC
+               MXP= MAX(MXP,NLOOP(2,I))
+            ENDDO
+         ENDIF
+         END IF
+         MIJ4= NOC3/NPROC
+         IF(MOD(NOC3,NPROC).NE.0) MIJ4= MIJ4+1
+         NIJ4 = NGOTMX/(NVIR*(2*NBF+MXP*NPROC))
+         IF(NIJ4.GT.MIJ4) NIJ4= MIJ4
+         IF(NIJ4.EQ.0) THEN
+           IF(MASWRK) WRITE(IW,*) 'PARALLEL MP2IMS: NOT ENOUGH MEMORY'
+           CALL ABRT
+         ENDIF
+         JDDIS= NIJ4*NVIR*MXP*NPROC
+         NPASS= NOC3/(NIJ4*NPROC)
+         IF(MOD(NOC3,(NIJ4*NPROC)).NE.0) NPASS= NPASS+1
+      ELSE
+         NIJ4 = NGOTMX/(2*NVIR*NBF)
+         IF(NIJ4.GT.NOC3) NIJ4= NOC3
+         IF(NIJ4.EQ.0) THEN
+           WRITE(IW,*) 'SERIAL MP2IMS: NOT ENOUGH MEMORY'
+           CALL ABRT
+         ENDIF
+         JDDIS= 1
+         NPASS= NOC3/NIJ4
+         IF(MOD(NOC3,NIJ4).NE.0) NPASS= NPASS+1
+      ENDIF
+C
+      CALL VALFMP(LOADFM)
+      IDDIS = 1     + LOADFM
+      JPTR3 = IDDIS + JDDIS
+      JPTR3I= JPTR3 + NIJ4*NVIR*NBF
+      IMO1  = JPTR3I+ NIJ4*NVIR*NBF
+      IMO2  = IMO1  + NVIR*NVIR
+      IENGO = IMO2  + NVIR*NVIR
+      IWORK = IENGO + NOC3
+      LAST  = IWORK + NVIR*NBF
+      NEEDE = LAST  - LOADFM -1
+C
+      NEED4 = NEEDA + NEEDE
+      IF(MASWRK  .AND.  ICHKPASS.EQ.1) WRITE(IW,9070) NEED4
+C
+      CALL GETFMP(NEEDE)
+      IF(EXETYP.EQ.CHECK) GO TO 230
+C
+C     ----- START 4TH QUARTER TRANSFORMATION -----
+C     -----       AND MP2 ENERGY CALCULATION -----
+C
+C
+      CALL MOCHNGDC(X(IVECV),X(IVECV2),NVIR,NLOOP,ILOOP)
+      CALL MP2SD2DC(X(IENG),X(IENGO),X(IVECV2),X(IWORK),X(IDDIS),
+     *              X(JPTR3),X(JPTR3I),X(IMO1),X(IMO2),X(IIRP),X(INSYM),
+     *              X(IISYM),
+     *              NVIR,NOC,NOC3,NT,
+     *              IJEND,ILEN,IRECV,NLOOP,NCPU,
+     *              MXP,NPASS,NIJ4,E2SO,E2TO,IDAF20,IDAF21)
+C
+C     ----- DELETE THE DIRECT ACCESS FILE(S) ON EACH CORE -----
+C
+      CLOSE(UNIT=IDAF20, STATUS='DELETE')
+      CLOSE(UNIT=IDAF21, STATUS='DELETE')
+C
+  230 CONTINUE
+      CALL RETFMP(NEEDE)
+      CALL RETFMP(NEEDA)
+C
+C     ----- PRINT ENERGY DATA -----
+C
+      IF(ICHKPASS.EQ.2  .OR.  EXESAV.EQ.CHECK) THEN
+         WVIR=ONE-WOCC
+         E2OPOS=E2OPOS+E2SO*WOCC+E2SV*WVIR
+         E2PARA=E2PARA+E2TO*WOCC+E2TV*WVIR
+         IF(GOPARR) THEN
+            CALL DDI_GSUMF(1000,E2SO,1)
+            CALL DDI_GSUMF(1000,E2TO,1)
+            CALL DDI_GSUMF(1000,E2SV,1)
+            CALL DDI_GSUMF(1000,E2TV,1)
+         END IF
+         E2OSUB=E2SO+E2TO
+         E2VSUB=E2SV+E2TV
+         E2SUB=E2OSUB*WOCC+E2VSUB*WVIR
+      END IF
+C
+C        REAL RUNS NOW BRANCH BACK TO DO THE ACTUAL CALCULATION
+C
+      EXETYP=EXESAV
+      IF(ICHKPASS.EQ.1  .AND.  EXESAV.NE.CHECK) GO TO 50
+C
+C     SUBTRACTING CORE ORBITALS
+C
+      DO J=1,NO-NACORE
+         ENG(J)=ENG(J+NACORE)
+         DO I=1,NBF
+            VEC(I+NBF*(J-1))=VEC(I+NBF*(J-1+NACORE))
+         END DO
+      END DO
+C
+      DSKWRK= DSKSAV
+      IF(.NOT.ABEL) CALL SYMON
+      RETURN
+C
+ 9000 FORMAT(/1X,29('-'),3X,43(1H-)/
+     *        1X,'RHF-DC MP2 ENERGY CALCULATION',3X,
+     *           'PROGRAM WRITTEN BY M.KATOUDA AND K.ISHIMURA'/
+     *        1X,29('-'),3X,43(1H-)/
+     *        1X,'NUMBER OF OCCUPIED ORBITALS            =',I5,/
+     *        1X,'NUMBER OF CORRELATED OCCUPIED ORBITALS =',I5,/
+     *        1X,'NUMBER OF VIRTUAL ORBITALS             =',I5,/
+     *        1X,'NUMBER OF BASIS FUNCTIONS              =',I5,/
+     *        1X,'NUMBER OF BASIS SHELLS                 =',I5,/
+     *        1X,'AO-TRANSFORMED INTEGRAL THRESHOLD      =',1P,E9.2/
+     *        1X,'HALF-TRANSFORMED INTEGRAL THRESHOLD    =',1P,E9.2)
+ 9010 FORMAT(/1X,'NUMBER OF REDUNDANT MOS IN FMO         =',I5)
+ 9020 FORMAT(1X,'TOTAL DISK REQUIRED (ALL PROCESSORS)=',I15,' MBYTES'/
+     *       1X,'                 DISK SPACE PER CORE=',I15,
+     *          ' MBYTES, USING P=',I5)
+ 9030 FORMAT(/1X,'*** WARNING: THE MAXIMUM LCAO COEF=',F15.6,
+     *           ', FOR AO',I6,' IN MO=',I6,','/
+     *        1X,'EXCEEDS 100.  ADDITIONAL INPUTS MAY BE REQUIRED TO',
+     *           ' OBTAIN GOOD MP2 ACCURACY:'/
+     *        1X,' $CONTRL ICUT=10 OR 11'/
+     *        1X,' $SCF    CONV=2.5D-7 FDIFF=.FALSE.'/)
+ 9040 FORMAT(1X,'**** ERROR: TOO LITTLE MEMORY TO RUN RHF-MP2 *****',/,
+     *       1X,'INCREASE MEMORY TO AT LEAST',I15,'WORDS.')
+ 9050 FORMAT(1X,'MULTIPLE PASSES',
+     *      /1X,'MAXIMUM ANGULAR MOMENTUM=',I3)
+ 9060 FORMAT(1X,'MEMORY REQUIRED FOR TRANSFORMATION OF 1ST THREE',
+     *          ' INDICES=',I12)
+ 9065 FORMAT(1X,'BEGINNING MP2 INTEGRAL TRANSFORMATION...')
+ 9070 FORMAT(1X,'MEMORY REQUIRED FOR    4TH INDEX TRANSF. AND MP2',
+     *          ' ENERGY=',I12)
+      END
+C
+C*MODULE DCMP2IM  *DECK MP2QT1DC
+      SUBROUTINE MP2QT1DC(VECO,AOINTS,PTR1,PTR1I,NOC,NUMI,NUMK,NUML,
+     *                    NANGM,LBLINT,NUMINT,KSH,LSH)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      PARAMETER (MXLATM=200, MXLSHL=700)
+      PARAMETER (ZER=0.0D+00)
+C
+      LOGICAL KANDL
+C
+      COMMON /MP2PAR/ OSPT,CODEMP,SCSPT,TOL,METHOD,NWDMP2,MEMPRI,MPPROP,
+     *                NACORE,NBCORE,NOA,NOB,NO,NBF,NOMIT,MOCPHF,MAXITC
+      COMMON /INFOLC/ LOC2TA(MXLATM),LOC2TS(MXLSHL),LCKLOC(MXLSHL),
+     *                NLAT,NLATC,NLSH,NLSHC,LNUM,LNUMC
+C
+      DIMENSION VECO(NOC,*),AOINTS(NBF,*),
+     *          PTR1(NOC,NANGM,NANGM,NANGM),PTR1I(NOC,NANGM,NANGM,NANGM)
+      DIMENSION LBLINT(NBF,*),NUMINT(*)
+C
+C     1ST QUARTER TRANSFORMATION
+C
+      KANDL= KSH.EQ.LSH
+      LNUML = NUML
+C
+      IKL= 0
+      DO 160 I= 1,NUMI
+         DO 150 K= 1,NUMK
+            IF(KANDL) LNUML= K
+            DO 140 L= 1,LNUML
+               IKL= IKL+1
+               DO 110 MOI= 1,NOC
+                  PTR1(MOI,L,K,I)= ZER
+                  PTR1I(MOI,L,K,I)= ZER
+  110          CONTINUE
+               DO 130 J= 1,NUMINT(IKL)
+                  JLABEL= LBLINT(J,IKL)
+                  DUM   = AOINTS(J,IKL)
+                  IF(JLABEL .LE. LNUMC) THEN
+                     DO 120 MOI= 1,NOC
+                        PTR1I(MOI,L,K,I)= PTR1I(MOI,L,K,I)
+     *                                   +DUM*VECO(MOI,JLABEL)
+ 120                 CONTINUE
+                  ELSE
+                     DO 125 MOI= 1,NOC
+                        PTR1(MOI,L,K,I)= PTR1(MOI,L,K,I)
+     *                                  +DUM*VECO(MOI,JLABEL)
+  125                CONTINUE
+                  END IF
+  130          CONTINUE
+               DO 135 MOI= 1,NOC
+                  PTR1(MOI,L,K,I) = PTR1(MOI,L,K,I)+PTR1I(MOI,L,K,I)
+  135          CONTINUE
+  140       CONTINUE
+  150    CONTINUE
+  160 CONTINUE
+C
+      RETURN
+      END
+C*MODULE MPIMDC  *DECK MP2QT2BDC
+      SUBROUTINE MP2QT2BDC(VECO,PTR1,PTR2,
+     *                     NOC,NOC3,NUMI,NUMK,NUML,NANGM,CUTOFFMO,
+     *                     KSH,LSH,MINK,MINL,LOCK,LOCL)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL KNOTL
+C
+      COMMON /MP2PAR/ OSPT,CODEMP,SCSPT,TOL,METHOD,NWDMP2,MEMPRI,MPPROP,
+     *                NACORE,NBCORE,NOA,NOB,NO,NBF,NOMIT,MOCPHF,MAXITC
+C
+      DIMENSION VECO(NOC,*),PTR1(NOC,NANGM,NANGM,NANGM),PTR2(NOC3,NBF,*)
+C
+C     2ND QUARTER TRANSFORMATION
+C
+      KNOTL= KSH.NE.LSH
+      LOCK2= LOCK+MINK-1
+      LOCL2= LOCL+MINL-1
+C
+C
+      IF(KNOTL)THEN
+      DO 160 I= 1,NUMI
+         DO 140 L= 1,NUML
+            LL= LOCL2+L
+            DO 150 K= 1,NUMK
+               KK= LOCK2+K
+               MOIJ= 0
+               DO 130 MOI= 1,NOC
+                  DUM1= PTR1(MOI,L,K,I)
+                  IF(ABS(DUM1).LT.CUTOFFMO) GO TO 120
+                  DO 110 MOJ= 1,NOC
+                     PTR2(MOIJ+MOJ,LL,I)= PTR2(MOIJ+MOJ,LL,I)
+     *                                   +DUM1*VECO(MOJ,KK)
+  110             CONTINUE
+  120             MOIJ= MOIJ+NOC
+  130          CONTINUE
+  150       CONTINUE
+  140    CONTINUE
+  160 CONTINUE
+C
+      DO 260 I=1,NUMI
+         DO 250 K=1,NUMK
+            KK= LOCK2+K
+            DO 240 L=1,NUML
+               LL= LOCL2+L
+               MOIJ= 0
+               DO 230 MOI=1,NOC
+                  DUM1= PTR1(MOI,L,K,I)
+                  IF(ABS(DUM1).LT.CUTOFFMO) GO TO 220
+                  DO 210 MOJ= 1,NOC
+                     PTR2(MOIJ+MOJ,KK,I)= PTR2(MOIJ+MOJ,KK,I)
+     *                                   +DUM1*VECO(MOJ,LL)
+  210             CONTINUE
+  220             MOIJ= MOIJ+NOC
+  230          CONTINUE
+  240       CONTINUE
+  250    CONTINUE
+  260 CONTINUE
+C
+      ELSE
+      DO 380 I=1,NUMI
+         DO 370 K= 1,NUMK
+            LMAX= K
+            KK= LOCK2+K
+            DO 360 L= 1,LMAX
+               LL= LOCL2+L
+               MOIJ= 0
+               DO 350 MOI= 1,NOC
+                  DUM1= PTR1(MOI,L,K,I)
+                  DUM3= ABS(DUM1)
+                  IF(DUM3.LT.CUTOFFMO) GO TO 320
+                  DO 310 MOJ= 1,NOC
+                     PTR2(MOIJ+MOJ,LL,I)= PTR2(MOIJ+MOJ,LL,I)
+     *                                   +DUM1*VECO(MOJ,KK)
+  310             CONTINUE
+  320             IF(DUM3.LT.CUTOFFMO) GO TO 340
+                  DO 330 MOJ= 1,NOC
+                     PTR2(MOIJ+MOJ,KK,I)= PTR2(MOIJ+MOJ,KK,I)
+     *                                   +DUM1*VECO(MOJ,LL)
+  330             CONTINUE
+  340             MOIJ= MOIJ+NOC
+  350          CONTINUE
+  360       CONTINUE
+  370    CONTINUE
+  380 CONTINUE
+      ENDIF
+C
+      RETURN
+      END
+C
+C*MODULE MPIMDC  *DECK MP2QT3DC
+      SUBROUTINE MP2QT3DC(VECV,PTR2,PTR3,WORK,
+     *                    NVIR,NOC2,IREC,NUMI,NIJ3,IDAF20)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      PARAMETER(ZER=0.0D+00, ONE=1.0D+00)
+C
+      COMMON /MP2PAR/ OSPT,CODEMP,SCSPT,TOL,METHOD,NWDMP2,MEMPRI,MPPROP,
+     *                NACORE,NBCORE,NOA,NOB,NO,NBF,NOMIT,MOCPHF,MAXITC
+C
+      DIMENSION VECV(NBF,*),PTR2(NOC2,NBF,*),PTR3(NVIR,NIJ3),
+     *          WORK(NBF,*)
+C
+C     3RD QUARTER TRANSFORMATION
+C
+      IPASS= NOC2/NIJ3
+      MODIJ= MOD(NOC2,NIJ3)
+      IF(MODIJ.NE.0) THEN
+         IPASS= IPASS+1
+      ELSE
+         MODIJ= NIJ3
+      ENDIF
+C
+      DO 150 I= 1,NUMI
+         MIJ3= NIJ3
+         DO 140 IJPASS= 1,IPASS
+            IF(IJPASS.EQ.IPASS) MIJ3= MODIJ
+            MOIJ2= (IJPASS-1)*NIJ3
+            DO 120 K= 1,NBF
+               DO 110 MOIJ= 1,MIJ3
+                  WORK(K,MOIJ)= PTR2(MOIJ+MOIJ2,K,I)
+  110          CONTINUE
+  120       CONTINUE
+            CALL DGEMM('T','N',NVIR,MIJ3,NBF,ONE,VECV,NBF,
+     *                 WORK,NBF,ZER,PTR3,NVIR)
+            DO 130 IJWRIT= 1,MIJ3
+               IREC= IREC+1
+               WRITE(UNIT=IDAF20,REC=IREC)
+     *              (PTR3(MOB,IJWRIT),MOB=1,NVIR)
+  130       CONTINUE
+  140    CONTINUE
+  150 CONTINUE
+C
+      RETURN
+      END
+C
+C
+C*MODULE DCMPIM  *DECK MP2QT4DC
+      SUBROUTINE MP2QT4DC(PTR3,PTR4,VECV,WORK,NVIR,NBF,NIJ4,MOIJ,INUM)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      PARAMETER (ZER=0.0D+00, ONE=1.0D+00)
+C
+      DIMENSION PTR3(NVIR,NIJ4,*),PTR4(NVIR,*),VECV(NBF,*),WORK(INUM,*)
+C
+      DO MOB= 1,NVIR
+         DO I= 1,INUM
+            WORK(I,MOB)=PTR3(MOB,MOIJ,I)
+C            WRITE(6,'(3I3,F15.8)') I,MOIJ,MOB,WORK(I,MOB)
+         END DO
+      END DO
+      CALL DGEMM('T','N',NVIR,NVIR,INUM,ONE,WORK,INUM,
+     *     VECV,NBF,ZER,PTR4,NVIR)
+C
+      RETURN
+      END
+C*MODULE MPIMDC  *DECK MP2SD1DC
+      SUBROUTINE MP2SD1DC(VECO,VECV,GHONDO,
+     *                    XINTS,AOINTS,PTR1,PTR1I,PTR2,PTR2I,PTR3,
+     *                    WORK,
+     *                    LBLINT,NUMINT,
+     *                    NUMP,NOC,NVIR,NOC3,NANGM,
+     *                    CUTOFFAO,CUTOFFMO,
+     *                    NLOOP,ILOOP,DIVANG,MXANGM,NIJ3,IDAF20,IDAF21)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL GOPARR,DSKWRK,MASWRK,SCHSKP
+      LOGICAL DIVANG,PASSCH,NXT
+C
+      PARAMETER (MXSH=5000, MXGTOT=20000, MXAO=8192)
+      PARAMETER (ZER=0.0D+00)
+C
+      PARAMETER (MXLATM=200, MXLSHL=700)
+C
+      COMMON /INFOLC/ LOC2TA(MXLATM),LOC2TS(MXLSHL),LCKLOC(MXLSHL),
+     *                NLAT,NLATC,NLSH,NLSHC,LNUM,LNUMC
+      COMMON /IJPAIR/ IA(MXAO)
+      COMMON /MP2PAR/ OSPT,CODEMP,SCSPT,TOL,METHOD,NWDMP2,MEMPRI,MPPROP,
+     *                NACORE,NBCORE,NOA,NOB,NO,NBF,NOMIT,MOCPHF,MAXITC
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /IOFILE/ IR,IW,IP,IJK,IPK,IDAF,NAV,IODA(950)
+      COMMON /SHLEXC/ NORGSH(3),NORGSP(3),IEXCH,MANGM,NGTH(4)
+      COMMON /MACHIN/ NWDVAR,MAXFM,MAXSM,LIMFM,LIMSM
+      COMMON /GOUT  / GPOPLE(768),NORG
+      COMMON /SHLG70/ ISH,JSH,KSH,LSH,IJKLXX(4)
+      COMMON /SHLNOS/ QQ4,IDUMMY(20)
+C
+      DIMENSION VECO(NOC,*),VECV(*),
+     *          GHONDO(*),XINTS(*),AOINTS(*),PTR1(*),PTR1I(*),PTR2(*),
+     *          PTR2I(*),PTR3(*),WORK(*),NUMP(0:NPROC)
+      DIMENSION NLOOP(2,0:NPROC-1),ILOOP(NLSH,0:NPROC-1)
+      DIMENSION LBLINT(NBF*(NANGM**3)),NUMINT(NANGM**3)
+C
+C     1ST, 2ND, 3RD QUARTER TRANSFORMATIONS
+C
+      NXT = IBTYP.EQ.1
+      NEXT = -1
+      MINE = -1
+C
+      NORG  = 0
+      IEXCH = 1
+      ISTART= 1
+      IEND  = NLSH
+      IREC1 = 0
+      IREC2 = 0
+C
+      TAO=ZER
+      TQT1=ZER
+      TQT2=ZER
+      TQT3=ZER
+C
+C      DO I=1,NBF
+C         DUM=ZER
+C         DO J=1,NOC
+C            DUM=MAX(DUM,ABS(VECO(J,I)))
+C         ENDDO
+C         BSMAX(I)=DUM
+C      ENDDO
+C      JSTART=1
+C      DO I=1,NSHELL
+C         DUM=ZER
+C         DO J= JSTART, KLOC(I)
+C            DUM=MAX(DUM,BSMAX(J))
+C         ENDDO
+C         JSTART= KLOC(I)+1
+C      ENDDO
+C
+C     ----- STATIC PARALLEL -----
+C
+      IF((.NOT.NXT) .AND. GOPARR) THEN
+         ISTART= NUMP(ME)+1
+         IEND  = NUMP(ME+1)
+      ENDIF
+C
+C     ----- DYNAMIC PARALLEL -----
+C
+      IF(NXT .AND. GOPARR) THEN
+         NLOOP(1,ME)= 0
+         NLOOP(2,ME)= 0
+      ENDIF
+C
+C
+C     ----- START I SHELL -----
+C
+      DO 500 ISHS= ISTART,IEND
+         ISH= LOC2TS(ISHS)
+C
+         IF(MASWRK) THEN
+            IF(MOD(ISH,25).EQ.1) THEN
+               IF(MOD(ISH,50).EQ. 1) WRITE(IW,9999) ISH,'ST'
+               IF(MOD(ISH,50).EQ.26) WRITE(IW,9999) ISH,'TH'
+            END IF
+            CALL FLSHBF(IW)
+         END IF
+C
+C     ----- GO PARALLEL! -----
+C
+         IF(NXT.AND.GOPARR) THEN
+            MINE = MINE + 1
+            IF (MINE.GT.NEXT) CALL DDI_DLBNEXT(NEXT)
+            IF (NEXT.NE.MINE) GO TO 500
+            NLOOP(1,ME)= NLOOP(1,ME)+1
+            ILOOP(NLOOP(1,ME),ME)=ISHS
+         END IF
+C
+         MINI= KMIN(ISH)
+         MAXI= KMAX(ISH)
+         MINI2= MINI
+         MAXI2= MAXI
+         ITMP= MAXI2-MINI2+1
+         IDIV= 0
+  110    IF(DIVANG.AND.ITMP.GT.MXANGM) THEN
+            MINI2= MXANGM*IDIV+KMIN(ISH)
+            MAXI2= MXANGM+MINI2-1
+            IF(MAXI2.GT.KMAX(ISH)) MAXI2=KMAX(ISH)
+            IDIV= IDIV+1
+         ENDIF
+         NUMI= MAXI2-MINI2+1
+         IF(NXT.AND.GOPARR) NLOOP(2,ME)=NLOOP(2,ME)+NUMI
+C         CALL VCLR(PTR2, 1,NOC2*NBF*NUMI)
+         CALL VCLR(PTR2, 1,NOC3*NBF*NUMI)
+         CALL VCLR(PTR2I,1,NOC3*NBF*NUMI)
+C
+C     ----- START K SHELL -----
+C
+      DO 400 KSHS=1,NLSH
+         KSH= LOC2TS(KSHS)
+C         CALL SYMIK(ISH,KSH,Q2,NSHELL)
+C         IF(Q2.EQ.ZER) GO TO 400
+         MINK= KMIN(KSH)
+         MAXK= KMAX(KSH)
+         NUMK= MAXK-MINK+1
+         LCKLOCK= LCKLOC(KSHS)-MINK
+C
+C     ----- START L SHELL -----
+C
+      DO 300 LSHS=1,KSHS
+         LSH= LOC2TS(LSHS)
+         MINL= KMIN(LSH)
+         MAXL= KMAX(LSH)
+         NUML= MAXL-MINL+1
+         LCKLOCL= LCKLOC(LSHS)-MINL
+         KLKL= IA(KSH)+LSH
+         IF(LSH.GT.KSH) KLKL= IA(LSH)+KSH
+         PASSCH=.FALSE.
+         DO II=1,NUMI*NUMK*NUML
+            NUMINT(II)=0
+         ENDDO
+C
+C     ----- START J SHELL -----
+C
+      DO 200 JSHS=1,NLSH
+         JSH= LOC2TS(JSHS)
+         IJIJ= IA(ISH)+JSH
+         IF(JSH.GT.ISH) IJIJ= IA(JSH)+ISH
+C         CALL SYMIKLJ(ISH,KSH,LSH,JSH,Q4,NSHELL)
+C         IF(Q4.EQ.ZER) GO TO 200
+C         QQ4=Q4
+         TEST= QQ4*XINTS(IJIJ)*XINTS(KLKL)
+         SCHSKP= TEST.LT.CUTOFFAO
+         MINJ= KMIN(JSH)
+         MAXJ= KMAX(JSH)
+         LOCJ= KLOC(JSH)-MINJ
+C
+         IF(.NOT.SCHSKP) THEN
+            PASSCH= .TRUE.
+            CALL TSECND(TAO0)
+            CALL SHELLQUARTMP2(GHONDO)
+C
+C     ----- SAVE AO INTEGRALS -----
+C
+            CALL SAVEAODC(AOINTS,GHONDO,CUTOFFAO,
+     *                    LBLINT,NUMINT,KSH,LSH,LOCJ,MINI,
+     *                    MINI2,MAXI2,MINJ,MAXJ,MINK,MAXK,MINL,MAXL)
+            CALL TSECND(TAO1)
+            TAO=TAO+(TAO1-TAO0)
+C
+         ENDIF
+  200 CONTINUE
+C
+C     ----- END J SHELL -----
+C
+      IF(.NOT.PASSCH) GO TO 300
+C
+C     ----- 1ST QUARTER TRANSFORMATION -----
+C
+      CALL TSECND(TQT1S)
+      CALL MP2QT1DC(VECO,AOINTS,PTR1,PTR1I,NOC,NUMI,NUMK,NUML,
+     *              NANGM,LBLINT,NUMINT,KSH,LSH)
+      CALL TSECND(TQT1E)
+      TQT1=TQT1+(TQT1E-TQT1S)
+C
+C     ----- 2ND QUARTER TRANSFORMATION -----
+C
+      CALL TSECND(TQT2S)
+      CALL MP2QT2BDC(VECO,PTR1,PTR2,
+     *               NOC,NOC3,NUMI,NUMK,NUML,NANGM,CUTOFFMO,
+     *               KSH,LSH,MINK,MINL,LCKLOCK,LCKLOCL)
+      CALL MP2QT2BDC(VECO,PTR1I,PTR2I,
+     *               NOC,NOC3,NUMI,NUMK,NUML,NANGM,CUTOFFMO,
+     *               KSH,LSH,MINK,MINL,LCKLOCK,LCKLOCL)
+      CALL TSECND(TQT2E)
+      TQT2=TQT2+(TQT2E-TQT2S)
+C
+  300 CONTINUE
+C
+C     ----- END L SHELL -----
+C
+  400 CONTINUE
+C
+C     ----- END K SHELL -----
+C
+C
+C     ----- 3RD QUARTER TRANSFORMATION -----
+C
+      CALL TSECND(TQT3S)
+      CALL MP2QT3DC(VECV,PTR2,PTR3,WORK,
+     *              NVIR,NOC3,IREC1,NUMI,NIJ3,IDAF20)
+      CALL MP2QT3DC(VECV,PTR2I,PTR3,WORK,
+     *              NVIR,NOC3,IREC2,NUMI,NIJ3,IDAF21)
+      CALL TSECND(TQT3E)
+      TQT3=TQT3+(TQT3E-TQT3S)
+C
+      IF(DIVANG.AND.MAXI2.NE.KMAX(ISH)) GO TO 110
+C
+  500 CONTINUE
+C
+C     ----- END I SHELL -----
+C
+C
+C     ----- CHECK DYNAMIC PARALLEL INFORMATIONS -----
+      IF(NXT.AND.GOPARR) THEN
+         CALL DDI_DLBRESET
+         INTSIZ=8/NWDVAR
+C        INTSIZ=4
+CI32     INTSIZ=4
+CI64     INTSIZ=8
+         DO 600 I=1,NPROC-1
+C           IF(MASWRK .AND. I.NE.MASTER) THEN
+            IF(MASWRK) THEN
+               CALL DDI_RECV(NLOOP(1,I),2*INTSIZ,I)
+               CALL DDI_RECV(ILOOP(1,I),NLSH*INTSIZ,I)
+            ELSE
+               IF(I.EQ.ME)CALL DDI_SEND(NLOOP(1,I),2*INTSIZ,MASTER)
+               IF(I.EQ.ME)CALL DDI_SEND(ILOOP(1,I),NLSH*INTSIZ,MASTER)
+            ENDIF
+  600    CONTINUE
+         CALL DDI_BCAST(1012,'I',NLOOP,2*NPROC,MASTER)
+         CALL DDI_BCAST(1011,'I',ILOOP,NLSH*NPROC,MASTER)
+      ENDIF
+C
+CTIME WRITE(IW,999)TAO,TQT1,TQT2,TQT3
+C 999 FORMAT(/1X,'TIME TO GENERATE AO INTEGRALS=     ',F9.1,
+C    *       /1X,'TIME OF 1ST QUARTER TRANSFORMATION=',F9.1,
+C    *       /1X,'TIME OF 2ND QUARTER TRANSFORMATION=',F9.1,
+C    *       /1X,'TIME OF 3RD QUARTER TRANSFORMATION=',F9.1)
+ 9999 FORMAT(1X,'BEGINNING',I5,A2,' SHELL LOOP...')
+      RETURN
+      END
+C
+C
+C*MODULE MPIMDC  *DECK MP2SD2DC
+      SUBROUTINE MP2SD2DC(ENG,ENGO,VECV,WORK,DDIS,
+     *                    PTR3,PTR3I,PTR4,PTR4I,MOSIRP,NSYM,ISYM,
+     *                    NVIR,NOC,NOC2,NT,
+     *                    IJEND,ILEN,IRECV,NLOOP,NCPU,
+     *                    MXP,NPASS,NIJ4,E2SO,E2TO,IDAF20,IDAF21)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL GOPARR,DSKWRK,MASWRK,SYM2EI
+C
+      PARAMETER (MXAO=8192)
+      PARAMETER (ZER=0.0D+00, ONE=1.0D+00)
+C
+C        NOTE THAT -NCPU- IS AN ALIAS FOR -NPROC-
+      DIMENSION IJEND(NCPU),ILEN(NCPU),IRECV(NCPU),NLOOP(2,0:NCPU-1)
+C
+      COMMON /IJPAIR/ IA(MXAO)
+      COMMON /MP2PAR/ OSPT,CODEMP,SCSPT,TOL,METHOD,NWDMP2,MEMPRI,MPPROP,
+     *                NACORE,NBCORE,NOA,NOB,NO,NBF,NOMIT,MOCPHF,MAXITC
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+      DIMENSION ENG(NBF),ENGO(NOC2),VECV(NBF,*),
+     *          DDIS(NVIR,NIJ4,MXP,*),PTR3(NVIR,NIJ4,*),PTR4(NVIR,*),
+     *          PTR3I(NVIR,NIJ4,*),PTR4I(NVIR,*),
+     *          WORK(NBF,*),MOSIRP(*),NSYM(*),ISYM(NVIR,*)
+C
+C     4TH QUARTER TRANSFORMATION AND MP2 ENERGY CALCULATION
+C
+C     ----- CALCULATE I+J MO ENERGIES -----
+C
+      DO 120 I= 1,NOC
+         ENGI= ENG(I+NACORE)
+         II  = (I-1)*NOC
+         DO 110 J= 1,NOC
+            ENGO(II+J)= ENGI+ENG(J+NACORE)
+  110    CONTINUE
+  120 CONTINUE
+C
+C     ----- 4TH QUARTER TRANSFORMATION -----
+C     ----- AND MP2 ENERGY CALCULATION -----
+C
+C     ----- PARALLEL VERSION -----
+C
+      IF(GOPARR) THEN
+         NUMI=NLOOP(2,ME)
+         LENDDI= NVIR*NIJ4*NUMI
+         MIJ4  = NIJ4
+         MODIJ1= MOD(NOC2,NIJ4*NPROC)
+         MODIJ2= MOD(MODIJ1,NPROC)
+         MIJTMP= MODIJ1/NPROC
+         IF(MIJTMP.EQ.0.AND.MODIJ2.EQ.0) MIJTMP= NIJ4
+C
+         NSUM=1
+         DO 210 IPROC= 1,NPROC
+            IJEND(IPROC)= MIJTMP
+            IF(IPROC.LE.MODIJ2) IJEND(IPROC)= IJEND(IPROC)+1
+            ILEN(IPROC)=NLOOP(2,IPROC-1)*NVIR*NIJ4
+            IRECV(IPROC)=NSUM
+            NSUM= NSUM+NLOOP(2,IPROC-1)
+  210    CONTINUE
+C
+C     WRITE(6,*) ME,'MP2 CODE REACHED THE DATA EXCHANGE.'
+      DO 500 IPASS= 1,NPASS
+         IJREC1=(IPASS-1)*NIJ4*NPROC
+         MIJ4= NIJ4
+         DO I= 1,NUMI
+            IJREC2= (I-1)*NOC2+IJREC1
+            DO IPROC=1,NPROC
+               IF(IPASS.EQ.NPASS) MIJ4= IJEND(IPROC)
+               DO MOIJ= 1,MIJ4
+                  READ(UNIT=IDAF20,REC=IJREC2+MOIJ)
+     *                 (DDIS(MOB,MOIJ,I,IPROC),MOB=1,NVIR)
+               END DO
+               IJREC2= IJREC2+MIJ4
+            END DO
+         END DO
+C
+C     ----- CALL NON-BLOCKING SEND AND RECIEVE ---
+C
+         JPROC= ME+1
+         DO IPROC= ME+2,NPROC
+            JPROC= JPROC-1
+            IF(JPROC.EQ.0) JPROC= NPROC
+            CALL DDI_ISEND(DDIS(1,1,1,IPROC),LENDDI*8,IPROC-1,
+     *                        IREQ1)
+            CALL DDI_IRECV(PTR3(1,1,IRECV(JPROC)),ILEN(JPROC)*8,
+     *                     JPROC-1,IREQ2)
+            CALL DDI_WAIT(IREQ2)
+            CALL DDI_WAIT(IREQ1)
+         END DO
+         DO IPROC= 1,ME
+            JPROC= JPROC-1
+            IF(JPROC.EQ.0) JPROC= NPROC
+            CALL DDI_ISEND(DDIS(1,1,1,IPROC),LENDDI*8,IPROC-1,
+     *                        IREQ1)
+            CALL DDI_IRECV(PTR3(1,1,IRECV(JPROC)),ILEN(JPROC)*8,
+     *                     JPROC-1,IREQ2)
+            CALL DDI_WAIT(IREQ2)
+            CALL DDI_WAIT(IREQ1)
+         END DO
+         CALL DCOPY(LENDDI,DDIS(1,1,1,ME+1),1,PTR3(1,1,IRECV(ME+1)),1)
+C
+         IJREC1=(IPASS-1)*NIJ4*NPROC
+         MIJ4= NIJ4
+         DO I= 1,NUMI
+            IJREC2= (I-1)*NOC2+IJREC1
+            DO IPROC=1,NPROC
+               IF(IPASS.EQ.NPASS) MIJ4= IJEND(IPROC)
+               DO MOIJ= 1,MIJ4
+                  READ(UNIT=IDAF21,REC=IJREC2+MOIJ)
+     *                 (DDIS(MOB,MOIJ,I,IPROC),MOB=1,NVIR)
+               END DO
+               IJREC2= IJREC2+MIJ4
+            END DO
+         END DO
+C
+C     ----- CALL NON-BLOCKING SEND AND RECIEVE ---
+C
+         JPROC= ME+1
+         DO IPROC= ME+2,NPROC
+            JPROC= JPROC-1
+            IF(JPROC.EQ.0) JPROC= NPROC
+            CALL DDI_ISEND(DDIS(1,1,1,IPROC),LENDDI*8,IPROC-1,
+     *                        IREQ1)
+            CALL DDI_IRECV(PTR3I(1,1,IRECV(JPROC)),ILEN(JPROC)*8,
+     *                     JPROC-1,IREQ2)
+            CALL DDI_WAIT(IREQ2)
+            CALL DDI_WAIT(IREQ1)
+         END DO
+         DO IPROC= 1,ME
+            JPROC= JPROC-1
+            IF(JPROC.EQ.0) JPROC= NPROC
+            CALL DDI_ISEND(DDIS(1,1,1,IPROC),LENDDI*8,IPROC-1,
+     *                        IREQ1)
+            CALL DDI_IRECV(PTR3I(1,1,IRECV(JPROC)),ILEN(JPROC)*8,
+     *                     JPROC-1,IREQ2)
+            CALL DDI_WAIT(IREQ2)
+            CALL DDI_WAIT(IREQ1)
+         END DO
+         CALL DCOPY(LENDDI,DDIS(1,1,1,ME+1),1,PTR3I(1,1,IRECV(ME+1)),1)
+C
+         MIJ4= NIJ4
+         MIJ5= ME*NIJ4
+         IF(IPASS.EQ.NPASS) THEN
+            MIJ4= IJEND(ME+1)
+            MIJ5= 0
+            DO 360 IPROC= 1,ME
+               MIJ5= MIJ5+ IJEND(IPROC)
+  360       CONTINUE
+         ENDIF
+         IJREC2=MIJ5+(IPASS-1)*NIJ4*NPROC
+C
+         IF(NT.NE.1) THEN
+            DO 370 II= 1,NOC-1
+               MOI= II
+               IF(IJREC2.LT.IA(II+1)) GO TO 380
+  370       CONTINUE
+            MOI= NOC
+  380       MOJ= IJREC2-IA(MOI)+1
+         ENDIF
+C
+         DO 490 MOIJ=1,MIJ4
+C            DO 400 I= 1,NBF
+C               DO 390 MOB= 1,NVIR
+C                  WORK(I,MOB)= PTR3(MOB,MOIJ,I)
+C  390          CONTINUE
+C  400       CONTINUE
+            EIJ= ENGO(IJREC2+MOIJ)
+C
+            IF(NT.EQ.1) THEN
+               CALL MP2QT4DC(PTR3,PTR4,VECV,WORK,NVIR,NBF,NIJ4,MOIJ,NBF)
+               CALL MP2QT4DC(PTR3I,PTR4I,VECV,WORK,NVIR,NBF,NIJ4,MOIJ,
+     *              NBF)
+               CALL MP2E2ACDC(ENG,PTR4,PTR4I,EIJ,TOL,NOA,NVIR,NBF,
+     *              E2SO,E2TO)
+C               IF(.NOT. ONLYOC) THEN
+C                  CALL MP2QT4DC(PTR3I,PTR4I,VECV,WORK,NVIR,NBF,NIJ4,
+C     *                 MOIJ,LNUMC)
+C                  CALL MP2E2ACDC(ENG,PTR4,PTR4I,EIJ,TOL,NOA,NVIR,NBF,
+C     *                 E2SV,E2TV)
+C               END IF
+C
+            ELSE
+               NIT= 1
+               DO 440 IT= 1,NT
+                  IF(NSYM(IT).EQ.0) GO TO 440
+                  NJT= 1
+                  DO 430 JT= 1,NT
+                     IF(NSYM(JT).EQ.0) GO TO 430
+                     MOSA= ISYM(1,IT)+NOA
+                     MOSB= ISYM(1,JT)+NOA
+                     IF(SYM2EI(MOSIRP(MOI+NACORE),MOSIRP(MOSA),
+     *                         MOSIRP(MOJ+NACORE),MOSIRP(MOSB)))
+     *                  CALL DGEMM('T','N',NSYM(JT),NSYM(IT),NBF,ONE,
+     *                             WORK(1,NJT),NBF,VECV(1,NIT),NBF,ZER,
+     *                             PTR4(1,NIT),NVIR)
+  430             NJT= NJT+NSYM(JT)
+  440          NIT= NIT+NSYM(IT)
+               NIT= 0
+               DO 480 IT= 1,NT
+                  IF(NSYM(IT).EQ.0) GO TO 480
+                  NJT= 0
+                  DO 470 JT= 1,NT
+                     IF(NSYM(JT).EQ.0) GO TO 470
+                     MOSA= ISYM(1,IT)+NOA
+                     MOSB= ISYM(1,JT)+NOA
+                     IF(SYM2EI(MOSIRP(MOI+NACORE),MOSIRP(MOSA),
+     *                         MOSIRP(MOJ+NACORE),MOSIRP(MOSB))) THEN
+                        DO 460 MOA= 1,NSYM(IT)
+                           EMO1= ENG(ISYM(MOA,IT)+NOA)-EIJ
+                           DO 450 MOB= 1,NSYM(JT)
+                              XAB= PTR4(MOB,MOA+NIT)
+                              IF(ABS(XAB).LT.TOL) GO TO 450
+                              XBA= PTR4(MOA,MOB+NJT)
+                              EMO2= ONE/(EMO1+ENG(ISYM(MOB,JT)+NOA))
+                              E2SO= E2SO-XAB*XAB*EMO2
+                              E2TO= E2TO-XAB*(XAB-XBA)*EMO2
+  450                      CONTINUE
+  460                   CONTINUE
+                     ENDIF
+  470             NJT= NJT+NSYM(JT)
+  480          NIT= NIT+NSYM(IT)
+               MOJ= MOJ+1
+               IF(MOI.LT.MOJ) THEN
+                  MOI= MOI+1
+                  MOJ= 1
+               ENDIF
+            ENDIF
+  490    CONTINUE
+  500 CONTINUE
+C
+C     ----- SERIAL VERSION -----
+C
+      ELSE
+      MIJ4 = NIJ4
+      DO 660 IPASS= 1,NPASS
+         IJPASS=(IPASS-1)*NIJ4
+         IF(IPASS.EQ.NPASS.AND.(MOD(NOC2,NIJ4).NE.0))
+     *      MIJ4= MOD(NOC2,NIJ4)
+         DO I= 1,NBF
+            IJREC= (I-1)*NOC2+(IPASS-1)*NIJ4
+            DO MOIJ= 1,MIJ4
+               READ(UNIT=IDAF20,REC=IJREC+MOIJ)
+     *             (PTR3(MOB,MOIJ,I),MOB=1,NVIR)
+            END DO
+         END DO
+         DO I=1,NBF
+            IJREC= (I-1)*NOC2+(IPASS-1)*NIJ4
+            DO MOIJ= 1,MIJ4
+               READ(UNIT=IDAF21,REC=IJREC+MOIJ)
+     *             (PTR3I(MOB,MOIJ,I),MOB=1,NVIR)
+            END DO
+         END DO
+C
+         IF(NT.NE.1) THEN
+            DO 530 II= 1,NOC-1
+               MOI=II
+               IF(IJPASS.LT.IA(II+1)) GO TO 540
+  530       CONTINUE
+            MOI= NOC
+  540       MOJ= IJPASS-IA(MOI)+1
+         ENDIF
+C
+         DO 650 MOIJ= 1,MIJ4
+C            DO 560 I= 1,NBF
+C               DO 550 MOB= 1,NVIR
+C                  WORK(I,MOB)= PTR3(MOB,MOIJ,I)
+C  550          CONTINUE
+C  560       CONTINUE
+            EIJ= ENGO(MOIJ+IJPASS)
+C
+            IF(NT.EQ.1) THEN
+               CALL MP2QT4DC(PTR3,PTR4,VECV,WORK,NVIR,NBF,NIJ4,MOIJ,NBF)
+               CALL MP2QT4DC(PTR3I,PTR4I,VECV,WORK,NVIR,NBF,NIJ4,MOIJ,
+     *              NBF)
+               CALL MP2E2ACDC(ENG,PTR4,PTR4I,EIJ,TOL,NOA,NVIR,NBF,
+     *              E2SO,E2TO)
+C               IF(.NOT. ONLYOC) THEN
+C                  CALL MP2QT4DC(PTR3,PTR4I,VECV,WORK,NVIR,NBF,NIJ4,
+C     *                 MOIJ,LNUMC)
+C                  CALL MP2E2ACDC(ENG,PTR4,PTR4I,EIJ,TOL,NOA,NVIR,NBF,
+C     *                 E2SV,E2TV)
+C               END IF
+C
+            ELSE
+               NIT=1
+               DO 600 IT=1,NT
+                  IF(NSYM(IT).EQ.0) GO TO 600
+                  NJT=1
+                  DO 590 JT=1,NT
+                     IF(NSYM(JT).EQ.0) GO TO 590
+                     MOSA= ISYM(1,IT)+NOA
+                     MOSB= ISYM(1,JT)+NOA
+                     IF(SYM2EI(MOSIRP(MOI+NACORE),MOSIRP(MOSA),
+     *                         MOSIRP(MOJ+NACORE),MOSIRP(MOSB)))
+     *                  CALL DGEMM('T','N',NSYM(JT),NSYM(IT),NBF,ONE,
+     *                             WORK(1,NJT),NBF,VECV(1,NIT),NBF,ZER,
+     *                             PTR4(1,NIT),NVIR)
+  590             NJT= NJT+NSYM(JT)
+  600          NIT= NIT+NSYM(IT)
+               NIT= 0
+               DO 640 IT= 1,NT
+                  IF(NSYM(IT).EQ.0) GO TO 640
+                  NJT= 0
+                  DO 630 JT= 1,NT
+                     IF(NSYM(JT).EQ.0) GO TO 630
+                     MOSA= ISYM(1,IT)+NOA
+                     MOSB= ISYM(1,JT)+NOA
+                     IF(SYM2EI(MOSIRP(MOI+NACORE),MOSIRP(MOSA),
+     *                         MOSIRP(MOJ+NACORE),MOSIRP(MOSB))) THEN
+                        DO 620 MOA= 1,NSYM(IT)
+                           EMO1= ENG(ISYM(MOA,IT)+NOA)-EIJ
+                           DO 610 MOB= 1,NSYM(JT)
+C                             XAB= PTR4(MOB,MOA)
+                              XAB= PTR4(MOB,MOA+NIT)
+                              IF(ABS(XAB).LT.TOL) GO TO 610
+C                             XBA= PTR4(MOA,MOB)
+                              XBA= PTR4(MOA,MOB+NJT)
+                              EMO2= ONE/(EMO1+ENG(ISYM(MOB,JT)+NOA))
+                              E2SO= E2SO-XAB*XAB*EMO2
+                              E2TO= E2TO-XAB*(XAB-XBA)*EMO2
+  610                      CONTINUE
+  620                   CONTINUE
+                     ENDIF
+  630             NJT= NJT+NSYM(JT)
+  640          NIT= NIT+NSYM(IT)
+               MOJ= MOJ+1
+               IF(MOI.LT.MOJ) THEN
+                  MOI= MOI+1
+                  MOJ= 1
+               ENDIF
+            ENDIF
+  650    CONTINUE
+  660 CONTINUE
+      ENDIF
+C
+      RETURN
+      END
+C
+C*MODULE DCMPIM  *DECK SAVEAODC
+      SUBROUTINE SAVEAODC(AOINTS,GHONDO,CUTOFFAO,
+     *                    LBLINT,NUMINT,KSH,LSH,LOCJ,MINI,
+     *                    MINI2,MAXI2,MINJ,MAXJ,MINK,MAXK,MINL,MAXL)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL KANDL
+C
+      PARAMETER (MXAO=8192)
+      PARAMETER (HALF=0.5D+00)
+C
+      COMMON /MP2PAR/ OSPT,CODEMP,SCSPT,TOL,METHOD,NWDMP2,MEMPRI,MPPROP,
+     *                NACORE,NBCORE,NOA,NOB,NO,NBF,NOMIT,MOCPHF,MAXITC
+      COMMON /ERIOUT/ INU,JNU,KNU,LNU,LSTRI,LSTRJ,LSTRK,LSTRL
+      COMMON /TO2LC / IT2LOC(MXAO)
+C
+      DIMENSION AOINTS(NBF,*),GHONDO(*)
+      DIMENSION LBLINT(NBF,*),NUMINT(*)
+C
+C     SAVE AO INTEGRALS
+C
+      KANDL= KSH.EQ.LSH
+      IKL  = 0
+      LMAX = MAXL
+C
+C      WRITE(6,*) 'Q0'
+      DO 240 I= MINI2,MAXI2
+         I_INDEX = (I-MINI)*LSTRI + 1
+         DO 230 K= MINK,MAXK
+            IK_INDEX = (K-MINK)*LSTRK + I_INDEX
+            IF(KANDL) LMAX= K
+            DO 220 L= MINL,LMAX
+               IKL_INDEX = (L-MINL)*LSTRL + IK_INDEX
+               IKL= IKL+1
+               DO 210 J= MINJ,MAXJ
+                  JJ= LOCJ+J
+                  JJL= IT2LOC(JJ)
+                  IJKL_INDEX = (J-MINJ)*LSTRJ + IKL_INDEX
+C
+                  VAL = GHONDO( IJKL_INDEX)
+C                  WRITE(6,'(4I3,F15.8)') I,J,K,L,VAL 
+                  IF(ABS(VAL).LT.CUTOFFAO) GO TO 210
+                  IF(KANDL.AND.K.EQ.L) VAL= VAL*HALF
+                  NUMINT(IKL)= NUMINT(IKL)+1
+                  AOINTS(NUMINT(IKL),IKL)= VAL
+                  LBLINT(NUMINT(IKL),IKL)= JJL
+  210          CONTINUE
+  220       CONTINUE
+  230    CONTINUE
+  240 CONTINUE
+C
+      RETURN
+      END
+C

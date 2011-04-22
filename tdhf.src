@@ -1,3 +1,5 @@
+C 15 APR 11 - TT,MK - DIIS ADDED FOR U-A RESPONSES, ADD DIVIDE+CONQUER,
+C                   COMPATIBLE WITH SEMI-IN-CORE INTEGRAL TREATMENT
 C 11 AUG 10 - DGF - SYNCH COMMON BLOCK ENRGYS
 C 25 MAR 10 - DJS - PAD COMMON BLOCK PCMPNT
 C 22 MAY 09 - MWS - IMPROVE ERROR HANDLING ON INPUT VALUES
@@ -35,7 +37,7 @@ C*MODULE TDHF    *DECK TDHFX
       LOGICAL GTHG,GEFISH,GIDRI,GOKE,BSHG,BEOPE,BOR
       LOGICAL DIRSCF,FDIFF
 C
-      PARAMETER (MXATM=2000, NNAM=19, MXRT=100)
+      PARAMETER (MXATM=2000, NNAM=21, MXRT=100)
 C
       COMMON /BASSPH/ QMTTOL,ISPHER
       COMMON /ENRGYS/ ENUCR,EELCT,ETOT,SZ,SZZ,ECORE,ESCF,EERD,E1,E2,
@@ -65,6 +67,9 @@ C
      X                GTHG,GEFISH,GIDRI,GOKE,BSHG,BEOPE,BOR,
      X                INIB,INIG
       COMMON /TDOPT / RETDHF,TDDEB,EXTRAH,IFREQ
+      LOGICAL DODIIS
+C
+      COMMON /TDDIIS/ MXDITD,DODIIS
 C
       DIMENSION QNAM(NNAM),KQNAM(NNAM)
 C
@@ -73,8 +78,9 @@ C
      X           8HGTHG    ,8HGEFISH  ,8HGIDRI   ,8HGOKE    ,
      X           8HBSHG    ,8HBEOPE   ,8HBOR     ,8HMAXITA  ,
      X           8HMAXITU  ,8HATOL    ,8HBTOL    ,8HNFREQ   ,
-     X           8HFREQ    ,8HINIB    ,8HINIG    ,8HILOCF   /
-      DATA KQNAM/0,0,0,0,0,0,0,0,0,0,1,1,3,3,1,103,1,1,1/
+     X           8HFREQ    ,8HINIB    ,8HINIG    ,8HILOCF   ,
+     X           8HDIIS    ,8HMAXDII  /
+      DATA KQNAM/0,0,0, 0,0,0,0, 0,0,0,1, 1,3,3,1, 103,1,1,1, 0,1/
       DATA ZERO/0.0D+00/
       DATA CHECK/8HCHECK   /
 C
@@ -109,6 +115,8 @@ C
       BTOL = 1.0D-05
       NFREQ = 1
       FREQ(1) = 0.0D+00
+      DODIIS=.TRUE.
+      MXDITD=50
 C
 C B. MENNUCCI/1999
 C     BETA AND GAMMA CALCULATIONS:
@@ -130,8 +138,8 @@ C
 C
       CALL NAMEIO (IR,JRET,TDHFIN,NNAM,QNAM,KQNAM,RETDHF,TDDEB,EXTRAH,
      *             GTHG,GEFISH,GIDRI,GOKE,BSHG,BEOPE,BOR,MAXITA,MAXITU,
-     *             ATOL,BTOL,NFREQ,FREQ,INIB,INIG,ILOCF,
-     *             0,0,0,0,0,
+     *             ATOL,BTOL,NFREQ,FREQ,INIB,INIG,ILOCF,DODIIS,MXDITD,
+     *             0,0,0,
      *    0,0,0,0,0,   0,0,0,0,0,   0,0,0,0,0,   0,0,0,0,0,
      *    0,0,0,0,0,   0,0,0,0,0,   0,0,0,0,0,   0,0,0,0,0)
 C
@@ -181,6 +189,7 @@ C
 C
       IF (MASWRK) THEN
          WRITE(IW,221) GTHG,BSHG,GEFISH,BEOPE,GIDRI,BOR,GOKE,
+     *                 DODIIS,MXDITD,
      *                 ATOL,MAXITA,BTOL,MAXITU,INIB,INIG,NFREQ
          WRITE(IW,222) (FREQ(IFRE),IFRE=1,NFREQ)
       END IF
@@ -192,6 +201,7 @@ C
      X         '    GEFISH = ',L1,'    BEOPE = ',L1/
      X         '    GIDRI  = ',L1,'    BOR   = ',L1/
      X         '    GOKE   = ',L1/
+     X         '    DIIS   = ',L1,'    MAXDII= ',I3/
      X         '    ATOL   = ',1P,E8.1,0P,'   MAXITA = ',I3/
      X         '    BTOL   = ',1P,E8.1,0P,'   MAXITU = ',I3/
      X         '    CALC.LEVELS ARE INIB = ',I3,' INIG = ',I3/
@@ -358,6 +368,11 @@ C
      X                INIB,INIG
       COMMON /TDOPT / RETDHF,TDDEB,EXTRAH,IFREQ
 C
+C     CHANGE FOR DIVIDE-AND-CONQUER METHOD
+C
+      LOGICAL DCFLG
+      COMMON /DCOPT / SUBTYP,BUFTYP,SUBLNG,BUFRAD,NDCPRT,NSUBS,DCFLG
+C
       DATA ZERO/0.0D+00/
       DATA CHECK/8HCHECK   /
 C
@@ -370,8 +385,10 @@ C
 C  GET EIGENVECTORS AND ENERGIES FROM PREVIOUS ENERGY CALC.
 C
       NSQR = NORB*NORB
-      CALL DAREAD(IDAF,IODA,VEC ,NSQR,15,0)
-      CALL DAREAD(IDAF,IODA,EIGS,NORB,17,0)
+      IF (.NOT.DCFLG) THEN
+        CALL DAREAD(IDAF,IODA,VEC ,NSQR,15,0)
+        CALL DAREAD(IDAF,IODA,EIGS,NORB,17,0)
+      END IF
 C
 C GET SURFACE CHARGES FOR A PCM RUN
 C
@@ -621,6 +638,7 @@ C
       LOGICAL LAST,GOPARR,DSKWRK,MASWRK,PACK2E,SCHWRZ,DIRSCF,FDIFF
       LOGICAL GTHG,GEFISH,GIDRI,GOKE,BSHG,BEOPE,BOR,ABINIT
       LOGICAL RETDHF,TDDEB,EXTRAH,DAMPH
+      LOGICAL DSKWSV
 C
       PARAMETER (MXATM=2000, MXGTOT=20000, MXSH=5000, MXGSH=30,
      *           MXAO=8192)
@@ -628,6 +646,7 @@ C
       COMMON /FMCOM / X(1)
       COMMON /IJPAIR/ IA(MXAO)
       COMMON /INTFIL/ NINTMX,NHEX,NTUPL,PACK2E,INTTYP,IGRDTYP
+      COMMON /INT2IC/ NINTIC,ININTIC,NXXIC,LBUFPIC,LIXIC,LABSIX,NINTIX
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
       COMMON /MOLKST/ NUMAT,MNAT(MXATM),NFIRST(MXATM),NMIDLE(MXATM),
      *                NLAST(MXATM),NORBS,NELECS,NALPHA,NBETA,NCLMPC,
@@ -658,6 +677,31 @@ C
       COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
      *                MPLEVL,MPCTYP
 C
+C     CHANGE FOR DIVIDE-AND-CONQUER METHOD
+C
+      PARAMETER (MXLATM=200,MXLSHL=700)
+C
+      LOGICAL DCFLG
+      COMMON /DCFRM / FRMLVA,FRMLVB,FRBETA,FTOL,MXITDC
+      COMMON /DCOPT / SUBTYP,BUFTYP,SUBLNG,BUFRAD,NDCPRT,NSUBS,DCFLG
+      COMMON /INFOLC/ LOC2TA(MXLATM),LOC2TS(MXLSHL),LCKLOC(MXLSHL),
+     *                NLAT,NLATC,NLSH,NLSHC,LNUM,LNUMC
+      COMMON /IODC  / IDCSUB,IDCVEC,IDCDM,IDCQ,IDCDMO,IDCEIG,IDCW,IDCEDM
+      COMMON /SUBSP / ILCST1(MXATM),NLC1,LNUMMX,ILATST(MXATM),NLCAT1
+      LOGICAL LASTSB
+C
+      LOGICAL DBG
+      DATA DEBUG/8HDEBUG   /
+      DATA DBGME/8HTDHF    /
+C
+      LOGICAL LAST2
+      LOGICAL DODIIS,DIIDCF,NOTOPN,DIIQTR
+      COMMON /TDDIIS/ MXDITD,DODIIS
+      COMMON /DIISSO/ SOGTOL,ETHRSH,MAXDII,IRAF
+      COMMON /DCDIIS/ EXTDII,PEXDII,ETHRDC,DIITYP,NDCDIS,IRAFDC,DIIDCF,
+     *                DIIQTR
+      LOGICAL FDIFFT
+C
       DATA ALAB/'X','Y','Z'/
       DATA RHF/8HRHF     /
       DATA CHECK/8HCHECK   /
@@ -668,6 +712,14 @@ C  RESPONCE MATRICIES UA AND DENSITIES DA.
 C  USED TO COMPUTE THE FREQUENCY DEPENDENT POLARIZABILITY AND FOR
 C  SOLVING THE SECOND-ORDER PROBLEM.
 C... 6/14/91
+C
+      DBG=.FALSE.
+      IF (MASWRK.AND.(EXETYP.EQ.DEBUG .OR. EXETYP.EQ.DBGME)) DBG=.TRUE.
+      LAST2 = .FALSE.
+C
+C     PRESENT IMPLEMENTATION ONLY ALLOWS FDIFF=.FALSE.
+      FDIFFT = FDIFF
+      FDIFF  = .FALSE.
 C
       DAMP   = 0.0D+00
       ABINIT = MPCTYP.EQ.NONE
@@ -688,6 +740,8 @@ C
       MAXG = NANGM**4
 C
       CALL VALFM (LOADFM)
+      MINTMX=NINTMX
+      IF(NINTIC.NE.0) MINTMX=0
       IF (ABINIT) THEN
          IF (DIRSCF) THEN
             LBUF   = LOADFM + 1
@@ -699,12 +753,16 @@ C
             LLAST  = LDDIJ  + 49*MXGSH*MXGSH
          ELSE
             LBUF   = LOADFM + 1
-            LIBUF  = LBUF   + NINTMX
+            LIBUF  = LBUF   + MINTMX
             LCLINT = LBUF
             LGHOND = LBUF
             LDSH   = LBUF
             LDDIJ  = LBUF
-            LLAST  = LIBUF  + NINTMX
+            LLAST  = LIBUF  + MINTMX
+         END IF
+         IF(NINTIC.NE.0) THEN
+            LBUF  = LBUFPIC
+            LIBUF = LIXIC
          END IF
          LTWOEI = LLAST
          LPA    = LLAST
@@ -739,8 +797,57 @@ C
          LF3S = LLAST
          LF4S = LLAST
       END IF
+      IF (DCFLG) THEN
+         LEIGT=LLAST
+         LF4  =LEIGT+NLC1
+         LLAST=LF4  +NSQR
+      ELSE
+         LEIGT=LLAST
+      ENDIF
+      IF (FDIFF) THEN
+         LWRK1  = LLAST
+         LWRK2  = LWRK1 + NSQR
+         LLAST  = LWRK2 + NSQR
+      ELSE
+         LWRK1  = LLAST
+         LWRK2  = LLAST
+      ENDIF
+C
+      MAXIT2 = (MAXITA*MAXITA+MAXITA)/2
+      IF (DODIIS) THEN
+         LWRK   = LLAST
+         LWRK4  = LWRK  + NORB
+         LWRK5  = LWRK4 + NSQR
+         LQ     = LWRK5 + NSQR
+         LADIIS = LQ + NSQR
+         LBDIIS = LADIIS + MXDITD*MXDITD
+         LPDIIS = LBDIIS + MAXIT2
+         LXDIIS = LPDIIS + MAXITA
+         LIODII = LXDIIS + MAXITA
+         LLAST  = LIODII + 4*MXDITD
+C
+         ETHRTP = ETHRSH
+         ETHRSH = 1.0D+02
+         MAXDIT = MAXDII
+         MAXDII = MXDITD
+         NDCDIT = NDCDIS
+         NDCDIS = 0
+      ELSE
+         LWRK   = LLAST
+         LWRK4  = LLAST
+         LWRK5  = LLAST
+         LQ     = LLAST
+         LADIIS = LLAST
+         LBDIIS = LLAST
+         LPDIIS = LLAST
+         LXDIIS = LLAST
+         LIODII = LLAST
+      ENDIF
+C
       NEED = LLAST - LOADFM - 1
       CALL GETFM (NEED)
+C
+      IF (DODIIS) CALL DAREAD(IDAF,IODA,X(LQ),NSQR,45,0)
 C
       IF(EXETYP.EQ.CHECK) GO TO 1200
 C
@@ -759,6 +866,12 @@ C
       DO 900 ID = 1,3
          ICEXT=0
          LAST = .FALSE.
+         ITDIIS = 1
+         IF(DODIIS) THEN
+            ERDIIS = 0.0D+00
+            NOTOPN = .TRUE.
+            CALL RACLOS(IRAF,'DELETE')
+         ENDIF
 C
 C  READ MOPAC TWO-ELECTRON INTEGRALS
 C
@@ -789,69 +902,185 @@ C
             CALL HMU (H1,ID,GEO,NFIRST,NLAST,MNAT,NORB,NUMAT)
          END IF
          CALL VCLR (F,1,NSQR)
+         CALL VCLR (D,1,NSQR)
 C
 C  IF POSSIBLE TRY TO FIND A BETTER STARTING VALUE FOR U TO
 C  GENERATE AN IMPROVED F MATRIX
 C
          IF (IWFLA.GT.0) THEN
+          IF (DCFLG) THEN
+C           ALTHOUGH DAF 113-115 ARE RESERVED FOR U(2W),
+C           INDUCED DENSITY MATRICES FOR OMEGA=0 ARE STORED 
+            CALL DAREAD(IDAF,IODA,D,NSQR,112+ID,0)
+          ELSE
             IOFFU = 100 + 6*(IWFLA-1)
             CALL DAREAD(IDAF,IODA,U,NSQR,IOFFU+ID,0)
             CALL DENSF (U,VEC,D,DA,F,NORB,NCLOSE)
-            IF (ABINIT) THEN
-               IF (DIRSCF) THEN
-                  CALL VCLR (F,1,NSQR)
-                  CALL TWOEI(RHF,.FALSE.,.TRUE.,.FALSE.,.FALSE.,
-     *                       INTTYP,SCHWRZ,NINT,NSCHWZ,NORB,L2,
-     *                       DUMMY,DUMMY,IDUMMY,1,
-     *                       X(LCLINT),NSH2,X(LGHOND),MAXG,X(LDDIJ),
-     *                       IA,DUMMY,DUMMY,DUMMY,DUMMY,X(LDSH),D,F,1)
-               ELSE
-                  CALL VCLR (F,1,NSQR)
-                  CALL F2NONS (D,F,X(LBUF),X(LIBUF),NINTMX,NOPK,1)
-               END IF
-               IF(GOPARR) THEN
-                  CALL DDI_GSUMF(2200,F,NSQR)
-                  IF (IBTYP.EQ.1) CALL DDI_DLBRESET
-               END IF
-            ELSE
-               CALL MPCFNS (D,F,X(LPA),X(LTWOEI),N2EL,NORB)
-            END IF
+          END IF
+          IF (ABINIT) THEN
+             IF (DIRSCF) THEN
+                CALL VCLR (F,1,NSQR)
+                CALL TWOEI(RHF,.FALSE.,.TRUE.,.FALSE.,.FALSE.,
+     *                     INTTYP,SCHWRZ,NINT,NSCHWZ,NORB,L2,
+     *                     DUMMY,DUMMY,IDUMMY,1,
+     *                     X(LCLINT),NSH2,X(LGHOND),MAXG,X(LDDIJ),
+     *                     IA,DUMMY,DUMMY,DUMMY,DUMMY,X(LDSH),D,F,1)
+             ELSE
+                CALL VCLR (F,1,NSQR)
+                CALL F2NONS (D,F,X(LBUF),X(LIBUF),NINTMX,NOPK,1)
+             END IF
+             IF(GOPARR) THEN
+                CALL DDI_GSUMF(2200,F,NSQR)
+                IF (IBTYP.EQ.1) CALL DDI_DLBRESET
+             END IF
+          ELSE
+             CALL MPCFNS (D,F,X(LPA),X(LTWOEI),N2EL,NORB)
+          END IF
          END IF
+         IF (FDIFF) THEN
+            CALL DCOPY(NSQR,D,1,X(LWRK1),1)
+            CALL DCOPY(NSQR,F,1,X(LWRK2),1)
+         ENDIF
          CALL VADD (F,1,H1,1,F,1,NSQR)
 C.................................................................
 C  LOOP STARTS HERE
 C.................................................................
          ICOUNT = 0
+         ALPHAW = 0.0D+00
+         IF(DBG) WRITE(IW,*) "ITER   ALPHA        DIFF        ",
+     *                       "DIIS ERROR  NON-0 INT."
    10    CONTINUE
          ICOUNT = ICOUNT + 1
          IF (ICOUNT.GT.MAXITA) LAST = .TRUE.
+         IF (DODIIS) CALL DCOPY(NSQR,F,1,X(LWRK4),1)
+C
+         IF(DCFLG) THEN
+C
+C           DIVIDE-AND-CONQUER TDHF CALCULATION
+C
+            DSKWSV=DSKWRK
+            DSKWRK=.FALSE.
+            CALL SEQREW(IDCVEC)
+            CALL SEQREW(IDCDMO)
+            CALL SEQREW(IDCEIG)
+            CALL SQREAD(IDCEIG,X(LEIGT),NLC1)
+            NCLOSV=NCLOSE
+            CALL SEQREW(IDCQ)
+C           ### SUBSYSTEM LOOP START ###
+            DO ISUB=1,NSUBS
+               CALL LOCREG(ISUB)
+               CALL TOLOC
+               NCLOSE=0
+               VAL1=FRMLVA-X(LEIGT+ILCST1(ISUB)-1)
+               DO WHILE (NCLOSE.LE.LNUM .AND. VAL1.GT.0.0D+00)
+                  NCLOSE=NCLOSE+1
+                  VAL1=FRMLVA-X(LEIGT+ILCST1(ISUB)+NCLOSE-1)
+               ENDDO
+               CALL SQT2LC(F,UOLD,NORB,LNUM,'F       ')
+               LNG=LNUM*LNUM
+               CALL SQREAD(IDCVEC,VEC,LNG)
 C
 C  CREATE G MATRIX.
 C
-         CALL TRANSFF (F,G,VEC,D,NORB)
+               CALL TRANSFF (UOLD,G,VEC,D,LNUM)
 C
 C  FORM U MATRIX
 C
-         CALL MAKEUF (U,UOLD,G,EIGS,LAST,NORB,DIFF)
+               CALL MAKEUF (U,UOLD,G,X(LEIGT+ILCST1(ISUB)-1),
+     *                      LASTSB,LNUM,DIFFSB)
 C
 C  FORM NEW DENSITY MATRIX
 C
-         CALL DENSF (U,VEC,D,DA,F,NORB,NCLOSE)
+               CALL DENSF (U,VEC,D,DA,UOLD,LNUM,NCLOSE)
+               CALL SQWRIT (IDCDMO,D,LNUM*LNUM)
+            ENDDO
+C           ### SUBSYSTEM LOOP END ###
+            NCLOSE=NCLOSV
+C
+C  FORM TOTAL DENSITY MATRIX
+C
+            CALL SQLC2T (IDCDMO,D,UOLD,NORB,'DENSITY ',.TRUE.)
+C
+C COMPUTE TEST ALPHA TO BE USED FOR A CONVERGENCE TEST
+C           NOTE: CONVERGENCE CRITERIA (USAGE OF ATOL) IN DC-TDHF
+C                 IS DIFFERENT FROM THAT IN NORMAL TDHF!!
+C
+            ALPHAO = ALPHAW
+            ALPHAW = AVAL(H1,D,NORB)
+            DIFF = ALPHAW - ALPHAO
+            CHK=DABS(DIFF)
+            IF(DABS(ALPHAW).GT.1.0D+00) CHK=DABS(DIFF/ALPHAW)
+            IF (CHK.LT.ATOL .AND. ICOUNT.GE.2) THEN
+               IF (LAST2) LAST=.TRUE.
+               LAST2=.TRUE.
+            ELSE
+               LAST2=.FALSE.
+            ENDIF
+            DSKWRK=DSKWSV
+         ELSE
+C
+C           NORMAL TDHF CALCULATION
+C
+C  CREATE G MATRIX.
+C
+            CALL TRANSFF (F,G,VEC,D,NORB)
+C
+C  FORM U MATRIX
+C
+            CALL MAKEUF (U,UOLD,G,EIGS,LAST,NORB,DIFF)
+C
+C  FORM NEW DENSITY MATRIX
+C
+            CALL DENSF (U,VEC,D,DA,F,NORB,NCLOSE)
 C
 C COMPUTE TEST ALPHA TO BE USED FOR A CONVERGENCE TEST
 C
-         ALPHAW = AVAL(H1,D,NORB)
+            ALPHAW = AVAL(H1,D,NORB)
+         ENDIF
+         IF(DBG) WRITE(IW,'(I5,F12.6,F12.6,F12.6,I12)') 
+     *                ICOUNT,ALPHAW,DIFF,ERDIIS,NINT
 C
 C  CREATE NEW FOCK MATRIX
 C
          IF (ABINIT) THEN
             IF (DIRSCF) THEN
                CALL VCLR (F,1,NSQR)
-               CALL TWOEI(RHF,.FALSE.,.TRUE.,.FALSE.,.FALSE.,
+               IF (FDIFF) THEN
+C
+                  CALL VSUB(X(LWRK1),1,D,1,X(LWRK1),1,NSQR)
+                  IF (DCFLG) THEN
+                     CALL DAREAD(IDAF,IODA,UOLD,L2,272,1)
+                     CALL TWOEIDC(RHF,.FALSE.,.TRUE.,.FALSE.,.FALSE.,
      *                    INTTYP,SCHWRZ,NINT,NSCHWZ,NORB,L2,
      *                    DUMMY,DUMMY,IDUMMY,1,
      *                    X(LCLINT),NSH2,X(LGHOND),MAXG,X(LDDIJ),
-     *                    IA,DUMMY,DUMMY,DUMMY,DUMMY,X(LDSH),D,F,1)
+     *                    IA,DUMMY,DUMMY,DUMMY,DUMMY,X(LDSH),X(LWRK1),
+     *                    F,1,UOLD)
+                  ELSE
+                     CALL TWOEI(RHF,.FALSE.,.TRUE.,.FALSE.,.FALSE.,
+     *                    INTTYP,SCHWRZ,NINT,NSCHWZ,NORB,L2,
+     *                    DUMMY,DUMMY,IDUMMY,1,
+     *                    X(LCLINT),NSH2,X(LGHOND),MAXG,X(LDDIJ),
+     *                    IA,DUMMY,DUMMY,DUMMY,DUMMY,
+     *                    X(LDSH),X(LWRK1),F,1)
+                  ENDIF
+               ELSE
+                  IF (DCFLG) THEN
+                     CALL DAREAD(IDAF,IODA,UOLD,L2,272,1)
+                     CALL TWOEIDC(RHF,.FALSE.,.TRUE.,.FALSE.,.FALSE.,
+     *                            INTTYP,SCHWRZ,NINT,NSCHWZ,NORB,L2,
+     *                            DUMMY,DUMMY,IDUMMY,1,
+     *                            X(LCLINT),NSH2,X(LGHOND),MAXG,
+     *                            X(LDDIJ),IA,DUMMY,DUMMY,DUMMY,DUMMY,
+     *                            X(LDSH),D,F,1,UOLD)
+                  ELSE
+                     CALL TWOEI(RHF,.FALSE.,.TRUE.,.FALSE.,.FALSE.,
+     *                         INTTYP,SCHWRZ,NINT,NSCHWZ,NORB,L2,
+     *                         DUMMY,DUMMY,IDUMMY,1,
+     *                         X(LCLINT),NSH2,X(LGHOND),MAXG,X(LDDIJ),
+     *                         IA,DUMMY,DUMMY,DUMMY,DUMMY,X(LDSH),D,F,1)
+                  ENDIF
+               ENDIF
             ELSE
                CALL VCLR (F,1,NSQR)
                CALL F2NONS (D,F,X(LBUF),X(LIBUF),NINTMX,NOPK,1)
@@ -894,16 +1123,31 @@ C
          ELSE
             CALL MPCFNS (D,F,X(LPA),X(LTWOEI),N2EL,NORB)
          END IF
+         IF(FDIFF) THEN
+            CALL DCOPY(NSQR,D,1,X(LWRK1),1)
+            CALL VADD (F,1,X(LWRK2),1,F,1,NSQR)
+            CALL DCOPY(NSQR,F,1,X(LWRK2),1)
+         END IF
 C
 C WARNING: USE OF SYMMETRY DOES NOT YET WORK  (NOSYM IS SET IN THDFX)
 C         CALL SYMHNS (NORB,F)
 C
          CALL VADD (F,1,H1,1,F,1,NSQR)
 C..............................................................
+C DIIS EXTRAPOLATION
+C..............................................................
+         IF(DODIIS) THEN
+            CALL VSUB(X(LWRK4),1,F,1,X(LWRK4),1,NSQR)
+            CALL DIIS(RHF,IW,ITDIIS,X(LQ),F,DMY,X(LWRK4),DMY,
+     *                X(LWRK5),X(LADIIS),X(LXDIIS),X(LPDIIS),X(LBDIIS),
+     *                X(LIODII),X(LWRK),NORB,NSQR,NSQR,MAXITA,
+     *                MAXIT2,4*MXDITD,ERDIIS,NOTOPN,DBG)
+         ENDIF
+C..............................................................
 C EXTRAPOLATE IF POSSIBLE
 C..............................................................
 C         EXTRAH = .TRUE.
-         IF (EXTRAH) THEN
+         IF (EXTRAH.AND.ITDIIS.EQ.1) THEN
             DAMPH=.FALSE.
             ITERV = 0
             DAMP0 = 0.0D+00
@@ -917,17 +1161,33 @@ C..............................................................
 C
 C COMPUTE ALPHA
 C
+C        INDUCED DENSITY MATRICES ARE SAVED TO DAF 113-115
+         IF(DCFLG) CALL DAWRIT(IDAF,IODA,D,NSQR,112+ID,0)
+C
          ALPHAW = AVAL(H1,D,NORB)
-         IF(MASWRK)WRITE (IW,2000) ALAB(ID),ALAB(ID),ALPHAW,
-     X                             DIFF,ICOUNT
+         IF(ICOUNT.GT.MAXITA .AND. MASWRK) WRITE(IW,2100)
+ 2100    FORMAT (1X,23(1H*)/' WARNING: NOT CONVERGED'/1X,23(1H*)) 
+         IF(MASWRK) THEN
+            IF(.NOT.DCFLG) THEN
+               WRITE (IW,2000) ALAB(ID),ALAB(ID),ALPHAW,
+     X                         DIFF,ICOUNT
+            ELSE
+               WRITE (IW,2020) ALAB(ID),ALAB(ID),ALPHAW,
+     X                         DIFF,ICOUNT
+            END IF
+         END IF
  2000    FORMAT ('      ALPHA ',A1,A1,' = ',F13.4,
      X           '      UA CONV. TO',1P,E9.2,' IN ',I3,' ITER.')
+ 2020    FORMAT ('      ALPHA ',A1,A1,' = ',F13.4,
+     X           '      ALPHA CONV. TO',1P,E9.2,' IN ',I3,' ITER.')
          ALPAVG = ALPAVG + ALPHAW
 C
 C  WRITE OUT U AND G FOR FUTURE USE
 C
-         CALL DAWRIT(IDAF,IODA,U,NSQR,IPOSU+ID,0)
-         CALL DAWRIT(IDAF,IODA,G,NSQR,IPOSG+ID,0)
+         IF (.NOT.DCFLG) THEN
+           CALL DAWRIT(IDAF,IODA,U,NSQR,IPOSU+ID,0)
+           CALL DAWRIT(IDAF,IODA,G,NSQR,IPOSG+ID,0)
+         END IF
 C
 C  COMPUTE OTHER COMPONENTS
 C
@@ -950,6 +1210,13 @@ C
  3100 FORMAT (/,'  ISOTROPIC AVERAGE ALPHA = ',F13.4,' A.U.',/)
 C
  1200 CONTINUE
+C
+      IF(DODIIS) THEN
+         MAXDII = MAXDIT
+         ETHRSH = ETHRTP
+         NDCDIS = NDCDIT
+      ENDIF
+      FDIFF  = FDIFFT
       CALL RETFM (NEED)
       IF(MASWRK) WRITE(IW,*) '....DONE WITH POLARIZABILITY....'
       CALL TIMIT(1)
@@ -1894,30 +2161,23 @@ C  FORM DENSITY MATRIX      CA*N*C+ + C*N*CA+
 C
 C INTERMEDIATE SUM
 C
+C  MK 2010: USE LIBRARY CODES FOR MATRIX MULTIPLICATION
+C
       CALL VCLR (D,1,NORBS*NORBS)
-      DO 110 I = 1,NORBS
-         DO 120 J = 1,NORBS
-            S1 = 0.0D+00
-            S2 = 0.0D+00
-            DO 130 K = 1,NCLOSE
-               S1 = S1 + U(I,K)*C(J,K)
-               S2 = S2 + C(I,K)*U(K,J)
-  130       CONTINUE
-            SCR(I,J) = 2.0D+00*S1
-            TMP(I,J) = 2.0D+00*S2
-  120    CONTINUE
-  110 CONTINUE
+      CALL MRARTR(U,NORBS,NORBS,NCLOSE,C,NORBS,NORBS,SCR,NORBS)
+      CALL MRARBR(C,NORBS,NORBS,NCLOSE,U,NORBS,NORBS,TMP,NORBS)
+      CALL DSCAL(NORBS*NORBS,2.0D+00,SCR,1)
+      CALL DSCAL(NORBS*NORBS,2.0D+00,TMP,1)
 C
+      CALL MRARTR(TMP,NORBS,NORBS,NORBS,C,NORBS,NORBS,D,NORBS)
+      CALL DCOPY(NORBS*NORBS,D,1,TMP,1)
+      CALL MRARBR(C,NORBS,NORBS,NORBS,SCR,NORBS,NORBS,D,NORBS)
+      DO I=1,NORBS
+        DO J=1,NORBS
+          D(J,I)=D(J,I)-TMP(J,I)
+        ENDDO
+      ENDDO
 C
-      DO 330 I = 1,NORBS
-         DO 320 J = 1,NORBS
-            SUM = 0.0D+00
-            DO 310 K = 1,NORBS
-               SUM = SUM + C(I,K)*SCR(K,J) - TMP(I,K)*C(J,K)
-  310       CONTINUE
-            D(I,J) = SUM
-  320    CONTINUE
-  330 CONTINUE
 C NOT NEEDED FOR GAMESS
 C      DO 530 I = 1,NORBS
 C         DO 520 J = 1,NORBS
@@ -2409,6 +2669,7 @@ C
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
       COMMON /ORDOPT/ NORDER(7)
       COMMON /PCKLAB/ LABSIZ
+      COMMON /INT2IC/ NINTIC,ININTIC,NXXIC,LBUFPIC,LIXIC,LABSIX,NINTIX
 C
       DIMENSION D(NUM,NUM,NPARAM),F(NUM,NUM,NPARAM),
      *          XX(NINTMX),IX(NINTMX)
@@ -2437,14 +2698,24 @@ C
 C
 C     ----- INTEGRALS ARE NOT IN SUPERMATRIX FORM (NOPK=.TRUE.) -----
 C
+C     FIRST, PROCESS IN CORE INTEGRALS
+      NPACKIC=0
   120 CONTINUE
-      CALL PREAD(IS,XX,IX,NXX,NINTMX)
-      IF (NXX .EQ. 0) GO TO 220
-      NINT = IABS(NXX)
-      IF (NINT .GT. NINTMX) CALL ABRT
+      IF(NPACKIC.EQ.0.AND.NINTIC.NE.0) THEN
+        NXX=NXXIC
+        NINT=NXX
+      ELSE
+C       IF ALL IN CORE BAIL OUT
+        IF(NINTIC.NE.0.AND.NXXIC.LT.NINTIC) GO TO 220
+        CALL PREAD(IS,XX(NINTIC+1),IX(ININTIC+1),NXX,NINTMX)
+        IF(NXX .EQ. 0) GO TO 220
+        NINT = IABS(NXX)
+        IF(NINT .GT. NINTMX) CALL ABRT
+      ENDIF
+C
       DO 200 M = 1,NINT
 C
-                       NPACK = M
+                       NPACK = NPACKIC+M
                        IF (LABSIZ .EQ. 2) THEN
 *I32                     LABEL = IX( 2*NPACK - 1 )
 *I32                     IPACK = ISHFT( LABEL, -16 )
@@ -2483,7 +2754,7 @@ C
                        L = LPACK
 C
 C
-      VAL = XX(M)
+      VAL = XX(NPACK)
       NIJ = I*(I - 1)/2 +J
       NKL = K*(K - 1)/2 +L
       IF (NORDER(7) .NE. 1) GO TO 130
@@ -2513,6 +2784,8 @@ C
       END DO
   200 CONTINUE
 C
+      IF(NPACKIC.EQ.0) NPACKIC=NINTIC
+C     SWITCH TO INTEGRALS ON DISK
       IF (NXX .GT. 0) GO TO 120
 C
 C     DONE CONSTRUCTING MATRIX, OFF DIAGONAL ELEMENTS NEED HALVING
@@ -4240,28 +4513,13 @@ C
       DIMENSION C(NORB,NORB),F(NORB,NORB),G(NORB,NORB),
      X          TEMP(NORB,NORB)
 C
-       DO 200 I = 1,NORB
-          DO 190 J = 1,NORB
-             TERM = 0.0D+00
-             DO 100 K = 1,NORB
-                TERM = TERM + F(I,K)*C(K,J)
-  100        CONTINUE
-             TEMP(I,J) = TERM
-  190     CONTINUE
-  200  CONTINUE
+C  MK 2010: USE LIBRARY CODES FOR MATRIX MULTIPLICATION
 C
-       DO 330 I = 1,NORB
-          DO 320 J = 1,NORB
-             TERM = 0.0D+00
-             DO 310 K = 1,NORB
-                TERM = TERM + C(K,I)*TEMP(K,J)
-  310        CONTINUE
-             G(I,J) = TERM
-  320     CONTINUE
-  330  CONTINUE
+      CALL MRARBR(F,NORB,NORB,NORB,C,NORB,NORB,TEMP,NORB)
+      CALL MRTRBR(C,NORB,NORB,NORB,TEMP,NORB,NORB,G,NORB)
 C
-       RETURN
-       END
+      RETURN
+      END
 C*MODULE TDHF    *DECK TRSPOU
       SUBROUTINE TRSPOU(A,B,NORBS,ITW,SIGN)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)

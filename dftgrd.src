@@ -1,3 +1,6 @@
+C 15 APR 11 - YI  - CHANGES FOR LOCAL RESPONSE DISPERSION METHOD
+C 15 APR 11 - MK  - ACCELERATE DC-DFT GRID EVALUATION
+C 15 APR 11 - DGF - GRDDFT,PRUNEOCT: FIX DLB PARALLELISM IN SG1/JANSSEN
 C 12 DEC 10 - MWS - OCT: SIMPLIFY STORAGE SPECIFICATION
 C 23 JUN 10 - MK  - SG1/JANSSEN FIX NUMBER OF GRID POINTS IN PARALLEL
 C 25 MAR 10 - MK,MWS  - DMATD,DEREXC: DC-UHF, SECRET BRAGG INPUT
@@ -608,8 +611,9 @@ C*MODULE DFTGRD  *DECK DMATD
      *                 DVMOYB,DVMOZB,VALGB,FA,FB,NCNTR,EEXC,TOTELE,NANG,
      *                 PTRAD,XDAT,YDAT,ZDAT,ATMXVEC,ATMYVEC,ATMZVEC,
      *                 ANGXVL,ANGYVL,ANGZVL,BSLRDII,RSQRD,PCOEFF,EXPS,
-     *                 AOX,GAOX,GAOY,GAOZ,IJX,IJY,IJZ,L1,BOHR,NEEDGR,
-     *                 IZCORE,UROHF,TOTKIN)
+     *                 AOX,GAOX,GAOY,GAOZ,NLCT,NELM,IJX,IJY,IJZ,L1,BOHR,
+     *                 NEEDGR,IZCORE,UROHF,TOTKIN,ATMPOL,ATPPOL,EFPOL,
+     *                 WTAB,DRSPH,MAXL,MAXM,NFREQ)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
@@ -642,6 +646,7 @@ C
 C
       PARAMETER (HALF=0.5D+00)
 C
+      DIMENSION NLCT(*),NELM(*)
       DIMENSION TOTWT(NAT,*),COEFFA(L1,*),COEFFB(L1,*),VMOA(L1),
      *          DVMOXA(L1),DVMOYA(L1),DVMOZA(L1),VMOB(L1),DVMOXB(L1),
      *          DVMOYB(L1),DVMOZB(L1),VALGA(L1),VALGB(L1),IZCORE(*)
@@ -653,6 +658,12 @@ C
      *          ANGXVL(NAT,*),ANGYVL(NAT,*),ANGZVL(NAT,*),EXPS(*)
       DIMENSION IJX(35),IJY(35),IJZ(35)
       DATA DEBUG/8HDEBUG   /, DFTGRD/8HDERDFT  /
+C
+      LOGICAL LRDFLG,MLTINT,DOLRD
+      COMMON /LRDISP/ ELRD6,ELRD8,ELRD10,EMULT,LRDFLG,MLTINT,DOLRD
+      DIMENSION WTAB(NAT,NAT,*),ATMPOL(NAT,MAXL,MAXM,MAXM,NFREQ),
+     *          ATPPOL(NAT,NAT,NFREQ),EFPOL(NAT),DRSPH(3,MAXL,MAXM)
+C-END
 C
 C=======================================================================
 C     THIS ROUTINE DOES A NUMERICAL INTEGRATION TO YIELD THE <I|V|A>
@@ -802,7 +813,8 @@ C***********************************************************************
                ROB=ROA
              ENDIF
           ELSE
-             CALL DFTTRFDM(UROHF,L1,COEFFA,COEFFB,AOX,VMOA,VMOB,CCUTOFF)
+             CALL DFTTRFDM(UROHF,L1,COEFFA,COEFFB,AOX,VMOA,VMOB,CCUTOFF,
+     *                     NLCT,NELM)
              ROA=DDOT(L1,AOX,1,VMOA,1)
              IF(UROHF) THEN
                 ROB=DDOT(L1,AOX,1,VMOB,1)
@@ -884,11 +896,11 @@ C***********************************************************************
                 ENDIF
               ELSE
                 CALL DFTTRFDM(UROHF,L1,COEFFA,COEFFB,GAOX,DVMOXA,DVMOXB,
-     *                        CCUTOFF)
+     *                        CCUTOFF,NLCT,NELM)
                 CALL DFTTRFDM(UROHF,L1,COEFFA,COEFFB,GAOY,DVMOYA,DVMOYB,
-     *                        CCUTOFF)
+     *                        CCUTOFF,NLCT,NELM)
                 CALL DFTTRFDM(UROHF,L1,COEFFA,COEFFB,GAOZ,DVMOZA,DVMOZB,
-     *                        CCUTOFF)
+     *                        CCUTOFF,NLCT,NELM)
                 TAUXA=DDOT(L1,GAOX,1,DVMOXA,1)
                 TAUYA=DDOT(L1,GAOY,1,DVMOYA,1)
                 TAUZA=DDOT(L1,GAOZ,1,DVMOZA,1)
@@ -945,11 +957,11 @@ C***********************************************************************
                 ENDIF
               ELSE
                 CALL DFTTRFDM(UROHF,L1,COEFFA,COEFFB,GAOX,DVMOXA,DVMOXB,
-     *                        CCUTOFF)
+     *                        CCUTOFF,NLCT,NELM)
                 CALL DFTTRFDM(UROHF,L1,COEFFA,COEFFB,GAOY,DVMOYA,DVMOYB,
-     *                        CCUTOFF)
+     *                        CCUTOFF,NLCT,NELM)
                 CALL DFTTRFDM(UROHF,L1,COEFFA,COEFFB,GAOZ,DVMOZA,DVMOZB,
-     *                        CCUTOFF)
+     *                        CCUTOFF,NLCT,NELM)
                 TAUXA=DDOT(L1,GAOX,1,DVMOXA,1)
                 TAUYA=DDOT(L1,GAOY,1,DVMOYA,1)
                 TAUZA=DDOT(L1,GAOZ,1,DVMOZA,1)
@@ -1044,6 +1056,12 @@ C
           TOTGRADY=TOTGRADY+FTOTWT*GRDBB
           TOTGRADZ=TOTGRADZ+FTOTWT*GRDAB
 C
+          IF (DOLRD) THEN
+            CALL LRDPOL(ATMPOL,ATPPOL,EFPOL,FTOTWT,WTAB,FACT,
+     *                  NCNTR,IPTME,ROA,ROB,GRDAA,GRDBB,GRDAB,DRSPH,
+     *                  XD,YD,ZD,MAXL,MAXM,NFREQ)
+          END IF
+C
    10   CONTINUE
 C
 C     ----- NEXT RADIAL POINT -----
@@ -1121,6 +1139,11 @@ C     ---- MEMORY ADDRESS -----
      *     IANGN,INEQATM,INDEG,IUNIQUE
       SAVE ISYMXY,ISYMXZ,ISYMYZ,ISYMRX,ISYMRY,ISYMRZ,ISYMI,
      *     ISYMC1,NSYMAT,NANG,NDER,NEEDGR,NDFTEN,UROHF,FIRST
+      SAVE INLCT,INELM
+C
+      SAVE IWTAB,IATMPOL,IATPPOL,IEFPOL,IDRSPH,
+     *     ISMATC,ISMATP,IWIGD,ICOEF6,ICOEF8,ICOEF10,IATMPE,LRDMEM
+      PARAMETER (MAXL=3,MAXM=7,MAXS=9,NFREQ=12)
 C
       PARAMETER (MXATM=2000,MXGTOT=20000)
       PARAMETER (MXGRID=10,MXGRIDTYP=10)
@@ -1158,6 +1181,13 @@ C
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
       COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
      *                MPLEVL,MPCTYP
+C
+      LOGICAL DCFLG
+      COMMON /DCOPT / SUBTYP,BUFTYP,SUBLNG,BUFRAD,NDCPRT,NSUBS,DCFLG
+      COMMON /DNSAO / IDENAO
+C
+      LOGICAL LRDFLG,MLTINT,DOLRD
+      COMMON /LRDISP/ ELRD6,ELRD8,ELRD10,EMULT,LRDFLG,MLTINT,DOLRD
 C
 C         THE ADJUSTABLE ARRAYS IN THE NEXT STATEMENT ARE USED ONLY
 C         BY THE VARIOUS ENTRY POINTS, WHERE THEY ARE CALLING ARGS.
@@ -1379,9 +1409,6 @@ C     *              PRUNEATOMS(2,ITYPE)
 11111       CONTINUE
          ENDDO
          NPT = NRAD*MAXANG
-         DO I=1,MXATM
-            NTOTGRIDPOINTS(I) = 0
-         ENDDO
       ELSE IF(JANS.GT.0) THEN
          IF(JANS.EQ.1) THEN
             NRAD = 95
@@ -1428,9 +1455,6 @@ C     *              PRUNEATOMS(2,ITYPE)
 11112       CONTINUE
          ENDDO
          NPT = NRAD*MAXANG
-         DO I=1,MXATM
-            NTOTGRIDPOINTS(I) = 0
-         ENDDO
       ELSE
 C
 C            UNDOCUMENTED $BRAGG GROUP TO READ IN BRAGG/SLATER RADII.
@@ -1481,9 +1505,9 @@ C
       NPTME=(NPT-1)/NPROC+1
       IF(DLB) NPTME=NPT
 C
-      CALL BASCHK(MAXL)
+      CALL BASCHK(MAXLL)
       CALL DERCHK(NDER)
-      NANG=MAXL+1+1
+      NANG=MAXLL+1+1
 C     1 FOR GRADIENT TERMS
       NANG1=NANG+1+NDER
 C
@@ -1614,6 +1638,47 @@ C
       IGAOZ   = IGAOY   + NUM
       LAST    = IGAOZ   + NUM
 C
+      INLCT   = LAST
+      INELM   = LAST
+      IF(IDENAO.NE.0) THEN
+        INELM = INLCT + NUM*NUM
+        LAST  = INELM + NUM*2
+      END IF
+C
+C     FOR LOCAL RESPONSE DISPERSION METHOD
+C
+      IF(LRDFLG) THEN
+         IWTAB   = LAST
+         IATMPOL = IWTAB   + NAT*NAT*NPTME
+         IATPPOL = IATMPOL + NAT*MAXL*MAXM*MAXM*NFREQ
+         IEFPOL  = IATPPOL + NAT*NAT*NFREQ
+         IDRSPH  = IEFPOL  + NAT
+         ISMATC  = IDRSPH  + 3*MAXL*MAXM
+         ISMATP  = ISMATC  + MAXS*MAXS
+         IWIGD   = ISMATP  + MAXS*MAXS
+         ICOEF6  = IWIGD   + MAXS
+         ICOEF8  = ICOEF6  + NAT*(NAT+1)/2
+         ICOEF10 = ICOEF8  + NAT*(NAT+1)/2
+         IATMPE  = ICOEF10 + NAT*(NAT+1)/2
+         LAST    = IATMPE  + NAT*(NAT+1)/2
+         LRDMEM  = LAST    - IATMPOL
+      ELSE
+         IWTAB   = LAST
+         IATMPOL = LAST
+         IATPPOL = LAST
+         IEFPOL  = LAST
+         IDRSPH  = LAST
+         ISMATC  = LAST
+         ISMATP  = LAST
+         IWIGD   = LAST
+         ICOEF6  = LAST
+         ICOEF8  = LAST
+         ICOEF10 = LAST
+         IATMPE  = LAST
+         LAST    = LAST
+         LRDMEM  = 0
+      END IF
+C
       NDFTEN=LAST
       RETURN
 C
@@ -1733,6 +1798,9 @@ C
 C
       CALL RADPT(X(IPTRAD),X(IWTRAD),NRAD)
       IF(DLB) CALL VCLR(X(ITOTWT),1,NAT*NPT)
+      IF(DLB .AND. LRDFLG) THEN
+        CALL VCLR(X(IWTAB),1,NAT*NAT*NPT)
+      END IF
 C
       DO 30 NCNTR = 1, NAT
 C
@@ -1767,7 +1835,7 @@ C              WRITE(IW,*) 'SETTING UP STANDARD GRID-1'
      *          X(IRI),X(IRIJ),X(IWTINTR),
      *          X(ITOTWT),X(IAIJ),BSLRD,
      *          X(IANGN),X(NAPTS),X(IPTRAD),X(IWTRAD),
-     *          NRAD,NLEB,BOHR,IZCORE,MAXANG,NGRIDS)
+     *          NRAD,NLEB,BOHR,IZCORE,MAXANG,NGRIDS,X(IWTAB))
         ELSE
            IF(NLEB(1).NE.0) THEN
 C              WRITE(IW,*) 'SETTING UP AN EM/LEBEDEV GRID'
@@ -1777,7 +1845,7 @@ C              WRITE(IW,*) 'SETTING UP AN EM/LEBEDEV GRID'
      *             X(IRI),X(IRIJ),X(IWTINTR),
      *             X(ITOTWT),X(IAIJ),BSLRD,
      *             X(IANGN),X(NAPTS),X(IPTRAD),X(IWTRAD),
-     *             NRAD,NLEB(1),BOHR,IZCORE)
+     *             NRAD,NLEB(1),BOHR,IZCORE,X(IWTAB))
            ELSE
 C              WRITE(IW,*) 'SETTING UP AN EM/POLAR COORD GRID'
               CALL GRDPT(NCNX,X(IWGHT),X(IXDAT),X(IYDAT),X(IZDAT),
@@ -1785,12 +1853,15 @@ C              WRITE(IW,*) 'SETTING UP AN EM/POLAR COORD GRID'
      *             X(IWTINTR),X(ITOTWT),X(IAIJ),X(IGLROOT),X(IGLWGHT),
      *             BSLRD,X(IANGN),X(IFACT),X(NAPTS),X(IPTRAD),X(IWTRAD),
      *             IQ2,IQ3,IQ4,IQ5,IQ6,IQ7,NRAD,NTHE,NPHI,OPTGRD,
-     *             BOHR,IZCORE)
+     *             BOHR,IZCORE,X(IWTAB))
            ENDIF
         ENDIF
  30   CONTINUE
 C
       IF(GOPARR.AND.DLB) CALL DDI_GSUMF(2314,X(ITOTWT),NAT*NPT)
+      IF(GOPARR.AND.DLB.AND.LRDFLG) THEN
+        CALL DDI_GSUMF(2350,X(IWTAB),NAT*NAT*NPT)
+      END IF
 C
 C     POSSIBLY SAVE GRID FOR THE GRADIENT AND HOPEFULLY THE HESSIAN
 C     THE LATTER CONDITION SAVES SOME TIME BY NOT WRITING THE COARSER
@@ -1816,12 +1887,28 @@ C
       CALL VCLR(FA,1,L2)
       IF (UROHF) CALL VCLR(FB,1,L2)
 C
+      IF(IDENAO.NE.0) THEN
+         IF(DCFLG) THEN
+            CALL DAREAD(IDAF,IODA,X(INLCT),L2,272,1)
+            CALL DFTNLC(X(INLCT),X(INELM),L1)
+         ELSE
+C           NLCT(1)=-1000 MEANS NON-DC CALCULATION
+            CALL IXSTOR(X(INLCT),1,-1000)
+C            IONE=-1
+C            CALL ICOPY(L2,IONE,0,X(INLCT),1)
+         END IF
+      END IF
+C
 C     ----- LOOP FOR ATOMS -----
 C
       TOTELE = ZERO
       TOTKIN = ZERO
       EEXC   = ZERO
       ECORL  = ZERO
+      IF(DOLRD) THEN
+        CALL VCLR(X(IATMPOL),1,LRDMEM)
+        IF (MASWRK) WRITE (IW,2000)
+      END IF
       DO 930 NCNTR = 1, NAT
         INC0=IXFTCH(X(IUNIQUE),NCNTR)
         IF(INC0.EQ.0) GOTO 930
@@ -1832,19 +1919,54 @@ C     ----------------------------------------------------------------
 C            CALCULATE THE EXCHANGE-CORRELATION ENERGY FUNCTIONAL
 C     ----------------------------------------------------------------
 C
-C        WRITE(IW,*)'CALLING DMATD'
+        NCNTRX = NCNTR
         CALL DMATD(X(ITOTWT),X(IFACT),X(NAPTS),COEFFA,COEFFB,X(IANGN),
      *             X(IFACTR),INC0,X(IVMOA),X(IDVMOXA),X(IDVMOYA),
      *             X(IDVMOZA),X(IVALGA),X(IVMOB),X(IDVMOXB),X(IDVMOYB),
-     *             X(IDVMOZB),X(IVALGB),FA,FB,NCNTR,EEXC,TOTELE,NANG,
+     *             X(IDVMOZB),X(IVALGB),FA,FB,NCNTRX,EEXC,TOTELE,NANG,
      *             X(IPTRAD),X(IXDAT),X(IYDAT),X(IZDAT),X(IATMXVC),
      *             X(IATMYVC),X(IATMZVC),X(IANGXV),X(IANGYV),X(IANGZV),
      *             BSLRD,X(IRSQRD),X(IPCOEFF),X(IEXPS),X(IAOX),X(IGAOX),
-     *             X(IGAOY),X(IGAOZ),IJX,IJY,IJZ,L1,BOHR,NEEDGR,IZCORE,
-     *             UROHF,TOTKIN)
+     *             X(IGAOY),X(IGAOZ),X(INLCT),X(INELM),IJX,IJY,IJZ,L1,
+     *             BOHR,NEEDGR,IZCORE,UROHF,TOTKIN,
+     *             X(IATMPOL),X(IATPPOL),X(IEFPOL),X(IWTAB),
+     *             X(IDRSPH),MAXL,MAXM,NFREQ)
 C
  930  CONTINUE
+C
+C     CALCULATE LRD ENERGY
+C
+      IF(DOLRD) THEN
+        IF (GOPARR) THEN
+          CALL DDI_GSUMF(2351,X(IATMPOL),NAT*MAXL*MAXM*MAXM*NFREQ)
+          CALL DDI_GSUMF(2352,X(IATPPOL),NAT*NAT*NFREQ)
+          CALL DDI_GSUMF(2353,X(IEFPOL),NAT)
+          CALL LRDENEG(X(IATMPOL),X(IEFPOL),
+     *                 X(ISMATC),X(ISMATP),X(IWIGD),
+     *                 X(ICOEF6),X(ICOEF8),X(ICOEF10),X(IATMPE),
+     *                 MAXL,MAXM,MAXS,NFREQ,ELRD6,ELRD8,ELRD10,
+     *                 X(IATMXVC),X(IATMYVC),X(IATMZVC),X(IRIJ),
+     *                 X(IUNIQUE))
+          IF (MLTINT)
+     *    CALL LRDMULT(X(IATPPOL),X(IEFPOL),NFREQ,EMULT,
+     *                 X(IATMXVC),X(IATMYVC),X(IATMZVC),X(IRIJ),
+     *                 X(IUNIQUE))
+        ELSE
+          CALL LRDENEG(X(IATMPOL),X(IEFPOL),
+     *                 X(ISMATC),X(ISMATP),X(IWIGD),
+     *                 X(ICOEF6),X(ICOEF8),X(ICOEF10),X(IATMPE),
+     *                 MAXL,MAXM,MAXS,NFREQ,ELRD6,ELRD8,ELRD10,
+     *                 X(IATMXVC),X(IATMYVC),X(IATMZVC),X(IRIJ),
+     *                 X(IUNIQUE))
+          IF (MLTINT)
+     *    CALL LRDMULT(X(IATPPOL),X(IEFPOL),NFREQ,EMULT,
+     *                 X(IATMXVC),X(IATMYVC),X(IATMZVC),X(IRIJ),
+     *                 X(IUNIQUE))
+        END IF
+      END IF
+C
       RETURN
+ 2000 FORMAT(10X,'--- CALCULATING LOCAL RESPONSE DISPERSION ENERGY ---')
 C
 C     ==================================================================
       ENTRY DFTGRAD(X,G2AXX,G2AYY,G2AZZ,G2AXY,G2AYZ,G2AXZ,
@@ -1852,6 +1974,19 @@ C     ==================================================================
      *              L1,TOTELE,GRDOUT)
 C     ==================================================================
 C     DFT CONTRIBUTIONS TO THE NUCLEAR GRADIENT.
+C
+      LL2=L1*(L1+1)/2
+      IF(IDENAO.NE.0) THEN
+         IF(DCFLG) THEN
+            CALL DAREAD(IDAF,IODA,X(INLCT),LL2,272,1)
+            CALL DFTNLC(X(INLCT),X(INELM),L1)
+         ELSE
+C           NLCT(1)=-1000 MEANS NON-DC CALCULATION
+            CALL IXSTOR(X(INLCT),1,-1000)
+C            IONE=-1
+C            CALL ICOPY(LL2,IONE,0,X(INLCT),1)
+         END IF
+      END IF
 C
 C     ----- LOOP FOR ATOMS -----
 C
@@ -1868,9 +2003,9 @@ C
      *              X(IYDAT),X(IZDAT),X(IATMXVC),X(IATMYVC),X(IATMZVC),
      *              X(IANGXV),X(IANGYV),X(IANGZV),BSLRD,X(IRSQRD),
      *              X(IPCOEFF),X(IEXPS),X(IAOX),X(IGAOX),X(IGAOY),
-     *              X(IGAOZ),G2AXX,G2AYY,G2AZZ,G2AXY,G2AYZ,G2AXZ,IJX,
-     *              IJY,IJZ,BOHR,NEEDGR,DEDFT,IZCORE,UVEC,DWTINT,DWTTOT,
-     *              DTOTWT,GRDOUT)
+     *              X(IGAOZ),G2AXX,G2AYY,G2AZZ,G2AXY,G2AYZ,G2AXZ,
+     *              X(INLCT),X(INELM),IJX,IJY,IJZ,BOHR,NEEDGR,DEDFT,
+     *              IZCORE,UVEC,DWTINT,DWTTOT,DTOTWT,GRDOUT)
  940  CONTINUE
       RETURN
 C1193 FORMAT(/'TOTAL EXC ENERGY',F20.10,'TOTAL ELECTRON',F20.10)
@@ -3166,7 +3301,8 @@ C*MODULE DFTGRD  *DECK PRUNEPT
      *                   TWGHT,ATMXVEC,ATMYVEC,ATMZVEC,
      *                   RI,RIJ,WTINTR,TOTWT,AIJ,BSLRDII,
      *                   IANGN,NAPTS,PTRAD,WTRAD,
-     *                   NRADPT,NLEBPT,BOHR,IZCORE,MAXPTS,NGRIDS)
+     *                   NRADPT,NLEBPT,BOHR,IZCORE,MAXPTS,NGRIDS,
+     *                   WTAB)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
@@ -3187,7 +3323,7 @@ C
      *          RI(NAT),RIJ(NAT,NAT),WTINTR(NAT),
      *          TOTWT(NAT,*),AIJ(NAT,NAT),
      *          BSLRDII(137),IANGN(NAT,2,NGRIDS),NAPTS(NAT),
-     *          PTRAD(NRADPT),WTRAD(NRADPT),IZCORE(*)
+     *          PTRAD(NRADPT),WTRAD(NRADPT),IZCORE(*),WTAB(NAT,NAT,*)
 C
 C=======================================================================
 C     THIS ROUTINE SETS UP THE NUMERICAL LEBEDEV BASED GRID FOR
@@ -3280,7 +3416,7 @@ C     WRITE(IW,*)'GOING INTO PRUNEOCT'
       CALL PRUNEOCT(ITMP,XDAT,YDAT,
      *     ZDAT,ATMXVEC,ATMYVEC,ATMZVEC,RI,RIJ,NAT,
      *     AIJ,WTINTR,TOTWT,WGHT,IANGN,
-     *     NCNTR,RAD,PTRAD,WTRAD)
+     *     NCNTR,RAD,PTRAD,WTRAD,WTAB)
 C
       RETURN
       END
@@ -3290,7 +3426,7 @@ C*MODULE DFTGRD  *DECK LEBPT
      *                 TWGHT,ATMXVEC,ATMYVEC,ATMZVEC,
      *                 RI,RIJ,WTINTR,TOTWT,AIJ,BSLRDII,
      *                 IANGN,NAPTS,PTRAD,WTRAD,
-     *                 NRADPT,NLEBPT,BOHR,IZCORE)
+     *                 NRADPT,NLEBPT,BOHR,IZCORE,WTAB)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
@@ -3310,7 +3446,7 @@ C
      *          RI(NAT),RIJ(NAT,NAT),WTINTR(NAT),TOTWT(NAT,*),
      *          AIJ(NAT,NAT),
      *          BSLRDII(137),IANGN(NAT,2),NAPTS(NAT),
-     *          PTRAD(NRADPT),WTRAD(NRADPT),IZCORE(*)
+     *          PTRAD(NRADPT),WTRAD(NRADPT),IZCORE(*),WTAB(NAT,NAT,*)
 C
 C=======================================================================
 C     THIS ROUTINE SETS UP THE NUMERICAL LEBEDEV GRID FOR DIFFERENT
@@ -3396,7 +3532,8 @@ C         WRITE(IW,*)'WHGT: ',I,TWGHT(I)
       IANGN(NCNTR,2) = NLEBPT
 C
       CALL OCT(ITMP,XDAT,YDAT,ZDAT,ATMXVEC,ATMYVEC,ATMZVEC,RI,RIJ,NAT,
-     *         AIJ,WTINTR,TOTWT,WGHT,IANGN,NCNTR,RAD,NAPTS,PTRAD,WTRAD)
+     *         AIJ,WTINTR,TOTWT,WGHT,IANGN,NCNTR,RAD,NAPTS,PTRAD,WTRAD,
+     *         WTAB)
       RETURN
       END
 C
@@ -3406,7 +3543,7 @@ C*MODULE DFTGRD  *DECK GRDPT
      *                 TOTWT,AIJ,GLROOT,GLWGHT,BSLRDII,
      *                 IANGN,IIFACT,NAPTS,PTRAD,WTRAD,
      *                 IQ2,IQ3,IQ4,IQ5,IQ6,IQ7,
-     *                 NRADPT,NTHE,NPHI,OPTGRD,BOHR,IZCORE)
+     *                 NRADPT,NTHE,NPHI,OPTGRD,BOHR,IZCORE,WTAB)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
@@ -3416,7 +3553,8 @@ C
      >          RI(NAT),RIJ(NAT,NAT),WTINTR(NAT),TOTWT(NAT,*),
      >          AIJ(NAT,NAT),GLROOT(NTHE,NTHE),GLWGHT(NTHE,NTHE),
      *          BSLRDII(137),IANGN(NAT,2),IIFACT(NAT),NAPTS(NAT),
-     *          PTRAD(NRADPT),WTRAD(NRADPT),IZCORE(*)
+     *          PTRAD(NRADPT),WTRAD(NRADPT),IZCORE(*),
+     *          WTAB(NAT,NAT,*)
 C
       LOGICAL   OPTGRD,GOPARR,DSKWRK,MASWRK
 C
@@ -3620,7 +3758,8 @@ C**********************************************************************
       IANGN(NCNTR,2)=(ITHEB-ITHEA)*(IPHIB-IPHIA+1)+IPHIB
 C
       CALL OCT(ITMP,XDAT,YDAT,ZDAT,ATMXVEC,ATMYVEC,ATMZVEC,RI,RIJ,NAT,
-     *         AIJ,WTINTR,TOTWT,WGHT,IANGN,NCNTR,RAD,NAPTS,PTRAD,WTRAD)
+     *         AIJ,WTINTR,TOTWT,WGHT,IANGN,NCNTR,RAD,NAPTS,PTRAD,WTRAD,
+     *         WTAB)
 C
 C**********************************************************************
 C     EXTRA DO LOOP WITH REGARD TO IPHI
@@ -3655,7 +3794,8 @@ C
      >    -(IPHIA2-1)
 C
       CALL OCT(ITMP,XDAT,YDAT,ZDAT,ATMXVEC,ATMYVEC,ATMZVEC,RI,RIJ,NAT,
-     *         AIJ,WTINTR,TOTWT,WGHT,IANGN,NCNTR,RAD,NAPTS,PTRAD,WTRAD)
+     *         AIJ,WTINTR,TOTWT,WGHT,IANGN,NCNTR,RAD,NAPTS,PTRAD,WTRAD,
+     *         WTAB)
       IANGN(NCNTR,1)=1
       RETURN
  1000 FORMAT(1X,'NTHE HAS TO BE A MULTIPLE OF ',I1,' AND NPHI OF ',I1/,
@@ -4368,8 +4508,8 @@ C*MODULE DFTGRD  *DECK DEREXC
      *                  NCNTR,L1,TOTELE,NANG,PTRAD,XDAT,YDAT,ZDAT,
      *                  ATMXVEC,ATMYVEC,ATMZVEC,ANGXVL,ANGYVL,ANGZVL,
      *                  BSLRDII,RSQRD,PCOEFF,EXPS,AOX,GAOX,GAOY,GAOZ,
-     *                  G2AOXX,G2AOYY,G2AOZZ,G2AOXY,G2AOYZ,G2AOXZ,
-     *                  IJX,IJY,IJZ,BOHR,NEEDGR,DEDFT,IZCORE,UVEC,
+     *                  G2AOXX,G2AOYY,G2AOZZ,G2AOXY,G2AOYZ,G2AOXZ,NLCT,
+     *                  NELM,IJX,IJY,IJZ,BOHR,NEEDGR,DEDFT,IZCORE,UVEC,
      *                  DWTINT,DWTTOT,DTOTWT,OUT)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
@@ -4417,6 +4557,7 @@ C
      *          ,AIJ(NAT,NAT),WTRAD(*),UVEC(3,NAT),DWTINT(3,NAT,NAT),
      *          DWTTOT(3,NAT),DTOTWT(3,NAT)
       DIMENSION IJX(35),IJY(35),IJZ(35)
+      DIMENSION NLCT(*),NELM(*)
 C
       DATA DEBUG/8HDEBUG   /, DFTDER/8HDFTDER  /
       DATA UHF,ROHF/8HUHF     ,8HROHF    /
@@ -4598,7 +4739,8 @@ C***********************************************************************
                ROB=ROA
              ENDIF
           ELSE
-             CALL DFTTRFDM(UROHF,L1,COEFFA,COEFFB,AOX,VMOA,VMOB,CCUTOFF)
+             CALL DFTTRFDM(UROHF,L1,COEFFA,COEFFB,AOX,VMOA,VMOB,CCUTOFF,
+     *                     NLCT,NELM)
              ROA=DDOT(L1,AOX,1,VMOA,1)
              IF(UROHF) THEN
                 ROB=DDOT(L1,AOX,1,VMOB,1)
@@ -4689,11 +4831,11 @@ C***********************************************************************
                 ENDIF
               ELSE
                 CALL DFTTRFDM(UROHF,L1,COEFFA,COEFFB,GAOX,DVMOXA,DVMOXB,
-     *                        CCUTOFF)
+     *                        CCUTOFF,NLCT,NELM)
                 CALL DFTTRFDM(UROHF,L1,COEFFA,COEFFB,GAOY,DVMOYA,DVMOYB,
-     *                        CCUTOFF)
+     *                        CCUTOFF,NLCT,NELM)
                 CALL DFTTRFDM(UROHF,L1,COEFFA,COEFFB,GAOZ,DVMOZA,DVMOZB,
-     *                        CCUTOFF)
+     *                        CCUTOFF,NLCT,NELM)
                 TAUXA=DDOT(L1,GAOX,1,DVMOXA,1)
                 TAUYA=DDOT(L1,GAOY,1,DVMOYA,1)
                 TAUZA=DDOT(L1,GAOZ,1,DVMOZA,1)
@@ -4747,11 +4889,11 @@ C***********************************************************************
                 ENDIF
               ELSE
                 CALL DFTTRFDM(UROHF,L1,COEFFA,COEFFB,GAOX,DVMOXA,DVMOXB,
-     *                        CCUTOFF)
+     *                        CCUTOFF,NLCT,NELM)
                 CALL DFTTRFDM(UROHF,L1,COEFFA,COEFFB,GAOY,DVMOYA,DVMOYB,
-     *                        CCUTOFF)
+     *                        CCUTOFF,NLCT,NELM)
                 CALL DFTTRFDM(UROHF,L1,COEFFA,COEFFB,GAOZ,DVMOZA,DVMOZB,
-     *                        CCUTOFF)
+     *                        CCUTOFF,NLCT,NELM)
                 TAUXA=DDOT(L1,GAOX,1,DVMOXA,1)*HALF
                 TAUYA=DDOT(L1,GAOY,1,DVMOYA,1)*HALF
                 TAUZA=DDOT(L1,GAOZ,1,DVMOZA,1)*HALF
@@ -4879,7 +5021,7 @@ C
 C*MODULE DFTGRD  *DECK OCT
       SUBROUTINE OCT(ITMP,XDAT,YDAT,ZDAT,ATMXVEC,ATMYVEC,ATMZVEC,RI,
      *               RIJ,NAT,AIJ,WTINTR,TOTWT,WGHT,IANGN,NCNTR,RAD,
-     *               NAPTS,PTRAD,WTRAD)
+     *               NAPTS,PTRAD,WTRAD,WTAB)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
@@ -4902,6 +5044,10 @@ C              OLD G77 COMPILERS WITH INDEXED DIMS FROM COMMON?
      *          RI(NAT),RIJ(NAT,NAT),WTINTR(NAT),TOTWT(NAT,*),
      *          AIJ(NAT,NAT),IANGN(NAT,2),NAPTS(NAT),PTRAD(ITMP),
      *          WTRAD(ITMP)
+C
+      LOGICAL LRDFLG,MLTINT,DOLRD
+      COMMON /LRDISP/ ELRD6,ELRD8,ELRD10,EMULT,LRDFLG,MLTINT,DOLRD
+      DIMENSION WTAB(NAT,NAT,*)
 C
       DATA CHECK/8HCHECK   /
 C
@@ -5014,6 +5160,13 @@ C---  IF(IRAD.EQ.1 .AND. I.LE.5) WRITE(6,4) I,RADWT,ATMWT,WGHT(NCNTR,I)
 C---4 FORMAT(1X,'WEIGHTS IN OCT:',I5,3F15.10)
 C
             TOTWT(NCNTR,IPTME)=ATMWT*RADWT*WGHT(NCNTR,I)
+C
+            IF(LRDFLG) THEN
+              DO IATM=1,NAT
+                WTAB(NCNTR,IATM,IPTME)=WTINTR(IATM)/WTTOT
+              END DO
+            END IF
+C
   605    CONTINUE
   600 CONTINUE
       RETURN
@@ -5021,7 +5174,7 @@ C
 C*MODULE DFTGRD  *DECK PRUNEOCT
       SUBROUTINE PRUNEOCT(ITMP,XDAT,YDAT,ZDAT,ATMXVEC,ATMYVEC,ATMZVEC,
      *                    RI,RIJ,NAT,AIJ,WTINTR,TOTWT,WGHT,IANGN,
-     *                    NCNTR,RAD,PTRAD,WTRAD)
+     *                    NCNTR,RAD,PTRAD,WTRAD,WTAB)
 C**********************************************************************
 C
 C     THIS ROUTINE SETS UP THE NUMERICAL GRID FOR THE XYZ OCTANT
@@ -5047,6 +5200,10 @@ C
      *          AIJ(NAT,NAT),IANGN(NAT,2,NGRIDS),
      *          PTRAD(ITMP),WTRAD(ITMP)
 C
+      LOGICAL LRDFLG,MLTINT,DOLRD
+      COMMON /LRDISP/ ELRD6,ELRD8,ELRD10,EMULT,LRDFLG,MLTINT,DOLRD
+      DIMENSION WTAB(NAT,NAT,*)
+C
 C**********************************************************************
 C
 C     DETERMINE GRID POINT VOLUMES (=WEIGHTS) FOR ONE OCTANT.
@@ -5059,6 +5216,8 @@ C     WRITE(IW,*)'ITMP,IANGS:',ITMP,IANGN(NCNTR,1),IANGN(NCNTR,2)
 C     WRITE(IW,*)'ZDAT: ',NCNTR,ZDAT(NCNTR,5)
 C     WRITE(IW,*)'RAD: ',RAD
       IGRID = 1
+C
+      NTOTGRIDPOINTS(NCNTR)=0
 C
       DO 600 IRAD=1,ITMP
          RADWT=RAD*RAD*RAD*WTRAD(IRAD)
@@ -5145,6 +5304,12 @@ C
 C         WRITE(6,'(A,2I5,3F30.10)')'WEIGHTS (OCT):',I,IGRID,
 C     *        RADWT,ATMWT,WGHT(NCNTR,I,IGRID)
          TOTWT(NCNTR,IPTME)=ATMWT*RADWT*WGHT(NCNTR,I,IGRID)
+C
+         IF(LRDFLG) THEN
+           DO IATM=1,NAT
+             WTAB(NCNTR,IATM,IPTME)=WTINTR(IATM)/WTTOT
+           END DO
+         END IF
 C
   605    CONTINUE
   600 CONTINUE
