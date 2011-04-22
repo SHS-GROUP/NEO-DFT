@@ -1,3 +1,5 @@
+C 11 AUG 10 - TN  - CHANGES FOR FMO 4.0
+C 11 AUG 10 - MWS - FIX PARALLEL ADDITION OF MCP TERMS TO TOTAL GRADIENT
 C 10 MAY 10 - TZ  - CHANGE MXT=4 TO 10, MXT1=5 TO 10 FOR MORE MCP TERMS
 C 15 DEC 08 - HM  - CHANGE MXVO & MXCO DIMENSION FOR LARGER MCPGRD CALC
 C  4 MAR 08 - HM  - L-SHELL TREATMENT WAS ADDED
@@ -63,7 +65,7 @@ C     (OEMP(I,IO),I=1,NTC(IO)): EXPONENTS OF THE CIO
 C     (CEMP(I,IO),I=1,NTC(IO)): COEFFICIENTS OF THE CIO
 C
 C=======================================================================
-      SUBROUTINE MCPGRD(EG,DC,DD,OVMP,DVMP,MXCO,MXVO)
+      SUBROUTINE MCPGRD(EG,DC,EGMCP,OVMP,DVMP,MXCO,MXVO)
 C=======================================================================
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       PARAMETER (MXCS=1000,MXNT=40)
@@ -74,7 +76,8 @@ C=======================================================================
      &                NT(MXCS),NCO,NAO,NCS,NATM
       COMMON /IOFILE/ IR,IW,IP,IJK,IJKT,IDAF,NAV,IODA(950)
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
-      DIMENSION EG(3,*),DC(*),DD(3,*),OVMP(MXCO,MXVO),DVMP(MXCO,MXVO,3)
+      DIMENSION EG(3,*),EGMCP(3,*),DC(*),
+     *          OVMP(MXCO,MXVO),DVMP(MXCO,MXVO,3)
       LOGICAL GOPARR,DSKWRK,MASWRK
 C
       T0 = 0.0D+00
@@ -107,19 +110,7 @@ C
          STOP
       ENDIF
 C
-      DO IATM=1,NATM
-         DO IX=1,3
-            DD(IX,IATM)=EG(IX,IATM)
-         ENDDO
-      ENDDO
-C
-      CALL MCPDER(EG,DC,OVMP,DVMP,MXCO,MXVO)
-C
-      DO IATM=1,NATM
-         DO IX=1,3
-            DD(IX,IATM)=EG(IX,IATM)-DD(IX,IATM)
-         ENDDO
-      ENDDO
+      CALL MCPDER(EG,EGMCP,DC,OVMP,DVMP,MXCO,MXVO)
 C
       IF (MASWRK) THEN
          CALL TSECND(T1)
@@ -130,7 +121,7 @@ C
       RETURN
       END
 C=======================================================================
-      SUBROUTINE MCPDER(EG,DC,OVMP,DVMP,MXCO,MXVO)
+      SUBROUTINE MCPDER(EG,EGMCP,DC,OVMP,DVMP,MXCO,MXVO)
 C=======================================================================
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       PARAMETER ( MXCS=1000,MXATM=2000 )
@@ -152,11 +143,13 @@ C=======================================================================
       COMMON /MCPOUT/ CTERM(MXC,MXC),DTERM(MXC,MXC)
       COMMON /MCPOUTG/CTERMG(MXC,3,MXC),DTERMG(MXC,3,MXC)
       COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
-      DIMENSION DC(*),OVMP(MXCO,MXVO),DVMP(MXCO,MXVO,3)
-      DIMENSION EG(3,MXATM),EGLOC(3,MXATM),EGMCP(3,MXATM)
-      DIMENSION EG_WFCD(3,MXATM),EG_WFE(3,MXATM)
-      DIMENSION EG_HFCD(3,MXATM),EG_HFE(3,MXATM)
-      DIMENSION WW(MXATM)
+C
+      DIMENSION DC(*),OVMP(MXCO,MXVO),DVMP(MXCO,MXVO,3),
+     *          EG(3,*),EGMCP(3,*)
+      DIMENSION EG_WFCD(3,MXATM),EG_WFE(3,MXATM),
+     *          EG_HFCD(3,MXATM),EG_HFE(3,MXATM),
+     *          EGLOC(3,MXATM),WW(MXATM)
+C
       PARAMETER (MAXSP=6)
       DIMENSION NSP(0:MAXSP)
       DATA (NSP(I),I=0,MAXSP)/0,1,3,6,10,15,21/
@@ -1404,21 +1397,26 @@ C
          ENDIF
       ENDIF
 C
-C     GET MCP-GRADIENT TOTAL CONTRIBUTION
+C     GET TOTAL MCP CONTRIBUTION IN -EGMCP-, ADD TO RUNNING TOTAL -EG-
+C         THE FOUR MCP CONTRIBUTIONS ARE ALREADY GLOBALLY SUMMED,
+C         SO ACCUMULATE THEM ONLY INTO ONE NODE'S TOTAL MCP TERMS,
+C         AS THE FINAL -EG- GRADIENT WILL BE SUMMED AGAIN LATER,
+C         WHEN WE RETURN TO THE MAIN GRADIENT DRIVER.
+C
       IF (MASWRK) THEN
          DO I=1,NATM
             DO J=1,3
-               EGMCP(J,I)=0.0D+00
+               EGMCP(J,I) = EG_WFCD(J,I) + EG_WFE(J,I)
+     *                    + EG_HFCD(J,I) + EG_HFE(J,I)
             ENDDO
          ENDDO
-C
-         DO I=1,NATM
-            DO J=1,3
-               EGMCP(J,I) = EGMCP(J,I)
-     &              + EG_WFCD(J,I) + EG_WFE(J,I)
-     &              + EG_HFCD(J,I) + EG_HFE(J,I)
-            ENDDO
-         ENDDO
+         IF (DBG) THEN
+            WRITE (IW,5000)
+            CALL EGOUT(EGMCP,NATM)
+            WRITE (IW,5010)
+         ENDIF
+      ELSE
+         CALL VCLR(EGMCP,1,3*NATM)
       ENDIF
 C
       DO I=1,NATM
@@ -1427,17 +1425,7 @@ C
          ENDDO
       ENDDO
 C
-C
-C     PRINT OUT MCP-GRADIENT FOR DEBUG
-C
-      IF (DBG) THEN
-         IF (MASWRK) THEN
-            WRITE (IW,5000)
-C
-            CALL EGOUT(EGMCP,NATM)
-            WRITE (IW,5010)
-         ENDIF
-      ENDIF
+      RETURN
 C
  999  FORMAT(/1X,'BEGINNING MCP GRADIENT...')
  1999 FORMAT(/5X,'=== WF-CONTRIBUTION OF MCP-C&D TERMS ===')
@@ -1448,7 +1436,6 @@ C
      &       /5X,'=== THE TOTAL MCP CONTRIBUTION TO EG ==='
      &       /5X,40(1H=))
  5010 FORMAT(/,' ...... END OF -MCP- GRADIENT ..... ')
-      RETURN
       END
 C=======================================================================
       SUBROUTINE WFPROJ(IAO,JAO,W1,W2,OVMP,DVMP,IX,MXCO,MXVO)
@@ -1877,6 +1864,7 @@ C=======================================================================
       PARAMETER ( MXMPA=3*MXATM,MXMPSH=2*MXATM, MXMPGT=5*MXMPSH )
       PARAMETER ( MXT1=10,MXIO=202,MXNT=40,MXELM=30,MXPOS=100 )
       PARAMETER ( MAXSP=5 )
+      LOGICAL LMCPFMO, LSKPBDA
       COMMON /ABDATA/ AG(MXNT,MXCS),CGI(MXNT,MXCS),
      &                X(MXATM),Y(MXATM),Z(MXATM),
      &                NATOM(MXATM),MATOM(MXCS),NG(MXCS),MG(MXCS),
@@ -1888,6 +1876,8 @@ C=======================================================================
      &                NSIT(MXPOS,MXELM),NPOS(MXELM),NEFF(MXELM),
      &                NQNDMP(4,MXIO),IPOS(MXPOS,MXIO),MPOS(MXIO),
      &                NTC(MXIO),NGC(MXIO),IPSET,IOSET,NCO,NATM
+      COMMON /MCPFMO/ IMCPFMO,LFZCOR,LIFMPTYP,LIFMPTYP2,LMCPSW,
+     *                LIZCOR2,IMP0,JMP0,ICORSH0,IGTF0
       COMMON /INFOA / NATOMS,ICH,MUL,NBASIS,NQMT,NE,NA,NB,
      &                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
 C
@@ -1983,16 +1973,31 @@ C
          NATOM(IATM)=INT(ZAN(IATM)+0.01D+00)
       ENDDO
 C
+      LMCPFMO = IMCPFMO.EQ.1
+C
       DO IATM=1,NATM
          IF (MPSKP(IATM).EQ.0) THEN
             IF (IELM.GE.1) THEN
                DO J=1,IELM
                   IF (IAN(IATM).EQ.IZNUC(J)) THEN
-                     NPOS(J) = NPOS(J)+1
-                     NSIT(NPOS(J),J) = IATM
-                     N0=N0+NOAN0(IATM)
-                     N1=N1+NOAN1(IATM)
-                     GOTO 10
+C
+C                   TREATMENT OF BDA IN FMO/MCP
+                    IF (LMCPFMO) THEN
+                      LSKPBDA = NEFF(J).EQ.NATOM(IATM)
+                      IF (LSKPBDA) THEN
+                        NPOS(J) = NPOS(J)+1
+                        NSIT(NPOS(J),J) = IATM
+                        N0=N0+NOAN0(IATM)
+                        N1=N1+NOAN1(IATM)
+                        GOTO 10
+                      END IF
+                    ELSE
+                        NPOS(J) = NPOS(J)+1
+                        NSIT(NPOS(J),J) = IATM
+                        N0=N0+NOAN0(IATM)
+                        N1=N1+NOAN1(IATM)
+                        GOTO 10
+                    END IF
                   ENDIF
                ENDDO
 C

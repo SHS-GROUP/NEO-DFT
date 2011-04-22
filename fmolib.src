@@ -1,3 +1,4 @@
+C 11 Aug 10 - DGF,TN - changes for FMO 4.0 
 C 14 Oct 09 - DGF - changes for FMO 3.3
 C 22 May 09 - MWS - synchronize DFGRID and INFOTD common
 C 12 Jan 09 - DGF - additional changes for FMO 3.2
@@ -39,7 +40,7 @@ C*MODULE fmolib  *DECK makemol
      *                liodcfmo,ljob2grp,lfmopg,lemocdr,luntxyz,luntrot,
      *                lstonep,lmapsu,lfrgmul,lclmo,lialmo,lindlmo,
      *                latclmo,llmobdf,lfgflmo,lnfglmo,llfglmo,lpfglmo,
-     *                LPOPDMAT
+     *                LPOPDMAT,lidmpnt,liddpnt,livmpnt
 c
       call makmol(ifg,jfg,kfg,ilayer,itask,nat0,nshell0,ngau0,ne0,ich0,
      *            mul0,runqm,x(lichfg),x(lmulfg),x(lfrgnam),x(liaglob),
@@ -71,9 +72,10 @@ C*MODULE fmolib  *DECK makmol
      *          scffrg(*),fmoscf(*),INTYP(MXSH),NS(MXATM),KS(MXATM)
       COMMON /BASSPH/ QMTTOL,ISPHER
       COMMON /CORE  / CORE(107)
-      COMMON /EFPFMO/ IEFPFMO,ISWENUC,REPNUCEFP,EFPEFP,RUNEFP
+      COMMON /DMPING/ SHIFTO,SHIFTV,DMPCUT,SWDIIS,DIRTHR
+      COMMON /EFPFMO/ RUNEFP,REFFMO,REPNUCEFP,IEFPFMO,ISWENUC,EFPEFP
       COMMON /ENRGYS/ ENUCR,EELCT,ETOT,SZ,SZZ,ECORE,ESCF,EERD,E1,E2,
-     *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2)
+     *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2),EDISP
       COMMON /FMCOM / X(1)
       COMMON /GDDI/   ISCOPE,NGROUPS,MYGROUP,MEGLOB,npglob,nnglob,JBTYP,
      *                ISGDDI,PAROUT,INITGDDI
@@ -101,15 +103,16 @@ c     common /fmolat/ untang(3),untorg(3),respbc(4),abclat(3),anglat(3),
 c    *                symtra(3,24),symope(3,3,24),iatorg,nsymop,maxklms,
 c    *                ioporg(3),iopdir(3),iopabc(3),iopang(3)
       common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
-     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(3),
-     *                orshft,cnvafo,IXESP,mxitfg,nguess,NBSSE,modorb,
-     *                modpar,irststp,irstlay,nprfmo,nfmopal,modprp,
-     *                maxl1c,ipieda,modgrd,modesp,ivmul,modlmo,nopden,
-     *                mofock
+     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
+     *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
+     *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
+     *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
+     *                modlmo,nopden,mofock
       common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
      *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
      *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
-     *                IESDPPC,idoprop,mp2run,icurit
+     *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
+     *                iddcur,nddleft,ivmfmo
       common /fmoshl/ fzan(MXAFMO),fEX(MXGFMO),fC(MXGFMO,MAXL),
      *                LSTART(MXSFMO),LATOM(MXSFMO),LTYPE(MXSFMO),
      *                LNG(MXSFMO),LMIN(MXSFMO),LMAX(MXSFMO),llay(MXAFMO)
@@ -422,7 +425,11 @@ c     fragment. ONly call MP2inp when external monomers are not around.
       MPTEST=.FALSE.
       if(itask.ne.1.and.(icurfg.eq.0.or.ifmostp.eq.1.and.nbsse.eq.3)
      *   .and.ifmostp.ne.6) then
-        if(urohf) CALL SCFIN
+        if(urohf) then
+          swdiisv=swdiis
+          CALL SCFIN
+          swdiis=swdiisv
+        endif
         if(mplevl.ne.0) call MP2INP(mptest)
         IF(CCTYP.NE.RNONE) CALL CCINP
         IF(CCTYP.EQ.EOMSD.OR.CCTYP.EQ.EOMSDT.OR.CCTYP.EQ.CRCCL) 
@@ -430,7 +437,7 @@ c     fragment. ONly call MP2inp when external monomers are not around.
         IF(SCFTYP.EQ.RMC) CALL MCIN
         IF(CITYP.EQ.CIS) CALL CISINP
         IF(TDDFTYP.NE.RNONE) CALL TDDINP
-        IF(IEFPFMO.EQ.1) CALL EFPFMOIO(1) 
+        IF(IEFPFMO.NE.0) CALL EFPFMOIO(1) 
       endif
       ENUCR  = ENUC(NAT,ZAN,C)
 c     if(itask.ne.1.and..not.dirscf.and..not.dirtrf) call mod2ei
@@ -589,11 +596,11 @@ C*MODULE fmolib  *DECK projgues
       common /fmodim/ maxbnd,maxknd,maxcbs,maxcao,maxvec,maxl1,maxnat,
      *                maxabd,maxbas,maxbbd,maxlmo,maxslo,maxabd2
       common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
-     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(3),
-     *                orshft,cnvafo,IXESP,mxitfg,nguess,NBSSE,modorb,
-     *                modpar,irststp,irstlay,nprfmo,nfmopal,modprp,
-     *                maxl1c,ipieda,modgrd,modesp,ivmul,modlmo,nopden,
-     *                mofock
+     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
+     *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
+     *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
+     *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
+     *                modlmo,nopden,mofock
       common /fmopnt/ lichfg,lmulfg,lidmrec,lfrgnam,llayfrg,lindat,
      *                lnCBS,lfmozan,lfmoc,lfmomas,lizbas,liaglob,libdgh,
      *                liabdfg,ljabdfg,lnCAO,lidxCAO,liaprjo,ljaprjo,
@@ -606,7 +613,7 @@ C*MODULE fmolib  *DECK projgues
      *                liodcfmo,ljob2grp,lfmopg,lemocdr,luntxyz,luntrot,
      *                lstonep,lmapsu,lfrgmul,lclmo,lialmo,lindlmo,
      *                latclmo,llmobdf,lfgflmo,lnfglmo,llfglmo,lpfglmo,
-     *                LPOPDMAT
+     *                LPOPDMAT,lidmpnt,liddpnt,livmpnt
 c
 c
 c     Project out cut bond LMOs. This is useful in making initial guess for
@@ -632,7 +639,8 @@ c     CALL DAREAD(IDAF,IODA,vv,L3,15,0)
      *            x(liabdfg),x(ljabdfg),x(lidxCAO),x(liaglob),x(lnCBS),
      *            x(lnCAO),x(liaprjo),x(ljaprjo),x(lshiftb),x(lCoreAO),
      *            x(lfmoc),x(lrotlcao),x(llocfmo),nshell,KATOM,KTYPE,
-     *            KLOC,kmin,.false.)
+     *            KLOC,kmin,.false.,.FALSE.)
+C    *            KLOC,kmin,.false.)
 c     call prsq(vv,l1,l1,l1)
 c     call TFTRI(wrk2,da,wrk1,x(lwrk),l1,l1,l1)
 c     call dcopy(l2,wrk1,1,da,1)
@@ -692,15 +700,16 @@ C*MODULE fmolib  *DECK fmoatfrg
      *                symtra(3,24),symope(3,3,24),iatorg,nsymop,maxklms,
      *                ioporg(3),iopdir(3),iopabc(3),iopang(3)
       common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
-     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(3),
-     *                orshft,cnvafo,IXESP,mxitfg,nguess,NBSSE,modorb,
-     *                modpar,irststp,irstlay,nprfmo,nfmopal,modprp,
-     *                maxl1c,ipieda,modgrd,modesp,ivmul,modlmo,nopden,
-     *                mofock
+     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
+     *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
+     *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
+     *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
+     *                modlmo,nopden,mofock
       common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
      *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
      *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
-     *                IESDPPC,idoprop,mp2run,icurit
+     *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
+     *                iddcur,nddleft,ivmfmo
       data bimer/3*.false./
 c
       if(iat0.gt.natfmo.and.ifmostp.le.2) then
@@ -968,9 +977,6 @@ C
 C
       PARAMETER (ZERO=0.0D+00,two=2.0D+00)
 c
-c     this is an RHF version of DMTX. It should/will be replaced later
-c     after generalising FMO into ROHF/UHF.
-C
       IJ = 0
       DO 120 I = 1,N
          DO 110 J = 1,I
@@ -1097,7 +1103,7 @@ C*MODULE fmolib  *DECK fillind
      *                   scffrg,ichfg,ichfmo,nefmo,mulfmo,l0fmo,l1fmo,
      *                   m1fmo,orbxch,enexch,docas,loadbf,loadgr,nstjob,
      *                   semidyn,spargrid,noffg,indgrd,vdwrad,grdpad,
-     *                   nxyzg,maxg,itdfrg,nocctdm,nvirtdm,some)
+     *                   nxyzg,maxg,itdfrg,nocctdm,nvirtdm,mixlbas,some)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       Parameter (MXATM=2000)
       logical orbxch,enexch,docas,semidyn,spargrid,some
@@ -1129,6 +1135,7 @@ c
       if(nbdfg.ne.0) call viclr(indatg,1,natfmo*maxabd)
       call viclr(maxg,1,3)
       ioff=1
+      mixlbas=0
       do ilay=1,nlayer
         do 100 ifg=1,nfg
           if(layfrg(ifg).lt.ilay) goto 100
@@ -1137,6 +1144,7 @@ c
           call makemol(iifg,0,0,iilay,1,0,0,0,0,0,0,.false.)
           maxl1=max(maxl1,num)
           maxnat=max(maxnat,nat)
+          if(ilay.gt.1.and.num.ne.maxl30(ifg)) mixlbas=1
           if(num.gt.maxl30(ifg)) maxl30(ifg)=num
           if(ilay.eq.1) numfrg(ifg)=num
           if(layfrg(ifg).eq.ilay) then
@@ -1333,7 +1341,7 @@ C*MODULE fmolib  *DECK filloc
      *                liodcfmo,ljob2grp,lfmopg,lemocdr,luntxyz,luntrot,
      *                lstonep,lmapsu,lfrgmul,lclmo,lialmo,lindlmo,
      *                latclmo,llmobdf,lfgflmo,lnfglmo,llfglmo,lpfglmo,
-     *                LPOPDMAT
+     *                LPOPDMAT,lidmpnt,liddpnt,livmpnt
 c
 c     fill in locfmo array and do nothing else in FMOHOP.
 c     (note that this option is passed through IRSTSTP and IFMOSTP).
@@ -1341,7 +1349,8 @@ c     dummy arguments are passed as x and 0.
 c
       call fmohop(0,0,x,x,x,x,x,x,x,x,x(liabdfg),x(ljabdfg),x(lidxCAO),
      *            x(liaglob),x,x,x,x,x,x,x,x,x(llocfmo),
-     *            NSHELL,KATOM,KTYPE,KLOC,kmin,.false.)
+     *            NSHELL,KATOM,KTYPE,KLOC,kmin,.false.,.FALSE.)
+C    *            NSHELL,KATOM,KTYPE,KLOC,kmin,.false.)
 c
       return
       end
@@ -1536,6 +1545,12 @@ C*MODULE fmolib  *DECK fmoconv
       COMMON /QUDMC / QUDTHR,QUD
       COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
       COMMON /SCFOPT/ CONVHF,MAXIT,MCONV,NPUNCH,npreo(4)
+      common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
+     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
+     *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
+     *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
+     *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
+     *                modlmo,nopden,mofock
       data veritas/.false.,.true./
       DATA debug/8HDEBUG   / 
 c     DATA RMC/8HMCSCF   /,GVB/8HGVB     /
@@ -1619,12 +1634,16 @@ c         also force the first iteration to be DIIS.
 c         In some cases we should not write these dummy orbitals, e.g.
 c         when doing DFT as then orbitals are essential.
           call RUNITV(l1,l1,vec)
+c         call vnan(vec,1,l1*l1)
           l3=l1*l1
           CALL dawrit(IDAF,IODA,vec,l3,15,0)
 c         also write fake orbital energies, that happen to be 1,0,0,...
         endif
-        if((rSOSCF.or.swdiis.ne.0).and..not.enexch) then
+c       if((rSOSCF.or.swdiis.ne.0).and..not.enexch) then
+        if((rSOSCF.or.swdiis.ne.0.or.iand(nguess,1024).ne.0).and.
+     *     .not.enexch) then
           call vclr(vec,1,l1)
+c         call vnan(vec,1,l1)
           CALL dawrit(IDAF,IODA,vec,l1,17,0)
         endif 
         DIRSCF=iand(mconv,512).ne.0
@@ -1843,7 +1862,8 @@ C*MODULE fmolib  *DECK fmodist
       common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
      *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
      *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
-     *                IESDPPC,idoprop,mp2run,icurit
+     *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
+     *                iddcur,nddleft,ivmfmo
       common /fmopnt/ lichfg,lmulfg,lidmrec,lfrgnam,llayfrg,lindat,
      *                lnCBS,lfmozan,lfmoc,lfmomas,lizbas,liaglob,libdgh,
      *                liabdfg,ljabdfg,lnCAO,lidxCAO,liaprjo,ljaprjo,
@@ -1856,7 +1876,7 @@ C*MODULE fmolib  *DECK fmodist
      *                liodcfmo,ljob2grp,lfmopg,lemocdr,luntxyz,luntrot,
      *                lstonep,lmapsu,lfrgmul,lclmo,lialmo,lindlmo,
      *                latclmo,llmobdf,lfgflmo,lnfglmo,llfglmo,lpfglmo,
-     *                LPOPDMAT
+     *                LPOPDMAT,lidmpnt,liddpnt,livmpnt
 c
 c     Return distance between a monomer (ifg), a dimer (ifg,jfg) or
 c     a trimer (ifg,jfg,kfg) and another monomer (lfg). 
@@ -1926,7 +1946,7 @@ C*MODULE fmolib  *DECK fmodist3
      *                liodcfmo,ljob2grp,lfmopg,lemocdr,luntxyz,luntrot,
      *                lstonep,lmapsu,lfrgmul,lclmo,lialmo,lindlmo,
      *                latclmo,llmobdf,lfgflmo,lnfglmo,llfglmo,lpfglmo,
-     *                LPOPDMAT
+     *                LPOPDMAT,lidmpnt,liddpnt,livmpnt
 c
 c     Return inter-fragment distances for a trimer:
 c     rd the distance between two closest monomers, forming a dimer,
@@ -1995,11 +2015,11 @@ C*MODULE fmolib  *DECK fmoprr
       COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
       Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
       common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
-     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(3),
-     *                orshft,cnvafo,IXESP,mxitfg,nguess,NBSSE,modorb,
-     *                modpar,irststp,irstlay,nprfmo,nfmopal,modprp,
-     *                maxl1c,ipieda,modgrd,modesp,ivmul,modlmo,nopden,
-     *                mofock
+     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
+     *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
+     *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
+     *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
+     *                modlmo,nopden,mofock
 C
 C     ----- print interfragment DISTANCES -----
 C
@@ -2417,11 +2437,11 @@ C*MODULE fmolib  *DECK adjconv
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
       common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
-     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(3),
-     *                orshft,cnvafo,IXESP,mxitfg,nguess,NBSSE,modorb,
-     *                modpar,irststp,irstlay,nprfmo,nfmopal,modprp,
-     *                maxl1c,ipieda,modgrd,modesp,ivmul,modlmo,nopden,
-     *                mofock
+     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
+     *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
+     *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
+     *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
+     *                modlmo,nopden,mofock
 c
 c     adjust convergence SCF parameters depending on monomer SCF convergence
 c
@@ -2487,7 +2507,7 @@ C*MODULE fmolib  *DECK fmolag
      *                liodcfmo,ljob2grp,lfmopg,lemocdr,luntxyz,luntrot,
      *                lstonep,lmapsu,lfrgmul,lclmo,lialmo,lindlmo,
      *                latclmo,llmobdf,lfgflmo,lnfglmo,llfglmo,lpfglmo,
-     *                LPOPDMAT
+     *                LPOPDMAT,lidmpnt,liddpnt,livmpnt
       dimension eps(l2),v(l1,l1),wrk(l1)
       data rnone/8HNONE    /,rohf/8HROHF    /,uhf/8HUHF     /
 c
@@ -2581,7 +2601,7 @@ C*MODULE fmolib  *DECK fmosdist
      *                liodcfmo,ljob2grp,lfmopg,lemocdr,luntxyz,luntrot,
      *                lstonep,lmapsu,lfrgmul,lclmo,lialmo,lindlmo,
      *                latclmo,llmobdf,lfgflmo,lnfglmo,llfglmo,lpfglmo,
-     *                LPOPDMAT
+     *                LPOPDMAT,lidmpnt,liddpnt,livmpnt
       common /fmodim/ maxbnd,maxknd,maxcbs,maxcao,maxvec,maxl1,maxnat,
      *                maxabd,maxbas,maxbbd,maxlmo,maxslo,maxabd2
       Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
@@ -2939,11 +2959,12 @@ C*MODULE fmolib  *DECK fmomul
      *                liodcfmo,ljob2grp,lfmopg,lemocdr,luntxyz,luntrot,
      *                lstonep,lmapsu,lfrgmul,lclmo,lialmo,lindlmo,
      *                latclmo,llmobdf,lfgflmo,lnfglmo,llfglmo,lpfglmo,
-     *                LPOPDMAT
+     *                LPOPDMAT,lidmpnt,liddpnt,livmpnt
       common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
      *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
      *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
-     *                IESDPPC,idoprop,mp2run,icurit
+     *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
+     *                iddcur,nddleft,ivmfmo
 c
 c     Change multiplicity for FMO-CI runs (monomers+dimers).
 c
@@ -3277,11 +3298,11 @@ c
 C*MODULE fmolib  *DECK dmexch
       SUBROUTINE dmexch(ilay,nfge,jobgrp,layfrg,numfrg,natfrg,scffrg,
      *                  LDAF,iodfmo,maxl30,emon,glocon,nconv,irec0,dosap
-     *                 ,dospc,orbxch,enexch,atonce,mastid,popmul,popmat,
-     *                  ifgbuf,nfgbuf)
+     *                 ,dospc,orbxch,enexch,atonce,dodistr,mastid,popmul
+     *                 ,popmat,ifgbuf,nfgbuf)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       logical GOPARR,DSKWRK,MASWRK,dosap,dospc,orbxch,enexch,atonce,
-     *        isgddi,parout,INITGDDI,maswrks
+     *        dodistr,isgddi,parout,INITGDDI,maswrks
       Integer ddi_world,ddi_group
       Parameter(ddi_world=0,ddi_group=1)
       COMMON /FMCOM / X(1)
@@ -3294,11 +3315,11 @@ C*MODULE fmolib  *DECK dmexch
      *                maxabd,maxbas,maxbbd,maxlmo,maxslo,maxabd2
       common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
       common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
-     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(3),
-     *                orshft,cnvafo,IXESP,mxitfg,nguess,NBSSE,modorb,
-     *                modpar,irststp,irstlay,nprfmo,nfmopal,modprp,
-     *                maxl1c,ipieda,modgrd,modesp,ivmul,modlmo,nopden,
-     *                mofock
+     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
+     *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
+     *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
+     *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
+     *                modlmo,nopden,mofock
       common /fmopnt/ lichfg,lmulfg,lidmrec,lfrgnam,llayfrg,lindat,
      *                lnCBS,lfmozan,lfmoc,lfmomas,lizbas,liaglob,libdgh,
      *                liabdfg,ljabdfg,lnCAO,lidxCAO,liaprjo,ljaprjo,
@@ -3311,11 +3332,12 @@ C*MODULE fmolib  *DECK dmexch
      *                liodcfmo,ljob2grp,lfmopg,lemocdr,luntxyz,luntrot,
      *                lstonep,lmapsu,lfrgmul,lclmo,lialmo,lindlmo,
      *                latclmo,llmobdf,lfgflmo,lnfglmo,llfglmo,lpfglmo,
-     *                LPOPDMAT
+     *                LPOPDMAT,lidmpnt,liddpnt,livmpnt
       common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
      *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
      *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
-     *                IESDPPC,idoprop,mp2run,icurit
+     *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
+     *                iddcur,nddleft,ivmfmo
       dimension jobgrp(*),layfrg(*),numfrg(*),scffrg(*),iodfmo(*),
      *          maxl30(*),emon(*),glocon(*),mastid(0:*),popmul(maxl1,*),
      *        natfrg(*),popmat(maxnat,*),ifgbuf(2,nfg,0:*),nfgbuf(2,0:*)
@@ -3355,6 +3377,28 @@ c     if(maswrk) then
         if(nconv.ge.0) call ddi_gsumf(2422,glocon,ngroups)
         if(maswrk.and.iand(nprfmo,3).le.0) 
      *    write(6,*) 'jobs:',(jobgrp(i),i=1,nfg)
+        if(dodistr) then
+c         only exchange populations and charges
+c       if(dospc) write(6,*) 'wwwz1',(popmat(i,1),i=1,maxnat*nfg)
+        do ifg=1,nfg
+          mefg=jobgrp(ifg)
+          ididit=mastid(mefg)
+          if(layfrg(ifg).lt.ilay.or.scffrg(ifg).eq.rnone) ididit=0 
+c         pretend that grand master did the undone work 
+          l1=iand(numfrg(ifg),65535)
+          nati=natfrg(ifg)
+          if(me.ne.ididit) then
+            if(dosap) call vclr(popmul(1,ifg),1,l1)
+            if(dospc) call vclr(popmat(1,ifg),1,nati)
+c           to prevent double counting on slaves
+          endif
+        enddo
+c       if(dospc) write(6,*) 'wwwz2',(popmat(i,1),i=1,maxnat*nfg)
+        if(dosap) call ddi_gsumf(2422,popmul,maxl1*nfg)
+        if(dospc) call ddi_gsumf(2423,popmat,maxnat*nfg)
+c       if(dospc) write(6,*) 'wwwz3',(popmat(i,1),i=1,maxnat*nfg)
+        ndata=ndata+maxl1*nfg+maxnat*nfg
+        else
         if(atonce) then
           call viclr(nfgbuf,1,2*ngroups)
           do 100 ifg=1,nfg
@@ -3491,6 +3535,7 @@ c           if(me.ne.ididit) then
           enddo
           call retfm(need) 
         endif
+        endif
 c     endif
       call gddi_scope(ddi_group)
 c     CALL DDI_BCAST(2417,'I',nconv,1,master)
@@ -3504,7 +3549,7 @@ c
 C*MODULE fmolib  *DECK fmopre
       subroutine fmopre(ilay,nstep,ngrfmo,mannod,mastid)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-      COMMON /EFPFMO/ IEFPFMO,ISWENUC,REPNUCEFP,EFPEFP,RUNEFP
+      COMMON /EFPFMO/ RUNEFP,REFFMO,REPNUCEFP,IEFPFMO,ISWENUC,EFPEFP
       parameter (maxpst=10)
       dimension ngrfmo(maxpst,*),mannod(*),mastid(*)
 c
@@ -3528,7 +3573,7 @@ c
 c
 c     FMO/EFP needs to reinitialise its arrays
 c
-      IF(IEFPFMO.EQ.1) CALL EFPPARL
+      IF(IEFPFMO.NE.0) CALL EFPPARL
 c
       call timit(1)
 c
@@ -3633,15 +3678,16 @@ C*MODULE fmolib  *DECK setvskip
      *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
       common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
       common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
-     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(3),
-     *                orshft,cnvafo,IXESP,mxitfg,nguess,NBSSE,modorb,
-     *                modpar,irststp,irstlay,nprfmo,nfmopal,modprp,
-     *                maxl1c,ipieda,modgrd,modesp,ivmul,modlmo,nopden,
-     *                mofock
+     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
+     *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
+     *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
+     *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
+     *                modlmo,nopden,mofock
       common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
      *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
      *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
-     *                IESDPPC,idoprop,mp2run,icurit
+     *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
+     *                iddcur,nddleft,ivmfmo
 c
       huge=1.0D+30
       natfmob=natfmo+nbdfg
@@ -3707,7 +3753,7 @@ C*MODULE fmolib  *DECK excmono
       subroutine excmono(iexcit,eexcit,texcit,MONOC,MONVR,NSTMONO)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       logical TRIPLET,SG1T,GOPARR,DSKWRK,MASWRK,MNMEDG,MNMEOP,UNVGSS,
-     *        DGAPRX,RDCISV
+     *        DGAPRX,RDCISV,TAMMD
       parameter(mxrt=100)
       dimension iexcit(5),eexcit(mxrt,2),texcit(3,mxrt,2),
      *          MONOC(mxrt),MONVR(mxrt)
@@ -3716,12 +3762,12 @@ C*MODULE fmolib  *DECK excmono
      &                NBF,NGSVEC,MNMEDG,MNMEOP,ICLOBBR,UNVGSS,DGAPRX,
      &                RDCISV
       COMMON /ENRGYS/ ENUCR,EELCT,ETOT,SZ,SZZ,ECORE,ESCF,EERD,E1,E2,
-     *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2)
+     *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2),EDISP
       COMMON /INFOEX/ TDM(3,mxrt),MOCC(mxrt),MVIR(mxrt),MONOC1,MONVR1,
      *                IFMODIM
       COMMON /INFOTD/ CNVTOL,TRIPLET,SG1T,JANST,NRADT,NTHET,NPHIT,NLEBT,
      *                NSTAT,NTRIAL,MAXVEC,NTHST,IRECTD,ITDFG,NONEQR,
-     *                ITDPRP
+     *                ITDPRP,TAMMD
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
       COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
      *                MPLEVL,MPCTYP
@@ -3772,7 +3818,7 @@ C*MODULE fmolib  *DECK tdesum
       logical GOPARR,DSKWRK,MASWRK
       parameter(mxrt=100,one=1.0D+00)
       COMMON /ENRGYS/ ENUCR,EELCT,ETOT,SZ,SZZ,ECORE,ESCF,EERD,E1,E2,
-     *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2)
+     *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2),EDISP
       COMMON /INFOEX/ TDM(3,mxrt),MOCC(mxrt),MVIR(mxrt),MONOC1,MONVR1,
      *                IFMODIM
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
@@ -3798,8 +3844,8 @@ c
           eexfg(1,idfg,IST)=EED
           eexcit(IST,2)=eexcit(IST,2)+EED
 c
-          iexcsav=iexcit(5)
-          iexcit(5)=3
+c         iexcsav=iexcit(5)
+c         iexcit(5)=3
           if(iexcit(5).eq.0) then
 c           expand D in the FMO series
             ss=ddot(3,TDM(1,ISTD),1,texcit(1,IST,1),1)
@@ -3827,7 +3873,7 @@ c           expand f in the FMO series
             texcit(1,IST,2)=texcit(1,IST,2)+osd
             write(IW,9720) ifg,jfg,IST,rij,EEDEV,osd
           endif
-          iexcit(5)=iexcsav
+c         iexcit(5)=iexcsav
         endif
 c
   100 CONTINUE
@@ -3914,8 +3960,6 @@ c       if(iand(iexcit(5),1).ne.0) then
           else
             WRITE(IW,9815)
           endif
-c              right now we want to always skip the next printing
-       if(iw.gt.0) goto 777
           DO IST=1,NSTMAXM
             if(iexcit(5).eq.0) then
               WRITE(IW,9850) IST,EExcit(IST,2)*TOEV,texcit(1,IST,2),
@@ -3930,7 +3974,6 @@ c         write(6,*) 'final OSC',texcit(1,IST,2),OSMD(IST,2)
 c         write(6,*) 'final OSC',OSMD(IST,2)
             endif
           enddo
-  777  continue
 c
 c       endif
         DO IST=1,NSTMAXM
@@ -3991,7 +4034,8 @@ C*MODULE fmolib  *DECK monovec
       common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
      *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
      *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
-     *                IESDPPC,idoprop,mp2run,icurit
+     *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
+     *                iddcur,nddleft,ivmfmo
       dimension wrk(*),VIJ(*),mapi(*),iodfmo(*)
       l2i=(l1i*l1i+l1i)/2
       l3i=l1i*l1i
@@ -4046,13 +4090,13 @@ C*MODULE fmolib  *DECK excheck
      *                   nvird,exfid,ctdm)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       parameter(mxrt=100)
-      logical TRIPLET,sg1t,GOPARR,DSKWRK,MASWRK
+      logical TRIPLET,sg1t,GOPARR,DSKWRK,MASWRK,TAMMD
       COMMON /FMCOM / X(1)
       COMMON /INFOEX/ TDM(3,mxrt),MOCC(mxrt),MVIR(mxrt),MONOC1,MONVR1,
      *                IFMODIM
       COMMON /INFOTD/ CNVTOL,TRIPLET,SG1T,JANST,NRADT,NTHET,NPHIT,NLEBT,
      *                NSTAT,NTRIAL,MAXVEC,NTHST,IRECTD,ITDFG,NONEQR,
-     *                ITDPRP
+     *                ITDPRP,TAMMD
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
       common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
@@ -4221,16 +4265,17 @@ C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
       Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
+      COMMON /MACHIN/ NWDVAR,MAXFM,MAXSM,LIMFM,LIMSM
       COMMON /MCPFMO/ IMCPFMO,LFZCOR,LIFMPTYP,LIFMPTYP2,LMCPSW,
      *                LIZCOR2,imp0,jmp0,icorsh0,igtf0
 C
       IF (IMCPFMO.EQ.1) THEN
         LFZCOR    = LAST
-        LIFMPTYP  = LFZCOR    + NATFMO
-        LIFMPTYP2 = LIFMPTYP  + NATFMO
-        LMCPSW    = LIFMPTYP2 + NATFMO + NBDFG
-        LIZCOR2   = LMCPSW    + NFG
-        LAST      = LIZCOR2   + NATFMO + NBDFG
+        LIFMPTYP  = LFZCOR    +  NATFMO
+        LIFMPTYP2 = LIFMPTYP  + (NATFMO-1)/NWDVAR + 1
+        LMCPSW    = LIFMPTYP2 + (NATFMO + NBDFG-1)/NWDVAR + 1
+        LIZCOR2   = LMCPSW    + (NFG -1)/NWDVAR + 1
+        LAST      = LIZCOR2   + (NATFMO + NBDFG-1)/NWDVAR + 1
       ELSE
         LFZCOR    = LAST
         LIFMPTYP  = LAST
@@ -4262,7 +4307,6 @@ C     This routine must be called before data in $DATA is replaced.
 C
 C     write (6,*) 'IN MCPPRPR', (IZCORE(I),I=1,NAT)
       CALL  VCLR(FZCOR,  1,NATFMO)
-      CALL VICLR(IZCOR2, 1,NATFMO+NBDFG)
       CALL VICLR(IFMPTYP,1,NATFMO)
       DO I = 1, NATFMO
         DO J = 1, NATL
@@ -4278,6 +4322,7 @@ c     write (6,*) 'FZCORE', (FZCOR(I), I=1,NATFMO)
 C     write (6,*) 'IFMPTYP', (IFMPTYP(I),I=1,NATFMO)
 C     write (6,*) 'MPTYP', (MPTYP(I),I=1,NAT)
 C
+      CALL VICLR(IZCOR2,  1,NATFMO+NBDFG)
       CALL VICLR(IFMPTYP2,1,NATFMO+NBDFG)
 C      write (6,*) 'LIFMPTYP2', LIFMPTYP2
 C
@@ -4297,8 +4342,8 @@ C
           ISWTCH = ISWTCH + IFMPTYP2(IC)
         END DO
 C
-        NED = NST + NATFRG(IFG) - 1
-        NST = NST + NAT0FRG(IFG)
+        NST = NED + 1
+        NED = NST + NATFRG(IFG) - NAT0FRG(IFG) - 1
         DO J = NST, NED
           IC = IC + 1
           ICC = IATFRG(IC)
@@ -4348,9 +4393,10 @@ C*MODULE fmolib  *DECK makelmo
      *                   timeafo,l1dir)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       Parameter(MXATM=2000,mxrt=100,MXGRID=10,UNITS=0.52917724924D+00,
-     *          MAXNZ=137,scut=0.15D+00,one=1.0D+00)
+     *          MAXNZ=137,one=1.0D+00)
       logical ISGDDI,PAROUT,INITGDDI,GOPARR,DSKWRK,MASWRK,DIRTRF,myjob,
-     *        DIRSCF,FDIFF,addc,bonded1,bonded2,orbxch,forcedir,SG1
+     *        DIRSCF,FDIFF,addc,bonded1,bonded2,orbxch,forcedir,fullmul,
+     *        cutdiff,SG1
       integer ddi_world,ddi_group
       Parameter(ddi_world=0,ddi_group=1)
       COMMON /DFGRID/ DFTTHR,DFTGTHR,SWOFF,SW0,BSLRD(137),NDFTFG,
@@ -4358,7 +4404,7 @@ C*MODULE fmolib  *DECK makelmo
      *                NANGPT(MXGRID),NANGPT0(MXGRID),SG1,JANS
       COMMON /FMCOM / xX(1)
       COMMON /ENRGYS/ ENUCR,EELCT,ETOT,SZ,SZZ,ECORE,ESCF,EERD,E1,E2,
-     *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2)
+     *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2),EDISP
       COMMON /GDDI/   ISCOPE,NGROUPS,MYGROUP,MEGLOB,npglob,nnglob,JBTYP,
      *                ISGDDI,PAROUT,INITGDDI
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
@@ -4368,7 +4414,7 @@ C*MODULE fmolib  *DECK makelmo
       COMMON /OPTSCF/ DIRSCF,FDIFF
       COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
-      COMMON /PRPOPT/ etollz,ILOCAL
+      COMMON /PRPOPT/ ETOLLZ,ILOCAL,IAHARD
       COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
       COMMON /SCFOPT/ CONVHF,MAXIT,MCONV,NPUNCH,NPREO(4)
       COMMON /TIMING/ CPU,WALL
@@ -4379,15 +4425,16 @@ C*MODULE fmolib  *DECK makelmo
      *                maxabd,maxbas,maxbbd,maxlmo,maxslo,maxabd2
       Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
       common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
-     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(3),
-     *                orshft,cnvafo,IXESP,mxitfg,nguess,NBSSE,modorb,
-     *                modpar,irststp,irstlay,nprfmo,nfmopal,modprp,
-     *                maxl1c,ipieda,modgrd,modesp,ivmul,modlmo,nopden,
-     *                mofock
+     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
+     *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
+     *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
+     *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
+     *                modlmo,nopden,mofock
       common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
      *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
      *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
-     *                IESDPPC,idoprop,mp2run,icurit
+     *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
+     *                iddcur,nddleft,ivmfmo
       dimension ichfg(*),indat(*),fmozan(*),fmoc(3,*),iaglob(*),
      *          iabdfg(*),jabdfg(*),idxcao(maxbnd,*),
      *          clmo(maxbbd,maxabd2,maxlmo,*),
@@ -4423,8 +4470,12 @@ c     rcaps2=rcaps*rcaps
       icuts=icut
       convhf=1.0D-06
       cuttrf=1.0D-09
-      itol=20
-      icut=10
+c     0 value means no diffuse function cutoff ->
+c     hence no diffuse function expected
+      if(rflmo(4).eq.0) then
+        itol=20
+        icut=10
+      endif
       mplevls=mplevl
       cctyps=cctyp
       cityps=cityp
@@ -4445,6 +4496,10 @@ c     rcaps2=rcaps*rcaps
 c     call vclr(elmo,1,2*maxlmo*nbdfgsav)
       ndidlmo=0
       if(naoafo3.gt.0) call vclr(vafo,1,naoafo3)
+      fullmul=iand(modlmo,32).ne.0
+      cutdiff=rflmo(4).ne.0
+      expdiff=rflmo(4)
+      if(fullmul) write(6,*) 'Using full Mulliken for criteria.'
 c
 C     ----- INITIALIZATION FOR PARALLEL WORK -----
 C     
@@ -4704,12 +4759,8 @@ c       na2=(na*na+na)/2
 c       na is the number of localised MO 
 c       if(ilocal.eq.2) CALL DAread(IDAF,IODA,xx(lflmo),na2,285,0)
         do i=1,na
-          call mocoze(1,xx(lvv+(i-1)*l1),xx(lvi))
-c         call prsq(xx(lvi),l1,1,1) 
-          call MTARBR(xx(lss),l1,xx(lvi),1,xx(lvi+l1),l1,1)
-          xx(lover+i-1)=ddot(l1,xx(lvi),1,xx(lvi+l1),1)
-c         over is ct * S * c , where c is one MO vector with
-c         only atom 1 coefficients.  
+          xx(lover+i-1)=abs(critloc(l1,1,xx(lvv+(i-1)*l1),
+     *                      xx(lss),fullmul,cutdiff,expdiff))
         enddo
         izc=ian(1)-int(zan(1)+0.1D+00)
         nlmo=lmoatom(ian(1),MPTYP(1),izc)
@@ -4728,21 +4779,37 @@ c    *                              elmo(1,i,ibdfg)
         enddo
         ilmo=idamax(na,xx(lover),1)
         if(maswrk) write(iw,9050) ibdfg,ilmo,xx(lover+ilmo-1)
-        jlmos=0
+c
+c       Find the special bond
+c
+        do jlmo=1,nlmo
+          i=ixftch(xx(lilmo),jlmo)
+          xx(lover+jlmo-1)=abs(critloc(l1,2,xx(lvv+(i-1)*l1),xx(lss),
+     *                         fullmul,cutdiff,expdiff))
+        enddo
+        jlmos=idamax(nlmo,xx(lover),1)
+        jlmo=ixftch(xx(lilmo),jlmos)
+        if(maswrk) write(iw,9060) ibdfg,jlmo,xx(lover+jlmos-1)
+        xx(lover+jlmos-1)=0
+        ilmo=idamax(nlmo,xx(lover),1)
+        i=ixftch(xx(lilmo),ilmo)
+        if(maswrk) write(iw,9065) ibdfg,i,xx(lover+ilmo-1)
+c
         do jlmo=1,nlmo
           i=ixftch(xx(lilmo),jlmo)
 c         if(over.gt.scut) then
 c         check if it is the "special" one (between atoms 1 and 2)
-          call mocoze(2,xx(lvv+(i-1)*l1),xx(lvi))
-          call MTARBR(xx(lss),l1,xx(lvi),1,xx(lvi+l1),l1,1)
-          over2=ddot(l1,xx(lvi),1,xx(lvi+l1),1)
+c         over2=abs(critloc(l1,2,xx(lvv+(i-1)*l1),xx(lss),fullmul))
+c         call mocoze(2,xx(lvv+(i-1)*l1),xx(lvi))
+c         call MTARBR(xx(lss),l1,xx(lvi),1,xx(lvi+l1),l1,1)
+c         over2=ddot(l1,xx(lvi),1,xx(lvi+l1),1)
 c         ilmo=ilmo+1 
 c         jlmo=jlmo+1 
-          if(over2.gt.scut) then
-            if(maswrk) write(iw,9060) ibdfg,i
-            if(jlmos.ne.0) call abrt
-            jlmos=jlmo
-          endif
+c         if(over2.gt.scut) then
+c           if(maswrk) write(iw,9060) ibdfg,i
+c           if(jlmos.ne.0) call abrt
+c           jlmos=jlmo
+c         endif
 c         find the closest atoms to the BDA
           jat=0
           rstore1=rflmo(3)
@@ -4759,8 +4826,10 @@ c    *            +(c(3,1)-c(3,iat))**2
 c             for the special bond LMO only copy atoms 1 and 2, for other LMOs
 c             copy atoms except 2. 
 c             addc=rr1.lt.rcut2.and.(over2.le.scut.and.iat.ne.2.or.
-              addc=bonded1.and.(over2.le.scut.and.iat.ne.2.or.
-     *                          over2.gt.scut.and.iat.le.2)
+              addc=bonded1.and.(jlmo.ne.jlmos.and.iat.ne.2.or.
+     *                          jlmo.eq.jlmos.and.iat.le.2)
+c             addc=bonded1.and.(over2.le.scut.and.iat.ne.2.or.
+c    *                          over2.gt.scut.and.iat.le.2)
             else
 c             copy all atoms close to atoms 1 and 2
 c             rr2=(c(1,2)-c(1,iat))**2+(c(2,2)-c(2,iat))**2
@@ -4814,7 +4883,7 @@ c         endif
         endif
         if(maswrk) indlmo(1,ibdfg)=nlmo
 c       Occupied LMOs done, now proceed to the virtuals.
-        if(iand(modlmo,32).ne.0.and.maswrk) then
+        if(iand(modlmo,2097152).ne.0.and.maswrk) then
 c         call dacopy(l1,one,xx(lvi+1),1) 
 c         call mocoze(1,xx(lvi+1),xx(lvi))
 c         get a fake LCAO vector consisiting of 1's for all basis functions
@@ -4897,39 +4966,17 @@ c9000 format(/1x,'Computing LMOs for bond',I5)
  9040 format(1x,'Bond ',I5,' : LMO',I5,' has overlap',F10.6)
  9050 format(1x,'Bond ',I5,' : the first discarded LMO',I5,
      *          ' has overlap',F10.6)
- 9060 format(1x,'Bond ',I5,' : LMO',I5,' is the special bond orbital.')
+ 9060 format(1x,'Bond ',I5,' : LMO',I5,' is the detached bond orbital,',
+     *          ' overlap=',F10.6)
+ 9065 format(1x,'Bond ',I5,' : the closest to the detached bond LMO',I5,
+     *          ' has overlap',F10.6)
  9070 format(/1x,'Iteration',I4,': model system for bond',I5,' has E=',
      *          F18.10,/)
  9080 format(/1x,'Increase NAOAFO at least to',I6)
  9090 format(/1x,'Internal storage overflow, maxabd2=',I6) 
  9100 format(/1x,'Iteration',I4,':',I5,' bond AFO construction took',
      *           F10.1,' seconds.')
- 9200 format(100(I5,F10.5,3F12.5,/))
-      END
-C*MODULE fmolib  *DECK mocoze
-      subroutine mocoze(iat,vi,vf)
-      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-      dimension vi(*),vf(*) 
-      PARAMETER (MXSH=5000, MXGTOT=20000)
-      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
-     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
-     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
-     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
-c
-      do ii=1,nshell
-        mini=kmin(ii)
-        maxi=kmax(ii)
-        loci=kloc(ii)
-        do i=mini,maxi
-          if(katom(ii).ne.iat) then
-            vf(loci)=0 
-          else 
-            vf(loci)=vi(loci)
-          endif 
-          loci=loci+1
-        enddo
-      enddo
-      return
+ 9200 format(100(I5,F10.5,3F15.8,/))
       END
 C*MODULE fmolib  *DECK mococp
       subroutine mococp(iat,cmo,naoat,cmoat)
@@ -4981,15 +5028,16 @@ C*MODULE fmolib  *DECK flmovec
      *                maxabd,maxbas,maxbbd,maxlmo,maxslo,maxabd2
       Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
       common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
-     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(3),
-     *                orshft,cnvafo,IXESP,mxitfg,nguess,NBSSE,modorb,
-     *                modpar,irststp,irstlay,nprfmo,nfmopal,modprp,
-     *                maxl1c,ipieda,modgrd,modesp,ivmul,modlmo,nopden,
-     *                mofock
+     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
+     *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
+     *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
+     *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
+     *                modlmo,nopden,mofock
       common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
      *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
      *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
-     *                IESDPPC,idoprop,mp2run,icurit
+     *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
+     *                iddcur,nddleft,ivmfmo
       dimension indat(*),iaglob(*),iabdfg(*),jabdfg(*),
      *          clmo(maxbbd,maxabd2,maxlmo,*),ialmo(2,maxabd2,maxlmo,*),
      *          indlmo(2,nbdfg),vv(l1,l1),dd(*),ee(l1),iwrk(l1),
@@ -5085,13 +5133,13 @@ c         endif
           if(iside.eq.0.and.iand(modlmo,4).eq.0) imoe=nblmo
 c         Uncomment one line below to project out diffuse on the left side 
 c         if(iside.eq.0.and.iand(modlmo,32).ne.0.and.ndmo.ne.0) imoe=nmo
-          if(iside.eq.0.and.iand(modlmo,32).ne.0.and.ndmo.ne.0) 
+          if(iside.eq.0.and.iand(modlmo,2097152).ne.0.and.ndmo.ne.0) 
      *      imoe=nmo-ndmo/2
 c         ndmo/2 only removes diffuse on the left atom for the left fragment
 c         go back to imoe=nmo for some alternative. 
           do 200 imo=imob,imoe
 c           proceed from the occupied to the diffuse skipping the virtuals
-            if(iside.eq.0.and.iand(modlmo,32).ne.0.and.
+            if(iside.eq.0.and.iand(modlmo,2097152).ne.0.and.
      *         imo.gt.nblmo.and.imo.le.nmo-ndmo) goto 200
 c    *         imo.gt.nblmo.and.imo.le.nmo-ndmo) goto 200
 c           Skip occupied for converged SCC
@@ -5128,7 +5176,7 @@ c               find the atom from LMO in the current n-mer
               endif
             enddo
 c           if(iside.eq.0.and.iand(modlmo,32).ne.0.and.imo.gt.nmo-ndmo)
-            if(iand(modlmo,32).ne.0.and.imo.gt.nmo-ndmo) then
+            if(iand(modlmo,2097152).ne.0.and.imo.gt.nmo-ndmo) then
               ee(nflmo)=orshft*2
             else
               if(occupied) then
@@ -5233,7 +5281,8 @@ C*MODULE fmolib  *DECK storelmo
       common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
      *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
      *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
-     *                IESDPPC,idoprop,mp2run,icurit
+     *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
+     *                iddcur,nddleft,ivmfmo
       dimension lmobdf(*),vec(*),fgflmo(maxl1,maxslo,*),nfglmo(*),
      *          lfglmo(maxslo,*),pfglmo(maxnat,maxslo,*)
 c
@@ -5365,24 +5414,33 @@ c     write(6,*) 'dist=',DIST,ss*BOND,';'
       return
       end
 C*MODULE fmolib  *DECK getflmo
-      subroutine getflmo(ifg,l1,l2,l3,nlmo,indat,iaglob,ss,vv,vi,nbndfg,
+      subroutine getflmo(ifg,l1,l2,l3,nlmo,indat,iaglob,ss,vv,nbndfg,
      *                   fgflmo,nfglmo)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
-      logical GOPARR,DSKWRK,MASWRK
+      logical GOPARR,DSKWRK,MASWRK,fullmul,cutdiff
       Parameter (MXATM=2000,one=1.0D+00)
       common /fmodim/ maxbnd,maxknd,maxcbs,maxcao,maxvec,maxl1,maxnat,
      *                maxabd,maxbas,maxbbd,maxlmo,maxslo,maxabd2
+      common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
+     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
+     *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
+     *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
+     *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
+     *                modlmo,nopden,mofock
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
      *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
-      DIMENSION indat(*),iaglob(*),ss(*),vv(l1,*),vi(l1,2),
+      DIMENSION indat(*),iaglob(*),ss(*),vv(l1,*),
      *          fgflmo(maxl1,nbndfg,*),nfglmo(*)
 c
       call daread(IDAF,IODA,vv,l3,71,0)
       call daread(IDAF,IODA,ss,l2,12,0)
       nfglmo(ifg)=0
+      fullmul=iand(modlmo,32).ne.0
+      cutdiff=rflmo(4).ne.0
+      expdiff=rflmo(4)
       do iat=1,nat
 c       find ghost atoms
         if(indat(iaglob(iat)).ne.ifg) then
@@ -5390,9 +5448,11 @@ c         find the LMO which is localised most on iat
           over=-one
           jmo=1
           do imo=1,nlmo
-            call mocoze(iat,vv(1,imo),vi)
-            call MTARBR(ss,l1,vi,1,vi(1,2),l1,1)
-            overi=abs(ddot(l1,vi,1,vi(1,2),1))
+c           call mocoze(iat,vv(1,imo),vi)
+c           call MTARBR(ss,l1,vi,1,vi(1,2),l1,1)
+c           overi=abs(ddot(l1,vi,1,vi(1,2),1))
+            overi=abs(critloc(l1,iat,vv(1,imo),ss,fullmul,cutdiff,
+     *                expdiff))
             if(overi.gt.over) then
               jmo=imo 
               over=overi
@@ -5562,15 +5622,16 @@ C
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
       common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
-     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(3),
-     *                orshft,cnvafo,IXESP,mxitfg,nguess,NBSSE,modorb,
-     *                modpar,irststp,irstlay,nprfmo,nfmopal,modprp,
-     *                maxl1c,ipieda,modgrd,modesp,ivmul,modlmo,nopden,
-     *                mofock
+     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
+     *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
+     *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
+     *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
+     *                modlmo,nopden,mofock
       common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
      *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
      *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
-     *                IESDPPC,idoprop,mp2run,icurit
+     *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
+     *                iddcur,nddleft,ivmfmo
       dimension E(nmo)
 c
 c     Scale orbital enregies for projected orbitals in FMO,
@@ -5614,7 +5675,7 @@ C*MODULE FMOlib  *DECK loadhfd
      *                liodcfmo,ljob2grp,lfmopg,lemocdr,luntxyz,luntrot,
      *                lstonep,lmapsu,lfrgmul,lclmo,lialmo,lindlmo,
      *                latclmo,llmobdf,lfgflmo,lnfglmo,llfglmo,lpfglmo,
-     *                LPOPDMAT
+     *                LPOPDMAT,lidmpnt,liddpnt,livmpnt
 C
       if(maswrk) write(iw,*) 'Restoring the RHF density...'
       l1=num
@@ -5622,4 +5683,78 @@ C
       CALL daread(IDAF,IODA,x(lfmoda),L2,308,0)
       CALL dawrit(IDAF,IODA,x(lfmoda),L2,16,0)
       RETURN
+      end
+C*MODULE FMOlib  *DECK critloc
+      function critloc(l1,iat,vv,ss,fullmul,cutdiff,expdiff)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      logical fullmul,cutdiff
+      parameter(one=1.0D+00,half=0.5D+00)
+      dimension vv(l1),ss(*)
+      PARAMETER (MXSH=5000, MXGTOT=20000)
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+c
+      sum=0
+      do ii=1,nshell
+        mini=kmin(ii)
+        maxi=kmax(ii)
+        loci=kloc(ii)
+        ati=katom(ii)
+        I1 = KSTART(II)
+        I2 = I1+KNG(II)-1
+        ig=idamax(i2-i1+1,ex(i1),1)
+        AI = EX(IG+i1-1)
+c       write(6,*) 'shell=',ii,' exp=',ai,ig,i1,i2
+        if(ati.eq.iat.and.(.not.cutdiff.or.ai.gt.expdiff)) then
+          do i=mini,maxi
+            cci=vv(loci)
+            do jj=1,nshell 
+              minj=kmin(jj)
+              maxj=kmax(jj)
+              locj=kloc(jj)
+              atj=katom(jj)
+              if(atj.ne.iat) then
+                fac=half*cci
+              else
+                fac=one*cci
+              endif
+              j1 = KSTART(JJ)
+              j2 = j1+KNG(JJ)-1
+              jg=idamax(j2-j1+1,ex(j1),1)
+              AJ = EX(JG+j1-1)
+c             write(6,*) 'Shell=',jj,' exp=',aj
+              if((atj.eq.iat.or.fullmul).and.
+     *           (.not.cutdiff.or.aj.gt.expdiff)) then 
+                do j=minj,maxj
+                  mm=min(loci,locj)
+                  nn=max(loci,locj)
+                  sum=sum+fac*ss((nn*nn-nn)/2+mm)*vv(locj) 
+                  locj=locj+1 
+                enddo
+              endif
+            enddo
+            loci=loci+1
+          enddo
+        endif
+      enddo
+      critloc=sum
+c
+c     call mocoze(iat,vv,ww)
+c     call prsq(ww,l1,1,1)
+c     call MTARBR(ss,l1,ww,1,ww(1+l1),l1,1)
+c     critloc=ddot(l1,ww,1,ww(1+l1),1)
+c     over is ct * S * c , where c is one MO vector with
+c     only atom 1 coefficients.
+c     write(6,*) 'critloc=',critloc
+      return
+c         xx(lover+i-1)=critloc(l1,1,xx(lvv+(i-1)*l1),xx(lvi),xx(lss),
+c    *                          fullmul)
+c         call mocoze(1,xx(lvv+(i-1)*l1),xx(lvi))
+c         call prsq(xx(lvi),l1,1,1) 
+c         call MTARBR(xx(lss),l1,xx(lvi),1,xx(lvi+l1),l1,1)
+c         xx(lover+i-1)=ddot(l1,xx(lvi),1,xx(lvi+l1),1)
+c         over is ct * S * c , where c is one MO vector with
+c         only atom 1 coefficients.  
       end

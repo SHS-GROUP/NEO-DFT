@@ -1,0 +1,2202 @@
+C 11 Aug 10 - TN  - new module for CPHF in FMO
+c
+C*MODULE FMOCP *DECK ESDCPHFX
+      SUBROUTINE ESDCPHFX(ILAY,LOADHF,LOADM,DA,TRI1,TRI2,ZVLAG,FMODE,
+     *                    NUMFRG,IODFMO,IDMREC0,LAYFRG,SCFFRG,ISGDDI,
+     *                    IREC0,NGRFMO,MANNOD,MASTID,NQMTFG,IPTLG,
+     *                    hopgrd,NEVSAV)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      PARAMETER (MXATM=2000,MAXPST=10)
+      Integer ddi_world,ddi_group
+      Parameter (ddi_world=0,ddi_group=1)
+      PARAMETER (ZERO=0.0D+00,ONE=1.0D+00,HALF=0.5D+00,FOUR=4.0D+00)
+      PARAMETER (THRSH=1.0D-06)
+c
+      DIMENSION ZVLAG(1),DA(1)
+      DIMENSION LOADM(*),NUMFRG(*)
+      DIMENSION IODFMO(*),IDMREC0(*),LAYFRG(*),SCFFRG(*)
+      DIMENSION NGRFMO(MAXPST,*),MANNOD(*),MASTID(*),NQMTFG(*)
+      DIMENSION IPTLG(*)
+      DIMENSION FMODE(3,*)
+C
+      LOGICAL GOPARR,DSKWRK,MASWRK,OUT
+      LOGICAL ISGDDI,MYJOB
+      LOGICAL LCONV,hopgrd,LPUTGET,LFIRST,DOSCZV
+      LOGICAL DIRSAV, DIRSCF, FDIFF
+C
+      COMMON /EFPFMO/ RUNEFP,REFFMO,REPNUCEFP,IEFPFMO,ISWENUC,EFPEFP
+      COMMON /FMCOM / X(1)
+      COMMON /FMODIM/ MAXBND,MAXKND,MAXCBS,MAXCAO,MAXVEC,MAXL1,MAXNAT,
+     *                MAXABD,MAXBAS,MAXBBD,MAXLMO,MAXSLO,MAXABD2
+      COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
+      common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
+     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
+     *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
+     *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
+     *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
+     *                modlmo,nopden,mofock
+      COMMON /FMORUN/ ESPSCF,E0SCF(2),EMP2S,IDAFMO,ICURFG,JCURFG,KCURFG,
+     *                ICURLAY,ICURUNT,NAT1E,NCURSH,NGAU,ICURPOP,IFMOSTP,
+     *                MONCOR,NEEDR,MODRST,NORBPROJ,NUNESP,ISKIPESP,
+     *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
+     *                iddcur,nddleft,ivmfmo
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /OPTSCF/ DIRSCF,FDIFF
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /RESTAR/ TIMLIM,IREST,NREC,INTLOC,IST,JST,KST,LST
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+C
+C     PARAMETERS
+C
+      OUT = MASWRK.AND.IAND(NPRFMO,3).NE.3
+      MAXL2   = (MAXL1*MAXL1+MAXL1)/2
+      MAXL3   =  MAXL1*MAXL1
+      JCURFG  = 0
+      KCURFG  = 0
+      ICURLAY = ILAY
+c
+CZ
+CZ    SPACE FOR ZVEC
+CZ
+      LPUTGET = IAND(MODPAR,512).NE.0
+      NOVTOT = 0
+      NOVMAX = 0
+      DO IFG = 1, NFG
+        NQI = NQMTFG(IFG)
+        NAI = ISHFT(NUMFRG(IFG),-16)
+        NTMP = (NQI-NAI)*NAI
+        NOVTOT = NOVTOT + NTMP
+        NOVMAX = MAX(NOVMAX,NTMP)
+      END DO
+c
+cz
+cz    SUM UP ZVLAG
+cz
+CZCZ  IF (.NOT.LPUTGET) THEN
+        IF (ISGDDI) THEN
+          CALL GDDI_SCOPE(DDI_WORLD)
+          CALL DDI_GSUMF(3000,ZVLAG,IPTLG(NFG+1))
+          CALL GDDI_SCOPE(DDI_GROUP)
+        ELSE
+          CALL DDI_BCAST(3000,'F',ZVLAG,IPTLG(NFG+1),0)
+        END IF
+CZCZ  END IF
+c
+cz
+cz    ALLOCATION OF THE WORK SPACE
+cz
+      CALL VALFM(LOADFM)
+      LWRT1 = LOADFM + 1
+      LWRK1 = LWRT1  + MAXL2
+      LWRK2 = LWRK1  + MAXL3
+      LWRK3 = LWRK2  + MAXL3
+      LAST  = LWRK3  + MAXL3
+c
+      IF (LPUTGET) THEN
+        ! LZVEC0 has temporary space of NOVMAX
+        ! which is used in OFFORBHSS
+        LZVEC0 = LAST
+        LZVEC1 = LZVEC0 + NOVMAX*2
+        LAST   = LZVEC1 + NOVMAX
+        LIPTZC = LAST
+      ELSE
+        LZVEC0 = LAST
+        LZVEC1 = LZVEC0 + NOVTOT
+        LIPTZC = LZVEC1 + NOVTOT
+        LAST   = LIPTZC + NFG
+      END IF
+C
+      NEEDWK = LAST - LOADFM -1
+      CALL GETFM(NEEDWK)
+C
+      IF (.NOT.LPUTGET) THEN
+        IPT = 1
+        DO IFG = 1, NFG
+          NQI = NQMTFG(IFG)
+          NAI = ISHFT(NUMFRG(IFG),-16)
+          CALL IXSTOR(X(LIPTZC),IFG,IPT)
+          IPT = IPT + (NQI-NAI)*NAI
+        END DO
+      END IF
+c
+c
+c     switch GDDI groups to monomers (using monomer group division).
+c
+      IF (ISGDDI.AND.NGRFMO(1,ILAY).NE.0)
+     *  CALL FMOPRE(ILAY,1,NGRFMO,MANNOD,MASTID)
+c
+      IF (LPUTGET) THEN
+        CALL VCLR(X(LZVEC0),1,NOVMAX*2)
+        CALL VCLR(X(LZVEC1),1,NOVMAX)
+      ELSE
+        CALL VCLR(X(LZVEC0),1,NOVTOT)
+        CALL VCLR(X(LZVEC1),1,NOVTOT)
+      END IF
+CZ
+CZ    OUTERMOST LOOP
+CZ
+      NTER  = 50
+      LCONV = .FALSE.
+      DO ITER = 0, NTER
+c
+        ! if nevsav.eq.0, result would corrupt?
+        LFIRST = LPUTGET.AND.ITER.EQ.0.AND.NEVSAV.LT.1
+        DOSCZV  = (.NOT.LPUTGET.AND.ITER.GT.0).OR.(.NOT.LFIRST)
+CZ      if (maswrk) write(6,*) 'LFIRST',LFIRST
+        IF (OUT) WRITE(IW,9000) ITER
+c
+CZ
+CZ      MONOMER SCZV LOOP
+CZ
+        ncursh = 0
+        NCONV  = 0
+        IF (ISGDDI) CALL GDDICOUNT(-1,LGROUP,MYJOB)
+        DO 230 IIFG = 1,NFG
+          IFG = IIFG
+          IF (LOADHF.EQ.1) IFG = LOADM(IIFG)
+c
+c
+          IF (LAYFRG(IFG).LT.ILAY) GOTO 230
+          ICURFG = IFG
+          IF (ISGDDI) THEN
+            CALL GDDICOUNT(0,LGROUP,MYJOB)
+            IF (.NOT.MYJOB) GOTO 230
+          END IF
+c
+          IF (OUT) WRITE(IW,9010) IFG
+          CALL CLOSDA('DELETE')
+          CALL OPENDA(0)
+          NEVALS = 0
+          CALL MAKEMOL(IFG,0,0,ILAY,0,0,0,0,0,0,0,.TRUE.)
+          L1  = NUM
+          L2  = (L1*L1+L1)/2
+          L3  =  L1*L1
+          NQI = NQMTFG(IFG)
+          NQMT = NQI
+CZ        IF (MASWRK) write(6,*) 'NUM NQMT',NUM,NQI
+c
+CZ
+CZ        OPTION: FMO/EFP
+CZ
+          IF (IEFPFMO.NE.0.AND.DOSCZV) THEN
+            CALL VALFM(LOADFM)
+            LPEX  = LOADFM + 1
+            LPEY  = LPEX   + L2
+            LPEZ  = LPEY   + L2
+            LAST  = LPEZ   + L2
+            NDEFP = LAST - LOADFM -1
+            CALL GETFM(NDEFP)
+c
+            ! PEX, PEY, PEZ are stored in a file
+            CALL POLINT(X(LPEX),X(LPEY),X(LPEZ),L2)
+            CALL RETFM(NDEFP)
+          END IF
+c
+CZ
+CZ        wonder how to treat JANDK?
+CZ
+CZCZ      IF (ITER.GT.0) THEN
+          IF (DOSCZV) THEN
+            DIRSAV = DIRSCF
+            DIRSCF = .TRUE.
+            IST=1
+            JST=1
+            KST=1
+            LST=1
+            CALL JANDK
+            DIRSCF = DIRSAV
+          END IF
+C
+C
+CZCZ      IREC0=IDMREC0(ILAY)
+C         HACK IT UP TO POINT TO RHF DENSITIES FOR RUNS WITH MP2 DENSITIES.
+CZCZ      IF(DODDCOR) THEN
+CZCZ        IREC0RHF=1
+CZCZ        IF(IREC0.EQ.1) IREC0RHF=NFG*2+1
+CZCZ        IREC0=IREC0RHF
+CZCZ      ENDIF
+          IDMREC0I = IFG + IREC0
+c
+CZCZ      NAI  = ISHFT(NUMFRG(IFG),-16)
+CZCZ      MULI = MULFG(IFG)
+CZCZ      NBI  = NAI-MULI+1
+          NAI  = NA
+CZCZ      MULI = MUL
+          NBI  = NB
+c
+CZ        numbers of occ. and vir.
+          NOCC = NAI
+          NVIR = NQI - NOCC
+C
+          NVOC = NOCC*NVIR
+          LCCC = L2 + 1
+          LORB = L2 + L3 + 1
+cz
+cz        In the FMO/CPHF case, MOs and orbital energies are
+cz        always read in.
+cz
+          CALL VCLR(DA,1,L2+L3+L1)
+          CALL RAREADS(IDAFMO,IODFMO,DA(LCCC),L3+L1,IDMREC0I,0)
+          ! construct density: be careful about the last arg.
+          CALL DMTX2(DA,DA(LCCC),NAI,L1,L1,NBI)
+c
+cz
+c         if (maswrk) write(6,*) 'DENSITY FOR ',IFG
+c         CALL PRTRI(DA,L1)
+cz
+CZ
+CZ        COPY ZVEC0 TO ZVEC1
+CZ
+          IF (LPUTGET) THEN
+            LZ0PT = LZVEC0
+            LZ1PT = LZVEC1
+            IF (LFIRST) THEN
+              CALL VCLR(X(LZVEC0),1,NVOC)
+            ELSE
+              CALL ZVECPUTGET(1,0,IFG,NVOC,X(LZ0PT))
+              CALL DCOPY(NVOC,X(LZ0PT),1,X(LZ1PT),1)
+            END IF
+          ELSE
+            IPT   = IXFTCH(X(LIPTZC),IFG)-1
+            LZ0PT = LZVEC0+IPT
+            LZ1PT = LZVEC1+IPT
+            IF (ITER.EQ.0) THEN
+              CALL VCLR(X(LZ0PT),1,NVOC)
+            ELSE
+              CALL DCOPY(NVOC,X(LZ0PT),1,X(LZ1PT),1)
+            END IF
+          END IF
+c
+cz
+cz        Transform LAG_I=sum_KL{D_KL*TWOEI} into MO basis
+cz
+          IF (LCONV) THEN
+CZCZ        IF (LPUTGET) THEN
+CZCZ          ! Clear the space for the next calculation of ZLAG
+CZCZ          CALL VCLR(X(LWRT1),1,L2)
+CZCZ          CALL ZLAGPUTGET(0,IFG,IPTLG,L2,X(LWRT1))
+CZCZ        END IF
+          ELSE
+CZCZ        IF (LPUTGET) THEN
+CZCZ          CALL ZLAGPUTGET(1,IFG,IPTLG,L2,X(LWRT1))
+CZZC        ELSE
+              CALL DCOPY(L2,ZVLAG(IPTLG(IFG)),1,X(LWRT1),1)
+CZCZ        END IF
+            ! CX(1,NOCC+1)^t*LAG*CX(1,1)
+            CALL CPYTSQ(X(LWRT1),X(LWRK2),L1,1)
+            CALL SWBASIS(1,L1,NOCC,NVIR,DA(LCCC),X(LWRK2),L1,X(LWRK1),
+     *                   NVIR,X(LWRK3))
+          END IF
+c
+          ! LWRK1 is Lagrangian here
+          IF (LPUTGET) THEN
+            IF (LFIRST) THEN
+              CALL PRFCTMO(0,NVIR,NOCC,NVIR,X(LWRK1),X(LWRK2),DA(LORB),
+     *                     FOUR)
+              CALL DCOPY(NVOC,X(LWRK1),1,X(LZVEC1),1)
+            ELSE
+              IF (LCONV) THEN
+                CALL DCOPY(NVOC,X(LZVEC1),1,X(LWRK1),1)
+                CALL PRFCTMO(2,NVIR,NOCC,NVIR,X(LWRK1),X(LWRK2),
+     *                       DA(LORB),ONE)
+              ELSE
+                CALL DSCAL(NVOC,FOUR,X(LWRK1),1)
+                CALL FMOCGCP(IFG,ILAY,NOCC,NVIR,L1,L2,DA(LCCC),
+     *                       X(LZVEC0),X(LZVEC1),NOVMAX,DA(LORB),
+     *                       LAYFRG,IDMREC0,NQMTFG,LPUTGET,X(LWRT1),
+     *                       X(LWRK1),X(LWRK2),X(LWRK3))
+              END IF
+            END IF
+          ELSE
+            IF (ITER.EQ.0) THEN
+              CALL PRFCTMO(0,NVIR,NOCC,NVIR,X(LWRK1),X(LWRK2),DA(LORB),
+     *                     FOUR)
+              CALL DCOPY(NVOC,X(LWRK1),1,X(LZ1PT),1)
+            ELSEIF (ITER.GT.0) THEN
+              IF (LCONV) THEN
+                CALL DCOPY(NVOC,X(LZ1PT),1,X(LWRK1),1)
+                CALL PRFCTMO(2,NVIR,NOCC,NVIR,X(LWRK1),X(LWRK2),
+     *                       DA(LORB),ONE)
+              ELSE
+                CALL DSCAL(NVOC,FOUR,X(LWRK1),1)
+                CALL FMOCGCP(IFG,ILAY,NOCC,NVIR,L1,L2,DA(LCCC),
+     *                       X(LZVEC0),X(LZ1PT),X(LIPTZC),DA(LORB),
+     *                       LAYFRG,IDMREC0,NQMTFG,LPUTGET,X(LWRT1),
+     *                       X(LWRK1),X(LWRK2),X(LWRK3))
+              END IF
+            END IF
+          END IF
+CZ
+CZ        CHECK THE FRAGMENT CONVERGENCE
+CZ
+          CONV_F = ZERO
+          DO II = 0, NVOC-1
+            DIFF = X(LZ1PT+II) - X(LZ0PT+II)
+            CONV_F = CONV_F + DIFF*DIFF
+          END DO
+          CONV_F = SQRT(CONV_F/NVOC)
+          IF (OUT) WRITE(IW,9020) CONV_F, IFG
+          IF (CONV_F.LE.THRSH.AND.MASWRK) NCONV = NCONV + 1
+c
+CZ
+CZ        IF ALL THE FRAGMENT Z-VECTORS CONVERGE,
+CZ        GO TO CALCULATION OF THE GRADIENT CONTRIBUTION: Z*B^a
+CZ
+czcz      lconv = .true.
+CZCZ      IF (lconv) THEN
+          IF (LCONV.AND.ITER.GT.0) THEN
+            ! get TRI1 from ZVEC
+            CALL SWBASIS(0,L1,NOCC,NVIR,DA(LCCC),X(LZ1PT),NVIR,
+     *                   X(LWRK1),L1,X(LWRK3))
+            CALL SQ2TRI(L1,L1,X(LWRK1),TRI1,HALF)
+cz
+CZ          if (maswrk) write(6,*) 'TRI1'
+CZ          CALL PRTRI(TRI1,L1)
+cz
+            ! get TRI2: FOR S^a
+            CALL SWBASIS(0,L1,NOCC,NVIR,DA(LCCC),X(LWRK2),NVIR,
+     *                   X(LWRK1),L1,X(LWRK3))
+            CALL SQ2TRI(L1,L1,X(LWRK1),TRI2,-HALF)
+c
+c
+            CALL ESDCPHF(IFG,ILAY,DA,TRI1,TRI2,L1,L2,FMODE,LAYFRG,
+     *                   SCFFRG,IDMREC0,0,0,0,X(LWRT1),X(LWRK1),
+     *                   X(LWRK2),X(LWRK3),hopgrd)
+CZCZ        if (maswrk) write(iw,*) 'Z-VECTOR IN', IFG
+CZCZ        CALL PRSQ(X(LZ1PT),NOCC,NVIR,NVIR)
+          END IF
+c
+          IF (LPUTGET) THEN
+            ! put new zvec
+            CALL ZVECPUTGET(0,NFG,IFG,NVOC,X(LZ1PT))
+          ELSE
+            IF (GOPARR) CALL DSCAL(NVOC,ONE/NPROC,X(LZ1PT),1)
+          END IF
+  230   CONTINUE
+        IF (OUT) CALL TIMIT(1)
+c
+        IF (ISGDDI) CALL GDDICOUNT( 1,LGROUP,MYJOB)
+        IF (LPUTGET) THEN
+          IF (ISGDDI) THEN
+            CALL GDDI_SCOPE(DDI_WORLD)
+            CALL DDI_GSUMI(3004,NCONV,1)
+            CALL GDDI_SCOPE(DDI_GROUP)
+          ELSE
+            CALL DDI_BCAST(3004,'I',NCONV,1,0)
+          END IF
+        ELSE
+          IF (ISGDDI) THEN
+            CALL GDDI_SCOPE(DDI_WORLD)
+            CALL DDI_GSUMF(3003,X(LZVEC1),NOVTOT)
+            CALL DDI_GSUMI(3004,NCONV,1)
+            CALL GDDI_SCOPE(DDI_GROUP)
+          ELSE
+            CALL DDI_GSUMF(3003,X(LZVEC1),NOVTOT)
+            CALL DDI_BCAST(3004,'I',NCONV,1,0)
+          END IF
+        END IF
+c
+        IF (LCONV.AND.ITER.GT.0) THEN
+          IF (MASWRK) WRITE(IW,9040) ITER
+          CALL RETFM(NEEDWK)
+          RETURN
+        END IF
+        IF ((NCONV.EQ.NFG.AND.ITER.GT.0).OR.ITER.EQ.NTER-1)
+     *     LCONV = .TRUE.
+        IF (OUT) WRITE(IW,9030) NCONV, ITER
+c
+        IF (LPUTGET) THEN
+          IF (ISGDDI) CALL GDDICOUNT(-1,LGROUP,MYJOB)
+          DO 444 IFG = 1, NFG
+            IF (LAYFRG(IFG).LT.ILAY) GOTO 444
+            IF (ISGDDI) THEN
+              CALL GDDICOUNT(0,LGROUP,MYJOB)
+              IF (.NOT.MYJOB) GOTO 444
+            END IF
+            NQI  = NQMTFG(IFG)
+            NAI  = ISHFT(NUMFRG(IFG),-16)
+            NVOC = (NQI-NAI)*NAI
+            CALL ZVECPUTGET(1,NFG,IFG,NVOC,X(LZVEC0))
+            CALL ZVECPUTGET(0,  0,IFG,NVOC,X(LZVEC0))
+  444     CONTINUE
+          IF (ISGDDI) CALL GDDICOUNT( 1,LGROUP,MYJOB)
+        ELSE
+          CALL DCOPY(NOVTOT,X(LZVEC1),1,X(LZVEC0),1)
+          CALL VCLR(X(LZVEC1),1,NOVTOT)
+        END IF
+      END DO
+c
+      CALL RETFM(NEEDWK)
+      RETURN
+ 9000 FORMAT(/1X,60(1H+)/
+     *        1X,60(1H-)/
+     *        3X,' FMO CPHF CALCULATION AT ITERATION:',I5/
+     *        1X,60(1H-)/
+     *        1X,60(1H+))
+ 9010 FORMAT(/3X,44(1H=)/
+     *        5X,' SCZV CALCULATION FOR IFG=',I5/
+     *        3X,44(1H=))
+ 9020 FORMAT(/3X,60(1H#)/
+     *        5X,'Z-VECTOR DEV:',F12.8,' AT FRAG.:',I5/
+     *        3X,60(1H#))
+ 9030 FORMAT(/1X,60(1H*)/
+     *        3X,I5,' Z-VECTORS HAVE CONVERGED SO FAR AT ITER=',I4/
+     *        1X,60(1H*))
+ 9040 FORMAT(/1X,60(1H*)/
+     *        3X,'RESPONSE CALCULATIONS ARE ALL DONE IN FMO AT ITER=',
+     *        I4/
+     *        1X,60(1H*))
+      END
+C*MODULE FMOCP *DECK ESDCPHF
+      SUBROUTINE ESDCPHF(IXFG,IXLAY,DX,TRI1,TRI2,L1,L2,FMODE,
+     *                   LAYFRG,SCFFRG,IDMREC0,IDAM,IDAD,IDAT,
+     *                   WRT1,WRK1,WRK2,WRK3,hopgrd)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      PARAMETER (MXATM=2000,MXSH=5000,MXGTOT=20000,MXAO=8192,MXGSH=30,
+     *           MXG2=MXGSH*MXGSH,MXRT=100,MAXL=5)
+      PARAMETER (HALF=0.5D+00,ZERO=0.0D+00)
+C
+      LOGICAL DIRSCF,FDIFF,DIRSAV,SCHWRZ,PACK2E,GOPARR,DSKWRK,MASWRK,
+     *        OUT,SOME,BSSEDIM,ORBXCH,SAVGOP,ESPPAR,NXT,ESPAP,DODDCOR,
+     *        ESDDER,LARGEPRI,LCFLAG,LRINT,LCFLAGS,LRINTS
+      LOGICAL ESDER,hopgrd
+C
+      DIMENSION LAYFRG(*),SCFFRG(*),IDMREC0(*),KARTEN(0:MAXL-1)
+      dimension DX(1), tri1(1), tri2(1)
+      dimension WRT1(*),WRK1(*),WRK2(*),WRK3(*)
+      DIMENSION FMODE(3,*)
+C
+      COMMON /GRAD  / DE(3,MXATM)
+      COMMON /EFPFMO/ RUNEFP,REFFMO,REPNUCEFP,IEFPFMO,ISWENUC,EFPEFP
+      COMMON /ENRGYS/ ENUCR,EELCT,ETOT,SZ,SZZ,ECORE,ESCF,EERD,E1,E2,
+     *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2),edisp
+      COMMON /FMCOM / X(1)
+      COMMON /FMODIM/ MAXBND,MAXKND,MAXCBS,MAXCAO,MAXVEC,MAXL1,MAXNAT,
+     *                MAXABD,MAXBAS,MAXBBD,MAXLMO,MAXSLO,MAXABD2
+      COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
+      common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
+     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
+     *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
+     *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
+     *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
+     *                modlmo,nopden,mofock
+      COMMON /FMOPNT/ LICHFG,LMULFG,LIDMREC,LFRGNAM,LLAYFRG,LINDAT,
+     *                LNCBS,LFMOZAN,LFMOC,LFMOMAS,LIZBAS,LIAGLOB,LIBDGH,
+     *                LIABDFG,LJABDFG,LNCAO,LIDXCAO,LIAPRJO,LJAPRJO,
+     *                LCOREAO,LOCCCOR,LSHIFTB,LIODFMO,LFMODA,LFMODB,
+     *                LFMOESPA,LFMOESPB,LLOCFMO,LSCFFRG,LFMOSCF,LRIJ,
+     *                LPOPMUL,LPOPMAT,LIALOC,LINDBD,LIATFRG,LINDFRG,
+     *                LINDGFRG,LNATFRG,LNAT0FRG,LIANFRG,LZANFRG,LCFRG,
+     *                LLIBISH,LLIBNSH,LLIBNG,LINDATG,LFMOBUF(3),LFMODE,
+     *                LNUMFRG,LLOCTAT,LIAOGLOB,LLOADM,LFMOGE,LDGRID,
+     *                LIODCFMO,LJOB2GRP,LFMOPG,LEMOCDR,LUNTXYZ,LUNTROT,
+     *                LSTONEP,LMAPSU,LFRGMUL,LCLMO,LIALMO,LINDLMO,
+     *                LATCLMO,LLMOBDF,LFGFLMO,LNFGLMO,LLFGLMO,LPFGLMO,
+     *                LPOPDMAT,lidmpnt,liddpnt,livmpnt
+      COMMON /FMORUN/ ESPSCF,E0SCF(2),EMP2S,IDAFMO,ICURFG,JCURFG,KCURFG,
+     *                ICURLAY,ICURUNT,NAT1E,NCURSH,NGAU,ICURPOP,IFMOSTP,
+     *                MONCOR,NEEDR,MODRST,NORBPROJ,NUNESP,ISKIPESP,
+     *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
+     *                iddcur,nddleft,ivmfmo
+      COMMON /IJPAIR/ IA(MXAO)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /INTFIL/ NINTMX,NHEX,NTUPL,PACK2E,INTTYP,IGRDTYP
+C     COMMON /INTOPT/ ISCHWZ,IECP,NECP,IEFLD
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /MCPFMO/ IMCPFMO,LFZCOR,LIFMPTYP,LIFMPTYP2,LMCPSW,
+     *                LIZCOR2,IMP0,JMP0,ICORSH0,IGTF0
+      COMMON /MMPDOC/ MPTYP(MXATM),IMVO,IMCORE
+      COMMON /NLRC  / LCFLAG,LRINT,EMU,EMU2,LRFILE
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /OPTSCF/ DIRSCF,FDIFF
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+      COMMON /RESTAR/ TIMLIM,IREST,NREC,INTLOC,IST,JST,KST,LST
+      COMMON /SHLEXC/ NORGSH(3),NORGSP(3),IEXCH,NANGM,NGTH(4)
+C
+      DATA KARTEN/1,4,6,10,15/
+      DATA RHF/8HRHF     /,RMC/8HMCSCF   /
+     *     DBGFMO/8HDBGFMO  /,DBGME/8HFMOESP  /,DEBUG/8HDEBUG   /
+CZ
+CZ    THIS ROUTINE COMPUTES THE RESPONSE TERMS IN FMO.
+CZ
+C     PARSTAT: GROUPFULL/GROUPNONE
+C
+C     FOR NBSSE=3 MONOMERS AND DIMERS DURING BSSE RUNS ARE IN VACCUUM
+      IF(NBSSE.EQ.3.AND.IFMOSTP.EQ.5. OR. IFMOSTP.EQ.1) RETURN
+      IF (IFMOSTP.EQ.6) THEN
+        WRITE (IW,*) 'IFMOSTP=6 IS NOT ALLOWED IN FMOESDER'
+        CALL ABRT
+      END IF
+      IF (IFMOSTP.NE.2.AND.IFMOSTP.NE.4.AND.IFMOSTP.NE.8) RETURN
+C
+      SOME=(EXETYP.EQ.DEBUG.OR.EXETYP.EQ.DBGFMO.OR.EXETYP.EQ.DBGME).AND.
+     *     MASWRK
+      ORBXCH=MOD(MODORB,2).NE.0
+C     ENEXCH=MOD(MODORB/2,2).NE.0
+      ESPPAR=MOD(MODPAR/2,2).NE.0.AND.GOPARR
+C     .TRUE.  DIVIDE FRAGMENTS
+C     .FALSE. DIVIDE SHELLS
+CZ    LWRKDEN  = LFMOBUF(1)  ! LWRK  -> TRI1
+      LWRKESP  = LFMOBUF(2)  ! LWRK2 -> DIJ
+CZ    LWRKESP2 = LFMODB      ! DB    -> TRI2
+      if(nat.lt.0) write(iw,*) idat
+c
+czcz  EXPERIMENT: 3/16/10
+CZ    when ESPPC approximation is applied and
+CZ    Mulliken charge derivatives are skipped,
+CZ    this experiment activates
+CZ    RESPPC(1)=ZERO stands for skipping ESPPC calculation
+CZ    in 1E integrals
+      if (iand(modgrd,10).eq.2) then
+        resppc1s = resppc(1)
+        resppc(1) = zero
+      end if
+czcz
+C
+C     FOR MONOMER SCF THERE IS NO NEED TO ADJUST IREC0 BELOW (AND MPPROP MAY
+C     NOT HAVE BEEN READ ANYWAY).
+C
+      IFG      = IXFG
+      ILAY     = IXLAY
+C
+      IF(IFG.EQ.0) RETURN
+C
+      LCFLAGS =  LCFLAG
+      LRINTS  =  LRINT
+      LCFLAG  = .FALSE.
+      LRINT   = .FALSE.
+C
+C     ESP IS NOT NEEDED. THIS HAPPENS WHEN MONOMER/DIMER SCF ITERATIONS RUN.
+C     (ESP IS COMPUTED BEFORE SUCH ITERATIONS ALONG WITH 1-EL INTEGRALS)
+C
+      CALL DERCHK(NDER)
+CZ
+CZ    IESDPPC=1 AVOIDS ADDITION OF FMO/PCM REDUNDANT GRADIENTS IN SUBROUTINE FMODEG
+CZ
+      IESDPPC = 1   ! already set in FMOESDER?
+CZ
+      ESDER = NDER.GT.0.AND.IAND(MODGRD,32).NE.0
+      IF (.NOT.ESDER) THEN
+        WRITE(IW,*) 'MUST DEBUG FOR ESDCPHF'
+        CALL ABRT
+      END IF
+CZ    ESDDER=IFMOSTP.EQ.6.AND.RESDIM.NE.0.AND.IAND(IXESP,32).EQ.0.AND.
+CZ   *       NDER.GT.0
+      ESDDER=.TRUE.
+c
+czcz
+czcz  jfg and lfg should be changed ??
+czcz
+czcz  JFG  = JCURFG
+czcz  LFG  = KCURFG
+      JFG  = 0
+      LFG  = 0
+CZCZ
+      KFG0 = 1
+      KFG1 = NFG
+      IZ   = 1
+CZ
+      RESPAPI=RESPAP(IZ)
+      RESPPCI=RESPPC(IZ)
+      BSSEDIM=NBSSE.EQ.2.AND.IFMOSTP.EQ.5
+      IF(BSSEDIM) JFG=0
+      DODDCOR=IAND(IXESP,1024).NE.0
+C
+C     SCHWRZ = ISCHWZ.GT.0
+      SCHWRZ = .TRUE.
+C     DO NOT THINK THAT YOU CAN SET SCHWRZ TO .FALSE. AND GET AWAY WITH IT.
+C     SCHWRZ ALSO FORCES INTEGRAL INITIALISATION THAT WILL OTHERWISE NOT BE
+C     DONE.
+C
+      DIRSAV  =  DIRSCF
+      DIRSCF  = .TRUE.
+C     SCFTYP1 = SCFTYP
+C     IF(SCFTYP.EQ.RMC) SCFTYP1=RHF
+      SCFTYP1=RHF
+      OUT=SCHWRZ.AND.MASWRK.AND.IAND(NPRFMO,3).EQ.0
+C
+czcz  CALL VCLR(X(LFMOESPA),1,L2)
+CB    CALL VCLR(X(LFMOESPB),1,L2)
+C
+cz
+cz    note in 11/23/09: how I treat icurfg?
+cz    this routine procceds to esvder and exthelfey where
+cz    icurfg is used in fmoatfrg and icurfg never equals to ixfg
+cz    should I change the value of icurfg before esvder and exthelfey?
+C
+      NPRSAV=NPRFMO
+      IF(NPRINT.EQ.-5.AND.IAND(NPRFMO,3).EQ.0) NPRFMO=NPRFMO+1
+C     THAT IS, ENFORCE REDUCED OUTPUT IF NPRINT.EQ.-5
+C     FOR ESPS THE ONLY MEANINGFUL USAGE OF LOADM IS WITH TRUE ESPPAR.
+C     LOADM SHOULD ONLY BE USED IF FULL RANGE OF FRAGMENTS IS TREATED
+C     (THAT IS, EXCLUDING SEPARATED DIMERS).
+      LOADHF=MOD(MODPAR,2)
+      LARGEPRI=LOADHF.EQ.1.AND.ESPPAR.AND.KFG0.EQ.1.AND.KFG1.EQ.NFG
+C     WRITE(6,*) 'WWWLB',LARGEPRI
+c
+CZ
+CZ    Clear DE first for inner contributions
+CZ
+      CALL VCLR(DE,1,NAT*3)
+CZ
+CZ    (1). BASIS FUNCTION DERIVATIVE CONTRIBUTION OF 1E INTEGRALS
+CZ         TO FOCK DERIVATIVES
+CZ    THE CONTRIBUTIONS ARE DIRECTLY STORED IN FMODE().
+CZ
+      CALL ESVDER(1,0,TRI1,WRK1,WRK2,L2,0,.true.)
+c
+CZ    ONE = 1.0D+00
+CZCZ  IF (GOPARR) CALL DDI_GSUMF(2418,DE,NAT*3)
+CZ    if (maswrk) then
+CZ      write(6,*) 'ESVDER',ncursh,nshell
+CZ      do i = 1, nat
+CZ        write(6,'(3F12.8)') DE(1,I),DE(2,I),DE(3,I)
+CZ      end do
+CZ    end if
+CZCZ  IF(GOPARR) CALL DSCAL(3*NAT,ONE/NPROC,DE,1)
+CZ
+CZ    (2). HELMANN-FEYNMAN CONTRIBUTION TO FOCK DERIVATIVES
+CZ
+      ! second FMODE is dummy in the present version
+      CALL EXTHELFEY(1,0,TRI1,WRK1,L2,FMODE,FMODE,.true.)
+c
+CZCZ  IF (GOPARR) CALL DDI_GSUMF(2418,DE,NAT*3)
+CZ    if (maswrk) then
+CZ      write(6,*) 'ESVDER+HELFEY'
+CZ      do i = 1, nat
+CZ        write(6,'(3F12.8)') DE(1,I),DE(2,I),DE(3,I)
+CZ      end do
+CZ    end if
+CZCZ  IF(GOPARR) CALL DSCAL(3*NAT,ONE/NPROC,DE,1)
+CZ
+CZ    (3). DERIVATIVES OF MULLIKEN CHARGES IN ESPPC
+cz    I wonder if it can be just skipped
+CZ
+czcz  IF (NDER.GT.0.AND.IAND(MODGRD,8).NE.0) THEN
+czcz    CALL ESPPCDER(1,0,ILAY,TRI,L2,X(LPOPDMAT),LAYFRG)
+czcz  END IF
+c
+CZ
+CZ    (4). OVERLAP DERIVATIVE CONTRIBUTION TO RESPONSE
+CZ
+      NSH2 = (NSHELL*NSHELL+NSHELL)/2
+      CALL BASCHK(LMAX)
+      IF(LMAX.GE.5) THEN
+         IF(MASWRK) WRITE(IW,*) 'FMO HAS NOT BEEN REVIEWED FOR H,I'
+         CALL ABRT
+      END IF
+C     FOR SOME REASON GAMESS LIKES TO HANDLE AT LEAST L-SHELLS
+      NANGM=KARTEN(MAX(LMAX,1))
+      MAXG = NANGM**4
+      CALL VALFM(LOADFM)
+C
+      LXINTS= LOADFM + 1
+      LGHOND= LXINTS + NSH2
+      LDSH  = LGHOND + MAXG
+      LDSHB = LDSH   + NSH2
+      LDDIJ = LDSHB  + NSH2
+      LAST  = LDDIJ  + 49*MXG2
+      NEED1 = LAST - LOADFM -1
+      CALL GETFM(NEED1)
+      IF(SCHWRZ) THEN
+        DUMMY = 0.0D+00
+        CALL SHLDEN(SCFTYP1,TRI1,DUMMY,DUMMY,X(LDSH),IA,
+     *              L1,L2,NSH2,1)
+        ! XINTS is stored in disk in this case (ncursh is 0)
+        CALL EXCHNG(X(LXINTS),X(LGHOND),X(LDDIJ),NSH2,MAXG,INTTYP)
+      END IF
+c
+      NXYZ = 1 ! if NXYZ = NAT*3, it is just for response
+      NINT  =0
+      NSCHWZ=0
+      IST=1
+      JST=1
+      KST=1
+      LST=1
+czcz  CALL JANDK
+CZ
+CZ     IN: TRI1 symmetrized Z-vector
+CZ    OUT: WRK1     Fock-like matrix
+CZ
+      IDUMMY=1
+      CALL VCLR(WRT1,1,L2)
+      CALL TWOEI(RHF,DIRSCF,.FALSE.,.FALSE.,.FALSE.,
+     *           INTTYP,SCHWRZ,NINT,NSCHWZ,L1,L2,
+     *           DUMMY,DUMMY,IDUMMY,1,X(LXINTS),NSH2,X(LGHOND),
+     *           MAXG,X(LDDIJ),IA,TRI1,WRT1,DUMMY,DUMMY,X(LDSH),
+     *           DUMMY,DUMMY,NXYZ)
+      CALL RETFM(NEED1)
+      CALL DSCAL(L2,HALF,WRT1,1)
+      II = 0
+      DO I=1, L1
+        II = II+I
+        WRT1(II) = WRT1(II) + WRT1(II)
+      ENDDO
+C
+CZ
+CZ    OPTION (1). EFP contribution
+CZ
+C     This position is the best, because the contribution to
+C     S^a should be merged with other S^a terms.
+      IF (IEFPFMO.NE.0) CALL EFPCNT2RSP(L1,L2,DX,TRI1,WRT1)
+CZ
+c
+      IF (GOPARR) CALL DDI_GSUMF(2418,WRT1,L2)
+cz    if (maswrk) write(6,*) 'TRI*TWOEI matrix'
+cz    CALL PRTRI(WRT1,L1)
+c
+      ! note that WRK2 works as triangle matrix
+      CALL CPYTSQ(DX,WRK1,L1,1)
+      CALL TFTRI(WRK2,WRT1,WRK1,WRK3,L1,L1,L1)
+      CALL DAXPY(L2,-HALF,WRK2,1,TRI2,1)
+c
+cz    if (maswrk) write(6,*) 'DENSITY-LIKE MAT FOR SDER'
+cz    CALL PRTRI(TRI2,L1)
+c
+      CALL SDER(TRI2,WRK1,L1,L2,.FALSE.)
+      ! From now on, TRI2 is used as work space
+CZCZ  IF (GOPARR) CALL DDI_GSUMF(2418,DE,NAT*3)
+CZ    if (maswrk) then
+CZ      write(6,*) '+ SDERIVATIVE CONTRIBUTION'
+CZ      do i = 1, nat
+CZ        write(6,'(3F12.8)') DE(1,I),DE(2,I),DE(3,I)
+CZ      end do
+CZ    end if
+CZCZ  IF(GOPARR) CALL DSCAL(3*NAT,ONE/NPROC,DE,1)
+c
+cz
+cz    (5) HOP DERIVATIVE CONTRIBUTION
+cz
+      IF (hopgrd) CALL HOPDER(1,0,1,0,L1,L2,TRI1,WRK1,WRK2)
+CZ
+CZ    (6). TWO-ELECTON CONTRIBUTION TO FOCK DERIVATIVES
+CZ         here just for inner fragment IXFG
+CZ         JKDER is not applied as it is, because it calls
+cz         DAREAD with the old data for the fragment IJ.
+cz         Here, however, a call to DAREAD should be made for IXFG.
+cz         Another problem is that Z-vector (TRI1) in addition to
+cz         DA for K should be read in.
+cz         In the current code, it is not implemented.
+cz         Thus I have to modify JKDER or ESD2DER.
+cz         I think the latter is much easier to modify.
+CZ
+      ! ncursh should be zero here
+      ! special treatment for this purpose is made for
+      ! the last argument
+      IF(SCHWRZ) lfmobuf(3) = 0 ! read in XINTS from a file
+      CALL ESD2DER(DX,TRI1,-1)
+c
+CZCZ  IF (GOPARR) CALL DDI_GSUMF(2418,DE,NAT*3)
+CZ    if (maswrk) then
+CZ      write(6,*) 'AFTER ESD2DER',ncursh
+CZ      do i = 1, nat
+CZ        write(6,'(3F12.8)') DE(1,I),DE(2,I),DE(3,I)
+CZ      end do
+CZ    end if
+CZCZ  IF(GOPARR) CALL DSCAL(3*NAT,ONE/NPROC,DE,1)
+c
+CZ
+CZ    OPTION (2). MCP contribution
+CZ
+      IF (IMCPFMO.EQ.1) THEN
+        IMCPSW = 0
+        IF (IXFG.NE.0)   IMCPSW = IXFTCH(X(LMCPSW),IXFG)
+CZCZ    IF (JCURFG.NE.0) IMCPSW = IMCPSW + IXFTCH(X(LMCPSW),JCURFG)
+CZCZ    IF (KCURFG.NE.0) IMCPSW = IMCPSW + IXFTCH(X(LMCPSW),KCURFG)
+CZ      write(6,*) 'IMCPSW', IMCPSW
+        IF (IMCPSW.NE.0) THEN
+          NATMCP = NAT
+          MXVO   = IMVO
+          MXCO   = IMCORE
+C
+          CALL VALFM(LOADFM)
+          LDD  = LOADFM + 1
+          LOV  = LDD + 3*NATMCP
+          LDV  = LOV + MXCO*MXVO
+          LAST = LDV + MXCO*MXVO*3
+          NDMCP = LAST - LOADFM -1
+          CALL GETFM(NDMCP)
+          CALL MCPGRD(DE,TRI1,X(LDD),X(LOV),X(LDV),MXCO,MXVO)
+          CALL RETFM(NDMCP)
+        END IF
+      END IF
+c
+CZ
+CZ    SUM UP DE
+CZ
+      IF (GOPARR) CALL DDI_GSUMF(2418,DE,NAT*3)
+CZ
+CZ    the collected DE is now copied to FMODE
+CZ
+      IF (MASWRK) THEN
+        IF (IFMOSTP.EQ.2) THEN
+          CALL FMODEG(1,FMODE,X(LFMOPG),X(LIAGLOB))
+        ELSEIF (IFMOSTP.EQ.4) THEN
+          CALL FMODEG(1,FMODE,X(LFMOPG),X(LIAGLOB))
+          N11 = IDAM + IDAD
+          N11 = 0      ! NEED TO FIX FOR APPROXIMATE FMO3
+          IF (NBODY.GT.2)
+     *      CALL FMODEG(N11,X(LFMODE+6*NATFMO),X(LFMOPG),X(LIAGLOB))
+          ! MUST CHANGE
+        ELSEIF (IFMOSTP.EQ.8) THEN
+          CALL FMODEG(1,FMODE,X(LFMOPG),X(LIAGLOB))
+        ENDIF
+      ENDIF
+c
+czcz  goto 666
+C
+C     SAVE THE PRISTINE MONOMER(DIMER) CONFIGURATION
+C
+      CALL MONBSR(NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,NSHELL,NGAU,ENUCR,
+     *            NAT0,ICH0,MUL0,NUM0,NQMT0,NE0,NA0,NB0,
+     *            NCURSH,NGAU0,ENUCR0)
+C
+C     FIX THE NUMBER OF ELECTRONS TO AVOID DOUBLE COUNTING:
+C     EXCLUDE CHARGE AS OTHERWISE THE CHARGE OF FRAGMENT I WILL BE ADDED
+C     TO NE FIRST HERE AND THEN AGAIN IN MAKMOL BELOW.
+C     AT PRESENT NE IS ACTUALLY NOT IMPORTANT BECAUSE NUMFRG HAS NA.
+      NE0C=NE0+ICH0
+c
+czcz  experiment: 2e contributions are skipped subject to resppc(1)
+      if (iand(modgrd,10).eq.2) resppc(1) = resppc1s
+CZCZ
+C
+C     ----- INITIALIZATION FOR PARALLEL WORK -----
+C
+      NXT = IBTYP.EQ.1
+      NEXT  = -1
+      KOUNT = -1
+C
+C     ESP WILL BE COMPUTED IN THE DIRECT FASHION
+C
+C     DO 100 KFG=1,NFG
+      DO 100 KKFG=KFG0,KFG1
+        IF(LARGEPRI) THEN
+          KFG=IXFTCH(X(LLOADM),KKFG)
+        ELSE
+          KFG=KKFG
+        ENDIF
+        IF(IFG.EQ.KFG.OR.JFG.EQ.KFG.OR.LFG.EQ.KFG) GOTO 100
+C
+czcz    as of 11/23/09
+czcz    The approximation could be changed for the response calculation?
+czcz
+        IF(RESPPCI.NE.ZERO.OR.RESPAPI.NE.ZERO.OR.RESDIM.NE.ZERO) THEN
+          RK=FMODIST(IFG,JFG,LFG,KFG)
+C         THE DISTANCE WILL BE REFINED LATER FOR SMARTR.
+C         WRITE(6,*) 'DISTANCE IS',KFG,RK,RESPPCI
+          IF(RK.GT.RESPPCI.AND.RESPPCI.NE.ZERO) GOTO 100
+CZ
+C
+         IF(IFMOSTP.EQ.2.AND.IAND(IXESP,4096).NE.0.AND.RK.NE.0) GOTO 100
+C
+          ESPAP=RK.GT.RESPAPI.AND.RESPAPI.NE.ZERO
+        ELSE
+          ESPAP=.FALSE.
+        ENDIF
+C
+        IF(ESPPAR) THEN
+          KOUNT=KOUNT+1
+          IF(GOPARR) THEN
+            IF(NXT) THEN
+              IF(KOUNT.GT.NEXT) CALL DDI_DLBNEXT(NEXT)
+              IF(NEXT.NE.KOUNT) GOTO 100
+            ELSE
+              IF(MOD(KOUNT,NPROC).NE.ME) GOTO 100
+            ENDIF
+          ENDIF
+          SAVGOP=GOPARR
+          GOPARR=.FALSE.
+C         GOPARR IS SET TO .FALSE. TO PREVENT SHELL-BASED WORK DIVISION
+C         INSIDE OF EXCHNG AND FMOESP.
+C         NOTE THAT SHELL-BASED WORK DIVISION IS USED FOR ESPPAR=.FALSE.
+        ENDIF
+        KLAY=MIN(ILAY,LAYFRG(KFG))
+C       BSSEDIM=NBSSE.EQ.2.AND.IFMOSTP.EQ.5.AND.KFG.EQ.JCURFG
+        BSSEDIM=NBSSE.EQ.2.AND.IFMOSTP.EQ.5
+        IF(SOME) WRITE(6,*) 'COMPUTING ESD DUE TO FRG',KFG,' LAYER',KLAY
+C
+C       ADD MONOMER KFG AND READ ITS DENSITY (NOW ONLY ALPHA)
+C
+        KFGX = KFG
+        CALL MAKEMOL(KFGX,0,0,KLAY,0,NAT0,NCURSH,NGAU0,NE0C,ICH0,MUL0,
+     *               .FALSE.)
+        L1K =  NUM-NUM0
+        L2K = (L1K*L1K+L1K)/2
+CZ      L3K =  L1K*L1K
+C
+        IREC0=IDMREC0(KLAY)
+C       HACK IT UP TO POINT TO RHF DENSITIES FOR RUNS WITH MP2 DENSITIES.
+        IF(DODDCOR) THEN
+          IREC0RHF=1
+          IF(IREC0.EQ.1) IREC0RHF=NFG*2+1
+          IREC0=IREC0RHF
+        ENDIF
+        IDMREC0K=KFG+IREC0
+        IF(.NOT.ESPAP) THEN
+          NAK  = ISHFT(IXFTCH(X(LNUMFRG),KFG),-16)
+          MULK = IXFTCH(X(LMULFG),KFG)
+          NBK  = NAK-MULK+1
+cz
+cz        In this case, WRT1 is expected to have the length of L2+L3
+cz        covering WRK1, because READMOND first reads the MOs and then
+cz        the density is constructed in WRT1
+cz
+          CALL READMOND(WRT1,ORBXCH,SCFFRG(KFG).EQ.RMC,
+     *                  NAK,NBK,L1K,X(LIODFMO),IDMREC0K)
+          ! tri2 is external density
+          CALL DCOPY(L2K,WRT1,1,TRI2,1)
+C         GOTO 100
+C         WRITE(6,*) 'ORIGINAL DENSITY',KFG,L1K,NAK
+C         CALL PRTRI(X(LFMODA),L1K)
+C         CALL SEQOPN(38,'HESSIAN','UNKNOWN',.FALSE.,'UNFORMATTED')
+C         WRITE(38) (X(LFMODA+I-1),I=1,L2K)
+C         CALL SEQCLO(38,'KEEP')
+C         READ BETA DENSITY
+        ENDIF
+C
+C       ARRAY SIZES ARE DIFFERENT FOR EACH FRAGMENT.
+C
+        NSH2 = (NSHELL*NSHELL+NSHELL)/2
+        CALL BASCHK(LMAX)
+        IF(LMAX.GE.5) THEN
+           IF(MASWRK) WRITE(IW,*) 'FMO HAS NOT BEEN REVIEWED FOR H,I'
+           CALL ABRT
+        END IF
+C       FOR SOME REASON GAMESS LIKES TO HANDLE AT LEAST L-SHELLS
+        NANGM=KARTEN(MAX(LMAX,1))
+        MAXG = NANGM**4
+        CALL VALFM(LOADFM)
+C
+        LXINTS= LOADFM + 1
+        LGHOND= LXINTS + NSH2
+        LDSH  = LGHOND + MAXG
+        LDSHB = LDSH   + NSH2
+        LDDIJ = LDSHB  + NSH2
+        LAST  = LDDIJ  + 49*MXG2
+        NEED  = LAST- LOADFM -1
+        CALL GETFM(NEED)
+C
+        LDENP=LPOPMUL+((ICURPOP-1)*NFG+KFG-1)*MAXL1
+        IF(ESPAP) THEN
+          LDENA=LDENP
+          LDENB=LDENA
+        ELSE
+czcz      LDENA=LWRKDEN
+          LDENA=LWRKESP  ! TRI2 is lwrkesp in FMOESDER (tricky)
+czcz      LDENB=LFMODB   ! LWRKESP2=GEN
+          LDENB=LWRKESP  ! nothing happens, I guess
+        ENDIF
+C
+C       CALL ERIPRE
+C       THERE IS NO NEED TO CALL ERIPRE HERE. FMO CODE ALWAYS CALLS EXCHNG
+C       (BECAUSE SCHWRZ IS FORCED TRUE), AHD THIS IS WHERE INITIALISATION
+C       FOR EACH (N+1)-MER IS DONE. NOTE THAT THIS INITIALISATION IS
+C       IMPORTANT NOW: IT SETS ARRAYS FOR SCREENING AND SOME OTHER THINGS.
+C
+C       CREATE DENSITY MATRIX FOR SHELL INDICES
+C
+        IF(SCHWRZ) THEN
+          DUMMY = 0.0D+00
+CNB       FOR GRADIENTS, WHAT SHOULD BE SCFTYP??
+C         L1 AND L2K SEEM TO BE THE RIGHT CHOICE:
+C         L1 IS USED TO SKIP L1 AOS TO GET TO THE EXTERNAL MONOMER SHELL
+C         L2K GIVES THE SIZE OF GVB DENSITY MATRICES FOR THE EXTERNAL MONOMER
+C         WRITE(6,*) 'ORIGINAL DENSITY',KFG,L1K
+C         CALL PRTRI(X(LFMODA),L1K)
+          IF(ESPAP) THEN
+C           WRITE(6,*) 'MULLIKENS'
+C           CALL PRSQ(X(LDENA),L1K,1,1)
+            CALL SHLDEND(SCFTYP1,X(LDENA),X(LDENB),DUMMY,X(LDSH),L1,1)
+C           WRITE(6,*) 'CONTRACTED L-DENSITY',KFG,NSHELL-NCURSH
+C           CALL PRSQ(X(LDSH),NSHELL-NCURSH,1,1)
+          ELSE
+            CALL SHLDEN(SCFTYP1,TRI2,X(LDENB),DUMMY,X(LDSH),IA,
+     *                  L1,L2K,NSH2,1)
+            IF(ESDDER) THEN
+C             REMOVE ALL EVIDENCE OF FRAGMENT 2 BEING INVOLVED.
+C             KEEP ONLY FRAGMENT 1 INFORMATION AND OBTAIN ITS SHELL DENSITY.
+C             L1 ARGUMENT IS UNUSED BELOW.
+              NSHSAV=NSHELL
+              NSHELL=NCURSH
+              NCURSH=0
+              ! TRI1 works as density-like matrix
+              CALL SHLDEN(SCFTYP1,TRI1,X(LDENB),DUMMY,X(LDSHB),IA,
+     *                    L1,L2,NSH2,1)
+              NCURSH=NSHELL
+              NSHELL=NSHSAV
+            ENDIF
+C         WRITE(6,*) 'CONTRACTED DENSITY',KFG,NSHELL-NCURSH
+C         CALL PRTRI(X(LDSH),NSHELL-NCURSH)
+          ENDIF
+        END IF
+C
+C       INITIALISE TWO-ELECTRON INTEGRALS
+C       POPLE INTEGRALS USE A SEPARATE COORDINATE COMMON BLOCK INITIALISED
+C       ABOVE, ETC. ?ST MUST BE RESET SO THAT NO PHONEY RESTART IS DONE.
+C
+        IST=1
+        JST=1
+        KST=1
+        LST=1
+        CALL JANDK
+C
+C     ----- EXCHANGE INTEGRALS FOR DIRECT SCF THRESHOLD TESTS -----
+C       COMPUTED FOR THE COMBINED SYSTEM, NO NEED TO ADJUST INDICES.
+C
+        NINT   = 0
+        NSCHWZ = 0
+CNB5    EXCHNG CAN BE ADJUSTED TO TAKE ADVANTAGE OF THE REDUCED BASIS WITH BSSE.
+C       GOTO 100
+C       DO IOHNO=1,1000
+        IF(SCHWRZ) CALL EXCHNG(X(LXINTS),X(LGHOND),X(LDDIJ),
+     *                         NSH2,MAXG,INTTYP)
+C       ENDDO
+C       COMPUTE 2-EL INTEGRALS CORRESPONDING TO PLACING THE ORIGINAL
+C       MONOMER(DIMER) INTO THE COULOMB FIELD OF MONOMER KFG.
+C
+C       GOTO 100
+        IF(ESDDER) CALL VCLR(WRT1,1,L2K)
+CZ
+C       CALL TIMIT(1)
+C       DO IOHNO=1,100
+CZ
+cz      do I need this for the response calculation because of tiny values?
+CZ      Here only TRI1 is important and others just pass by
+CZ      Output is WRT1: first wrt1 (FA) is dummy
+CZ
+        CALL FMO2EI(SCHWRZ,NINT,NSCHWZ,NSCHWZB,NSCHWNZB,L1,L2,X(LXINTS),
+     *              NSH2,X(LGHOND),MAXG,IA,LDENA,LDENP,wrt1,
+     *              tri1,wrt1,X(LDSH),X(LDSHB),X(LIAGLOB),
+     *              X(LINDAT),X(LINDATG),BSSEDIM,RESPAPI,RESPPCI,ESPAP,
+     *              ESDDER,ESDER,IFG,JFG,LFG,KFG)
+C       ENDDO
+C       CALL TIMIT(1)
+        IF(OUT) THEN
+          IF(NSCHWZB.EQ.0) THEN
+            WRITE(IW,9000) KFG,NINT,NSCHWZ
+          ELSE
+            WRITE(IW,9005) KFG,NINT,NSCHWZ,NSCHWZB
+          ENDIF
+        ENDIF
+C       WRITE(IW,*) 'NON-ZERO SUPERBLOCKS',NSCHWNZB,NSH2
+C
+C       WRITE(6,*) 'DENSITY IN ESP IS'
+C       CALL PRTRIL(X(LFMODA),NUM0)
+CZ
+CZ      ADDED BY NAGATA 3/27/07
+CZ
+CZCZCZ  IF(SCHWRZ) CALL DAWRIT(IDAF,IODA,X(LXINTS),NSH2,54,0)
+        ! LXINTS is used in ESD2DER
+        IF(SCHWRZ) LFMOBUF(3) = LXINTS
+C
+        IF(ESPPAR) GOPARR=SAVGOP
+        CALL DSCAL(L2K,HALF,wrt1,1)
+        II=0
+        DO I=1, L1K
+          II = II + I
+          WRT1(II) = WRT1(II) + WRT1(II)
+        ENDDO
+        IF(GOPARR) CALL DDI_GSUMF(2418,wrt1,L2K)
+CZ      TEST
+C       WRITE(6,*) 'DEN*TWOEI',L1K
+C       CALL PRTRIL(WRT1,L1K)
+CZ
+        CALL CPYTSQ(TRI2,WRK1,L1K,1)
+        CALL TFTRI(WRK3,WRT1,WRK1,WRK2,L1K,L1K,L1K)
+        CALL DSCAL(L2K,-HALF,WRK3,1)
+c
+        CALL VCLR(DE,1,NAT*3)
+        CALL EXTSDER(WRK3,WRK2,L1K,L2K,.FALSE.,.FALSE.,L1)
+c
+CZ
+CZ      2E CONTRIBUTION TO FOCK DERIVATIVES
+CZ
+CZ      NOTE THAT DERIVATIVES ARE STORED IN DE().
+CZ
+        CALL ESD2DER(TRI1,TRI2,L1)
+        IF(GOPARR) CALL DDI_GSUMF(2418,DE,NAT*3)
+CZ      IF (MASWRK) THEN
+CZ        WRITE(6,*) 'TEST AFTER ESD2DER',KFG,NAT
+CZ        DO IJ = 1, NAT
+CZ          WRITE(6,'(3F12.8)') DE(1,IJ),DE(2,IJ),DE(3,IJ)
+CZ        END DO
+CZ      END IF
+        CALL RETFM(NEED)
+CZ
+        IF (MASWRK) THEN
+          IF (IFMOSTP.EQ.2) THEN
+            CALL FMODEG(1,FMODE,X(LFMOPG),X(LIAGLOB))
+          ELSEIF (IFMOSTP.EQ.4) THEN
+            CALL FMODEG(1,FMODE,X(LFMOPG),X(LIAGLOB))
+            N11 = IDAM + IDAD
+            N11 = 0      ! NEED TO FIX FOR APPROXIMATE FMO3
+            IF (NBODY.GT.2) CALL FMODEG
+     *         (N11,X(LFMODE+NATFMO*6),X(LFMOPG),X(LIAGLOB))
+            ! MUST CHANGE
+          ELSEIF (IFMOSTP.EQ.8) THEN
+            CALL FMODEG(1,FMODE,X(LFMOPG),X(LIAGLOB))
+          ENDIF
+        ENDIF
+  100 CONTINUE
+      IF(ESPPAR.AND.GOPARR.AND.NXT) CALL DDI_DLBRESET
+C
+C     IT IS IMPORTANT TO RESET NCURSH SO THAT 2E INTEGRALS WITHIN THE MONOMER
+C     (DIMER) DURING THE FOLLOWING SCF ARE COMPUTED PROPERLY.
+      ncursh = 0  ! need to reset
+C
+C     COMPUTE 2-EL INTEGRALS FOR THE ORIGINAL MONOMER(DIMER)
+C
+      IF(IFMOSTP.NE.6) THEN
+        IST=1
+        JST=1
+        KST=1
+        LST=1
+        CALL JANDK
+      ENDIF
+      NPRFMO = NPRSAV
+      DIRSCF = DIRSAV
+      LCFLAG = LCFLAGS
+      LRINT  = LRINTS
+      IESDPPC = 0
+cz
+cz    restore the calculation (11/24/09).
+cz
+      CALL MONBSR(NAT0,ICH0,MUL0,NUM0,NQMT0,NE0,NA0,NB0,NCURSH,NGAU0,
+     *           ENUCR0,NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,NSHELL,NGAU,ENUCR)
+c     CALL DCOPY(natfmo*3,x(lfmodest),1,fmode,1)
+c
+      RETURN
+ 9000 FORMAT(/1X,'ESD LFG=',I5,': NZ',I12,' SKIPPED',I10,' BLOCKS.')
+ 9005 FORMAT(/1X,'ESD LFG=',I5,': NZ',I12,' SKIPPED',I10,' BLOCKS',I8,
+     *           ' SUPERBLOCKS.')
+      END
+C*MODULE FMOCP *DECK FMOCGCP
+      SUBROUTINE FMOCGCP(IFG,ILAY,NOCC,NVIR,L1,L2,CX,ZVEC0,ZVEC1,IPTZC,
+     *                   ORB_E,LAYFRG,IDMREC0,NQMTFG,LPUTGET,
+     *                   WRT1,WRK1,WRK2,WRK3)
+c
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+c
+      PARAMETER (THRSH=1.0D-08)
+      PARAMETER (ONE=1.0D+00,FOUR=4.0D+00)
+c
+      LOGICAL GOPARR,DSKWRK,MASWRK,OUT
+      LOGICAL LPUTGET
+c
+      DIMENSION CX(L1,*)
+      DIMENSION ZVEC0(1), ZVEC1(NVIR,*), IPTZC(1)
+      DIMENSION ORB_E(L1)
+      DIMENSION LAYFRG(1), IDMREC0(1),NQMTFG(1)
+      DIMENSION WRT1(1),WRK1(1),WRK2(1),WRK3(1)
+C
+      COMMON /FMCOM / X(1)
+      common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
+     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
+     *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
+     *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
+     *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
+     *                modlmo,nopden,mofock
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+      OUT = MASWRK.AND.IAND(NPRFMO,3).NE.3
+      NOV = NVIR*NOCC
+CZ
+CZ   This routine solves the equation A*X = B
+CZ   using the preconditioned conjugate gradient method
+CZ
+      CALL VALFM(LOADFM)
+c
+      LR0  = LOADFM + 1
+      LZ0  = LR0    + NOV
+      LP0  = LZ0    + NOV
+      LAP  = LP0    + NOV
+      LAST = LAP    + NOV
+C
+      NEED = LAST - LOADFM -1
+      CALL GETFM(NEED)
+c
+CZ
+CZ    COMPUTE INITIAL PARAMETERS
+CZ    (a) construct Residue R0
+CZ
+      ! first copy Lag into R0
+      CALL DCOPY(NOV,WRK1,1,X(LR0),1)
+      ! Compute a part of A*Z
+      IF (LPUTGET) THEN
+        IZPT = 1
+      ELSE
+        IZPT = IPTZC(IFG)
+      END IF
+      ! Construct integral part of A*Z
+      CALL DIAORBHSS(L1,L2,NOCC,NVIR,CX,ZVEC0(IZPT),WRT1,WRK1,WRK2)
+      CALL CPYTSQ(WRT1,WRK1,L1,1)
+      CALL SWBASIS(1,L1,NOCC,NVIR,CX,WRK1,L1,WRK2,NVIR,WRK3)
+      ! factor FOUR is correct ?
+      CALL DSCAL(NOV,FOUR,WRK2,1)
+      ! complete  A*Z
+      CALL COMPAZ(NOCC,NVIR,ZVEC0(IZPT),WRK2,WRK1,ORB_E)
+      ! R0 = X-A*Z: the factor ONE is correct? 12/16
+      CALL DAXPY(NOV,-ONE,WRK1,1,X(LR0),1)
+c
+      ! Construct OFF_A*Z
+      CALL OFFORBHSS(IFG,ILAY,L1,L2,ZVEC0,IPTZC,WRT1,LAYFRG,
+     *               IDMREC0,NQMTFG,LPUTGET,WRK1,WRK2)
+      CALL CPYTSQ(WRT1,WRK1,L1,1)
+      ! AO to MO
+      CALL SWBASIS(1,L1,NOCC,NVIR,CX,WRK1,L1,WRK2,NVIR,WRK3)
+      ! R0 = B - A*Z: TWO is correct?? 12/12
+      ! where B = X + OFF_A*Z
+      CALL DAXPY(NOV,FOUR,WRK2,1,X(LR0),1)
+C
+czcz  display the residue
+cz    CALL PRSQ(X(LR0),NOCC,NVIR,NVIR)
+czcz
+c
+CZ    (b) construct Z0 from R0 and make P0=Z0
+CZ
+      CALL DCOPY(NOV,X(LR0),1,X(LZ0),1)
+      ! second Z0 is dummy in the case of mode=1
+      CALL PRFCTMO(1,NVIR,NOCC,NVIR,X(LZ0),X(LZ0),ORB_E,ONE)
+      CALL DCOPY(NOV,X(LZ0),1,X(LP0),1)
+c
+CZ
+CZ    Conjugate gradient iteration starts
+CZ
+      NTER = 50
+      DO ITER = 1, NTER
+c
+        ! compute AP = A*P0
+        CALL DIAORBHSS(L1,L2,NOCC,NVIR,CX,X(LP0),WRT1,WRK1,WRK2)
+        CALL CPYTSQ(WRT1,WRK2,L1,1)
+        CALL SWBASIS(1,L1,NOCC,NVIR,CX,WRK2,L1,WRK1,NVIR,WRK3)
+        CALL DSCAL(NOV,FOUR,WRK1,1)
+        CALL COMPAZ(NOCC,NVIR,X(LP0),WRK1,X(LAP),ORB_E)
+C
+        DENO  = DDOT(NOV,X(LP0),1,X(LAP),1)
+        RDNO  = DDOT(NOV,X(LR0),1,X(LZ0),1)
+        IF (MASWRK) THEN
+          RNORM = DDOT(NOV,X(LR0),1,X(LR0),1)
+          RNORM = SQRT(RNORM)
+        END IF
+        IF (GOPARR) CALL DDI_BCAST(666,'F',RNORM,1,0)
+        IF (OUT) WRITE(IW,1000) ITER, RNORM
+        IF (RNORM.LT.THRSH) THEN
+          IF (OUT) WRITE(IW,*) 'CG CONVERGES AT ',ITER
+          CALL RETFM(NEED)
+          RETURN
+        END IF
+c
+        ALPHA1 = RDNO/DENO
+c
+        ! New X = ZVEC1
+        CALL DAXPY(NOV, ALPHA1,X(LP0),1,ZVEC1,1)
+        ! New R
+        CALL DAXPY(NOV,-ALPHA1,X(LAP),1,X(LR0),1)
+        ! New Z
+        CALL DCOPY(NOV,X(LR0),1,X(LZ0),1)
+        CALL PRFCTMO(1,NVIR,NOCC,NVIR,X(LZ0),X(LZ0),ORB_E,ONE)
+c
+        BETA1 = DDOT(NOV,X(LR0),1,X(LZ0),1)/RDNO
+c
+        ! New P
+        CALL DSCAL(NOV,BETA1,X(LP0),1)
+        CALL DAXPY(NOV,ONE,X(LZ0),1,X(LP0),1)
+      END DO
+c
+      IF (MASWRK) WRITE(IW,*) 'CG DOES NOT CONVERGE IN ',ITER
+      CALL RETFM(NEED)
+      RETURN
+ 1000 FORMAT(1X,I4,'-TH LOCAL CONJUGATE GRADIENT RMSD:',F12.8)
+      END
+C*MODULE FMOCP *DECK DIAORBHSS
+      SUBROUTINE DIAORBHSS(L1,L2,NOCC,NVIR,CX,ZVEC,ORBH,WRK1,WRK2)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      LOGICAL SCHWRZ
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      LOGICAL DIRSCF,FDIFF,DIRSAV
+      LOGICAL PACK2E
+      PARAMETER (MXSH=5000,MXGTOT=20000,MXAO=8192,MXGSH=30,
+     *           MXG2=MXGSH*MXGSH,MAXL=5)
+      PARAMETER (HALF=0.5D+00)
+C
+      DIMENSION CX(L1,*),ZVEC(1),ORBH(1)
+      DIMENSION WRK1(1),WRK2(1)
+      DIMENSION KARTEN(0:MAXL-1)
+C
+      COMMON /EFPFMO/ RUNEFP,REFFMO,REPNUCEFP,IEFPFMO,ISWENUC,EFPEFP
+      COMMON /FMCOM / X(1)
+      COMMON /IJPAIR/ IA(MXAO)
+      COMMON /INTFIL/ NINTMX,NHEX,NTUPL,PACK2E,INTTYP,IGRDTYP
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /OPTSCF/ DIRSCF,FDIFF
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /RESTAR/ TIMLIM,IREST,NREC,INTLOC,IST,JST,KST,LST
+C
+      DATA RHF/8HRHF     /
+      DATA KARTEN/1,4,6,10,15/
+CZ
+CZ    COMPUTE THE ORBITAL HESSIAN MULTIPLIED BY DENSITY-LIKE MATRIX
+CZ    TRI1: DENSITY-LIKE MATRIX
+CZ    ORBH: ORBITAL HESSIAN MULTIPLIED BY TRI1
+CZ
+      DIRSAV  =  DIRSCF
+      DIRSCF  = .TRUE.
+      SCHWRZ  = .TRUE.
+      SCFTYP1 =  RHF
+c
+      NSH2 = (NSHELL*NSHELL+NSHELL)/2
+      CALL BASCHK(LMAX)
+      IF(LMAX.GE.5) THEN
+         IF(MASWRK) WRITE(IW,*) 'FMO HAS NOT BEEN REVIEWED FOR H,I'
+         CALL ABRT
+      END IF
+c
+      ! ZVEC: MO --> AO
+      CALL SWBASIS(0,L1,NOCC,NVIR,CX,ZVEC,NVIR,WRK1,L1,WRK2)
+      ! Factor ONE should be changed ? 12/12
+CZCZ  CALL SQ2TRI(L1,L1,WRK1,WRK2,ONE)
+      CALL SQ2TRI(L1,L1,WRK1,WRK2,HALF)
+      ! WRK2 with L2 is the symmetrized density-like matrix
+c
+C     FOR SOME REASON GAMESS LIKES TO HANDLE AT LEAST L-SHELLS
+      NANGM=KARTEN(MAX(LMAX,1))
+      MAXG = NANGM**4
+      CALL VALFM(LOADFM)
+C
+      LXINTS= LOADFM + 1
+      LGHOND= LXINTS + NSH2
+      LDSH  = LGHOND + MAXG
+      LDSHB = LDSH   + NSH2
+      LDDIJ = LDSHB  + NSH2
+      LAST  = LDDIJ  + 49*MXG2
+      NEED1 = LAST - LOADFM -1
+      CALL GETFM(NEED1)
+      IF(SCHWRZ) THEN
+        DUMMY = 0.0D+00
+        CALL SHLDEN(SCFTYP1,WRK2,DUMMY,DUMMY,X(LDSH),IA,
+     *              L1,L2,NSH2,1)
+      END IF
+c
+      NXYZ = 1 ! if NXYZ = NAT*3, it is just for response
+      NINT  =0
+      NSCHWZ=0
+      IST=1
+      JST=1
+      KST=1
+      LST=1
+czcz  CALL JANDK
+C
+      ! XINTS is stored in disk in this case (ncursh is 0)
+      IF(SCHWRZ)
+     *  CALL EXCHNG(X(LXINTS),X(LGHOND),X(LDDIJ),NSH2,MAXG,INTTYP)
+CZ
+CZ     IN: WRK2 density-like matrix
+CZ    OUT: ORBH    Fock-like matrix
+CZ
+      IDUMMY=1
+      CALL VCLR(ORBH,1,L2)
+      CALL TWOEI(RHF,DIRSCF,.FALSE.,.FALSE.,.FALSE.,
+     *           INTTYP,SCHWRZ,NINT,NSCHWZ,L1,L2,
+     *           DUMMY,DUMMY,IDUMMY,1,X(LXINTS),NSH2,X(LGHOND),
+     *           MAXG,X(LDDIJ),IA,WRK2,ORBH,DUMMY,DUMMY,X(LDSH),
+     *           DUMMY,DUMMY,NXYZ)
+      CALL RETFM(NEED1)
+      CALL DSCAL(L2,HALF,ORBH,1)
+      II = 0
+      DO I=1, L1
+        II = II+I
+        ORBH(II) = ORBH(II) + ORBH(II)
+      ENDDO
+CZCZ
+      IF (IEFPFMO.NE.0) CALL CALCINDE(1,L1,L2,WRK2,ORBH)
+CZCZ
+      IF (GOPARR) CALL DDI_GSUMF(3020,ORBH,L2)
+      DIRSCF  =  DIRSAV
+      IST=1
+      JST=1
+      KST=1
+      LST=1
+c
+      RETURN
+      END
+C*MODULE FMOCP *DECK OFFORBHSS
+      SUBROUTINE OFFORBHSS(IXFG,IXLAY,L1,L2,ZVEC0,IPTZC,OFFH,LAYFRG,
+     *                     IDMREC0,NQMTFG,LPUTGET,WRK1,WRK2)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      PARAMETER (MXATM=2000,MXSH=5000,MXGTOT=20000,MXAO=8192,MXGSH=30,
+     *           MXG2=MXGSH*MXGSH,MXRT=100,MAXL=5)
+      PARAMETER (HALF=0.5D+00,ZERO=0.0D+00)
+C
+      LOGICAL DIRSCF,FDIFF,DIRSAV,SCHWRZ,PACK2E,GOPARR,DSKWRK,MASWRK,
+     *        OUT,SOME,BSSEDIM,SAVGOP,ESPPAR,NXT,ESPAP,DODDCOR,
+     *        ESDDER,LARGEPRI,LCFLAG,LRINT,LCFLAGS,LRINTS,LPUTGET
+CZ    LOGICAL ESDER
+C
+      DIMENSION LAYFRG(*),IDMREC0(*),KARTEN(0:MAXL-1),NQMTFG(*)
+      dimension WRK1(1),WRK2(1)
+      DIMENSION ZVEC0(1),IPTZC(1),OFFH(1)
+C
+      COMMON /ENRGYS/ ENUCR,EELCT,ETOT,SZ,SZZ,ECORE,ESCF,EERD,E1,E2,
+     *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2),edisp
+      COMMON /FMCOM / X(1)
+      COMMON /IJPAIR/ IA(MXAO)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /INTFIL/ NINTMX,NHEX,NTUPL,PACK2E,INTTYP,IGRDTYP
+C     COMMON /INTOPT/ ISCHWZ,IECP,NECP,IEFLD
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /NLRC  / LCFLAG,LRINT,EMU,EMU2,LRFILE
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /OPTSCF/ DIRSCF,FDIFF
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+      COMMON /RESTAR/ TIMLIM,IREST,NREC,INTLOC,IST,JST,KST,LST
+      COMMON /SHLEXC/ NORGSH(3),NORGSP(3),IEXCH,NANGM,NGTH(4)
+      COMMON /FMODIM/ MAXBND,MAXKND,MAXCBS,MAXCAO,MAXVEC,MAXL1,MAXNAT,
+     *                MAXABD,MAXBAS,MAXBBD,MAXLMO,MAXSLO,MAXABD2
+      COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
+      common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
+     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
+     *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
+     *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
+     *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
+     *                modlmo,nopden,mofock
+      COMMON /FMOPNT/ LICHFG,LMULFG,LIDMREC,LFRGNAM,LLAYFRG,LINDAT,
+     *                LNCBS,LFMOZAN,LFMOC,LFMOMAS,LIZBAS,LIAGLOB,LIBDGH,
+     *                LIABDFG,LJABDFG,LNCAO,LIDXCAO,LIAPRJO,LJAPRJO,
+     *                LCOREAO,LOCCCOR,LSHIFTB,LIODFMO,LFMODA,LFMODB,
+     *                LFMOESPA,LFMOESPB,LLOCFMO,LSCFFRG,LFMOSCF,LRIJ,
+     *                LPOPMUL,LPOPMAT,LIALOC,LINDBD,LIATFRG,LINDFRG,
+     *                LINDGFRG,LNATFRG,LNAT0FRG,LIANFRG,LZANFRG,LCFRG,
+     *                LLIBISH,LLIBNSH,LLIBNG,LINDATG,LFMOBUF(3),LFMODE,
+     *                LNUMFRG,LLOCTAT,LIAOGLOB,LLOADM,LFMOGE,LDGRID,
+     *                LIODCFMO,LJOB2GRP,LFMOPG,LEMOCDR,LUNTXYZ,LUNTROT,
+     *                LSTONEP,LMAPSU,LFRGMUL,LCLMO,LIALMO,LINDLMO,
+     *                LATCLMO,LLMOBDF,LFGFLMO,LNFGLMO,LLFGLMO,LPFGLMO,
+     *                LPOPDMAT,lidmpnt,liddpnt,livmpnt
+      COMMON /FMORUN/ ESPSCF,E0SCF(2),EMP2S,IDAFMO,ICURFG,JCURFG,KCURFG,
+     *                ICURLAY,ICURUNT,NAT1E,NCURSH,NGAU,ICURPOP,IFMOSTP,
+     *                MONCOR,NEEDR,MODRST,NORBPROJ,NUNESP,ISKIPESP,
+     *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
+     *                iddcur,nddleft,ivmfmo
+C
+CZ    COMMON /GRAD  / DE(3,MXATM)
+C
+      DATA KARTEN/1,4,6,10,15/
+      DATA RHF/8HRHF     /,
+     *     DBGFMO/8HDBGFMO  /,DBGME/8HFMOESP  /,DEBUG/8HDEBUG   /
+CZ
+CZ    OFF-DIAGONAL BLOCKS OF ORBITAL HESSIAN IN FMO
+CZ
+C     PARSTAT: GROUPFULL/GROUPNONE
+C
+C     FOR NBSSE=3 MONOMERS AND DIMERS DURING BSSE RUNS ARE IN VACCUUM
+      IF(NBSSE.EQ.3.AND.IFMOSTP.EQ.5. OR. IFMOSTP.EQ.1) RETURN
+      IF (IFMOSTP.EQ.6) THEN
+        WRITE (IW,*) 'IFMOSTP=6 IS NOT ALLOWED IN FMOESDER'
+        CALL ABRT
+      END IF
+      IF (IFMOSTP.NE.2.AND.IFMOSTP.NE.4.AND.IFMOSTP.NE.8) RETURN
+C
+      SOME=(EXETYP.EQ.DEBUG.OR.EXETYP.EQ.DBGFMO.OR.EXETYP.EQ.DBGME).AND.
+     *     MASWRK
+CZ    ORBXCH=MOD(MODORB,2).NE.0
+C     ENEXCH=MOD(MODORB/2,2).NE.0
+      ESPPAR=MOD(MODPAR/2,2).NE.0.AND.GOPARR
+C     .TRUE.  DIVIDE FRAGMENTS
+C     .FALSE. DIVIDE SHELLS
+      LWRKDEN  = LFMOBUF(1)  ! LWRK  -> maxl1d+maxl2d+maxl3d
+      LWRKESP  = LFMOBUF(2)  ! LWRK2 -> maxl2d
+CZ    LWRKESP2 = LFMODB      ! DB    -> maxm2d
+czcz
+C
+C     FOR MONOMER SCF THERE IS NO NEED TO ADJUST IREC0 BELOW (AND MPPROP MAY
+C     NOT HAVE BEEN READ ANYWAY).
+C
+      IFG      = IXFG
+      ILAY     = IXLAY
+C
+      IF(IFG.EQ.0) RETURN
+C
+      LCFLAGS =  LCFLAG
+      LRINTS  =  LRINT
+      LCFLAG  = .FALSE.
+      LRINT   = .FALSE.
+C
+C     ESP IS NOT NEEDED. THIS HAPPENS WHEN MONOMER/DIMER SCF ITERATIONS RUN.
+C     (ESP IS COMPUTED BEFORE SUCH ITERATIONS ALONG WITH 1-EL INTEGRALS)
+C
+czcz  CALL DERCHK(NDER)
+CZ
+czcz  ESDER = NDER.GT.0.AND.IAND(MODGRD,32).NE.0
+czcz  IF (.NOT.ESDER) THEN
+czcz    WRITE(IW,*) 'MUST DEBUG FOR ESDCPHF'
+czcz    CALL ABRT
+czcz  END IF
+      ESDDER=.FALSE.
+c
+      ! they are supposed to be zero; otherwise made to be zero
+      JFG  = JCURFG
+      LFG  = KCURFG
+CZCZ
+      KFG0 = 1
+      KFG1 = NFG
+      IZ   = 1
+CZ
+      RESPAPI=RESPAP(IZ)
+      RESPPCI=RESPPC(IZ)
+      BSSEDIM=NBSSE.EQ.2.AND.IFMOSTP.EQ.5
+      IF(BSSEDIM) JFG=0
+      DODDCOR=IAND(IXESP,1024).NE.0
+C
+C     SCHWRZ = ISCHWZ.GT.0
+      SCHWRZ = .TRUE.
+C     DO NOT THINK THAT YOU CAN SET SCHWRZ TO .FALSE. AND GET AWAY WITH IT.
+C     SCHWRZ ALSO FORCES INTEGRAL INITIALISATION THAT WILL OTHERWISE NOT BE
+C     DONE.
+C
+      DIRSAV  =  DIRSCF
+      DIRSCF  = .TRUE.
+C     SCFTYP1 = SCFTYP
+C     IF(SCFTYP.EQ.RMC) SCFTYP1=RHF
+      SCFTYP1=RHF
+      OUT=SCHWRZ.AND.MASWRK.AND.IAND(NPRFMO,3).EQ.0
+C
+      NPRSAV=NPRFMO
+      IF(NPRINT.EQ.-5.AND.IAND(NPRFMO,3).EQ.0) NPRFMO=NPRFMO+1
+C     THAT IS, ENFORCE REDUCED OUTPUT IF NPRINT.EQ.-5
+C     FOR ESPS THE ONLY MEANINGFUL USAGE OF LOADM IS WITH TRUE ESPPAR.
+C     LOADM SHOULD ONLY BE USED IF FULL RANGE OF FRAGMENTS IS TREATED
+C     (THAT IS, EXCLUDING SEPARATED DIMERS).
+      LOADHF=MOD(MODPAR,2)
+      LARGEPRI=LOADHF.EQ.1.AND.ESPPAR.AND.KFG0.EQ.1.AND.KFG1.EQ.NFG
+C     WRITE(6,*) 'WWWLB',LARGEPRI
+c
+      CALL VCLR(OFFH,1,L2)
+C
+C     SAVE THE PRISTINE MONOMER(DIMER) CONFIGURATION
+C
+      CALL MONBSR(NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,NSHELL,NGAU,ENUCR,
+     *            NAT0,ICH0,MUL0,NUM0,NQMT0,NE0,NA0,NB0,
+     *            NCURSH,NGAU0,ENUCR0)
+C
+C     FIX THE NUMBER OF ELECTRONS TO AVOID DOUBLE COUNTING:
+C     EXCLUDE CHARGE AS OTHERWISE THE CHARGE OF FRAGMENT I WILL BE ADDED
+C     TO NE FIRST HERE AND THEN AGAIN IN MAKMOL BELOW.
+C     AT PRESENT NE IS ACTUALLY NOT IMPORTANT BECAUSE NUMFRG HAS NA.
+      NE0C=NE0+ICH0
+c
+C
+C     ----- INITIALIZATION FOR PARALLEL WORK -----
+C
+      NXT = IBTYP.EQ.1
+      NEXT  = -1
+      KOUNT = -1
+C
+C     ESP WILL BE COMPUTED IN THE DIRECT FASHION
+C
+C     DO 100 KFG=1,NFG
+      DO 100 KKFG=KFG0,KFG1
+        IF(LARGEPRI) THEN
+          KFG=IXFTCH(X(LLOADM),KKFG)
+        ELSE
+          KFG=KKFG
+        ENDIF
+        IF(IFG.EQ.KFG.OR.JFG.EQ.KFG.OR.LFG.EQ.KFG) GOTO 100
+C
+czcz    as of 11/23/09
+czcz    The approximation could be changed for the response calculation?
+czcz
+        IF(RESPPCI.NE.ZERO.OR.RESPAPI.NE.ZERO.OR.RESDIM.NE.ZERO) THEN
+          RK=FMODIST(IFG,JFG,LFG,KFG)
+C         THE DISTANCE WILL BE REFINED LATER FOR SMARTR.
+C         WRITE(6,*) 'DISTANCE IS',KFG,RK,RESPPCI
+          IF(RK.GT.RESPPCI.AND.RESPPCI.NE.ZERO) GOTO 100
+CZ
+C
+         IF(IFMOSTP.EQ.2.AND.IAND(IXESP,4096).NE.0.AND.RK.NE.0) GOTO 100
+C
+          ESPAP=RK.GT.RESPAPI.AND.RESPAPI.NE.ZERO
+        ELSE
+          ESPAP=.FALSE.
+        ENDIF
+C
+        IF(ESPPAR) THEN
+          KOUNT=KOUNT+1
+          IF(GOPARR) THEN
+            IF(NXT) THEN
+              IF(KOUNT.GT.NEXT) CALL DDI_DLBNEXT(NEXT)
+              IF(NEXT.NE.KOUNT) GOTO 100
+            ELSE
+              IF(MOD(KOUNT,NPROC).NE.ME) GOTO 100
+            ENDIF
+          ENDIF
+          SAVGOP=GOPARR
+          GOPARR=.FALSE.
+C         GOPARR IS SET TO .FALSE. TO PREVENT SHELL-BASED WORK DIVISION
+C         INSIDE OF EXCHNG AND FMOESP.
+C         NOTE THAT SHELL-BASED WORK DIVISION IS USED FOR ESPPAR=.FALSE.
+        ENDIF
+        KLAY=MIN(ILAY,LAYFRG(KFG))
+C       BSSEDIM=NBSSE.EQ.2.AND.IFMOSTP.EQ.5.AND.KFG.EQ.JCURFG
+        BSSEDIM=NBSSE.EQ.2.AND.IFMOSTP.EQ.5
+        IF(SOME) WRITE(6,*) 'COMPUTING ESD DUE TO FRG',KFG,' LAYER',KLAY
+C
+C       ADD MONOMER KFG AND READ ITS DENSITY (NOW ONLY ALPHA)
+C
+        KFGX = KFG
+        CALL MAKEMOL(KFGX,0,0,KLAY,0,NAT0,NCURSH,NGAU0,NE0C,ICH0,MUL0,
+     *               .FALSE.)
+        L1K =  NUM-NUM0
+        L2K = (L1K*L1K+L1K)/2
+        L3K =  L1K*L1K
+CZCZ    NQK = NQMT - NQMT0
+C
+        IREC0=IDMREC0(KLAY)
+C       HACK IT UP TO POINT TO RHF DENSITIES FOR RUNS WITH MP2 DENSITIES.
+        IF(DODDCOR) THEN
+          IREC0RHF=1
+          IF(IREC0.EQ.1) IREC0RHF=NFG*2+1
+          IREC0=IREC0RHF
+        ENDIF
+        IDMREC0K=KFG+IREC0
+czcz    IF(.NOT.ESPAP) THEN
+        NAK  = ISHFT(IXFTCH(X(LNUMFRG),KFG),-16)
+CZ      MULK = IXFTCH(X(LMULFG),KFG)
+CZ      NBK  = NAK-MULK+1
+cz
+cz        Just get MO coefficient matrix
+cz
+        LCK = LWRKDEN + L2K
+        CALL RAREADS(IDAFMO,X(LIODFMO),X(LCK),L3K,IDMREC0K,0)
+czcz      CALL READMOND(WRT1,ORBXCH,SCFFRG(KFG).EQ.RMC,
+czcz *                  NAK,NBK,L1K,X(LIODFMO),IDMREC0K)
+czcz      CALL DCOPY(L2K,WRT1,1,TRI2,1)
+C         GOTO 100
+C         WRITE(6,*) 'ORIGINAL DENSITY',KFG,L1K,NAK
+C         CALL PRTRI(X(LFMODA),L1K)
+C         CALL SEQOPN(38,'HESSIAN','UNKNOWN',.FALSE.,'UNFORMATTED')
+C         WRITE(38) (X(LFMODA+I-1),I=1,L2K)
+C         CALL SEQCLO(38,'KEEP')
+C         READ BETA DENSITY
+czcz    ENDIF
+cz
+cz      construct here the density-like matrix from ZVLAG
+cz
+        NOCK = NAK
+        NVRK = NQMTFG(KFG) - NAK
+CZ      NVRK = L1K - NAK
+        IF (LPUTGET) THEN
+          ! tricky part
+          ! IPTZC(1) should be NOVMAX, which avoids overwrite of zvec0(1)
+          IPTZ = IPTZC(1) + 1
+          CALL ZVECPUTGET(1,0,KFG,NOCK*NVRK,ZVEC0(IPTZ))
+        ELSE
+          IPTZ = IPTZC(KFG)
+        END IF
+        ! TO AO basis
+        CALL SWBASIS(0,L1K,NOCK,NVRK,X(LCK),ZVEC0(IPTZ),NVRK,WRK2,L1K,
+     *               WRK1)
+        ! ONE is correct?
+CZCZ    CALL SQ2TRI(L1K,L1K,WRK2,X(LWRKDEN),ONE)
+        CALL SQ2TRI(L1K,L1K,WRK2,X(LWRKDEN),HALF)
+c
+C
+C       ARRAY SIZES ARE DIFFERENT FOR EACH FRAGMENT.
+C
+        NSH2 = (NSHELL*NSHELL+NSHELL)/2
+        CALL BASCHK(LMAX)
+        IF(LMAX.GE.5) THEN
+           IF(MASWRK) WRITE(IW,*) 'FMO HAS NOT BEEN REVIEWED FOR H,I'
+           CALL ABRT
+        END IF
+C       FOR SOME REASON GAMESS LIKES TO HANDLE AT LEAST L-SHELLS
+        NANGM=KARTEN(MAX(LMAX,1))
+        MAXG = NANGM**4
+        CALL VALFM(LOADFM)
+C
+        LXINTS= LOADFM + 1
+        LGHOND= LXINTS + NSH2
+        LDSH  = LGHOND + MAXG
+        LDSHB = LDSH   + NSH2
+        LDDIJ = LDSHB  + NSH2
+        LAST  = LDDIJ  + 49*MXG2
+        NEED  = LAST- LOADFM -1
+        CALL GETFM(NEED)
+C
+        LDENP=LPOPMUL+((ICURPOP-1)*NFG+KFG-1)*MAXL1
+czcz    IF(ESPAP) THEN
+czcz      LDENA=LDENP
+czcz      LDENB=LDENA
+czcz    ELSE
+          LDENA=LWRKDEN
+czcz      LDENB=LFMODB   ! LWRKESP2=GEN
+          LDENB=LWRKESP  ! nothing happens, I guess
+czcz    ENDIF
+C
+C       CALL ERIPRE
+C       THERE IS NO NEED TO CALL ERIPRE HERE. FMO CODE ALWAYS CALLS EXCHNG
+C       (BECAUSE SCHWRZ IS FORCED TRUE), AHD THIS IS WHERE INITIALISATION
+C       FOR EACH (N+1)-MER IS DONE. NOTE THAT THIS INITIALISATION IS
+C       IMPORTANT NOW: IT SETS ARRAYS FOR SCREENING AND SOME OTHER THINGS.
+C
+C       CREATE DENSITY MATRIX FOR SHELL INDICES
+C
+        IF(SCHWRZ) THEN
+          DUMMY = 0.0D+00
+CNB       FOR GRADIENTS, WHAT SHOULD BE SCFTYP??
+C         L1 AND L2K SEEM TO BE THE RIGHT CHOICE:
+C         L1 IS USED TO SKIP L1 AOS TO GET TO THE EXTERNAL MONOMER SHELL
+C         L2K GIVES THE SIZE OF GVB DENSITY MATRICES FOR THE EXTERNAL MONOMER
+C         WRITE(6,*) 'ORIGINAL DENSITY',KFG,L1K
+C         CALL PRTRI(X(LFMODA),L1K)
+CZCZ      IF(ESPAP) THEN
+C           WRITE(6,*) 'MULLIKENS'
+C           CALL PRSQ(X(LDENA),L1K,1,1)
+CZCZ        CALL SHLDEND(SCFTYP1,X(LDENA),X(LDENB),DUMMY,X(LDSH),L1,1)
+C           WRITE(6,*) 'CONTRACTED L-DENSITY',KFG,NSHELL-NCURSH
+C           CALL PRSQ(X(LDSH),NSHELL-NCURSH,1,1)
+CZCZ      ELSE
+          CALL SHLDEN(SCFTYP1,X(LDENA),X(LDENB),DUMMY,X(LDSH),IA,
+     *                L1,L2K,NSH2,1)
+            ! esdder is always false for off-diagonal hessian
+CZCZ        IF(ESDDER) THEN
+C             REMOVE ALL EVIDENCE OF FRAGMENT 2 BEING INVOLVED.
+C             KEEP ONLY FRAGMENT 1 INFORMATION AND OBTAIN ITS SHELL DENSITY.
+C             L1 ARGUMENT IS UNUSED BELOW.
+CZCZ          NSHSAV=NSHELL
+CZCZ          NSHELL=NCURSH
+CZCZ          NCURSH=0
+CZCZ          ! TRI1 works as density matrix
+CZCZ          CALL SHLDEN(SCFTYP1,TRI1,X(LDENB),DUMMY,X(LDSHB),IA,
+CZCZ *                    L1,L2,NSH2,1)
+CZCZ          NCURSH=NSHELL
+CZCZ          NSHELL=NSHSAV
+CZCZ        ENDIF
+C         WRITE(6,*) 'CONTRACTED DENSITY',KFG,NSHELL-NCURSH
+C         CALL PRTRI(X(LDSH),NSHELL-NCURSH)
+czcz      ENDIF
+        END IF
+C
+C       INITIALISE TWO-ELECTRON INTEGRALS
+C       POPLE INTEGRALS USE A SEPARATE COORDINATE COMMON BLOCK INITIALISED
+C       ABOVE, ETC. ?ST MUST BE RESET SO THAT NO PHONEY RESTART IS DONE.
+C
+        IST=1
+        JST=1
+        KST=1
+        LST=1
+        CALL JANDK
+C
+C     ----- EXCHANGE INTEGRALS FOR DIRECT SCF THRESHOLD TESTS -----
+C       COMPUTED FOR THE COMBINED SYSTEM, NO NEED TO ADJUST INDICES.
+C
+        NINT   = 0
+        NSCHWZ = 0
+CNB5    EXCHNG CAN BE ADJUSTED TO TAKE ADVANTAGE OF THE REDUCED BASIS WITH BSSE.
+C       GOTO 100
+C       DO IOHNO=1,1000
+        IF(SCHWRZ) CALL EXCHNG(X(LXINTS),X(LGHOND),X(LDDIJ),
+     *                         NSH2,MAXG,INTTYP)
+C       ENDDO
+C       COMPUTE 2-EL INTEGRALS CORRESPONDING TO PLACING THE ORIGINAL
+C       MONOMER(DIMER) INTO THE COULOMB FIELD OF MONOMER KFG.
+C
+C       GOTO 100
+czcz    IF(ESDDER) CALL VCLR(WRT1,1,L2K)
+CZ
+C       CALL TIMIT(1)
+C       DO IOHNO=1,100
+CZ
+cz      We just give LDENA to FMO2EI. The output is OFFH
+CZ
+        CALL FMO2EI(SCHWRZ,NINT,NSCHWZ,NSCHWZB,NSCHWNZB,L1,L2,X(LXINTS),
+     *              NSH2,X(LGHOND),MAXG,IA,LDENA,LDENP,OFFH,
+     *              DUMMY,DUMMY,X(LDSH),X(LDSHB),X(LIAGLOB),
+     *              X(LINDAT),X(LINDATG),BSSEDIM,RESPAPI,RESPPCI,ESPAP,
+     *              ESDDER,.false.,IFG,JFG,LFG,KFG)
+C       ENDDO
+C       CALL TIMIT(1)
+        IF(OUT) THEN
+          IF(NSCHWZB.EQ.0) THEN
+            WRITE(IW,9000) KFG,NINT,NSCHWZ
+          ELSE
+            WRITE(IW,9005) KFG,NINT,NSCHWZ,NSCHWZB
+          ENDIF
+        ENDIF
+C       WRITE(IW,*) 'NON-ZERO SUPERBLOCKS',NSCHWNZB,NSH2
+C
+C       WRITE(6,*) 'DENSITY IN ESP IS'
+C       CALL PRTRIL(X(LFMODA),NUM0)
+        IF(ESPPAR) GOPARR=SAVGOP
+        CALL RETFM(NEED)
+  100 CONTINUE
+      IF(ESPPAR.AND.GOPARR.AND.NXT) CALL DDI_DLBRESET
+c
+      CALL DSCAL(L2,HALF,OFFH,1)
+      II = 0
+      DO I=1, L1
+        II = II + I
+        OFFH(II) = OFFH(II) + OFFH(II)
+      ENDDO
+      IF(GOPARR) CALL DDI_GSUMF(3333,OFFH,L2)
+CZ    TEST
+C     WRITE(6,*) 'OFF-DIAGONAL HESSIAN',L1
+C     CALL PRTRIL(OFFH,L1)
+CZ
+C
+C     IT IS IMPORTANT TO RESET NCURSH SO THAT 2E INTEGRALS WITHIN THE MONOMER
+C     (DIMER) DURING THE FOLLOWING SCF ARE COMPUTED PROPERLY.
+C
+C     COMPUTE 2-EL INTEGRALS FOR THE ORIGINAL MONOMER(DIMER)
+C
+cz
+cz    restore the calculation (11/24/09).
+cz
+      CALL MONBSR(NAT0,ICH0,MUL0,NUM0,NQMT0,NE0,NA0,NB0,NCURSH,NGAU0,
+     *           ENUCR0,NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,NSHELL,NGAU,ENUCR)
+cz
+      ncursh = 0  ! need to reset
+c
+      IF(IFMOSTP.NE.6) THEN
+        IST=1
+        JST=1
+        KST=1
+        LST=1
+        CALL JANDK
+      ENDIF
+      NPRFMO = NPRSAV
+      DIRSCF = DIRSAV
+      LCFLAG = LCFLAGS
+      LRINT  = LRINTS
+c
+      RETURN
+ 9000 FORMAT(/1X,'ESD LFG=',I5,': NZ',I12,' SKIPPED',I10,' BLOCKS.')
+ 9005 FORMAT(/1X,'ESD LFG=',I5,': NZ',I12,' SKIPPED',I10,' BLOCKS',I8,
+     *           ' SUPERBLOCKS.')
+      END
+C*MODULE FMOCP *DECK SQ2TRI
+      SUBROUTINE SQ2TRI(LDA,L,SQ,TRI,FAC)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+c
+      DIMENSION TRI(1), SQ(LDA,*)
+C
+      IC = 0
+      DO I = 1, L
+        DO J = 1, I
+          IC = IC + 1
+          TMP = SQ(I,J) + SQ(J,I)
+          TRI(IC) = TMP * FAC
+        END DO
+      END DO
+c
+      RETURN
+      END
+C*MODULE FMOCP *DECK PRFCTMO
+      SUBROUTINE PRFCTMO(MODE,LL,NOCC,NVIR,WRK1,WRK2,ORB_E,FAC)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+c
+      DIMENSION WRK1(LL,*), WRK2(LL,*),ORB_E(1)
+CZCZ  PARAMETER (FOUR=4.0D+00)
+C
+CZ
+CZ    MODE=0: FULL PREFACTOR AND COMPLEMENT
+CZ    MODE=1: FULL PREFACTOR BUT WRK2 IS DUMMY
+CZ    MODE=2: FAC FACTOR AND COMPLEMENT
+CZ
+      IF (MODE.EQ.0) THEN
+        DO IO = 1, NOCC
+          E_OCC = ORB_E(IO)
+          DO JR = 1, NVIR
+            E_VIR = ORB_E(NOCC+JR)
+            TMP = FAC*WRK1(JR,IO)/(E_OCC-E_VIR)
+            WRK1(JR,IO) = TMP
+            WRK2(JR,IO) = TMP*E_OCC
+          END DO
+        END DO
+      ELSEIF (MODE.EQ.1) THEN
+        DO IO = 1, NOCC
+          E_OCC = ORB_E(IO)
+          DO JR = 1, NVIR
+            E_VIR = ORB_E(NOCC+JR)
+            TMP = FAC*WRK1(JR,IO)/(E_OCC-E_VIR)
+            WRK1(JR,IO) = TMP
+          END DO
+        END DO
+      ELSEIF (MODE.EQ.2) THEN
+        DO IO = 1, NOCC
+          E_OCC = ORB_E(IO)
+          DO JR = 1, NVIR
+            TMP = FAC*WRK1(JR,IO)
+            WRK1(JR,IO) = TMP
+            WRK2(JR,IO) = TMP*E_OCC
+          END DO
+        END DO
+      ELSE
+        CALL ABRT
+      END IF
+c
+      RETURN
+      END
+C*MODULE FMOCP *DECK SWBASIS
+      SUBROUTINE SWBASIS(MODE,L1,NOCC,NVIR,C,TRA,LT,OUT,LO,WRK)
+c
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+c
+      PARAMETER (ZERO=0.0D+00,ONE=1.0D+00)
+      DIMENSION TRA(LT,*), C(L1,*), OUT(LO,*), WRK(L1,L1)
+c
+CZ
+CZ    C must be MO coefficient matrix.
+CZ    MODE=0: TRA is in the MO basis with NVIR*NOCC dimension.
+CZ    MODE=1: TRA is in the AO basis with L1*L1.
+CZ
+      IF (MODE.EQ.0) THEN
+        ! MO -> AO: C(1,NOCC+1)*TRA*C(1,1)^t
+        CALL DGEMM('N','T',NVIR,L1,NOCC,ONE,TRA,LT,C(1,1),L1,ZERO,
+     *             WRK,L1)
+        CALL DGEMM('N','N',L1,L1,NVIR,ONE,C(1,NOCC+1),L1,WRK,L1,ZERO,
+     *             OUT,LO)
+      ELSEIF (MODE.EQ.1) THEN
+        ! AO -> MO: C(1,NOCC+1)^t*TRA*C(1,1)
+        CALL DGEMM('N','N',L1,NOCC,L1,ONE,TRA,LT,C(1,1),L1,ZERO,WRK,L1)
+        CALL DGEMM('T','N',NVIR,NOCC,L1,ONE,C(1,NOCC+1),L1,WRK,L1,ZERO,
+     *              OUT,LO)
+      ELSE
+        CALL ABRT
+      END IF
+      RETURN
+      END
+C*MODULE FMOCP *DECK COMPAZ
+      SUBROUTINE COMPAZ(NOCC,NVIR,Z,AZ,R,ORB_E)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+c
+      DIMENSION Z(NVIR,*), AZ(NVIR,*), ORB_E(1)
+      DIMENSION R(NVIR,*)
+CZ
+CZ    Complete Orbital hessian * Z-vector
+CZ    R = (E_occ-E_vir)*Z - A*Z
+CZ
+      DO IOCC = 1, NOCC
+        EO = ORB_E(IOCC)
+        DO IVIR = 1, NVIR
+          EV = ORB_E(NOCC+IVIR)
+          EVO = EO - EV
+          R(IVIR,IOCC) = EVO*Z(IVIR,IOCC) - AZ(IVIR,IOCC)
+        END DO
+      END DO
+c
+      RETURN
+      END
+C*MODULE FMOCP *DECK ZVLGMEM1
+      SUBROUTINE ZVLGMEM1(NZV,NFG,NUMFRG)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      DIMENSION NUMFRG(1)
+c
+      NZV = 0
+      DO I = 1, NFG
+        L1 = IAND(NUMFRG(I),65535)
+        L2 = (L1+L1*L1)/2
+        NZV = NZV + L2
+      END DO
+c
+      RETURN
+      END
+C*MODULE FMOCP *DECK ZVLGMEM2
+      SUBROUTINE ZVLGMEM2(NFG,IPTLG,NUMFRG)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      DIMENSION IPTLG(1),NUMFRG(1)
+c
+      IPT = 1
+      DO I = 1, NFG
+        IPTLG(I) = IPT
+        L1 = IAND(NUMFRG(I),65535)
+        L2 = (L1+L1*L1)/2
+        IPT = IPT + L2
+      END DO
+      IPTLG(NFG+1) = IPT - 1
+c
+      RETURN
+      END
+C*MODULE FMOCP *DECK SETDZVEC
+      SUBROUTINE SETDZVEC(NFG,NZVSZ,IPTZVEC,IPTZLG,
+     *                    NUMFRG,NQMTFG,MAXL30)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      DIMENSION IPTZVEC(1),IPTZLG(1),NUMFRG(1),NQMTFG(1),MAXL30(1)
+CZ
+CZ    THIS ROUTINE ARE FOR PUT-GET TREATMENT
+CZ
+      ! (1) Lagrangian
+      IPT   = 1
+      NZVSZ = 0
+czcz  DO IFG = 1, NFG
+czcz    IPTZLG(IFG) = IPT
+czcz    L1 = MAXL30(IFG)
+czcz    NTMP = (L1*L1+L1)/2
+czcz    NZVSZ = NZVSZ + NTMP
+czcz    IPT = IPT + NTMP
+czcz  END DO
+      if(nfg.lt.0) write(6,*) iptzlg(1),maxl30(1)
+C
+      ! (2). ZVECTORS
+      DO IFG = 1, NFG
+        IPTZVEC(IFG) = IPT
+        NQMT = NQMTFG(IFG)
+        NAI  = ISHFT(NUMFRG(IFG),-16)
+        NTMP = (NQMT-NAI)*NAI
+        NZVSZ = NZVSZ + NTMP
+        IPT = IPT + NTMP
+      END DO
+      DO IFG = 1, NFG
+        IPTZVEC(NFG+IFG) = IPT
+        NTMP = IPTZVEC(IFG+1) - IPTZVEC(IFG)
+        NZVSZ = NZVSZ + NTMP
+        IPT = IPT + NTMP
+      END DO
+CZ    IPTZVEC(2*NFG+1) = NZVSZ
+cz    write(6,*) 'IPTZVEC'
+cz    write(6,'(6I5)') (IPTZVEC(I),I=1,2*NFG)
+c
+      RETURN
+      END
+C*MODULE FMOCP *DECK ZVECPUTGET
+      SUBROUTINE ZVECPUTGET(NPUTGET,NNFG,IFG,LEN,ZVEC)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      INTEGER DDI_WORLD
+      PARAMETER (DDI_WORLD=0)
+c
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      LOGICAL ISGDDI,PAROUT,INITGDDI
+      DIMENSION ZVEC(1)
+c
+      COMMON /FMCOM / X(1)
+      COMMON /GDDI/   ISCOPE,NGROUPS,MYGROUP,MEGLOB,NPGLOB,NNGLOB,JBTYP,
+     *                ISGDDI,PAROUT,INITGDDI
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /SCZVEC/ LIPTZVEC,LIPTLG,IDFZVEC
+C
+C     NPUTGET = 0: PUT
+C               1: GET
+C      NNFG =   0: ZVEC0
+C           = NFG: ZVEC1
+C
+c
+      IST  = IXFTCH(X(LIPTZVEC),IFG+NNFG)
+      IEND = IST + LEN - 1
+c
+      IF (MASWRK) THEN
+        ITMP = ISCOPE
+        IF (ISGDDI.AND.ITMP.NE.DDI_WORLD) CALL GDDI_ASCOPE(DDI_WORLD)
+c
+            IF (NPUTGET.EQ.0) THEN
+          CALL DDI_PUT(IDFZVEC,1,1,IST,IEND,ZVEC)
+        ELSEIF (NPUTGET.EQ.1) THEN
+          CALL DDI_GET(IDFZVEC,1,1,IST,IEND,ZVEC)
+        ELSE
+          CALL ABRT
+        END IF
+        IF (ISGDDI.AND.ITMP.NE.DDI_WORLD) CALL GDDI_ASCOPE(ITMP)
+      END IF
+      IF (NPUTGET.EQ.1) CALL DDI_BCAST(3000,'F',ZVEC,LEN,MASTER)
+c
+      RETURN
+      END
+C*MODULE FMOCP *DECK RETZVEC
+      SUBROUTINE RETZVEC
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      INTEGER DDI_WORLD
+      PARAMETER (DDI_WORLD=0)
+c
+      LOGICAL ISGDDI,PAROUT,INITGDDI
+      COMMON /GDDI/   ISCOPE,NGROUPS,MYGROUP,MEGLOB,NPGLOB,NNGLOB,JBTYP,
+     *                ISGDDI,PAROUT,INITGDDI
+      COMMON /SCZVEC/ LIPTZVEC,LIPTLG,IDFZVEC
+c
+      IF (IDFZVEC.GE.0) THEN
+        IF (ISGDDI) CALL GDDI_SCOPE(DDI_WORLD)
+        CALL DDI_DESTROY(IDFZVEC)
+        IDFZVEC = -1
+      END IF
+c
+      RETURN
+c---      END
+c---C*MODULE FMOCP *DECK ZLAGPUTGET
+c---      SUBROUTINE ZLAGPUTGET(NPUTGET,IFG,IPTLG,LEN,ZLAG)
+c---C
+c---      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+c---C
+c---      INTEGER DDI_WORLD
+c---      PARAMETER (DDI_WORLD=0)
+c---
+c---      LOGICAL GOPARR,DSKWRK,MASWRK
+c---      LOGICAL ISGDDI,PAROUT,INITGDDI
+c---      DIMENSION ZLAG(1), IPTLG(1)
+c---
+c---cz    COMMON /FMCOM / X(1)
+c---      COMMON /GDDI/   ISCOPE,NGROUPS,MYGROUP,MEGLOB,NPGLOB,NNGLOB,JBTYP,
+c---     *                ISGDDI,PAROUT,INITGDDI
+c---      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+c---      COMMON /SCZVEC/ LIPTZVEC,LIPTLG,IDFZVEC
+c---C
+c---C     NPUTGET = 0: PUT
+c---C               1: GET
+c---C
+c---      IST  = IPTLG(IFG)
+c---      IEND = IST + LEN - 1
+c---
+c---      IF (MASWRK) THEN
+c---        ITMP = ISCOPE
+c---        IF (ISGDDI.AND.ITMP.NE.DDI_WORLD) CALL GDDI_ASCOPE(DDI_WORLD)
+c---
+c---            IF (NPUTGET.EQ.0) THEN
+c---          CALL DDI_PUT(IDFZVEC,1,1,IST,IEND,ZLAG)
+c---        ELSEIF (NPUTGET.EQ.1) THEN
+c---          CALL DDI_GET(IDFZVEC,1,1,IST,IEND,ZLAG)
+c---        ELSE
+c---          CALL ABRT
+c---        END IF
+c---        IF (ISGDDI.AND.ITMP.NE.DDI_WORLD) CALL GDDI_ASCOPE(ITMP)
+c---      END IF
+c---      IF (NPUTGET.EQ.1) CALL DDI_BCAST(3000,'F',ZLAG,LEN,MASTER)
+c---
+c---      RETURN
+      END

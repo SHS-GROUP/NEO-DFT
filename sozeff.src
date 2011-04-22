@@ -1,3 +1,4 @@
+C 11 Aug 10 - TZ  - compute SOC averaged density matrix
 C 10 May 10 - TZ  - compute SOC density matrix and Natural Orbitals
 C 20 Nov 08 - DGF - SPNORY: inc. nuclear dipole in state-specific dipole
 C 18 Jul 08 - SK  - fix SOZEFX
@@ -1442,7 +1443,7 @@ C ... please contact him by TZENG@UALBERTA.CA for further information.
       ELSEIF(NUMVEC.NE.1) THEN
         IF(MASWRK)WRITE(IW,9820)
         GOTO 801
-      ELSEIF(ISTNO(1).GT.NHSO.OR.ISTNO(2).GT.NHSO) THEN
+      ELSEIF(ABS(ISTNO(1)).GT.NHSO.OR.ABS(ISTNO(2)).GT.NHSO) THEN
         IF(MASWRK)WRITE(IW,9830)ISTNO(1),ISTNO(2),NHSO
         GOTO 801
       ENDIF
@@ -1490,7 +1491,15 @@ C ... otherwise, just eigenvector of Hso are used (x(lhsosv))
       LSELCT=LHSOSV
       IF(JZOPT.NE.0)LSELCT=LJZMAT
       IF(MASWRK) THEN
-        WRITE(IW,9850)
+        IF(ISTNO(1).GT.0.AND.ISTNO(2).GE.0) THEN
+          WRITE(IW,9850)
+        ELSEIF(ISTNO(1).LT.0.AND.
+     *         (ABS(ISTNO(2)).GE.ABS(ISTNO(1)))) THEN
+          WRITE(IW,9851)(ABS(ISTNO(I)),I=1,2)
+        ELSE
+          WRITE(IW,9852)(ISTNO(I),I=1,2)
+          GOTO 801
+        ENDIF
         IF(JZOPT.EQ.0) THEN
           CALL ZPRSQL(NUMCI,NHSO,X(LSELCT),X(LEIGSV),X(LINDSV),MULST,
      *              IROOTS,IW,0)
@@ -1503,8 +1512,10 @@ C ... density matrix
       IF(ISTNO(2).EQ.0.OR.ISTNO(2).EQ.ISTNO(1)) THEN
         ISTNO(2)=ISTNO(1)
         IF(MASWRK)WRITE(IW,9860)ISTNO(1)
-      ELSE
+      ELSEIF(ISTNO(1).GT.0) THEN
         IF(MASWRK)WRITE(IW,9865)ISTNO(1),ISTNO(2)
+      ELSEIF(ISTNO(1).LT.0) THEN
+        IF(MASWRK)WRITE(IW,9866)(-ISTNO(I),I=1,2)
       ENDIF
 C
 C ... dimension of the complex density matrix
@@ -1567,13 +1578,16 @@ C
       IF(MASWRK)CALL PRTDNM(X(LDNMAT),NDNMAT,NAEL)
 C
 C ... no natural orbitals for transition density matrix
-      IF(ISTNO(2).NE.ISTNO(1)) GOTO 801
+      IF(ISTNO(2).NE.ISTNO(1).AND.ISTNO(1).GT.0) GOTO 801
 C
 C
 C ... check whether the average Jz from the density matrix = eigen Jz
+C ... this is only checked for the density matrix of a single state.
+C ... for state-averaged density, the average Jz must be zero.
+C ... this is also checked in chekjz
       LABJZ=0
 C ... if labjz = 1 after chekjz, check fails and go to the end
-      IF(JZOPT.NE.0) CALL CHEKJZ(X(LDNMAT),X(LMJMAT),X(LEIG),X(LZMO),
+      IF(JZOPT.NE.0)CALL CHEKJZ(X(LDNMAT),X(LMJMAT),X(LEIG),X(LZMO),
      *                           NDNMAT,N1,ISTNO(1),DBGSO,LABJZ)
       IF(LABJZ.NE.0) GOTO 801
 C
@@ -1637,7 +1651,7 @@ C
 C ... print soc natural orbitals in the basis of MO spin orbitals
       CALL PRSONO(X(LDNMAT),X(LEIGNO),X(LLWORK+2*NDNMAT),X(LLWORK),
      *            NDNMAT,X(LCMO(1)),X(LSONO),X(LDA),
-     *            X(LDB),X(LDT),N1,L1,DBGSO,JZOPT)
+     *            X(LDB),X(LDT),N1,L1,JZOPT)
 C
       IF(DBGSO.AND.MASWRK) THEN
         WRITE(IW,9870)
@@ -1714,10 +1728,15 @@ C    *       2F4.1,' is',3L2,'(for delta ms 1,0,-1)',3L2,'r',3L2)
  9850 FORMAT(/1X,'THE FOLLOWING ARE THE EIGENVECTORS USED TO CONSTRUCT',
      *       ' ONE-ELECTRON DENSITY MATRIX',/,
      *       1X,'ISTNO SPECIFIES STATE AMONG THESE EIGENVECTORS')
+ 9851 FORMAT(/1X,'STATES FROM',I3,1X,'TO',I3,1X,'AVERAGED TO MAKE',
+     *       ' ONE-ELECTRON DENSITY MATRIX')
+ 9852 FORMAT(/1X,'UNRECOGNIZED ISTNO ARRAY:',2I3)
  9860 FORMAT(/1X,'STATE #',I4,' WILL BE USED TO CONSTRUCT ONE-ELECTRON',
      *       ' DENSITY MATRIX',/)
  9865 FORMAT(/1X,'ONE-ELECTRON TRANSITION DENSITY WILL BE FORMED',
      *       /1X,'BETWEEN STATES',I4,' AND',I4,/)
+ 9866 FORMAT(/1X,'ONE-ELECTRON TRANSITION DENSITY WILL BE FORMED',
+     *       /1X,'AVERAGING FROM STATES',I4,' TO',I4,/)
  9870 FORMAT(/1X,'**REAL** ALPHA DENSITY MATRIX FOR PROPERTIES',
      *        1X,' CALCULATIONS',/)
  9875 FORMAT(/1X,'**REAL** BETA  DENSITY MATRIX FOR PROPERTIES',
@@ -1959,12 +1978,15 @@ C ... get the real avejz
       CAVEJZ=DIMAG(AVEJZ)
 C
 C     if(maswrk)write(iw,*)'averaged jz=',avejz,' eigen jz=',eigjz(ist)
-      IF(ABS(RAVEJZ-EIGJZ(IST)).GT.SMALL) THEN
+      IF(IST.GT.0.AND.ABS(RAVEJZ-EIGJZ(IST)).GT.SMALL) THEN
         LABJZ=1
         IF(MASWRK)WRITE(IW,9010)
-      ELSEIF(ABS(CAVEJZ).GT.SMALL) THEN
+      ELSEIF(IST.GT.0.AND.ABS(CAVEJZ).GT.SMALL) THEN
         LABJZ=1
         IF(MASWRK)WRITE(IW,9020)
+      ELSEIF(IST.LT.0.AND.(RAVEJZ.GT.SMALL.OR.ABS(CAVEJZ).GT.SMALL))THEN
+        LABJZ=1
+        IF(MASWRK)WRITE(IW,9025)
       ELSE
         LABJZ=0
         IF(MASWRK)WRITE(IW,9030)
@@ -1977,6 +1999,9 @@ C
      *       ' JUMP TO THE END')
  9020 FORMAT(1X,'THE IMAGINARY PART OF AVERAGED JZ IS TOO LARGE,',
      *       ' JUMP TO THE END')
+ 9025 FORMAT(1X,'JZ NOT EQUAL TO ZERO FOR AVERAGED DENSITY,',
+     *      /1X,'CHECK WHETHER ALL DEGENERATE COMPONENTS ARE AVERAGED.',
+     *      /1X,'JUMP TO THE END')
  9030 FORMAT(1X,'JZ CHECK PASSED')
       END
 C*MODULE SOZEFF   *DECK NO2MJ
@@ -2151,10 +2176,10 @@ C
 C
 C*MODULE SOZEFF   *DECK PRSONO
       SUBROUTINE PRSONO(DNMAT,EIGOCC,EIGMJ,WORK,NDNMAT,VMO,VNO,DA,DB,DT,
-     *                  N1,L1,DBGSO,JZOPT)
+     *                  N1,L1,JZOPT)
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
 C
-      LOGICAL GOPARR,DSKWRK,MASWRK,DBGSO
+      LOGICAL GOPARR,DSKWRK,MASWRK
 C
       COMMON /IOFILE/ IR,IW,IP,IJK,IJKT,IDAF,NAV,IODA(950)
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
@@ -2230,10 +2255,8 @@ C ... print in the output
         CALL PRSONO1(DNMAT,EIGOCC,EIGMJ,NDNMAT,NDNMAT,JZOPT,0)
       ENDIF
 C ... punch in the punch file
-      IF(DBGSO) THEN
-        IF(MASWRK)WRITE(IP,9009)'ACTIVE MO'
-        CALL ZPUSQL(DNMAT,NDNMAT,NDNMAT,NDNMAT)
-      ENDIF
+      IF(MASWRK)WRITE(IP,9009)'ACTIVE MO'
+      CALL ZPUSQL(DNMAT,NDNMAT,NDNMAT,NDNMAT)
 C
 C     if(maswrk)write(iw,*)vmo(l1-2,n1)
 C ... transform the natural orbs. into the basis of spin basis functions
@@ -2265,10 +2288,8 @@ C ... print in the output
         CALL PRSONO1(VNO,EIGOCC,EIGMJ,2*L1,NDNMAT,JZOPT,1)
       ENDIF
 C ... punch in the punch file
-      IF(DBGSO) THEN
-        WRITE(IP,9009)'SPIN AO'
-        CALL ZPUSQL(VNO,NDNMAT,2*L1,2*L1)
-      ENDIF
+      WRITE(IP,9009)'SPIN AO'
+      CALL ZPUSQL(VNO,NDNMAT,2*L1,2*L1)
 C
 C ... build the alpha and beta density matrix in the AO basis.
 C ... because only the real integrals will be employed in property
@@ -2389,7 +2410,7 @@ C
       COMPLEX*16 TRACE
 C
       IF(.NOT.MASWRK) RETURN
-      IF(ISTNO(1).EQ.ISTNO(2)) THEN
+      IF((ISTNO(1).EQ.ISTNO(2)).OR.(ISTNO(1).LT.0)) THEN
         WRITE(IW,1003)
       ELSE
         WRITE(IW,1004)
@@ -2880,8 +2901,17 @@ C
 C ...     accummulate elemnt
 C         if(some)write(iw,*)hso(lirt,istno(1)),hso(ljrt,istno(2)),
 C    *                       coefi(irt),coefj(jrt)
-          ELEMNT=DCONJG(HSO(LIRT,ISTNO(1)))*HSO(LJRT,ISTNO(2))*
+          IF(ISTNO(1).LT.0) THEN
+            NUMST=ABS(ISTNO(2)-ISTNO(1))+1
+            PREFAC=ONE/DFLOAT(NUMST)
+            DO IST=ABS(ISTNO(1)),ABS(ISTNO(2)),1
+              ELEMNT=DCONJG(HSO(LIRT,IST))*HSO(LJRT,IST)*
+     *           COEFI(IRT)*COEFJ(JRT)*PREFAC+ELEMNT
+            ENDDO
+          ELSE
+            ELEMNT=DCONJG(HSO(LIRT,ISTNO(1)))*HSO(LJRT,ISTNO(2))*
      *           COEFI(IRT)*COEFJ(JRT)+ELEMNT
+          ENDIF
 C
         ENDDO
       ENDDO
