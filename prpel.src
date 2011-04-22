@@ -1,3 +1,4 @@
+C 10 DEC 10 - HL  - EFP AND PCM CONTRIBUTIONS TO DIPOLE MOMENT
 C 11 AUG 10 - DGF - CHANGES FOR ESP SCREENING AND LOCAL HARDNESS
 C 23 JUN 10 - RP  - MOVED SOME COSMO SPECIFIC ROUTINES TO COSMO.SRC
 C 25 MAR 10 - MK  - IMPLEMENT 3-DIMENSIONAL GRID AND CUBE OUTPUT
@@ -771,23 +772,50 @@ C*MODULE PRPEL   *DECK ELMOMC
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
+      CHARACTER*8 FRGNME,POLNAM,DPOLNAM
+C
       LOGICAL PAPER,PUNCH,GOPARR,DSKWRK,MASWRK
 C
       DIMENSION ITAG(19),ELTEMP(16)
 C
-      PARAMETER (MXATM=2000)
+      PARAMETER (MXATM=2000, MXFRG=1050, MXDFG=5, MXIFRQ=12,
+     *           MXFGPT=12000, MXDPPT=MXFRG*MXDFG*12)
 C
+      COMMON /DEIDIP/ PMIND(3,MXFGPT),PMINDD(3,MXFGPT),
+     *                XYIND(3,MXFGPT),XYINDD(3,MXFGPT)
+      COMMON /EFMULT/ EFC(3,MXFGPT),EFCHG(2,MXFGPT),EFATRM(MXFGPT),
+     *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
+     *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
+     *                EFOCT(10,MXFGPT),FRGNME(MXFGPT)
+      COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
+     *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
+     *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
+     *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ,MXFGPT),
+     *                POLSCR(MXFGPT),IPLSCR,INDSCR
       COMMON /ELPROP/ ELDLOC,ELMLOC,ELPLOC,ELFLOC,
      *                IEDEN,IEMOM,IEPOT,IEFLD,MODENS,
      *                IEDOUT,IEMOUT,IEPOUT,IEFOUT,
      *                IEDINT,IEMINT,IEPINT,IEFINT
       COMMON /FMCOM / X(1)
       COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
      *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /MPDIPL/ DINDMP(3,MXFGPT),DINDDMP(3,MXFGPT)
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+      COMMON /PCMPAR/ IPCM,NFT26,NFT27,IRPPCM,IEF,IP_F,NFMOPCM
+      COMMON /PCMPNT/ LXYZRE,LSSFE,LLIST,LALPCM,LRINPCM,LINAPCM,LINFPCM,
+     *                LINIPCM,LMEPCM,LAXYZCT,LXYZCT2,LNVERT,LQSN,LQSE,
+     *                LQFS,LQIND,LISPHE,LVAD,LQOR,LVECMUL,LAIPRJ,LFIPRJ,
+     *                LPEL,LPCMCDR,LDAI,LIDDAI,LQSND,LQSED
       COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+      COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
+     *                MPLEVL,MPCTYP
       COMMON /XYZPRP/ XP,YP,ZP,
      *                DMX,DMY,DMZ,
      *                QXX,QYY,QZZ,QXY,QXZ,QYZ,
@@ -802,7 +830,7 @@ C
      *           TWO=2.0D+00, TWOPT5=2.5D+00)
 C
       DATA CHECK/8HCHECK   /, DEBUG/8HDEBUG   /, DBUGME/8HELMOMC  /
-      DATA ELMOM/8HELMOM   /
+      DATA ELMOM/8HELMOM   /, RNONE/8HNONE    /
       DATA ITAG/4H   X,4H   Y,4H   Z,4H  XX,4H  YY,4H  ZZ,4H  XY,
      *          4H  XZ,4H  YZ,4H XXX,4H YYY,4H ZZZ,4H XXY,4H XXZ,
      *          4H XYY,4H YYZ,4H XZZ,4H YZZ,4H XYZ/
@@ -986,6 +1014,68 @@ C
          OMYZZ = OMYZZ + ZNUC*YN*ZN*ZN
          OMXYZ = OMXYZ + ZNUC*XN*YN*ZN
   280 CONTINUE
+C
+C                 ADD EFP CONTRIBUTION TO MOMENTS
+C            HUI: ONLY CHARGE, DIPOLE AND INDUCED DIPOLE
+C
+      IF(NFRG.GT.0) THEN
+      IC1 = 0
+      IC2 = 0
+      DO 290  IFRG = 1, NFRG
+         DO III = 1, NMPTS(IFRG)
+            IC1    = IC1 + 1
+            IF(IEFC.GT.0)THEN
+               ZEFP   = EFCHG(1,IC1) + EFCHG(2,IC1)
+               CHARGE = CHARGE + ZEFP
+               XN     = EFC(1,IC1) - XP
+               YN     = EFC(2,IC1) - YP
+               ZN     = EFC(3,IC1) - ZP
+               DMX    = DMX + ZEFP*XN
+               DMY    = DMY + ZEFP*YN
+               DMZ    = DMZ + ZEFP*ZN
+            END IF
+            IF(IEFD.GT.0)THEN
+               DMX    = DMX + EFDIP(1,IC1)
+               DMY    = DMY + EFDIP(2,IC1)
+               DMZ    = DMZ + EFDIP(3,IC1)
+            END IF
+         ENDDO
+         IF(IEFP.GT.0) THEN
+            DO III = 1, NPPTS(IFRG)
+               IC2    = IC2 + 1
+               DMX    = DMX + DIND(1,IC2)
+               DMY    = DMY + DIND(2,IC2)
+               DMZ    = DMZ + DIND(3,IC2)
+               IF(MPLEVL.EQ.2) THEN
+               DMX    = DMX + DINDMP(1,IC2)
+               DMY    = DMY + DINDMP(2,IC2)
+               DMZ    = DMZ + DINDMP(3,IC2)
+               END IF
+               IF(TDDFTYP.NE.RNONE)THEN
+               DMX    = DMX + PMIND(1,IC2)
+               DMY    = DMY + PMIND(2,IC2)
+               DMZ    = DMZ + PMIND(3,IC2)
+               END IF
+            ENDDO
+         END IF
+  290 CONTINUE
+      END IF
+C
+C                 ADD PCM CONTRIBUTION TO MOMENTS
+C
+      IF(IPCM.EQ.1) THEN
+      DO ITS = 1, NTS
+         ZPCM   = X(LQSE +ITS-1)+X(LQSN +ITS-1)
+     *           +X(LQFS +ITS-1)+X(LQIND+ITS-1)
+         CHARGE = CHARGE + ZPCM
+         XN     = X(LAXYZCT       +ITS-1) - XP
+         YN     = X(LAXYZCT+MXTS  +ITS-1) - YP
+         ZN     = X(LAXYZCT+MXTS*2+ITS-1) - ZP
+         DMX    = DMX + ZPCM*XN
+         DMY    = DMY + ZPCM*YN
+         DMZ    = DMZ + ZPCM*ZN
+      ENDDO
+      END IF
 C
 C     ----- CONVERT UNITS, FORM QUADRUPOLE,OCTUPOLE TENSORS -----
 C

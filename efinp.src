@@ -1,3 +1,4 @@
+C 12 DEC 10 - HL  - ADD POL5P,TIP5P,TIP5PE,SPC,SPCE; NEW DECK RDLJPOT
 C  1 OCT 10 - CS  - ADDED EFMO CHANGES
 C 11 AUG 10 - DGF - SYNCH COMMON BLOCK PRPOPT
 C 25 MAR 10 - MWS - FIX DEVELOPER'S BACK DOOR KEYWORD
@@ -104,11 +105,12 @@ C
       LOGICAL IFRCPNT
 C
       CHARACTER*8 PTNAM,TEMP,WORD2,WORD3,FRGMNT,FRCNME,
-     *            MNAME,PNAME,DPNAME,RNAME,FNAME
+     *            MNAME,PNAME,DPNAME,RNAME,FNAME,LJNAME,ELJNAM
       CHARACTER*6 FRGNAM
       CHARACTER*1 DOLLAR,BLANK
       CHARACTER*8 TYPCRD(2),TYPPOS(3),TYPPOL(5)
 C
+      COMMON /CENTRL/ RQM,XQM,YQM,ZQM,RMM,XMM,YMM,ZMM,ICENFD
       COMMON /EFPBAS/ EX(MXGEFP,MXDFG),CS(MXGEFP,MXDFG),
      *                CP(MXGEFP,MXDFG),CD(MXGEFP,MXDFG),
      *                CF(MXGEFP,MXDFG),CG(MXGEFP,MXDFG),
@@ -125,7 +127,7 @@ C
      *                FRCCRD(3,MXFGPT),FRCNME(MXFGPT),FRCTRQ(6,MXFGPT)
      *                ,FRCTRQX(6,MXFGPT)
       COMMON /EFPMP2/ MP2TYP
-      COMMON /EFPOTD/ METHOD,INABIO,MOVE
+      COMMON /EFPOTD/ METHPOL,INABIO,MOVE
       COMMON /EFPPBC/ XBOX,YBOX,ZBOX,XCUT,YCUT,ZCUT,RCUT
      *                ,SWR1,SWR2,ISWF
       COMMON /EFPSCR/ POLAB(MXFRG),B,SCROFF,IELECS,IDISPS,NEW_POL
@@ -137,6 +139,10 @@ C
      *                NPPTS(MXFRG),NPTTPT,IEFP,
      *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
      *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /FRGLJP/ CORDLJ(3,MXPT),ELJCRD(3,MXFGPT),
+     *                POTLJ(2,MXPT),ELJPOT(2,MXFGPT),
+     *                LJNAME(MXPT),ELJNAM(MXFGPT),
+     *                NLJPTS(MXFRG),NLJTTPT,ILJP,NMLJ(2)
       COMMON /FRGMSS/ FPMASS(MXPT),FMASS(MXFGPT),
      *                FPNUC(MXPT),FGNUC(MXFGPT)
       COMMON /FRGSTD/ CORD(3,MXPT),PCORD(3,MXPT),POLT(9,MXPT),
@@ -194,6 +200,8 @@ C                       MODEL ON OR OFF, WHILE -IEFP- IS JUST ONE TERM.
       IEFP = 0
 C                 FITTED REPULSIVE POTENTIAL (NAMELY WATER!) FOR EFP-1
       IREP = 0
+C                 LENNARD-JONES POTENTIAL
+      ILJP = 0
 C
 C                 TERMS FOR EFP-2 POTENTIALS
 C                 PAULI FORMULA REPULSIVE POTENTIAL
@@ -211,12 +219,14 @@ C
       NRTTPT = 0
       NDTTPT = 0
       NTPATM = 0
-      NTFRCPN =0
+      NTFRCPN= 0
+      NLJTTPT= 0
       DO I=1,MXFRG
          NMPTS(I) = 0
          NPPTS(I) = 0
          NDPPTS(I)= 0
          NRPTS(I) = 0
+         NLJPTS(I)= 0
          NDPTS(I) = 0
          NORB(I)  = 0
          LSTMPTS(I) = 0
@@ -242,7 +252,7 @@ C           THE OPTION -NOELEC- DOES NOT WORK, ACTUALLY.
       NOCHTR =.FALSE.
       NODISP =.FALSE.
 C
-      METHOD= -1
+      METHPOL= -1
       MOVE  = -1
       INT   = -1
       NBM   = -1
@@ -259,6 +269,15 @@ C
       SWR1 = 1.0D+10
       SWR2 = 2.0D+10
       ISWF = 1
+      ICENFD = 0
+      RQM  = 1.0D+10
+      XQM  = 1.0D+10
+      YQM  = 1.0D+10
+      ZQM  = 1.0D+10
+      RMM  = 2.0D+10
+      XMM  = 2.0D+10
+      YMM  = 2.0D+10
+      ZMM  = 2.0D+10
 C
 C  ----        VARIOUS SCRENING & DAMPING OPTIONS
 C
@@ -336,6 +355,14 @@ C
          IEFRAG = 1
       END IF
 C
+      IF(IEFRAG.EQ.1) THEN
+         CALL BASCHK(LMAX)
+         IF (LMAX.GE.4) THEN
+            IF(MASWRK) WRITE(IW,9210)
+            CALL ABRT
+         END IF
+      END IF
+C
       IF(IEFRAG.EQ.0 .AND. IPDB.EQ.0) RETURN
       IF(IEFRAG.EQ.0 .AND. IPDB.EQ.1) GO TO 145
 C                                     *********
@@ -362,18 +389,15 @@ C
          WORD3='        '
          LGSTR=-8
          CALL GSTRNG(WORD3,LGSTR)
-         METHOD=-2
-         IF(WORD3.EQ.'FRGSCF  ') METHOD=2
-         IF(WORD3.EQ.'SCF     ') METHOD=3
-         IF(WORD3.EQ.'TIP3P   ') METHOD=4
-         IF(WORD3.EQ.'TIP4P   ') METHOD=5
-         IF(WORD3.EQ.'SPCE    ') METHOD=6
-         IF(METHOD.EQ.-2) THEN
+         METHPOL=-2
+         IF(WORD3.EQ.'FRGSCF  ') METHPOL=2
+         IF(WORD3.EQ.'SCF     ') METHPOL=3
+         IF(METHPOL.EQ.-2) THEN
             IF(MASWRK) WRITE(IW,*) '$EFRAG: ILLEGAL POLMETHD=',WORD3
             CALL ABRT
          END IF
 C           W/O AB INITIO SYSTEM, POLMETHOD=SCF MAKES NO SENSE AT ALL
-         IF(NUMINF.EQ.0  .AND.  METHOD.EQ.3) METHOD=2
+         IF(NUMINF.EQ.0  .AND.  METHPOL.EQ.3) METHPOL=2
          GO TO 140
       END IF
 C
@@ -485,6 +509,59 @@ C
 C
       IF(WORD2.EQ.'ISWF    ') THEN
         ISWF = IFIND('ISWF    ',IERR)
+        GO TO 140
+      END IF
+C
+      IF(WORD2.EQ.'ICENFD  ') THEN
+        ICENFD=IFIND('ICENFD  ',IERR)
+        GO TO 140
+      END IF
+C
+      IF(WORD2.EQ.'RQM     ') THEN
+        RQM  = RFIND('RQM     ',IERR)
+        RQM  = RQM/0.52917724924D+00
+        GO TO 140
+      END IF
+C
+      IF(WORD2.EQ.'XQM     ') THEN
+        XQM  = RFIND('XQM     ',IERR)
+        XQM  = XQM/0.52917724924D+00
+        GO TO 140
+      END IF
+C
+      IF(WORD2.EQ.'YQM     ') THEN
+        YQM  = RFIND('YQM     ',IERR)
+        YQM  = YQM/0.52917724924D+00
+        GO TO 140
+      END IF
+C
+      IF(WORD2.EQ.'ZQM     ') THEN
+        ZQM  = RFIND('ZQM     ',IERR)
+        ZQM  = ZQM/0.52917724924D+00
+        GO TO 140
+      END IF
+C
+      IF(WORD2.EQ.'RMM     ') THEN
+        RMM  = RFIND('RMM     ',IERR)
+        RMM  = RMM/0.52917724924D+00
+        GO TO 140
+      END IF
+C
+      IF(WORD2.EQ.'XMM     ') THEN
+        XMM  = RFIND('XMM     ',IERR)
+        XMM  = XMM/0.52917724924D+00
+        GO TO 140
+      END IF
+C
+      IF(WORD2.EQ.'YMM     ') THEN
+        YMM  = RFIND('YMM     ',IERR)
+        YMM  = YMM/0.52917724924D+00
+        GO TO 140
+      END IF
+C
+      IF(WORD2.EQ.'ZMM     ') THEN
+        ZMM  = RFIND('ZMM     ',IERR)
+        ZMM  = ZMM/0.52917724924D+00
         GO TO 140
       END IF
 C
@@ -636,7 +713,7 @@ C         PROVIDE DEFAULTS IF KEYWORD WAS NOT READ
 C
  145  CONTINUE
       IF(INT   .EQ.-1) INT   =0
-      IF(METHOD.EQ.-1) METHOD=2
+      IF(METHPOL.EQ.-1) METHPOL=2
       IF(MOVE  .EQ.-1) MOVE  =1
       IF(NBUFMO.EQ.-1) NBUFMO=0
 C
@@ -644,7 +721,7 @@ C ---- READ IN EACH FRAGMENT AND KEEP TRACK OF HOW MANY WE READ IN ----
 C
       IF(IEFRAG.EQ.1) THEN
          IF(MASWRK) WRITE(IW,9020) TYPCRD(INT+1),TYPPOS(MOVE+1),
-     *                             TYPPOL(METHOD-1),NBUFMO
+     *                             TYPPOL(METHPOL-1),NBUFMO
          NFRG=1
          STOP = .FALSE.
   150    CONTINUE
@@ -683,7 +760,11 @@ C
          DO 165 IDFRG=1,NDFRG
             IF(FRGNAM(NAMIDX(IDFRG)).EQ.'H2ORHF') GO TO 165
             IF(FRGNAM(NAMIDX(IDFRG)).EQ.'H2ODFT') GO TO 165
-            IF(FRGNAM(NAMIDX(IDFRG)).EQ.'H2OSPC') GO TO 165
+            IF(FRGNAM(NAMIDX(IDFRG)).EQ.'POL5P ') GO TO 165
+            IF(FRGNAM(NAMIDX(IDFRG)).EQ.'TIP5P ') GO TO 165
+            IF(FRGNAM(NAMIDX(IDFRG)).EQ.'TIP5PE') GO TO 165
+            IF(FRGNAM(NAMIDX(IDFRG)).EQ.'SPC   ') GO TO 165
+            IF(FRGNAM(NAMIDX(IDFRG)).EQ.'SPCE  ') GO TO 165
             CALL RDMXBF(IDFRG,MXBF,MXMO)
  165  CONTINUE
       END IF
@@ -735,8 +816,18 @@ C
                 CALL WATRHF(I)
       ELSE IF (FRGMNT.EQ.' $H2ODFT') THEN
                 CALL WATDFT(I)
-      ELSE IF (FRGMNT.EQ.' $H2OSPC') THEN
-                CALL SPCEWA(I)
+C-DEAD-LSE IF (FRGMNT.EQ.' $H2OSPC') THEN
+C-DEAD-         CALL SPCEWA(I)
+      ELSE IF (FRGMNT.EQ.' $POL5P ') THEN
+                CALL POL5P(I)
+      ELSE IF (FRGMNT.EQ.' $TIP5P ') THEN
+                CALL TIP5P(I,0)
+      ELSE IF (FRGMNT.EQ.' $TIP5PE') THEN
+                CALL TIP5P(I,1)
+      ELSE IF (FRGMNT.EQ.' $SPC   ') THEN
+                CALL SPC(I,0)
+      ELSE IF (FRGMNT.EQ.' $SPCE  ') THEN
+                CALL SPC(I,1)
       ELSE
          IF (MASWRK) WRITE(IW,9050) I,FRGMNT
          CALL RDSTFR(FRGMNT,I,XX(LPROVEC),XX(LFOCKMA),XX(LCANVEC),
@@ -781,6 +872,7 @@ C
       NMTTPT = NMTTPT + NMPTS(I)
       NPTTPT = NPTTPT + NPPTS(I)
       NDPTTPT= NDPTTPT+ NDPPTS(I)
+      NLJTTPT= NLJTTPT+ NLJPTS(I)
       NRTTPT = NRTTPT + NRPTS(I)
       NDTTPT = NDTTPT + NDPTS(I)
       NTPATM = NTPATM + NAT(ISET(I))
@@ -796,10 +888,10 @@ C        AND STORING THE LAST FRAGMENT IN THE CALLS ABOVE WOULD HAVE
 C        ALREADY GONE BEYOND THE ARRAY BOUNDS.
 C        THIS IS CERTAINLY A GOOD PLACE TO QUIT, IF THAT HAS HAPPENED!
 C
-      NPMAX = MAX(NMTTPT,NPTTPT,NRTTPT,NDTTPT,NTFRCPN)
+      NPMAX = MAX(NMTTPT,NPTTPT,NRTTPT,NDTTPT,NTFRCPN,NLJTTPT)
       IF(NPMAX.GT.MXFGPT) THEN
          IF(MASWRK) WRITE(IW,9200) I,NFRG,NMTTPT,NPTTPT,NDPTTPT,
-     *                               NRTTPT,NDTTPT,NTFRCPN,MXFGPT
+     *                     NRTTPT,NDTTPT,NTFRCPN,NLJTTPT,MXFGPT
          CALL ABRT
       END IF
       I = I + 1
@@ -818,7 +910,7 @@ C
       CALL DAWRIT(IDAF,IODA,XX(LCANVEC),LENCV,269,0)
       CALL RETFM(NEED)
 C
-      EFP1MODEL = NRTTPT+NDTTPT           .GT.0
+      EFP1MODEL = NRTTPT+NDTTPT           .GT.0 .AND. NLJTTPT.EQ.0
       EFP2MODEL = NTPATM+NTMO+NDPTTPT+NTAO.GT.0
 C
 C            SWITCH OFF ANY TERMS THE USER DOESN'T WANT.
@@ -897,6 +989,7 @@ C
          WRITE(IW,9090)
          WRITE(IW,9100) NMTTPT
          WRITE(IW,9105) NPTTPT
+         WRITE(IW,9106) NLJTTPT
          IF(EFP1MODEL) THEN
             IF(MP2TYP.EQ.1) WRITE(IW,9110) NDTTPT
             WRITE(IW,9115) NRTTPT
@@ -981,10 +1074,10 @@ C
          END IF
       END IF
 C
-      IF(IPBC.EQ.1  .AND.  NATINF.GT.0) THEN
-         IF(MASWRK) WRITE(IW,9390)
-         CALL ABRT
-      END IF
+C     IF(IPBC.EQ.1  .AND.  NATINF.GT.0) THEN
+C        IF(MASWRK) WRITE(IW,9390)
+C        CALL ABRT
+C     END IF
 C
 C   ---- READ $EWALD GROUP IF ANY
 C
@@ -1025,9 +1118,9 @@ C
 C        READ THE INTER-FRAGMENT REPULSIVE POTENTIAL GROUP $FRGRPL.
 C        IF ONLY THE INTERNALLY STORED H2ORHF IS BEING USED, SKIP.
 C
-      IF (NOEXREP)     GO TO 500
+      IF (NOEXREP)   GO TO 500
       IF (NTMO.GT.0) GO TO 500
-      IF (METHOD.GE.4) GO TO 500
+      IF (ILJP.EQ.1) GO TO 500
 C
       BILTIN = FRGMNT.EQ.' $H2ORHF' .OR. FRGMNT.EQ.' $H2ODFT'
       IF (NFRG.GT.1 .AND. .NOT.BILTIN) THEN
@@ -1089,7 +1182,6 @@ C
 C     ATTENTION: THE DATA ARE WRITTEN INTO FILE 81!!!
 C
         IF (NTMO.GT.0) GO TO 600
-        IF (METHOD .GE. 4) GO TO 600
 C
         BILTIN = FRGMNT.EQ.' $H2ORHF' .OR. FRGMNT.EQ.' $H2ODFT'
 C
@@ -1140,6 +1232,8 @@ C
      *          '  (EFP1/EFP2 ELECTROSTATICS)')
  9105 FORMAT(1X,'TOTAL NUMBER OF POLARIZABLE POINTS =',I10,
      *          '  (EFP1/EFP2 INDUCTION)')
+ 9106 FORMAT(1X,'TOTAL NUMBER OF L-J POINTS         =',I10,
+     *          '  (REPULSION AND DISPERSION)')
  9110 FORMAT(1X,'TOTAL NUMBER OF DISPERSION POINTS  =',I10,
      *          '  (EFP1/MP2 DISPERSION)')
  9115 FORMAT(1X,'TOTAL NUMBER OF REPULSIVE POINTS   =',I10,
@@ -1183,7 +1277,10 @@ C
      *       1X,'   FITTED REPULSIVE POINTS=',I8/
      *       1X,'         DISPERSION POINTS=',I8/
      *       1X,'              FORCE POINTS=',I8/
+     *       1X,'      LENNARD-JONES POINTS=',I8/
      *       1X,'   BUT PARAMETER MXFGPT WAS',I8,' AT COMPILE TIME')
+ 9210 FORMAT(1X,'QM/EFP INTEGRALS ARE PROGRAMMED FOR SPDF AO''S ONLY'/
+     *       1X,'PLEASE CHANGE YOUR AB INITIO BASIS SET.')
 C
  9350 FORMAT(/5X,'PBC BOX SIZE = ',3F14.6,' ANGSTROMS, ERROR',/)
  9360 FORMAT(/5X,'SWITCHING FUNCTIONS = ',2F14.6,' ANGSTROMS, ERROR',/)
@@ -1194,9 +1291,9 @@ C
  9382 FORMAT(5X,'CUT-OFF WILL BE USED AT ',3F10.4,' ANGSTROMS')
  9383 FORMAT(5X,'SWITCHING FUNCTIONS WILL BE APPLIED BETWEEN ',F10.4,
      *          ' AND ',F10.4,' ANG.')
- 9390 FORMAT(1X,'PERIODIC BOUNDARY CONDITIONS CAN ONLY BE USED IN',
-     *          ' A SIMULATION'/
-     *       1X,'INVOLVING -EFP- PARTICLES ONLY: COORD=FRAGONLY')
+C9390 FORMAT(1X,'PERIODIC BOUNDARY CONDITIONS CAN ONLY BE USED IN',
+C    *          ' A SIMULATION'/
+C    *       1X,'INVOLVING -EFP- PARTICLES ONLY: COORD=FRAGONLY')
 C
       END
 C
@@ -1301,7 +1398,7 @@ C
       LOGICAL IFRCPNT
 C
       CHARACTER*8 MNAME,PNAME,DPNAME,PTNAM,FRGNME,POLNAM,DPOLNAM,RNAME,
-     *            REPNAM,DNAME,DPSNAM,FRGMNT,FRCNME,FNAME
+     *            REPNAM,DNAME,DPSNAM,FRGMNT,FRCNME,FNAME,LJNAME,ELJNAM
       CHARACTER*6 FRGNAM
 C
       DIMENSION T1(3,3), T2(3,3), T3(3,3), T3T(3,3), IPT(3)
@@ -1340,6 +1437,10 @@ C
      *                POLSCR(MXFGPT),IPLSCR,INDSCR
       COMMON /FRAGMT/ XCRD(50,MXFRG),YCRD(50,MXFRG),ZCRD(50,MXFRG),
      *                PTNAM(50,MXFRG),FRGNAM(MXFRG)
+      COMMON /FRGLJP/ CORDLJ(3,MXPT),ELJCRD(3,MXFGPT),
+     *                POTLJ(2,MXPT),ELJPOT(2,MXFGPT),
+     *                LJNAME(MXPT),ELJNAM(MXFGPT),
+     *                NLJPTS(MXFRG),NLJTTPT,ILJP,NMLJ(2)
       COMMON /FRGMSS/ FPMASS(MXPT),FMASS(MXFGPT),
      *                FPNUC(MXPT),FGNUC(MXFGPT)
       COMMON /FRGTYP/ NDFRG,ISET(MXFRG),NAMIDX(MXDFG)
@@ -1625,6 +1726,25 @@ C
         EFPOL(9,NPTTPT+I) = T1(3,2)
         EFPOL(3,NPTTPT+I) = T1(3,3)
   690 CONTINUE
+C
+C         ROTATION OF LENNARD-JONES POTENTIAL
+C 
+      ILJPTS = NLJPTS(N)
+      DO I=1,ILJPTS
+         DO J=1,3
+            TEMP(J,I) = CORDLJ(J,I) - CORD(J,IPT(1))
+         ENDDO 
+      ENDDO
+      CALL MRARBR(T3,3,3,3,TEMP,3,ILJPTS,ELJCRD(1,NLJTTPT+1),3)
+      DO I = 1,ILJPTS
+         ELJCRD(1,I+NLJTTPT) = ELJCRD(1,I+NLJTTPT) + XCRD(1,N)
+         ELJCRD(2,I+NLJTTPT) = ELJCRD(2,I+NLJTTPT) + YCRD(1,N)
+         ELJCRD(3,I+NLJTTPT) = ELJCRD(3,I+NLJTTPT) + ZCRD(1,N)
+         ELJNAM(  I+NLJTTPT) = LJNAME(I)
+         ELJPOT(1,I+NLJTTPT) = POTLJ(1,I)
+         ELJPOT(2,I+NLJTTPT) = POTLJ(2,I)
+      ENDDO
+C
 C
 C         ROTATION OF REPULSIVE POTENTIAL
 C
@@ -2419,12 +2539,13 @@ C
       LOGICAL GOPARR,MASWRK,DSKWRK
       LOGICAL IFRCPNT
 C
-      PARAMETER (MXSHEF=1000, MXGEFP=4000,
+      PARAMETER (MXSHEF=1000, MXGEFP=4000, MXPT=2000,
      *           MXDFG=5, MXFRG=1050, MXFGPT=12000, MXIFRQ=12,
      *           MXDPPT=MXFRG*MXDFG*12)
 C
       CHARACTER*6 FRGNAM
       CHARACTER*8 PTNAM,FRGNME,POLNAM,DPOLNAM,REPNAM,KNAME,LNAME,FRCNME
+      CHARACTER*8 LJNAME,ELJNAM
 C
       COMMON /DOMULT/ DOMONO(MXFGPT),DODIPO(MXFGPT),DOQUAD(MXFGPT),
      *                DOOCTU(MXFGPT)
@@ -2455,6 +2576,10 @@ C
      *                NPPTS(MXFRG),NPTTPT,IEFP,
      *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
      *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /FRGLJP/ CORDLJ(3,MXPT),ELJCRD(3,MXFGPT),
+     *                POTLJ(2,MXPT),ELJPOT(2,MXFGPT),
+     *                LJNAME(MXPT),ELJNAM(MXFGPT),
+     *                NLJPTS(MXFRG),NLJTTPT,ILJP,NMLJ(2)
       COMMON /FRGTYP/ NDFRG,ISET(MXFRG),NAMIDX(MXDFG)
       COMMON /IOFILE/ IR,IW,IP,IJK,IJKT,IDAF,NAV,IODA(950)
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
@@ -2476,12 +2601,14 @@ C
      *                  EFCHG(2,I)
       ENDDO
 C
+      IF(ILJP.EQ.0 .AND. NLJTTPT.EQ.0)THEN
       WRITE(IW,9045) ICHGP,MOD(ICHGP,2),INT(ICHGP/2.0D+00)
       WRITE(IW,9046)
       DO I=1,NMTTPT
          WRITE(IW,9047) FRGNME(I),EFBTRM(I),EFATRM(I),
      *                           EFBTRM2(I),EFATRM2(I)
       ENDDO
+      END IF
 C
 C   --- LVS: IMFORMATION ABOUT POLARIZATION SCREENING
       IF (IPLSCR .EQ. 1) THEN
@@ -2563,6 +2690,15 @@ C
       DO 631 I=1,NDPTTPT
          WRITE(IW,9110) DPOLNAM(I),(EFDP(J,I),J=1,3),(EFDPOL(J,I),J=1,9)
   631 CONTINUE
+C           
+C  PRINT OUT LENNARD-JONES POINTS
+C 
+      IF (ILJP.EQ.1 .AND. NLJTTPT.GT.0) THEN
+        WRITE(IW,9120)NMLJ(1),NMLJ(2)
+      END IF
+      DO I=1,NLJTTPT
+        WRITE(IW,9121)ELJNAM(I),(ELJCRD(J,I),J=1,3),(ELJPOT(J,I),J=1,2)
+      ENDDO
 C
 C         AB INITIO-FRAGMENT REPULSION TERM
 C
@@ -2596,7 +2732,7 @@ C
 C
 C         FRAGMENT-FRAGMENT REPULSION TERM
 C
-      IF(NFRG.EQ.1 .OR. NTMO.GT.0) RETURN
+      IF(NFRG.EQ.1 .OR. NTMO.GT.0 .OR. ILJP.EQ.1) RETURN
 C
       IJ=0
       WRITE(IW,9200) NDFRG,NDFG2
@@ -2663,6 +2799,11 @@ C
  9105 FORMAT(/14X,'X',7X,'Y',7X,'Z',7X,'XX/YZ',4X,'YY/YX',4X,
      *                                 'ZZ/ZX',4X,'XY/ZY',5X,'XZ')
  9110 FORMAT(1X,A8,3F8.4,1X,5F9.5/34X,4F9.5)
+ 9120 FORMAT(/20X,30(1H-)/
+     *        20X,' LENNARD-JONES ',I2,'-',I1,' POTENTIAL '/
+     *        20X,30(1H-)/
+     *        17X,'X',11X,'Y',11X,'Z',10X,'SIGMA      EPSILON'/)
+ 9121 FORMAT(1X,A8,3F12.5,2X,2F12.7)
  9130 FORMAT(/20X,14(1H-),21X,18(1H-)/
      *        20X,'  REP POINTS  ',21X,'  REP PARAMETERS  '/
      *        20X,14(1H-),21X,18(1H-))
@@ -4739,7 +4880,7 @@ C
      *           MXAO=8192, MXIFRQ=12,
      *           MXDPPT=MXFRG*MXDFG*12)
 C
-      CHARACTER*8 FRGMNT
+      CHARACTER*8 FRGMNT,LJNAME,ELJNAM
       CHARACTER*8 WORD,MNAME,PNAME,RNAME,DPNAME,FNAME,FRCNME
       CHARACTER*80 TITLE
 C
@@ -4748,6 +4889,10 @@ C
       COMMON /EFPFRC/ IFRCPNT,NTFRCPN,NFRCPNT(MXFRG),LSTFPTS(MXFRG),
      *                FRCCRD(3,MXFGPT),FRCNME(MXFGPT),FRCTRQ(6,MXFGPT)
      *                ,FRCTRQX(6,MXFGPT)
+      COMMON /FRGLJP/ CORDLJ(3,MXPT),ELJCRD(3,MXFGPT),
+     *                POTLJ(2,MXPT),ELJPOT(2,MXFGPT),
+     *                LJNAME(MXPT),ELJNAM(MXFGPT),
+     *                NLJPTS(MXFRG),NLJTTPT,ILJP,NMLJ(2)
       COMMON /FRGSTD/ CORD(3,MXPT),PCORD(3,MXPT),POLT(9,MXPT),
      *                DPCORD(3,MXIFRQ*MXPT),DPOLT(9,MXIFRQ*MXPT),
      *                ACHG(2,MXPT),ADIP(3,MXPT),AQAD(6,MXPT),
@@ -4783,6 +4928,7 @@ C
       NMPTS(IFRAG)=0
       NPPTS(IFRAG)=0
       NDPPTS(IFRAG)=0
+      NLJPTS(IFRAG)=0
       NRPTS(IFRAG)=0
       NDPTS(IFRAG)=0
       NFRCPNT(IFRAG)=0
@@ -4805,6 +4951,7 @@ C
          PNAME(I)='        '
          RNAME(I)='        '
          FNAME(I)='        '
+         LJNAME(I)='        '
 C   ---- LVS: DEFAULT FOR POLARIZATION SCREENING PARAMETERS
 C---     IF (IPLSCR.EQ.1) THEN
 C---        POLSCRN(I) = 1.5D+00
@@ -5051,6 +5198,14 @@ C
       GO TO 200
 C
   420 CONTINUE
+      IF(WORD.NE.'LJPOTENT') GO TO 430
+      IERR = 0
+      NMLJ(1) = IFIND('N       ',IERR)
+      NMLJ(2) = IFIND('M       ',IERR)
+      CALL RDLJPOT(NLJPTS(IFRAG),IFRAG)
+      GO TO 200
+C
+  430 CONTINUE
       IF(WORD.EQ.'$END    ') THEN
          ICHGP = ICHGPX+2*ICHGPY
          IF (SCROFF.EQ.1.0D+04 .AND. ICHGPY .GT. 1) SCROFF = 11
@@ -5205,101 +5360,6 @@ C---      WRITE(6,*) 'XYZ2',(XYZ2(JJ),JJ=1,3)
       DO 10 I=1,3
          R(I)=XYZ1(I)-XYZ2(I)
    10 CONTINUE
-      RETURN
-      END
-C*MODULE EFINP   *DECK SPCEWA
-      SUBROUTINE SPCEWA(IFRAG)
-C
-      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-C
-      PARAMETER (MXPT=2000, MXFRG=1050, MXFGPT=12000, MXIFRQ=12,
-     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
-C
-      PARAMETER (ZERO=0.0D+00,TWO=2.0D+00,
-     *           ONE=1.00D+00, UNITS=ONE/0.52917724924D+00)
-C
-      CHARACTER*8 MNAME,PNAME,RNAME,DPNAME,FNAME
-C
-      COMMON /FRGSTD/ CORD(3,MXPT),PCORD(3,MXPT),POLT(9,MXPT),
-     *                DPCORD(3,MXIFRQ*MXPT),DPOLT(9,MXIFRQ*MXPT),
-     *                ACHG(2,MXPT),ADIP(3,MXPT),AQAD(6,MXPT),
-     *                AOCT(10,MXPT),AMULT(MXPT),BMULT(MXPT),
-     *                AMULT2(MXPT),BMULT2(MXPT),
-     *                RCORD(3,MXPT),TCLPR(4*MXPT),TZLPR(4*MXPT),
-     *                INLPR(4*MXPT),IKFR(MXPT),IKLR(MXPT),
-     *                MNAME(MXPT),PNAME(MXPT),RNAME(MXPT),
-     *                DPNAME(MXIFRQ,MXPT),POLSCRN(MXPT),
-     *                FCRD(3,MXPT),FNAME(MXPT),NFPNT(MXFRG)
-      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
-     *                NPPTS(MXFRG),NPTTPT,IEFP,
-     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
-     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
-      COMMON /FRGMSS/ FPMASS(MXPT),FMASS(MXFGPT),
-     *                FPNUC(MXPT),FGNUC(MXFGPT)
-      COMMON /POLTMP/ TCLPD(4*MXPT),TZLPD(4*MXPT),
-     *                JNLPR(4*MXPT),JKFR(MXPT),JKLR(MXPT),
-     *                NDPTS(MXFRG),NDTTPT
-C
-      Q2AU = SQRT(ONE/1.11265D-10/4.3598D-18*1.602177D-19*
-     *             1.602177D-19*UNITS/1.0D-10)
-C
-      IEFC = 1
-      IEFD = 0
-      IEFQ = 0
-      IEFO = 0
-      IEFP = 0
-      IREP = 0
-      NMPTS(IFRAG)=3
-      NPPTS(IFRAG)=0
-      NRPTS(IFRAG)=0
-      NDPTS(IFRAG)=0
-C
-C     INITIALIZE LOCAL COMMON BLOCK FRGSTD
-C
-      CALL VCLR(CORD(1,1),1,50*MXPT)
-      DO 10 I=1,MXPT
-         INLPR(4*(I-1)+1)=0
-         INLPR(4*(I-1)+2)=0
-         INLPR(4*(I-1)+3)=0
-         INLPR(4*(I-1)+4)=0
-         IKFR(I)=0
-         IKLR(I)=0
-         MNAME(I)='        '
-   10 CONTINUE
-C
-C COORDINATES (CHANGE TO AU WITH 'UNITS')
-C
-      MNAME(1) = 'ZO1     '
-      FPMASS(1) = 15.9949146D+00
-      MNAME(2) = 'ZH2     '
-      FPMASS(2) = 1.007825D+00
-      MNAME(3) = 'ZH3     '
-      FPMASS(3) = 1.007825D+00
-      TOTMA = FPMASS(1) + TWO*FPMASS(2)
-      TOTMAI = 1.0D+00 / TOTMA
-      ANG = ACOS(-1.0D+00/3.0D+00)
-      ANG2 = ANG*0.5D+00
-      RCMZ = 2.0D+00 * FPMASS(2) * COS(ANG2) * TOTMAI
-C CHANGE COORDINATES TO BOHR (VS. ANG.)
-      RHZ = (COS(ANG2) - RCMZ)*UNITS
-      RHY = SIN(ANG2)*UNITS
-      ROZ = RCMZ*UNITS
-      CORD(1,1) = ZERO
-      CORD(2,1) = ZERO
-      CORD(3,1) = ROZ
-      CORD(1,2) = ZERO
-      CORD(2,2) = -RHY
-      CORD(3,2) = -RHZ
-      CORD(1,3) = ZERO
-      CORD(2,3) = RHY
-      CORD(3,3) = -RHZ
-C CHARGES (ELECTRONIC UNITS)
-C CHANGE CHARGE TO COULOMBS AND MULTIPLY IN SQRT(COULOMB FACTOR)
-C IN AU
-C THEREFORE, ACHG*ACHG UNITS = AU * BOHR
-      ACHG(1,1) = -0.8476D+00*Q2AU
-      ACHG(1,2) = 0.4238D+00*Q2AU
-      ACHG(1,3) = 0.4238D+00*Q2AU
       RETURN
       END
 C
@@ -6520,7 +6580,8 @@ C
 C        OUTPUT THE POLARIZABILITY TERM.
 C
       IF(.NOT.POLAR) GO TO 300
-      IF(MASWRK) WRITE(NFTEFP,*) 'POLARIZABLE POINTS'
+      IF(MASWRK  .AND.  IEFMORUN.EQ.0)
+     *     WRITE(NFTEFP,*) 'POLARIZABLE POINTS'
 C
       IF(EXETYP.NE.CHECK) THEN
          CALL DAREAD(IDAF,IODA,DLPOL,LNA*9,251,0)
@@ -9913,6 +9974,65 @@ C
       WRITE(IW,*)' READING $PDBFRG IS DONE'
       RETURN
       END
+C*MODULE EFINP   *DECK RDLJPOT
+      SUBROUTINE RDLJPOT(NPTS,N)
+C
+      IMPLICIT DOUBLE PRECISION (A-H, O-Z)
+C
+      PARAMETER (MXPT=2000, MXFRG=1050, MXFGPT=12000)
+C
+      LOGICAL GOPARR,MASWRK,DSKWRK
+C
+      CHARACTER*8 LJNAME,ELJNAM
+C
+      COMMON /FRGLJP/ CORDLJ(3,MXPT),ELJCRD(3,MXFGPT),
+     *                POTLJ(2,MXPT),ELJPOT(2,MXFGPT),
+     *                LJNAME(MXPT),ELJNAM(MXFGPT),
+     *                NLJPTS(MXFRG),NLJTTPT,ILJP,NMLJ(2)
+      COMMON /IOFILE/ IR,IW,IP,IJK,IJKT,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+C
+      ILJP = 1
+      IERR = 0
+      IEOF = 0
+      NPTS = 0
+  100 CONTINUE
+      K = NPTS + 1
+      IF(K.GT.MXPT) THEN
+         IF(MASWRK) WRITE(IW,9000) N,MXPT
+         CALL ABRT
+      END IF
+      CALL RDCARD('RDLJPOT ',IEOF)
+      IF(IEOF.EQ.1) THEN
+         IF(MASWRK)WRITE(IW,*)
+     *      'END OF FILE READING FRAGMENT LJ POTENTIAL'
+         CALL ABRT
+      END IF
+      LJNAME(K) = '        '
+      LGSTR=-8
+      CALL GSTRNG(LJNAME(K),LGSTR)
+      IF(LJNAME(K).EQ.'STOP    ') RETURN
+      DO J=1,3
+        CORDLJ(J,K) = RFIND('LJCORD  ',IERR)
+        IF(IERR.NE.0) THEN
+           IF(MASWRK) WRITE(IW,*) 'RDLJPOT: ERROR READING LJCORD'
+           CALL ABRT
+        END IF
+      ENDDO
+      DO J=1,2
+        POTLJ(J,K) = RFIND('LJPOT   ',IERR)
+        IF(IERR.NE.0) THEN
+           IF(MASWRK) WRITE(IW,*) 'RDLJPOT: ERROR READING LJPOT'
+           CALL ABRT
+        END IF
+      ENDDO
+      NPTS = NPTS + 1
+      GO TO 100
+C
+ 9000 FORMAT(1X,'ERROR IN READING LJ POINTS FOR FRAGMENT',I6,
+     *          ' EXCEEDED MXPT=',I6)
+      END
 C*MODULE EFINP   *DECK LEVELEFP
       INTEGER FUNCTION LEVELEFP()
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
@@ -9973,4 +10093,527 @@ C
      *       1X,'EFP1: NRTTPT=',I7,' NDTTPT=',I7/
      *       1X,'EFP2: NTPATM=',I7,' NTMO=',I7,' NDPTTPT=',I7,
      *          ' NTAO=',I7)
+      END
+C*MODULE EFINP   *DECK POL5P
+      SUBROUTINE POL5P(IFRAG)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      PARAMETER (MXPT=2000, MXFRG=1050, MXFGPT=12000, MXIFRQ=12,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      PARAMETER (ZERO=0.0D+00)
+C
+      LOGICAL DOMTMP,DODTMP,DOQTMP,DOOTMP
+C
+      CHARACTER*8 MNAME,PNAME,RNAME,DPNAME,FNAME,LJNAME,ELJNAM
+C
+      COMMON /DOTMP / DOMTMP(MXPT),DODTMP(MXPT),DOQTMP(MXPT),
+     *                DOOTMP(MXPT)
+      COMMON /FRGSTD/ CORD(3,MXPT),PCORD(3,MXPT),POLT(9,MXPT),
+     *                DPCORD(3,MXIFRQ*MXPT),DPOLT(9,MXIFRQ*MXPT),
+     *                ACHG(2,MXPT),ADIP(3,MXPT),AQAD(6,MXPT),
+     *                AOCT(10,MXPT),AMULT(MXPT),BMULT(MXPT),
+     *                AMULT2(MXPT),BMULT2(MXPT),
+     *                RCORD(3,MXPT),TCLPR(4*MXPT),TZLPR(4*MXPT),
+     *                INLPR(4*MXPT),IKFR(MXPT),IKLR(MXPT),
+     *                MNAME(MXPT),PNAME(MXPT),RNAME(MXPT),
+     *                DPNAME(MXIFRQ,MXPT),POLSCRN(MXPT),
+     *                FCRD(3,MXPT),FNAME(MXPT),NFPNT(MXFRG)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /FRGLJP/ CORDLJ(3,MXPT),ELJCRD(3,MXFGPT),
+     *                POTLJ(2,MXPT),ELJPOT(2,MXFGPT),
+     *                LJNAME(MXPT),ELJNAM(MXFGPT),
+     *                NLJPTS(MXFRG),NLJTTPT,ILJP,NMLJ(2)
+      COMMON /FRGMSS/ FPMASS(MXPT),FMASS(MXFGPT),
+     *                FPNUC(MXPT),FGNUC(MXFGPT)
+      COMMON /POLTMP/ TCLPD(4*MXPT),TZLPD(4*MXPT),
+     *                JNLPR(4*MXPT),JKFR(MXPT),JKLR(MXPT),
+     *                NDPTS(MXFRG),NDTTPT
+C
+      IEFC = 1
+      IEFD = 0
+      IEFQ = 0
+      IEFO = 0
+      IEFP = 1
+      IREP = 1
+      ILJP = 1
+      NMLJ(1)=12
+      NMLJ(2)= 6
+      NMPTS(IFRAG)=5
+      NPPTS(IFRAG)=1
+      NRPTS(IFRAG)=5
+      NDPTS(IFRAG)=0
+      NLJPTS(IFRAG)=1
+C
+C     INITIALIZE LOCAL COMMON BLOCK FRGSTD
+C
+      CALL VCLR(CORD(1,1),1,50*MXPT)
+      DO I=1,MXPT
+         INLPR(4*(I-1)+1)=0
+         INLPR(4*(I-1)+2)=0
+         INLPR(4*(I-1)+3)=0
+         INLPR(4*(I-1)+4)=0
+         IKFR(I)=0
+         IKLR(I)=0
+         MNAME(I)='        '
+         PNAME(I)='        '
+         RNAME(I)='        '
+         LJNAME(I)='        '
+         DOMTMP(I) =  .FALSE.
+         DODTMP(I) =  .FALSE.
+         DOQTMP(I) =  .FALSE.
+         DOOTMP(I) =  .FALSE.
+      ENDDO
+C
+C     COORDINATES
+C
+      MNAME(1)  = 'O1      '
+      CORD(1,1) = ZERO
+      CORD(2,1) = ZERO
+      CORD(3,1) = ZERO
+      FPMASS(1) = 15.99491D+00
+      FPNUC(1)  = 8.0D+00
+      MNAME(2)  = 'H2      '
+      CORD(1,2) = -1.43042D+00
+      CORD(2,2) = ZERO
+      CORD(3,2) = 1.107161D+00
+      FPMASS(2) = 1.007825D+00
+      FPNUC(2)  = 1.0D+00
+      MNAME(3)  = 'H3      '
+      CORD(1,3) = 1.43042D+00
+      CORD(2,3) = ZERO
+      CORD(3,3) = 1.107161D+00
+      FPMASS(3) = 1.007825D+00
+      FPNUC(3)  = 1.0D+00
+      MNAME(4)  = 'L4      '
+      CORD(1,4) = ZERO
+      CORD(2,4) = 1.07999361D+00
+      CORD(3,4) = -0.763829D+00
+      FPMASS(4) = ZERO
+      FPNUC(4)  = ZERO
+      MNAME(5)  = 'L5      '
+      CORD(1,5) = ZERO
+      CORD(2,5) = -1.07999361D+00
+      CORD(3,5) = -0.763829D+00
+      FPMASS(5) = ZERO
+      FPNUC(5)  = ZERO
+C
+C     CHARGES
+C
+      DOMTMP(1) = .TRUE.
+      ACHG(1,1) =-8.0D+00
+      ACHG(2,1) = 8.0D+00 
+      DOMTMP(2) = .TRUE.
+      ACHG(1,2) = -0.805D+00
+      ACHG(2,2) = 1.0D+00
+      DOMTMP(3) = .TRUE.
+      ACHG(1,3) = ACHG(1,2)
+      ACHG(2,3) = ACHG(2,2)
+      DOMTMP(4) = .TRUE.
+      ACHG(1,4) = -0.195D+00
+      ACHG(2,4) = ZERO
+      DOMTMP(5) = .TRUE.
+      ACHG(1,5) = ACHG(1,4)
+      ACHG(2,5) = ACHG(2,4)
+C
+C     POLARIZABLE POINTS
+C
+      PNAME(1)   ='O1      '
+      PCORD(1,1) = ZERO
+      PCORD(2,1) = ZERO
+      PCORD(3,1) = ZERO
+      POLT(1,1)  =10.32D+00
+      POLT(2,1)  = 9.55D+00
+      POLT(3,1)  = 9.91D+00
+      POLT(4,1)  = ZERO
+      POLT(5,1)  = ZERO
+      POLT(6,1)  = ZERO
+      POLT(7,1)  = ZERO
+      POLT(8,1)  = ZERO
+      POLT(9,1)  = ZERO
+C
+C     QM-MM REPULSIVE POTENTIAL
+C
+      DO KKK=1,5
+         RNAME(  KKK) = MNAME( KKK)
+         RCORD(1,KKK) = CORD(1,KKK)
+         RCORD(2,KKK) = CORD(2,KKK)
+         RCORD(3,KKK) = CORD(3,KKK)
+      ENDDO
+      IKFR(1) = 1
+      IKLR(1) = 1
+      TCLPR(1) = 30.0D+00
+      INLPR(1) = 2
+      TZLPR(1) = 1.4D+00
+C
+      IKFR(2) = 2
+      IKLR(2) = 2
+      TCLPR(2) = -0.00085D+00
+      INLPR(2) = 2
+      TZLPR(2) = 0.1D+00
+C
+      IKFR(3) = 3
+      IKLR(3) = 3
+      TCLPR(3) = TCLPR(2)
+      INLPR(3) = INLPR(2)
+      TZLPR(3) = TZLPR(2)
+C
+      IKFR(4) = 4
+      IKLR(4) = 4
+      TCLPR(4) = 1.4D+00
+      INLPR(4) = 2
+      TZLPR(4) = 1.4D+00
+C
+      IKFR(5) = 5
+      IKLR(5) = 5
+      TCLPR(5) = TCLPR(4)
+      INLPR(5) = INLPR(4)
+      TZLPR(5) = TZLPR(4)
+C
+C     LENNARD-JONES POTENTIAL
+C     
+      LJNAME(1)   = MNAME(1)
+      CORDLJ(1,1) = CORD(1,1)
+      CORDLJ(2,1) = CORD(2,1)
+      CORDLJ(3,1) = CORD(3,1)
+C     AAA = 654500.0  BBB = 780.0
+      POTLJ(1,1)  = 3.07116046184D+00
+      POTLJ(2,1)  = 0.23239113827D+00
+C
+      RETURN
+      END
+C*MODULE EFINP   *DECK TIP5P
+      SUBROUTINE TIP5P(IFRAG,INDEX)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      PARAMETER (MXPT=2000, MXFRG=1050, MXFGPT=12000, MXIFRQ=12,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      PARAMETER (ZERO=0.0D+00)
+C
+      LOGICAL DOMTMP,DODTMP,DOQTMP,DOOTMP
+C
+      CHARACTER*8 MNAME,PNAME,RNAME,DPNAME,FNAME,LJNAME,ELJNAM
+C
+      COMMON /DOTMP / DOMTMP(MXPT),DODTMP(MXPT),DOQTMP(MXPT),
+     *                DOOTMP(MXPT)
+      COMMON /FRGSTD/ CORD(3,MXPT),PCORD(3,MXPT),POLT(9,MXPT),
+     *                DPCORD(3,MXIFRQ*MXPT),DPOLT(9,MXIFRQ*MXPT),
+     *                ACHG(2,MXPT),ADIP(3,MXPT),AQAD(6,MXPT),
+     *                AOCT(10,MXPT),AMULT(MXPT),BMULT(MXPT),
+     *                AMULT2(MXPT),BMULT2(MXPT),
+     *                RCORD(3,MXPT),TCLPR(4*MXPT),TZLPR(4*MXPT),
+     *                INLPR(4*MXPT),IKFR(MXPT),IKLR(MXPT),
+     *                MNAME(MXPT),PNAME(MXPT),RNAME(MXPT),
+     *                DPNAME(MXIFRQ,MXPT),POLSCRN(MXPT),
+     *                FCRD(3,MXPT),FNAME(MXPT),NFPNT(MXFRG)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /FRGLJP/ CORDLJ(3,MXPT),ELJCRD(3,MXFGPT),
+     *                POTLJ(2,MXPT),ELJPOT(2,MXFGPT),
+     *                LJNAME(MXPT),ELJNAM(MXFGPT),
+     *                NLJPTS(MXFRG),NLJTTPT,ILJP,NMLJ(2)
+      COMMON /FRGMSS/ FPMASS(MXPT),FMASS(MXFGPT),
+     *                FPNUC(MXPT),FGNUC(MXFGPT)
+      COMMON /POLTMP/ TCLPD(4*MXPT),TZLPD(4*MXPT),
+     *                JNLPR(4*MXPT),JKFR(MXPT),JKLR(MXPT),
+     *                NDPTS(MXFRG),NDTTPT
+C
+      IEFC = 1
+      IEFD = 0
+      IEFQ = 0
+      IEFO = 0
+      IEFP = 0
+      IREP = 1
+      ILJP = 1
+      NMLJ(1)=12
+      NMLJ(2)= 6
+      NMPTS(IFRAG)=5
+      NPPTS(IFRAG)=0
+      NRPTS(IFRAG)=5
+      NDPTS(IFRAG)=0
+      NLJPTS(IFRAG)=1
+C
+C     INITIALIZE LOCAL COMMON BLOCK FRGSTD
+C
+      CALL VCLR(CORD(1,1),1,50*MXPT)
+      DO I=1,MXPT
+         INLPR(4*(I-1)+1)=0
+         INLPR(4*(I-1)+2)=0
+         INLPR(4*(I-1)+3)=0
+         INLPR(4*(I-1)+4)=0
+         IKFR(I)=0
+         IKLR(I)=0
+         MNAME(I)='        '
+         PNAME(I)='        '
+         RNAME(I)='        '
+         LJNAME(I)='        '
+         DOMTMP(I) =  .FALSE.
+         DODTMP(I) =  .FALSE.
+         DOQTMP(I) =  .FALSE.
+         DOOTMP(I) =  .FALSE.
+      ENDDO
+C
+C     COORDINATES
+C
+      MNAME(1)  = 'O1      '
+      CORD(1,1) = ZERO
+      CORD(2,1) = ZERO
+      CORD(3,1) = ZERO
+      FPMASS(1) = 15.99491D+00
+      FPNUC(1)  = 8.0D+00
+      MNAME(2)  = 'H2      '
+      CORD(1,2) = -1.43042D+00
+      CORD(2,2) = ZERO
+      CORD(3,2) = 1.107161D+00
+      FPMASS(2) = 1.007825D+00
+      FPNUC(2)  = 1.0D+00
+      MNAME(3)  = 'H3      '
+      CORD(1,3) = 1.43042D+00
+      CORD(2,3) = ZERO
+      CORD(3,3) = 1.107161D+00
+      FPMASS(3) = 1.007825D+00
+      FPNUC(3)  = 1.0D+00
+      MNAME(4)  = 'L4      '
+      CORD(1,4) = ZERO
+      CORD(2,4) = 1.07999361D+00
+      CORD(3,4) = -0.763829D+00
+      FPMASS(4) = ZERO
+      FPNUC(4)  = ZERO
+      MNAME(5)  = 'L5      '
+      CORD(1,5) = ZERO
+      CORD(2,5) = -1.07999361D+00
+      CORD(3,5) = -0.763829D+00
+      FPMASS(5) = ZERO
+      FPNUC(5)  = ZERO
+C
+C     CHARGES
+C
+      DOMTMP(1) = .TRUE.
+      ACHG(1,1) =-8.0D+00
+      ACHG(2,1) = 8.0D+00 
+      DOMTMP(2) = .TRUE.
+      ACHG(1,2) = -0.759D+00
+      ACHG(2,2) = 1.0D+00
+      DOMTMP(3) = .TRUE.
+      ACHG(1,3) = ACHG(1,2)
+      ACHG(2,3) = ACHG(2,2)
+      DOMTMP(4) = .TRUE.
+      ACHG(1,4) = -0.241D+00
+      ACHG(2,4) = ZERO
+      DOMTMP(5) = .TRUE.
+      ACHG(1,5) = ACHG(1,4)
+      ACHG(2,5) = ACHG(2,4)
+C
+C     QM-MM REPULSIVE POTENTIAL
+C
+      DO KKK=1,5
+         RNAME(  KKK) = MNAME( KKK)
+         RCORD(1,KKK) = CORD(1,KKK)
+         RCORD(2,KKK) = CORD(2,KKK)
+         RCORD(3,KKK) = CORD(3,KKK)
+      ENDDO
+      IKFR(1) = 1
+      IKLR(1) = 1
+      TCLPR(1) = 30.0D+00
+      INLPR(1) = 2
+      TZLPR(1) = 1.4D+00
+C
+      IKFR(2) = 2
+      IKLR(2) = 2
+      TCLPR(2) = -0.00042D+00
+      INLPR(2) = 2
+      TZLPR(2) = 0.1D+00
+C
+      RNAME(3) = MNAME(3)
+      RCORD(1,3) = CORD(1,3)
+      RCORD(2,3) = CORD(2,3)
+      RCORD(3,3) = CORD(3,3)
+      IKFR(3) = 3
+      IKLR(3) = 3
+      TCLPR(3) = TCLPR(2)
+      INLPR(3) = INLPR(2)
+      TZLPR(3) = TZLPR(2)
+C
+      IKFR(4) = 4
+      IKLR(4) = 4
+      TCLPR(4) = 2.0D+00
+      INLPR(4) = 2
+      TZLPR(4) = 1.4D+00
+C
+      IKFR(5) = 5
+      IKLR(5) = 5
+      TCLPR(5) = TCLPR(4)
+      INLPR(5) = INLPR(4)
+      TZLPR(5) = TZLPR(4)
+C
+C     LENNARD-JONES POTENTIAL
+C     
+      LJNAME(1)   = 'O1      '
+      CORDLJ(1,1) = CORD(1,1)
+      CORDLJ(2,1) = CORD(2,1)
+      CORDLJ(3,1) = CORD(3,1)
+      POTLJ(1,1)  = 3.120D+00
+      POTLJ(2,1)  = 0.160D+00
+      IF(INDEX.EQ.1)THEN
+         POTLJ(1,1)  = 3.097D+00
+         POTLJ(2,1)  = 0.178D+00
+      END IF
+C
+      RETURN
+      END
+C*MODULE EFINP   *DECK SPC
+      SUBROUTINE SPC(IFRAG,INDEX)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      PARAMETER (MXPT=2000, MXFRG=1050, MXFGPT=12000, MXIFRQ=12,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      PARAMETER (ZERO=0.0D+00)
+C
+      LOGICAL DOMTMP,DODTMP,DOQTMP,DOOTMP
+C
+      CHARACTER*8 MNAME,PNAME,RNAME,DPNAME,FNAME,LJNAME,ELJNAM
+C
+      COMMON /DOTMP / DOMTMP(MXPT),DODTMP(MXPT),DOQTMP(MXPT),
+     *                DOOTMP(MXPT)
+      COMMON /FRGSTD/ CORD(3,MXPT),PCORD(3,MXPT),POLT(9,MXPT),
+     *                DPCORD(3,MXIFRQ*MXPT),DPOLT(9,MXIFRQ*MXPT),
+     *                ACHG(2,MXPT),ADIP(3,MXPT),AQAD(6,MXPT),
+     *                AOCT(10,MXPT),AMULT(MXPT),BMULT(MXPT),
+     *                AMULT2(MXPT),BMULT2(MXPT),
+     *                RCORD(3,MXPT),TCLPR(4*MXPT),TZLPR(4*MXPT),
+     *                INLPR(4*MXPT),IKFR(MXPT),IKLR(MXPT),
+     *                MNAME(MXPT),PNAME(MXPT),RNAME(MXPT),
+     *                DPNAME(MXIFRQ,MXPT),POLSCRN(MXPT),
+     *                FCRD(3,MXPT),FNAME(MXPT),NFPNT(MXFRG)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /FRGLJP/ CORDLJ(3,MXPT),ELJCRD(3,MXFGPT),
+     *                POTLJ(2,MXPT),ELJPOT(2,MXFGPT),
+     *                LJNAME(MXPT),ELJNAM(MXFGPT),
+     *                NLJPTS(MXFRG),NLJTTPT,ILJP,NMLJ(2)
+      COMMON /FRGMSS/ FPMASS(MXPT),FMASS(MXFGPT),
+     *                FPNUC(MXPT),FGNUC(MXFGPT)
+      COMMON /POLTMP/ TCLPD(4*MXPT),TZLPD(4*MXPT),
+     *                JNLPR(4*MXPT),JKFR(MXPT),JKLR(MXPT),
+     *                NDPTS(MXFRG),NDTTPT
+C
+      IEFC = 1
+      IEFD = 0
+      IEFQ = 0
+      IEFO = 0
+      IEFP = 0
+      IREP = 1
+      ILJP = 1
+      NMLJ(1)=12
+      NMLJ(2)= 6
+      NMPTS(IFRAG)=3
+      NPPTS(IFRAG)=0
+      NRPTS(IFRAG)=3
+      NDPTS(IFRAG)=0
+      NLJPTS(IFRAG)=1
+C
+C     INITIALIZE LOCAL COMMON BLOCK FRGSTD
+C
+      CALL VCLR(CORD(1,1),1,50*MXPT)
+      DO I=1,MXPT
+         INLPR(4*(I-1)+1)=0
+         INLPR(4*(I-1)+2)=0
+         INLPR(4*(I-1)+3)=0
+         INLPR(4*(I-1)+4)=0
+         IKFR(I)=0
+         IKLR(I)=0
+         MNAME(I)='        '
+         PNAME(I)='        '
+         RNAME(I)='        '
+         LJNAME(I)='        '
+         DOMTMP(I) =  .FALSE.
+         DODTMP(I) =  .FALSE.
+         DOQTMP(I) =  .FALSE.
+         DOOTMP(I) =  .FALSE.
+      ENDDO
+C
+C     COORDINATES
+C
+      MNAME(1)  = 'O1      '
+      CORD(1,1) = ZERO
+      CORD(2,1) = ZERO
+      CORD(3,1) = ZERO
+      FPMASS(1) = 15.99491D+00
+      FPNUC(1)  = 8.0D+00
+      MNAME(2)  = 'H2      '
+      CORD(1,2) = -1.5429433D+00
+      CORD(2,2) = ZERO
+      CORD(3,2) = 1.0910503D+00
+      FPMASS(2) = 1.007825D+00
+      FPNUC(2)  = 1.0D+00
+      MNAME(3)  = 'H3      '
+      CORD(1,3) = 1.5429433D+00
+      CORD(2,3) = ZERO
+      CORD(3,3) = 1.0910503D+00
+      FPMASS(3) = 1.007825D+00
+      FPNUC(3)  = 1.0D+00
+C
+C     CHARGES
+C
+      DOMTMP(1) = .TRUE.
+      ACHG(1,1) =-8.82D+00
+      IF(INDEX.EQ.1) ACHG(1,1) =-8.8476D+00
+      ACHG(2,1) = 8.00D+00 
+      DOMTMP(2) = .TRUE.
+      ACHG(1,2) = -0.59D+00
+      IF(INDEX.EQ.1) ACHG(1,2) = -0.5762D+00
+      ACHG(2,2) = 1.0D+00
+      DOMTMP(3) = .TRUE.
+      ACHG(1,3) = ACHG(1,2)
+      ACHG(2,3) = ACHG(2,2)
+C
+C     QM-MM REPULSIVE POTENTIAL
+C
+      DO KKK=1,3 
+         RNAME(  KKK) = MNAME( KKK)
+         RCORD(1,KKK) = CORD(1,KKK)
+         RCORD(2,KKK) = CORD(2,KKK)
+         RCORD(3,KKK) = CORD(3,KKK)
+      ENDDO
+      IKFR(1) = 1
+      IKLR(1) = 1
+      TCLPR(1) = 30.0D+00
+      INLPR(1) = 2
+      TZLPR(1) = 1.1D+00
+C
+      IKFR(2) = 2
+      IKLR(2) = 2
+      TCLPR(2) = -0.00033D+00
+      INLPR(2) = 2
+      TZLPR(2) = 0.1D+00
+C
+      IKFR(3) = 3
+      IKLR(3) = 3
+      TCLPR(3) = TCLPR(2)
+      INLPR(3) = INLPR(2)
+      TZLPR(3) = TZLPR(2)
+C    
+C     LENNARD-JONES POTENTIAL
+C     
+      LJNAME(1)   = 'O1      '
+      CORDLJ(1,1) = CORD(1,1)
+      CORDLJ(2,1) = CORD(2,1)
+      CORDLJ(3,1) = CORD(3,1)
+C     AAA = 629400.0   BBB = 625.50
+      POTLJ(1,1)  = 3.16555529528D+00
+      POTLJ(2,1)  = 0.15540604147D+00
+C
+      RETURN
       END

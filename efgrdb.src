@@ -1,3 +1,5 @@
+C 12 DEC 10 - HL  - ADD PERIODIC BOUNDARY CONDITION AND SWITCHING 
+C                   FUNCTION FOR QMMM SYSTEMS
 C 14 OCT 09 - MWS - PAD GAUSS-HERMITE QUADRATURE COMMON
 C 24 MAR 07 - MWS - PAD FRGINF COMMON BLOCK
 C 19 SEP 05 - IA  - SYNCHRONIZE FRGINF COMMON
@@ -51,6 +53,11 @@ C
      *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
      *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
      *                EFOCT(10,MXFGPT),FRGNME(MXFGPT)
+      COMMON /EFPPBC/ XBOX,YBOX,ZBOX,XCUT,YCUT,ZCUT,RCUT
+     *                ,SWR1,SWR2,ISWF
+      COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
+     *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
+     *                ATORQ(3,MXFRG)
       COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
      *                NPPTS(MXFRG),NPTTPT,IEFP,
      *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
@@ -300,12 +307,64 @@ C
       AAX=AA*AX
       AAY=AA*AY
       AAZ=AA*AZ
-      DO 818 IC=1,NMTTPT
+C
+      IC  = 0
+      DO 710 IFRG = 1,NFRG
+      PBCX  = ZERO
+      PBCY  = ZERO
+      PBCZ  = ZERO
+      IF(XBOX.NE.ZERO)PBCX=XBOX*ANINT(EFCENT(1,IFRG)/XBOX)
+      IF(YBOX.NE.ZERO)PBCY=YBOX*ANINT(EFCENT(2,IFRG)/YBOX)
+      IF(ZBOX.NE.ZERO)PBCZ=ZBOX*ANINT(EFCENT(3,IFRG)/ZBOX)
+      DX12  = EFCENT(1,IFRG) - PBCX
+      DY12  = EFCENT(2,IFRG) - PBCY
+      DZ12  = EFCENT(3,IFRG) - PBCZ
+      X12   = ABS(DX12)
+      Y12   = ABS(DY12)
+      Z12   = ABS(DZ12)
+      IF(X12.GT.XCUT.OR.Y12.GT.YCUT.OR.Z12.GT.ZCUT)THEN
+         IC = IC + NMPTS(IFRG)
+         GOTO 710 
+      END IF
+      R12  = X12*X12+Y12*Y12+Z12*Z12
+      IF(R12.GT.RCUT)THEN
+         IC = IC + NMPTS(IFRG)
+         GOTO 710
+      END IF
+      SWF   = 1.0D+00
+      IF(R12.GT.SWR2*SWR2) THEN
+         IC = IC + NMPTS(IFRG)
+         GO TO 710
+      ELSE IF(R12.GT.SWR1*SWR1) THEN
+         IF(ISWF.EQ.1) THEN
+            DUMY1 = 1.0D+00/(SWR2*SWR2 - SWR1*SWR1)
+            DUMY2 = DUMY1*DUMY1
+            DUMY3 = DUMY2*DUMY1
+            DUMY4 = DUMY2*DUMY2
+            DUMY5 = DUMY2*DUMY3
+            VUMY1 = R12 - SWR1*SWR1
+            VUMY2 = VUMY1*VUMY1
+            VUMY3 = VUMY2*VUMY1
+            VUMY4 = VUMY2*VUMY2
+            VUMY5 = VUMY2*VUMY3
+            SWF   = 1.0D+00 - 10.0D+00*DUMY3*VUMY3
+     *                      + 15.0D+00*DUMY4*VUMY4
+     *                      -  6.0D+00*DUMY5*VUMY5
+         ELSE IF(ISWF.EQ.2) THEN
+            R12   = SQRT(R12)
+            PIL   = 3.1415926535897932D+00/(SWR2-SWR1)
+            DUMY  = (R12 - SWR1) * PIL
+            SWF   = 0.50D+00 * (COS(DUMY) + 1.0D+00)
+         END IF
+      END IF
+C
+      DO 818 IMPTS = 1,NMPTS(IFRG)
+      IC = IC + 1
       IF(.NOT.DOMONO(IC)) GO TO 818
       ZNUC=-(EFCHG(1,IC)+EFCHG(2,IC))
-      CX=EFC(1,IC)
-      CY=EFC(2,IC)
-      CZ=EFC(3,IC)
+      CX=EFC(1,IC)-PBCX
+      CY=EFC(2,IC)-PBCY
+      CZ=EFC(3,IC)-PBCZ
       XX=AA*((AX-CX)**2+(AY-CY)**2+(AZ-CZ)**2)
 C     CALL RT123
       IF(NROOTS.LE.3)CALL RT123
@@ -343,7 +402,8 @@ C     CALL RT123
       DO 808 K=1,NROOTS
       DUM=DUM+XIN(NX+MM)*YIN(NY+MM)*ZIN(NZ+MM)
  808  MM=MM+20
- 810  G(N)=G(N)+DUM*FIJ(I)
+ 810  G(N)=G(N)+DUM*FIJ(I)*SWF
+C
 C     SUBTRACT DAMPING FUNCTION TERM.
       ALFA = EFATRM(IC)
       BETA = EFBTRM(IC)
@@ -392,8 +452,9 @@ C     CALL RT123
       DUM=DUM+XIN(NX+MM)*YIN(NY+MM)*ZIN(NZ+MM)
  816  MM=MM+20
       DAMPT = -GIJ(I) * PREI * BETA *DUM
- 817  G(N)=G(N) + DAMPT
+ 817  G(N)=G(N) + DAMPT*SWF
  818  CONTINUE
+ 710  CONTINUE
 C
 C     ----- END OF PRIMITIVE LOOPS -----
 C
@@ -577,6 +638,11 @@ C
      *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
      *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
      *                EFOCT(10,MXFGPT),FRGNME(MXFGPT)
+      COMMON /EFPPBC/ XBOX,YBOX,ZBOX,XCUT,YCUT,ZCUT,RCUT
+     *                ,SWR1,SWR2,ISWF
+      COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
+     *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
+     *                ATORQ(3,MXFRG)
       COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
      *                NPPTS(MXFRG),NPTTPT,IEFP,
      *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
@@ -826,13 +892,65 @@ C
       AAX = AA*AX
       AAY = AA*AY
       AAZ = AA*AZ
-      DO 819 IC = 1,NMTTPT
+C
+      IC  = 0
+      DO 810 IFRG = 1,NFRG
+      PBCX  = ZERO
+      PBCY  = ZERO
+      PBCZ  = ZERO
+      IF(XBOX.NE.ZERO)PBCX=XBOX*ANINT(EFCENT(1,IFRG)/XBOX)
+      IF(YBOX.NE.ZERO)PBCY=YBOX*ANINT(EFCENT(2,IFRG)/YBOX)
+      IF(ZBOX.NE.ZERO)PBCZ=ZBOX*ANINT(EFCENT(3,IFRG)/ZBOX)
+      DX12  = EFCENT(1,IFRG) - PBCX
+      DY12  = EFCENT(2,IFRG) - PBCY
+      DZ12  = EFCENT(3,IFRG) - PBCZ
+      X12   = ABS(DX12)
+      Y12   = ABS(DY12)
+      Z12   = ABS(DZ12)
+      IF(X12.GT.XCUT.OR.Y12.GT.YCUT.OR.Z12.GT.ZCUT)THEN
+         IC = IC + NMPTS(IFRG)
+         GOTO 810
+      END IF 
+      R12  = X12*X12+Y12*Y12+Z12*Z12
+      IF(R12.GT.RCUT)THEN
+         IC = IC + NMPTS(IFRG)
+         GOTO 810
+      END IF
+      SWF   = 1.0D+00
+      IF(R12.GT.SWR2*SWR2) THEN
+         IC = IC + NMPTS(IFRG)
+         GOTO 810
+      ELSE IF(R12.GT.SWR1*SWR1) THEN
+         IF(ISWF.EQ.1) THEN
+            DUMY1 = 1.0D+00/(SWR2*SWR2 - SWR1*SWR1)
+            DUMY2 = DUMY1*DUMY1
+            DUMY3 = DUMY2*DUMY1
+            DUMY4 = DUMY2*DUMY2
+            DUMY5 = DUMY2*DUMY3
+            VUMY1 = R12 - SWR1*SWR1
+            VUMY2 = VUMY1*VUMY1
+            VUMY3 = VUMY2*VUMY1
+            VUMY4 = VUMY2*VUMY2
+            VUMY5 = VUMY2*VUMY3
+            SWF   = 1.0D+00 - 10.0D+00*DUMY3*VUMY3
+     *                      + 15.0D+00*DUMY4*VUMY4
+     *                      -  6.0D+00*DUMY5*VUMY5
+         ELSE IF(ISWF.EQ.2) THEN
+            R12   = SQRT(R12)
+            PIL   = 3.1415926535897932D+00/(SWR2-SWR1)
+            DUMY  = (R12 - SWR1) * PIL
+            SWF   = 0.50D+00 * (COS(DUMY) + 1.0D+00)
+         END IF
+      END IF
+C
+      DO 819 IMPTS = 1,NMPTS(IFRG)
+      IC = IC + 1
       IF(.NOT.DODIPO(IC)) GO TO 819
       ALFA = EFATRM(IC)
       BETA = EFBTRM(IC)
-      CX = EFC(1,IC)
-      CY = EFC(2,IC)
-      CZ = EFC(3,IC)
+      CX = EFC(1,IC) - PBCX
+      CY = EFC(2,IC) - PBCY
+      CZ = EFC(3,IC) - PBCZ
       XMU = EFDIP(1,IC)
       YMU = EFDIP(2,IC)
       ZMU = EFDIP(3,IC)
@@ -886,7 +1004,7 @@ C     CALL RT123
       DUMY = DUMY+XIN(NX+MM    )*YIN(NY+MM+100)*ZIN(NZ+MM    )
       DUMZ = DUMZ+XIN(NX+MM    )*YIN(NY+MM    )*ZIN(NZ+MM+100)
   760 MM = MM+20
-      DUM = FIJ(I)
+      DUM = FIJ(I)*SWF
   780 G(N) = G(N)-DUM*(DUMX*XMU+DUMY*YMU+DUMZ*ZMU)
 C     SUBTRACT DAMPING FUNCTION TERM.
       IF (ABS(ALFA).LE.QLIM ) GO TO 818
@@ -938,10 +1056,11 @@ C     CALL RT123
       DUMY = DUMY+XIN(NX+MM    )*YIN(NY+MM+100)*ZIN(NZ+MM    )
       DUMZ = DUMZ+XIN(NX+MM    )*YIN(NY+MM    )*ZIN(NZ+MM+100)
  816  MM=MM+20
-      DAMPT = -GIJ(I) * PREI * BETA
+      DAMPT = -GIJ(I) * PREI * BETA * SWF
  817  G(N)=G(N) - DAMPT*(DUMX*XMU+DUMY*YMU+DUMZ*ZMU)
  818  CONTINUE
  819  CONTINUE
+ 810  CONTINUE
 C
 C     ----- END OF PRIMITIVE LOOPS -----
 C
@@ -1100,6 +1219,22 @@ C*MODULE EFGRDB  *DECK EFODER
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
+      PARAMETER (MXFGPT=12000)
+      COMMON /FMCOM / XX(1)
+C
+      CALL VALFM(LOADFM)
+      NEED=10*MXFGPT
+      CALL GETFM(NEED)
+      CALL EFODERX(DM,XX(LOADFM+1))
+      CALL RETFM(NEED)
+C
+      RETURN
+      END
+C*MODULE EFGRDB  *DECK EFODERX
+      SUBROUTINE EFODERX(DM,OCT)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
       CHARACTER*8 FRGNME
 C
       LOGICAL ISKIP
@@ -1112,7 +1247,7 @@ C
 C
       DIMENSION DM(*)
 C
-      DIMENSION OCT(10,MXFGPT),W4(9),W6(9)
+      DIMENSION OCT(10,*),W4(9),W6(9)
       DIMENSION ISKIP(35),INDX(70)
       DIMENSION IX(35),IY(35),IZ(35),JX(20),JY(20),JZ(20)
       DIMENSION IJG(210),IJX(210),IJY(210),IJZ(210)
@@ -1127,6 +1262,11 @@ C
      *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
      *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
      *                EFOCT(10,MXFGPT),FRGNME(MXFGPT)
+      COMMON /EFPPBC/ XBOX,YBOX,ZBOX,XCUT,YCUT,ZCUT,RCUT
+     *                ,SWR1,SWR2,ISWF
+      COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
+     *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
+     *                ATORQ(3,MXFRG)
       COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
      *                NPPTS(MXFRG),NPTTPT,IEFP,
      *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
@@ -1408,13 +1548,65 @@ C
       AAX = AA*AX
       AAY = AA*AY
       AAZ = AA*AZ
-      DO 819 IC = 1,NMTTPT
+C
+      IC  = 0
+      DO 810 IFRG = 1,NFRG
+      PBCX  = ZERO
+      PBCY  = ZERO
+      PBCZ  = ZERO
+      IF(XBOX.NE.ZERO)PBCX=XBOX*ANINT(EFCENT(1,IFRG)/XBOX)
+      IF(YBOX.NE.ZERO)PBCY=YBOX*ANINT(EFCENT(2,IFRG)/YBOX)
+      IF(ZBOX.NE.ZERO)PBCZ=ZBOX*ANINT(EFCENT(3,IFRG)/ZBOX)
+      DX12  = EFCENT(1,IFRG) - PBCX
+      DY12  = EFCENT(2,IFRG) - PBCY
+      DZ12  = EFCENT(3,IFRG) - PBCZ
+      X12   = ABS(DX12)
+      Y12   = ABS(DY12)
+      Z12   = ABS(DZ12)
+      IF(X12.GT.XCUT.OR.Y12.GT.YCUT.OR.Z12.GT.ZCUT)THEN
+         IC = IC + NMPTS(IFRG)
+         GOTO 810
+      END IF
+      R12  = X12*X12+Y12*Y12+Z12*Z12
+      IF(R12.GT.RCUT)THEN
+         IC = IC + NMPTS(IFRG)
+         GOTO 810
+      END IF
+      SWF   = 1.0D+00
+      IF(R12.GT.SWR2*SWR2) THEN
+         IC = IC + NMPTS(IFRG)
+         GOTO 810
+      ELSE IF(R12.GT.SWR1*SWR1) THEN
+         IF(ISWF.EQ.1) THEN
+            DUMY1 = 1.0D+00/(SWR2*SWR2 - SWR1*SWR1)
+            DUMY2 = DUMY1*DUMY1
+            DUMY3 = DUMY2*DUMY1
+            DUMY4 = DUMY2*DUMY2
+            DUMY5 = DUMY2*DUMY3
+            VUMY1 = R12 - SWR1*SWR1
+            VUMY2 = VUMY1*VUMY1
+            VUMY3 = VUMY2*VUMY1
+            VUMY4 = VUMY2*VUMY2
+            VUMY5 = VUMY2*VUMY3
+            SWF   = 1.0D+00 - 10.0D+00*DUMY3*VUMY3
+     *                      + 15.0D+00*DUMY4*VUMY4
+     *                      -  6.0D+00*DUMY5*VUMY5
+         ELSE IF(ISWF.EQ.2) THEN
+            R12   = SQRT(R12)
+            PIL   = 3.1415926535897932D+00/(SWR2-SWR1)
+            DUMY  = (R12 - SWR1) * PIL
+            SWF   = 0.50D+00 * (COS(DUMY) + 1.0D+00)
+         END IF
+      END IF
+C
+      DO 819 IMPTS = 1,NMPTS(IFRG)
+      IC = IC + 1
       IF(.NOT.DOOCTU(IC)) GO TO 819
       ALFA = EFATRM(IC)
       BETA = EFBTRM(IC)
-      CX = EFC(1,IC)
-      CY = EFC(2,IC)
-      CZ = EFC(3,IC)
+      CX = EFC(1,IC) - PBCX
+      CY = EFC(2,IC) - PBCY
+      CZ = EFC(3,IC) - PBCZ
       DUMA = PI212/(THREE*FIVE*(AA+ALFA))
       DO 710 I=1,IJ
       GIJ(I) = DIJ(I)*DUMA
@@ -1500,7 +1692,7 @@ C     CALL RT123
      1         -XIN(NX+MM    )*YIN(NY+MM+120)*ZIN(NZ+MM+240)*W6(K)
       DXYZ=DXYZ-XIN(NX+MM+120)*YIN(NY+MM+120)*ZIN(NZ+MM+120)*W6(K)
   760 MM = MM+20
-      DUM = FIJ(I)
+      DUM = FIJ(I)*SWF
       G(N) = G(N)-
      * DUM * ( DXXX * OCT(1,IC)
      *       + DYYY * OCT(2,IC)
@@ -1598,7 +1790,7 @@ C     CALL RT123
      1         -XIN(NX+MM    )*YIN(NY+MM+120)*ZIN(NZ+MM+240)*W6(K)
       DXYZ=DXYZ-XIN(NX+MM+120)*YIN(NY+MM+120)*ZIN(NZ+MM+120)*W6(K)
  816  MM=MM+20
-      DUM = -GIJ(I) * PREI * BETA
+      DUM = -GIJ(I) * PREI * BETA * SWF
       G(N)=G(N) -
      * DUM * ( DXXX * OCT(1,IC)
      *       + DYYY * OCT(2,IC)
@@ -1613,6 +1805,7 @@ C     CALL RT123
  817  CONTINUE
  818  CONTINUE
  819  CONTINUE
+ 810  CONTINUE
 C
 C     ----- END OF PRIMITIVE LOOPS -----
 C
@@ -1771,6 +1964,22 @@ C*MODULE EFGRDB  *DECK EFQDER
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
+      PARAMETER (MXFGPT=12000)
+      COMMON /FMCOM / XX(1)
+C
+      CALL VALFM(LOADFM)
+      NEED=6*MXFGPT
+      CALL GETFM(NEED)
+      CALL EFQDERX(DM,XX(LOADFM+1))
+      CALL RETFM(NEED)
+C
+      RETURN
+      END
+C*MODULE EFGRDB  *DECK EFQDERX
+      SUBROUTINE EFQDERX(DM,QUAD)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
       CHARACTER*8 FRGNME
 C
       LOGICAL OUT,DBG,NORM,GOPARR,DSKWRK,MASWRK,NXT
@@ -1783,7 +1992,7 @@ C
 C
       DIMENSION DM(*)
 C
-      DIMENSION QUAD(6,MXFGPT),W2(9),W4(9)
+      DIMENSION QUAD(6,*),W2(9),W4(9)
       DIMENSION ISKIP(35),INDX(70)
       DIMENSION IX(35),IY(35),IZ(35),JX(20),JY(20),JZ(20)
       DIMENSION IJG(210),IJX(210),IJY(210),IJZ(210)
@@ -1798,6 +2007,11 @@ C
      *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
      *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
      *                EFOCT(10,MXFGPT),FRGNME(MXFGPT)
+      COMMON /EFPPBC/ XBOX,YBOX,ZBOX,XCUT,YCUT,ZCUT,RCUT
+     *                ,SWR1,SWR2,ISWF
+      COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
+     *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
+     *                ATORQ(3,MXFRG)
       COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
      *                NPPTS(MXFRG),NPTTPT,IEFP,
      *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
@@ -2068,13 +2282,65 @@ C
       AAX = AA*AX
       AAY = AA*AY
       AAZ = AA*AZ
-      DO 819 IC = 1,NMTTPT
+C
+      IC  = 0
+      DO 810 IFRG = 1,NFRG
+      PBCX  = ZERO
+      PBCY  = ZERO
+      PBCZ  = ZERO
+      IF(XBOX.NE.ZERO)PBCX=XBOX*ANINT(EFCENT(1,IFRG)/XBOX)
+      IF(YBOX.NE.ZERO)PBCY=YBOX*ANINT(EFCENT(2,IFRG)/YBOX)
+      IF(ZBOX.NE.ZERO)PBCZ=ZBOX*ANINT(EFCENT(3,IFRG)/ZBOX)
+      DX12  = EFCENT(1,IFRG) - PBCX
+      DY12  = EFCENT(2,IFRG) - PBCY
+      DZ12  = EFCENT(3,IFRG) - PBCZ
+      X12   = ABS(DX12)
+      Y12   = ABS(DY12)
+      Z12   = ABS(DZ12)
+      IF(X12.GT.XCUT.OR.Y12.GT.YCUT.OR.Z12.GT.ZCUT)THEN
+         IC = IC + NMPTS(IFRG)
+         GOTO 810
+      END IF
+      R12  = X12*X12+Y12*Y12+Z12*Z12
+      IF(R12.GT.RCUT)THEN
+         IC = IC + NMPTS(IFRG)
+         GOTO 810
+      END IF
+      SWF   = 1.0D+00
+      IF(R12.GT.SWR2*SWR2) THEN
+         IC = IC + NMPTS(IFRG)
+         GOTO 810
+      ELSE IF(R12.GT.SWR1*SWR1) THEN
+         IF(ISWF.EQ.1) THEN
+            DUMY1 = 1.0D+00/(SWR2*SWR2 - SWR1*SWR1)
+            DUMY2 = DUMY1*DUMY1
+            DUMY3 = DUMY2*DUMY1
+            DUMY4 = DUMY2*DUMY2
+            DUMY5 = DUMY2*DUMY3
+            VUMY1 = R12 - SWR1*SWR1
+            VUMY2 = VUMY1*VUMY1
+            VUMY3 = VUMY2*VUMY1
+            VUMY4 = VUMY2*VUMY2
+            VUMY5 = VUMY2*VUMY3
+            SWF   = 1.0D+00 - 10.0D+00*DUMY3*VUMY3
+     *                      + 15.0D+00*DUMY4*VUMY4
+     *                      -  6.0D+00*DUMY5*VUMY5
+         ELSE IF(ISWF.EQ.2) THEN
+            R12   = SQRT(R12)
+            PIL   = 3.1415926535897932D+00/(SWR2-SWR1)
+            DUMY  = (R12 - SWR1) * PIL
+            SWF   = 0.50D+00 * (COS(DUMY) + 1.0D+00)
+         END IF
+      END IF
+C
+      DO 819 IMPTS = 1,NMPTS(IFRG)
+      IC = IC + 1
       IF(.NOT.DOQUAD(IC)) GO TO 819
       ALFA = EFATRM(IC)
       BETA = EFBTRM(IC)
-      CX = EFC(1,IC)
-      CY = EFC(2,IC)
-      CZ = EFC(3,IC)
+      CX = EFC(1,IC) - PBCX
+      CY = EFC(2,IC) - PBCY
+      CZ = EFC(3,IC) - PBCZ
       DUMA = PI212/(THREE*(AA+ALFA))
       DO 710 I=1,IJ
       GIJ(I) = DIJ(I)*DUMA
@@ -2140,7 +2406,7 @@ C     CALL RT123
       DUMXZ= DUMXZ+XIN(NX+MM+100)*YIN(NY+MM    )*ZIN(NZ+MM+100)*W4(K)
       DUMYZ= DUMYZ+XIN(NX+MM    )*YIN(NY+MM+100)*ZIN(NZ+MM+100)*W4(K)
   760 MM = MM+20
-      DUM = FIJ(I)
+      DUM = FIJ(I)*SWF
       G(N) = G(N)-
      1 DUM * ( DUMXX * QUAD(1,IC)
      2       + DUMYY * QUAD(2,IC)
@@ -2214,7 +2480,7 @@ C     CALL RT123
       DUMXZ= DUMXZ+XIN(NX+MM+100)*YIN(NY+MM    )*ZIN(NZ+MM+100)*W4(K)
       DUMYZ= DUMYZ+XIN(NX+MM    )*YIN(NY+MM+100)*ZIN(NZ+MM+100)*W4(K)
  816  MM=MM+20
-      DUM = -GIJ(I) * PREI * BETA
+      DUM = -GIJ(I) * PREI * BETA * SWF
       G(N)=G(N) -
      1 DUM * ( DUMXX * QUAD(1,IC)
      2       + DUMYY * QUAD(2,IC)
@@ -2225,6 +2491,7 @@ C     CALL RT123
  817  CONTINUE
  818  CONTINUE
  819  CONTINUE
+ 810  CONTINUE
 C
 C     ----- END OF PRIMITIVE LOOPS -----
 C

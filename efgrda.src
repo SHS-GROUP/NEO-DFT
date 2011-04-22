@@ -1,3 +1,5 @@
+C 12 DEC 10 - HL  - ADD MP2-POL GRADIENT; PERIODIC BOUNDARY CONDITION
+C                   AND SWITCHING FUNCTION FOR QMMM SYSTEM
 C 24 MAR 07 - MWS - PAD THE FRGINF,EFPPAR COMMON BLOCKS
 C 19 SEP 05 - IA  - SYNCHRONIZE FRGINF COMMON
 C  5 JUL 05 - MWS - SELECT NEW ATOM,BASIS,EFP,PCM,DAF DIMENSIONS
@@ -42,6 +44,7 @@ C
 C
       PARAMETER (MXATM=2000, MXAO=8192, MXFRG=1050, MXFGPT=12000,
      *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+      PARAMETER (ZERO=0.0D+00)
 C
       LOGICAL DOMONO,DODIPO,DOQUAD,DOOCTU
 C
@@ -54,6 +57,11 @@ C
      *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
      *                EFOCT(10,MXFGPT),FRGNME(MXFGPT)
       COMMON /EFPBUF/ POLCHG(10),NBUFMO,LBUFF(MXAO),LBF,NAPOL,IAPOL(10)
+      COMMON /EFPPBC/ XBOX,YBOX,ZBOX,XCUT,YCUT,ZCUT,RCUT
+     *                ,SWR1,SWR2,ISWF
+      COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
+     *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
+     *                ATORQ(3,MXFRG)
       COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
      *                NPPTS(MXFRG),NPTTPT,IEFP,
      *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
@@ -71,32 +79,90 @@ C     LLAT IS A COUNTER, WHILE LAT IS ATOM NUMBER
 C
        IF(NBUFMO.GT.0) NATAB=NAT-LBF
        DO 305 LLAT=1,NAT
-        LAT=LLAT
-        ZANLAT=ZAN(LAT)
+          LAT=LLAT
+          ZANLAT=ZAN(LAT)
 C
-        IF(NBUFMO.GT.0)THEN
-         IF (LLAT.GT.NATAB+NAPOL) GOTO 305
-         IF (LLAT.GT.NATAB) THEN
-            LAT=IAPOL(LLAT-NATAB)
-            ZANLAT=POLCHG(LLAT-NATAB)
-         END IF
-        END IF
+          IF(NBUFMO.GT.0)THEN
+             IF (LLAT.GT.NATAB+NAPOL) GOTO 305
+             IF (LLAT.GT.NATAB) THEN
+                LAT=IAPOL(LLAT-NATAB)
+                ZANLAT=POLCHG(LLAT-NATAB)
+             END IF
+          END IF
 C
-        DO 300 LEFC=1,NMTTPT
-         IF(.NOT.DOMONO(LEFC))GO TO 300
-         RS=(C(1,LAT)-EFC(1,LEFC))**2+(C(2,LAT)-EFC(2,LEFC))**2+
-     *      (C(3,LAT)-EFC(3,LEFC))**2
-         DAMP=-EFBTRM(LEFC)*EXP(-EFATRM(LEFC)*RS)
-         CNSTNT=ZANLAT*EFCHG(1,LEFC)*((1+DAMP)/RS+2*EFATRM(LEFC)
-     *         *DAMP)/SQRT(RS)
-         CNSTNT=CNSTNT + ZANLAT*EFCHG(2,LEFC)/(RS*SQRT(RS))
-         DO 295 LC=1,3
-          EG3(LC,LAT)=EG3(LC,LAT)+(EFC(LC,LEFC)-C(LC,LAT))*CNSTNT
-CPAUL
-          EF3(LC,LEFC)=EF3(LC,LEFC)-(EFC(LC,LEFC)-C(LC,LAT))*CNSTNT
-CPAUL
- 295     CONTINUE
- 300    CONTINUE
+          LEFC  = 0
+          DO 301 IFRG = 1,NFRG
+          PBCX  = ZERO
+          PBCY  = ZERO
+          PBCZ  = ZERO
+          IF(XBOX.NE.ZERO)PBCX=XBOX*ANINT(EFCENT(1,IFRG)/XBOX)
+          IF(YBOX.NE.ZERO)PBCY=YBOX*ANINT(EFCENT(2,IFRG)/YBOX)
+          IF(ZBOX.NE.ZERO)PBCZ=ZBOX*ANINT(EFCENT(3,IFRG)/ZBOX)
+          DX12  = EFCENT(1,IFRG) - PBCX
+          DY12  = EFCENT(2,IFRG) - PBCY
+          DZ12  = EFCENT(3,IFRG) - PBCZ
+          X12   = ABS(DX12)
+          Y12   = ABS(DY12)
+          Z12   = ABS(DZ12)
+          IF(X12.GT.XCUT.OR.Y12.GT.YCUT.OR.Z12.GT.ZCUT)THEN
+             LEFC = LEFC + NMPTS(IFRG)
+             GOTO 301
+          END IF
+          R12  = X12*X12+Y12*Y12+Z12*Z12
+          IF(R12.GT.RCUT)THEN
+             LEFC = LEFC + NMPTS(IFRG)
+             GOTO 301
+          END IF
+          SWF   = 1.0D+00
+          IF(R12.GT.SWR2*SWR2) THEN
+             LEFC = LEFC + NMPTS(IFRG)
+             GO TO 301
+          ELSE IF(R12.GT.SWR1*SWR1) THEN
+             IF(ISWF.EQ.1) THEN
+                DUMY1 = 1.0D+00/(SWR2*SWR2 - SWR1*SWR1)
+                DUMY2 = DUMY1*DUMY1
+                DUMY3 = DUMY2*DUMY1
+                DUMY4 = DUMY2*DUMY2
+                DUMY5 = DUMY2*DUMY3
+                VUMY1 = R12 - SWR1*SWR1
+                VUMY2 = VUMY1*VUMY1
+                VUMY3 = VUMY2*VUMY1
+                VUMY4 = VUMY2*VUMY2
+                VUMY5 = VUMY2*VUMY3
+                SWF   = 1.0D+00 - 10.0D+00*DUMY3*VUMY3
+     *                          + 15.0D+00*DUMY4*VUMY4
+     *                          -  6.0D+00*DUMY5*VUMY5
+             ELSE IF(ISWF.EQ.2) THEN
+                R12   = SQRT(R12)
+                PIL   = 3.1415926535897932D+00/(SWR2-SWR1)
+                DUMY  = (R12 - SWR1) * PIL
+                DUMY2 =-0.50D+00 * SIN(DUMY) * PIL / R12
+                SWF   = 0.50D+00 * (COS(DUMY) + 1.0D+00)
+             END IF
+          END IF
+C
+          DO 300 IMPTS = 1,NMPTS(IFRG)
+             LEFC = LEFC + 1
+             IF(.NOT.DOMONO(LEFC))GO TO 300
+             RS=(C(1,LAT)-EFC(1,LEFC)+PBCX)**2+
+     *          (C(2,LAT)-EFC(2,LEFC)+PBCY)**2+
+     *          (C(3,LAT)-EFC(3,LEFC)+PBCZ)**2
+             DAMP=-EFBTRM(LEFC)*EXP(-EFATRM(LEFC)*RS)
+             CNSTNT=ZANLAT*EFCHG(1,LEFC)*((1+DAMP)/RS+
+     *              2*EFATRM(LEFC)*DAMP)/SQRT(RS)
+             CNSTNT=CNSTNT + ZANLAT*EFCHG(2,LEFC)/(RS*SQRT(RS))
+             CNSTNT=CNSTNT*SWF
+             DUMDX = (EFC(1,LEFC)-PBCX-C(1,LAT))*CNSTNT
+             DUMDY = (EFC(2,LEFC)-PBCY-C(2,LAT))*CNSTNT
+             DUMDZ = (EFC(3,LEFC)-PBCZ-C(3,LAT))*CNSTNT
+             EG3(1,LAT )=EG3(1,LAT )+DUMDX
+             EG3(2,LAT )=EG3(2,LAT )+DUMDY
+             EG3(3,LAT )=EG3(3,LAT )+DUMDZ
+             EF3(1,LEFC)=EF3(1,LEFC)-DUMDX
+             EF3(2,LEFC)=EF3(2,LEFC)-DUMDY
+             EF3(3,LEFC)=EF3(3,LEFC)-DUMDZ
+ 300      CONTINUE
+ 301      CONTINUE
  305   CONTINUE
 C
       RETURN
@@ -112,6 +178,7 @@ C
 C
       PARAMETER (MXATM=2000, MXAO=8192, MXFRG=1050, MXFGPT=12000,
      *          MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+      PARAMETER (ZERO=0.0D+00)
 C
       LOGICAL DOMONO,DODIPO,DOQUAD,DOOCTU
 C
@@ -122,6 +189,8 @@ C
      *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
      *                EFOCT(10,MXFGPT),FRGNME(MXFGPT)
       COMMON /EFPBUF/ POLCHG(10),NBUFMO,LBUFF(MXAO),LBF,NAPOL,IAPOL(10)
+      COMMON /EFPPBC/ XBOX,YBOX,ZBOX,XCUT,YCUT,ZCUT,RCUT
+     *                ,SWR1,SWR2,ISWF
       COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
      *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
      *                ATORQ(3,MXFRG)
@@ -153,35 +222,98 @@ C
        END IF
 C
        LEFD=0
-       DO 120 IFRG=1,NFRG
+       DO 121 IFRG=1,NFRG
+          PBCX  = ZERO
+          PBCY  = ZERO
+          PBCZ  = ZERO
+          IF(XBOX.NE.ZERO)PBCX=XBOX*ANINT(EFCENT(1,IFRG)/XBOX)
+          IF(YBOX.NE.ZERO)PBCY=YBOX*ANINT(EFCENT(2,IFRG)/YBOX)
+          IF(ZBOX.NE.ZERO)PBCZ=ZBOX*ANINT(EFCENT(3,IFRG)/ZBOX)
+          DX12  = EFCENT(1,IFRG) - PBCX
+          DY12  = EFCENT(2,IFRG) - PBCY
+          DZ12  = EFCENT(3,IFRG) - PBCZ
+          X12   = ABS(DX12)
+          Y12   = ABS(DY12)
+          Z12   = ABS(DZ12)
+          IF(X12.GT.XCUT.OR.Y12.GT.YCUT.OR.Z12.GT.ZCUT)THEN
+             LEFD = LEFD + NMPTS(IFRG)
+             GOTO 121
+          END IF
+          R12  = X12*X12+Y12*Y12+Z12*Z12
+          IF(R12.GT.RCUT)THEN
+             LEFD = LEFD + NMPTS(IFRG)
+             GOTO 121
+          END IF
+          SWF   = 1.0D+00
+          IF(R12.GT.SWR2*SWR2) THEN
+             LEFD = LEFD + NMPTS(IFRG)
+             GOTO 121
+          ELSE IF(R12.GT.SWR1*SWR1) THEN
+             IF(ISWF.EQ.1) THEN
+                DUMY1 = 1.0D+00/(SWR2*SWR2 - SWR1*SWR1)
+                DUMY2 = DUMY1*DUMY1
+                DUMY3 = DUMY2*DUMY1
+                DUMY4 = DUMY2*DUMY2
+                DUMY5 = DUMY2*DUMY3
+                VUMY1 = R12 - SWR1*SWR1
+                VUMY2 = VUMY1*VUMY1
+                VUMY3 = VUMY2*VUMY1
+                VUMY4 = VUMY2*VUMY2
+                VUMY5 = VUMY2*VUMY3
+                SWF   = 1.0D+00 - 10.0D+00*DUMY3*VUMY3
+     *                          + 15.0D+00*DUMY4*VUMY4
+     *                          -  6.0D+00*DUMY5*VUMY5
+             ELSE IF(ISWF.EQ.2) THEN
+                R12   = SQRT(R12)
+                PIL   = 3.1415926535897932D+00/(SWR2-SWR1)
+                DUMY  = (R12 - SWR1) * PIL
+                DUMY2 =-0.50D+00 * SIN(DUMY) * PIL / R12
+                SWF   = 0.50D+00 * (COS(DUMY) + 1.0D+00)
+             END IF
+          END IF
+C
        DO 120 IIEFD=1,NMPTS(IFRG)
-       LEFD=LEFD+1
+        LEFD=LEFD+1
         IF(.NOT.DODIPO(LEFD))GO TO 120
-        RS=(C(1,LAT)-EFC(1,LEFD))**2+(C(2,LAT)-EFC(2,LEFD))**2+
-     *     (C(3,LAT)-EFC(3,LEFD))**2
+        RS=(C(1,LAT)-EFC(1,LEFD)+PBCX)**2+
+     *     (C(2,LAT)-EFC(2,LEFD)+PBCY)**2+
+     *     (C(3,LAT)-EFC(3,LEFD)+PBCZ)**2
         R3=RS*SQRT(RS)
         DAMP=EFBTRM(LEFD)*EXP(-EFATRM(LEFD)*RS)
         CNSTT1=ZANLAT*(3*(1-DAMP)/(R3*RS)-2*EFATRM(LEFD)*DAMP/R3)*
-     *         (EFDIP(1,LEFD)*(C(1,LAT)-EFC(1,LEFD))+
-     *          EFDIP(2,LEFD)*(C(2,LAT)-EFC(2,LEFD))+
-     *          EFDIP(3,LEFD)*(C(3,LAT)-EFC(3,LEFD)))
+     *         (EFDIP(1,LEFD)*(C(1,LAT)-EFC(1,LEFD)+PBCX)+
+     *          EFDIP(2,LEFD)*(C(2,LAT)-EFC(2,LEFD)+PBCY)+
+     *          EFDIP(3,LEFD)*(C(3,LAT)-EFC(3,LEFD)+PBCZ))
         CNSTT2=ZANLAT*(1-DAMP)/R3
         DO 100 LC=1,3
+         IF(LC.EQ.1) PBCLC = PBCX
+         IF(LC.EQ.2) PBCLC = PBCY
+         IF(LC.EQ.3) PBCLC = PBCZ
          CNST3(LC)=CNSTT2*EFDIP(LC,LEFD)
-         CNST4=CNSTT1*(EFC(LC,LEFD)-C(LC,LAT))
+         CNST4=CNSTT1*(EFC(LC,LEFD)-PBCLC-C(LC,LAT))
          CNST5=CNST3(LC)+CNST4
-         EG3(LC,LAT)=EG3(LC,LAT)+CNST5
-         EF3(LC,LEFD)=EF3(LC,LEFD)-CNST5
+         EG3(LC,LAT)=EG3(LC,LAT)+CNST5*SWF
+         EF3(LC,LEFD)=EF3(LC,LEFD)-CNST5*SWF
  100    CONTINUE
          DO 105 LC=1,3
-         LCM=LC-1
-         LC2=MOD(LCM+1,3)+1
-         LC3=MOD(LCM+2,3)+1
-         ATORQ(LC,IFRG)=ATORQ(LC,IFRG)+CNST3(LC2)*
-     $   (C(LC3,LAT)-EFC(LC3,LEFD))
-     $   -CNST3(LC3)*(C(LC2,LAT)-EFC(LC2,LEFD))
+            IF(LC.EQ.1) PBCLC = PBCX
+            IF(LC.EQ.2) PBCLC = PBCY
+            IF(LC.EQ.3) PBCLC = PBCZ
+            LCM=LC-1
+            LC2=MOD(LCM+1,3)+1
+            LC3=MOD(LCM+2,3)+1
+            IF(LC2.EQ.1) PBCLC2 = PBCX
+            IF(LC2.EQ.2) PBCLC2 = PBCY
+            IF(LC2.EQ.3) PBCLC2 = PBCZ
+            IF(LC3.EQ.1) PBCLC3 = PBCX
+            IF(LC3.EQ.2) PBCLC3 = PBCY
+            IF(LC3.EQ.3) PBCLC3 = PBCZ
+            ATORQ(LC,IFRG)=ATORQ(LC,IFRG)
+     *      +CNST3(LC2)*(C(LC3,LAT)-EFC(LC3,LEFD)+PBCLC3)*SWF
+     *      -CNST3(LC3)*(C(LC2,LAT)-EFC(LC2,LEFD)+PBCLC2)*SWF
  105     CONTINUE
  120   CONTINUE
+ 121   CONTINUE
  140  CONTINUE
       RETURN
       END
@@ -194,6 +326,7 @@ C
 C
       PARAMETER (MXATM=2000, MXAO=8192, MXFRG=1050, MXFGPT=12000,
      *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+      PARAMETER (ZERO=0.0D+00)
 C
       DIMENSION EG3(3,*),EF3(3,*)
 C
@@ -206,6 +339,8 @@ C
      *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
      *                EFOCT(10,MXFGPT),FRGNME(MXFGPT)
       COMMON /EFPBUF/ POLCHG(10),NBUFMO,LBUFF(MXAO),LBF,NAPOL,IAPOL(10)
+      COMMON /EFPPBC/ XBOX,YBOX,ZBOX,XCUT,YCUT,ZCUT,RCUT
+     *                ,SWR1,SWR2,ISWF
       COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
      *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
      *                ATORQ(3,MXFRG)
@@ -226,10 +361,58 @@ C     EFO - NUCLEI CONTRIBUTION TO NUCLEAR GRADIENTS.
 C
        I=0
        IF(NBUFMO.GT.0) NATAB=NAT-LBF
-       DO 380 IFRG=1,NFRG
-       DO 380 IIEFQ=1,NMPTS(IFRG)
+       DO 121 IFRG=1,NFRG
+          PBCX  = ZERO
+          PBCY  = ZERO
+          PBCZ  = ZERO
+          IF(XBOX.NE.ZERO)PBCX=XBOX*ANINT(EFCENT(1,IFRG)/XBOX)
+          IF(YBOX.NE.ZERO)PBCY=YBOX*ANINT(EFCENT(2,IFRG)/YBOX)
+          IF(ZBOX.NE.ZERO)PBCZ=ZBOX*ANINT(EFCENT(3,IFRG)/ZBOX)
+          DX12  = EFCENT(1,IFRG) - PBCX
+          DY12  = EFCENT(2,IFRG) - PBCY
+          DZ12  = EFCENT(3,IFRG) - PBCZ
+          X12   = ABS(DX12)
+          Y12   = ABS(DY12)
+          Z12   = ABS(DZ12)
+          IF(X12.GT.XCUT.OR.Y12.GT.YCUT.OR.Z12.GT.ZCUT)THEN
+             I = I + NMPTS(IFRG)
+             GOTO 121
+          END IF
+          R12  = X12*X12+Y12*Y12+Z12*Z12
+          IF(R12.GT.RCUT)THEN
+             I = I + NMPTS(IFRG)
+             GOTO 121
+          END IF
+          SWF   = 1.0D+00
+          IF(R12.GT.SWR2*SWR2) THEN
+             I = I + NMPTS(IFRG)
+             GOTO 121
+          ELSE IF(R12.GT.SWR1*SWR1) THEN
+             IF(ISWF.EQ.1) THEN
+                DUMY1 = 1.0D+00/(SWR2*SWR2 - SWR1*SWR1)
+                DUMY2 = DUMY1*DUMY1
+                DUMY3 = DUMY2*DUMY1
+                DUMY4 = DUMY2*DUMY2
+                DUMY5 = DUMY2*DUMY3
+                VUMY1 = R12 - SWR1*SWR1
+                VUMY2 = VUMY1*VUMY1
+                VUMY3 = VUMY2*VUMY1
+                VUMY4 = VUMY2*VUMY2
+                VUMY5 = VUMY2*VUMY3
+                SWF   = 1.0D+00 - 10.0D+00*DUMY3*VUMY3
+     *                          + 15.0D+00*DUMY4*VUMY4
+     *                          -  6.0D+00*DUMY5*VUMY5
+             ELSE IF(ISWF.EQ.2) THEN
+                R12   = SQRT(R12)
+                PIL   = 3.1415926535897932D+00/(SWR2-SWR1)
+                DUMY  = (R12 - SWR1) * PIL
+                DUMY2 =-0.50D+00 * SIN(DUMY) * PIL / R12
+                SWF   = 0.50D+00 * (COS(DUMY) + 1.0D+00)
+             END IF
+          END IF
+C
+       DO 380 IIEFO=1,NMPTS(IFRG)
        I=I+1
-C     DO 380 I = 1,NMTTPT
       IF(.NOT.DOOCTU(I))GO TO 380
       ALFA = EFATRM(I)
       BETA = EFBTRM(I)
@@ -276,9 +459,9 @@ C
          END IF
        END IF
 C
-      X = C(1,J) - EFC(1,I)
-      Y = C(2,J) - EFC(2,I)
-      Z = C(3,J) - EFC(3,I)
+      X = C(1,J) - EFC(1,I) + PBCX
+      Y = C(2,J) - EFC(2,I) + PBCY
+      Z = C(3,J) - EFC(3,I) + PBCZ
       XX = X*X
       YY = Y*Y
       ZZ = Z*Z
@@ -343,18 +526,21 @@ C
      *  XXZ2*(-6*ZZ)-6*XXY2*YZ+YYZ2*(-6*ZZ)-
      *  6*XYY2*XZ)/(5*R7)
 C
-      EG3(1,J)=EG3(1,J)+(CNST1*X+CNSTX+CNSTXB)
-      EG3(2,J)=EG3(2,J)+(CNST1*Y+CNSTY+CNSTYB)
-      EG3(3,J)=EG3(3,J)+(CNST1*Z+CNSTZ+CNSTZB)
-      EF3(1,I)=EF3(1,I)-(CNST1*X+CNSTX+CNSTXB)
-      EF3(2,I)=EF3(2,I)-(CNST1*Y+CNSTY+CNSTYB)
-      EF3(3,I)=EF3(3,I)-(CNST1*Z+CNSTZ+CNSTZB)
-       ATORQ(1,IFRG)=ATORQ(1,IFRG)+CNSTY*Z-CNSTZ*Y
-       ATORQ(2,IFRG)=ATORQ(2,IFRG)+CNSTZ*X-CNSTX*Z
-       ATORQ(3,IFRG)=ATORQ(3,IFRG)+CNSTX*Y-CNSTY*X
-CPAUL
+      DUMX = (CNST1*X+CNSTX+CNSTXB)*SWF
+      DUMY = (CNST1*Y+CNSTY+CNSTYB)*SWF
+      DUMZ = (CNST1*Z+CNSTZ+CNSTZB)*SWF
+      EG3(1,J)=EG3(1,J)+DUMX
+      EG3(2,J)=EG3(2,J)+DUMY
+      EG3(3,J)=EG3(3,J)+DUMZ
+      EF3(1,I)=EF3(1,I)-DUMX
+      EF3(2,I)=EF3(2,I)-DUMY
+      EF3(3,I)=EF3(3,I)-DUMZ
+       ATORQ(1,IFRG)=ATORQ(1,IFRG)+ (CNSTY*Z-CNSTZ*Y)*SWF
+       ATORQ(2,IFRG)=ATORQ(2,IFRG)+ (CNSTZ*X-CNSTX*Z)*SWF
+       ATORQ(3,IFRG)=ATORQ(3,IFRG)+ (CNSTX*Y-CNSTY*X)*SWF
  370   CONTINUE
  380   CONTINUE
+ 121   CONTINUE
       RETURN
       END
 C*MODULE EFGRDA  *DECK DNUCP
@@ -376,6 +562,8 @@ C
      *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
      *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ*MXFGPT),
      *                POLSCR(MXFGPT),IPLSCR,INDSCR
+      COMMON /EFPPBC/ XBOX,YBOX,ZBOX,XCUT,YCUT,ZCUT,RCUT
+     *                ,SWR1,SWR2,ISWF
       COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
      *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
      *                ATORQ(3,MXFRG)
@@ -386,7 +574,7 @@ C
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
      *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
 C
-      DATA PT5/0.5D+00/
+      DATA ZERO,PT5/0.0D+00,0.5D+00/
 C
 C     FIXED INDUCED DIPOLE - NUCLEI CONTRIBUTION TO NUCLEAR GRADIENTS.
 C
@@ -411,39 +599,92 @@ C
 C
        LEFP=0
        DO 120 IFRG=1,NFRG
+       PBCX  = ZERO
+       PBCY  = ZERO
+       PBCZ  = ZERO
+       IF(XBOX.NE.ZERO)PBCX=XBOX*ANINT(EFCENT(1,IFRG)/XBOX)
+       IF(YBOX.NE.ZERO)PBCY=YBOX*ANINT(EFCENT(2,IFRG)/YBOX)
+       IF(ZBOX.NE.ZERO)PBCZ=ZBOX*ANINT(EFCENT(3,IFRG)/ZBOX)
+       DX12  = EFCENT(1,IFRG) - PBCX
+       DY12  = EFCENT(2,IFRG) - PBCY
+       DZ12  = EFCENT(3,IFRG) - PBCZ
+       X12   = ABS(DX12)
+       Y12   = ABS(DY12)
+       Z12   = ABS(DZ12)
+       R12   = X12*X12+Y12*Y12+Z12*Z12
+       SWF   = 1.0D+00
+       IF(R12.GT.RCUT)THEN
+          SWF   = ZERO
+       END IF
+       IF(R12.GT.SWR2*SWR2) THEN
+          SWF   = ZERO
+       ELSE IF(R12.GT.SWR1*SWR1) THEN
+          IF(ISWF.EQ.1) THEN
+             DUMY1 = 1.0D+00/(SWR2*SWR2 - SWR1*SWR1)
+             DUMY2 = DUMY1*DUMY1
+             DUMY3 = DUMY2*DUMY1
+             DUMY4 = DUMY2*DUMY2
+             DUMY5 = DUMY2*DUMY3
+             VUMY1 = R12 - SWR1*SWR1
+             VUMY2 = VUMY1*VUMY1
+             VUMY3 = VUMY2*VUMY1
+             VUMY4 = VUMY2*VUMY2
+             VUMY5 = VUMY2*VUMY3
+             SWF   = 1.0D+00 - 10.0D+00*DUMY3*VUMY3
+     *                       + 15.0D+00*DUMY4*VUMY4
+     *                       -  6.0D+00*DUMY5*VUMY5
+          ELSE IF(ISWF.EQ.2) THEN
+             R12   = SQRT(R12)
+             PIL   = 3.1415926535897932D+00/(SWR2-SWR1)
+             DUMY  = (R12 - SWR1) * PIL
+             DUMY2 =-0.50D+00 * SIN(DUMY) * PIL / R12
+             SWF   = 0.50D+00 * (COS(DUMY) + 1.0D+00)
+          END IF
+       END IF
+C
        DO 120 IIEFD=1,NPPTS(IFRG)
-       LEFP=LEFP+1
-         RS=(C(1,LAT)-EFP(1,LEFP))**2+(C(2,LAT)-EFP(2,LEFP))**2+
-     *      (C(3,LAT)-EFP(3,LEFP))**2
+         LEFP=LEFP+1
+         RS=(C(1,LAT)-EFP(1,LEFP)+PBCX)**2+
+     *      (C(2,LAT)-EFP(2,LEFP)+PBCY)**2+
+     *      (C(3,LAT)-EFP(3,LEFP)+PBCZ)**2
          R3=RS*SQRT(RS)
          CNSTT1=ZANLAT*3*
-     *       PT5*((DIND(1,LEFP)+DINDD(1,LEFP))*(C(1,LAT)-EFP(1,LEFP))+
-     *           (DIND(2,LEFP)+DINDD(2,LEFP))*(C(2,LAT)-EFP(2,LEFP))+
-     *           (DIND(3,LEFP)+DINDD(3,LEFP))*(C(3,LAT)-EFP(3,LEFP)))
+     *       PT5*((DIND(1,LEFP)+DINDD(1,LEFP))
+     *               *(C(1,LAT)-EFP(1,LEFP)+PBCX)+
+     *           (DIND(2,LEFP)+DINDD(2,LEFP))
+     *               *(C(2,LAT)-EFP(2,LEFP)+PBCY)+
+     *           (DIND(3,LEFP)+DINDD(3,LEFP))
+     *               *(C(3,LAT)-EFP(3,LEFP)+PBCZ))
      *           /(R3*RS)
-C    *       ((DIND(1,LEFP))*(C(1,LAT)-EFP(1,LEFP))+
-C    *           (DIND(2,LEFP))*(C(2,LAT)-EFP(2,LEFP))+
-C    *           (DIND(3,LEFP))*(C(3,LAT)-EFP(3,LEFP)))
-C    *           /(R3*RS)
          CNSTT2=ZANLAT/R3
 C
          DO 100 LC=1,3
-         CNST3(LC)=CNSTT2*PT5*(DIND(LC,LEFP)+DINDD(LC,LEFP))
-C        CNST3(LC)=CNSTT2*DIND(LC,LEFP)
-         CNST4=CNSTT1*(EFP(LC,LEFP)-C(LC,LAT))
-         CNST5=CNST3(LC)+CNST4
-         EG3(LC,LAT)=EG3(LC,LAT)+CNST5
-CPAUL
-          LEFPP=LEFP+NMTTPT
-         EF3(LC,LEFPP)=EF3(LC,LEFPP)-CNST5
+            IF(LC.EQ.1) PBCLC = PBCX
+            IF(LC.EQ.2) PBCLC = PBCY
+            IF(LC.EQ.3) PBCLC = PBCZ
+            CNST3(LC)=CNSTT2*PT5*(DIND(LC,LEFP)+DINDD(LC,LEFP))
+            CNST4=CNSTT1*(EFP(LC,LEFP)-PBCLC-C(LC,LAT))
+            CNST5=CNST3(LC)+CNST4
+            EG3(LC,LAT)=EG3(LC,LAT)+CNST5*SWF
+            LEFPP=LEFP+NMTTPT
+            EF3(LC,LEFPP)=EF3(LC,LEFPP)-CNST5*SWF
  100     CONTINUE
          DO 105 LC=1,3
-         LCM=LC-1
-         LC2=MOD(LCM+1,3)+1
-         LC3=MOD(LCM+2,3)+1
-         ATORQ(LC,IFRG)=ATORQ(LC,IFRG)+CNST3(LC2)*
-     $   (C(LC3,LAT)-EFP(LC3,LEFP))
-     $   -CNST3(LC3)*(C(LC2,LAT)-EFP(LC2,LEFP))
+            IF(LC.EQ.1) PBCLC = PBCX
+            IF(LC.EQ.2) PBCLC = PBCY
+            IF(LC.EQ.3) PBCLC = PBCZ
+            LCM=LC-1
+            LC2=MOD(LCM+1,3)+1
+            LC3=MOD(LCM+2,3)+1
+            IF(LC2.EQ.1) PBCLC2 = PBCX
+            IF(LC2.EQ.2) PBCLC2 = PBCY
+            IF(LC2.EQ.3) PBCLC2 = PBCZ
+            IF(LC3.EQ.1) PBCLC3 = PBCX
+            IF(LC3.EQ.2) PBCLC3 = PBCY
+            IF(LC3.EQ.3) PBCLC3 = PBCZ
+            ATORQ(LC,IFRG)=ATORQ(LC,IFRG)
+     *      +CNST3(LC2)*(C(LC3,LAT)-EFP(LC3,LEFP)+PBCLC3)*SWF
+     *      -CNST3(LC3)*(C(LC2,LAT)-EFP(LC2,LEFP)+PBCLC2)*SWF
  105     CONTINUE
  120    CONTINUE
  140   CONTINUE
@@ -458,10 +699,13 @@ C
 C
       CHARACTER*8 FRGNME
 C
+      DIMENSION EG3(3,*),EF3(3,*)
+C
       LOGICAL DOMONO,DODIPO,DOQUAD,DOOCTU
 C
       PARAMETER (MXATM=2000, MXAO=8192, MXFRG=1050, MXFGPT=12000,
      *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+      PARAMETER (ZERO=0.0D+00)
 C
       COMMON /DOMULT/ DOMONO(MXFGPT),DODIPO(MXFGPT),DOQUAD(MXFGPT),
      *                DOOCTU(MXFGPT)
@@ -470,6 +714,8 @@ C
      *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
      *                EFOCT(10,MXFGPT),FRGNME(MXFGPT)
       COMMON /EFPBUF/ POLCHG(10),NBUFMO,LBUFF(MXAO),LBF,NAPOL,IAPOL(10)
+      COMMON /EFPPBC/ XBOX,YBOX,ZBOX,XCUT,YCUT,ZCUT,RCUT
+     *                ,SWR1,SWR2,ISWF
       COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
      *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
      *                ATORQ(3,MXFRG)
@@ -480,17 +726,60 @@ C
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
      *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
 C
-      DIMENSION EG3(3,*),EF3(3,*)
-C
 C     EFQ - NUCLEI CONTRIBUTION TO NUCLEAR GRADIENTS.
 C
-C     DO 55 LC=1,3
-C     DO 55 IFRG=1,NFRG
-C     TORQN(LC,IFRG)=ZERO
-C55   CONTINUE
        IF(NBUFMO.GT.0) NATAB=NAT-LBF
        LEFQ=0
-       DO 120 IFRG=1,NFRG
+       DO 121 IFRG=1,NFRG
+          PBCX  = ZERO
+          PBCY  = ZERO
+          PBCZ  = ZERO
+          IF(XBOX.NE.ZERO)PBCX=XBOX*ANINT(EFCENT(1,IFRG)/XBOX)
+          IF(YBOX.NE.ZERO)PBCY=YBOX*ANINT(EFCENT(2,IFRG)/YBOX)
+          IF(ZBOX.NE.ZERO)PBCZ=ZBOX*ANINT(EFCENT(3,IFRG)/ZBOX)
+          DX12  = EFCENT(1,IFRG) - PBCX
+          DY12  = EFCENT(2,IFRG) - PBCY
+          DZ12  = EFCENT(3,IFRG) - PBCZ
+          X12   = ABS(DX12)
+          Y12   = ABS(DY12)
+          Z12   = ABS(DZ12)
+          IF(X12.GT.XCUT.OR.Y12.GT.YCUT.OR.Z12.GT.ZCUT)THEN
+             LEFQ = LEFQ + NMPTS(IFRG)
+             GOTO 121
+          END IF
+          R12  = X12*X12+Y12*Y12+Z12*Z12
+          IF(R12.GT.RCUT)THEN
+             LEFQ = LEFQ + NMPTS(IFRG)
+             GOTO 121
+          END IF
+          SWF   = 1.0D+00
+          IF(R12.GT.SWR2*SWR2) THEN
+             LEFQ = LEFQ + NMPTS(IFRG)
+             GOTO 121
+          ELSE IF(R12.GT.SWR1*SWR1) THEN
+             IF(ISWF.EQ.1) THEN
+                DUMY1 = 1.0D+00/(SWR2*SWR2 - SWR1*SWR1)
+                DUMY2 = DUMY1*DUMY1
+                DUMY3 = DUMY2*DUMY1
+                DUMY4 = DUMY2*DUMY2
+                DUMY5 = DUMY2*DUMY3
+                VUMY1 = R12 - SWR1*SWR1
+                VUMY2 = VUMY1*VUMY1
+                VUMY3 = VUMY2*VUMY1
+                VUMY4 = VUMY2*VUMY2
+                VUMY5 = VUMY2*VUMY3
+                SWF   = 1.0D+00 - 10.0D+00*DUMY3*VUMY3
+     *                          + 15.0D+00*DUMY4*VUMY4
+     *                          -  6.0D+00*DUMY5*VUMY5
+             ELSE IF(ISWF.EQ.2) THEN
+                R12   = SQRT(R12)
+                PIL   = 3.1415926535897932D+00/(SWR2-SWR1)
+                DUMY  = (R12 - SWR1) * PIL
+                DUMY2 =-0.50D+00 * SIN(DUMY) * PIL / R12
+                SWF   = 0.50D+00 * (COS(DUMY) + 1.0D+00)
+             END IF
+          END IF
+C
        DO 120 IIEFQ=1,NMPTS(IFRG)
        LEFQ=LEFQ+1
        IF(.NOT.DOQUAD(LEFQ))GO TO 120
@@ -524,17 +813,13 @@ C
          END IF
        END IF
 C
-        DX=C(1,LAT)-EFC(1,LEFQ)
-        DY=C(2,LAT)-EFC(2,LEFQ)
-        DZ=C(3,LAT)-EFC(3,LEFQ)
+        DX=C(1,LAT)-EFC(1,LEFQ) + PBCX
+        DY=C(2,LAT)-EFC(2,LEFQ) + PBCY
+        DZ=C(3,LAT)-EFC(3,LEFQ) + PBCZ
         RS=DX*DX+DY*DY+DZ*DZ
         R5=RS*RS*SQRT(RS)
         R7=RS*R5
         DAMP=EFBTRM(LEFQ)*EXP(-EFATRM(LEFQ)*RS)
-C       CNSTNT=ZANLAT*((2*EFATRM(LEFQ)*DAMP/R5-5*(1-DAMP)/R7)
-C    &        *(QXX*(3*DX*DX-RS)+QYY*(3*DY*DY-RS)+QZZ*(3*DZ*DZ-RS)
-C    &         +QXY*6*DX*DY+QXZ*6*DX*DZ+QYZ*6*DY*DZ)/3
-C    &       -(1-DAMP)*(QXX*2+QYY*2+QZZ*2)/(3*R5))
         CNSTNT=ZANLAT*((2*EFATRM(LEFQ)*DAMP/R5-5*(1-DAMP)/R7)
      *        *(QXX*(3*DX*DX)+QYY*(3*DY*DY)+QZZ*(3*DZ*DZ)
      *         +QXY*6*DX*DY+QXZ*6*DX*DZ+QYZ*6*DY*DZ)/3
@@ -543,17 +828,21 @@ C    &       -(1-DAMP)*(QXX*2+QYY*2+QZZ*2)/(3*R5))
         CNSTX=CNSTR*(QXX*DX+QXY*DY+QXZ*DZ)
         CNSTY=CNSTR*(QXY*DX+QYY*DY+QYZ*DZ)
         CNSTZ=CNSTR*(QXZ*DX+QYZ*DY+QZZ*DZ)
-        EG3(1,LAT)=EG3(1,LAT)+CNSTNT*DX+CNSTX
-        EG3(2,LAT)=EG3(2,LAT)+CNSTNT*DY+CNSTY
-        EG3(3,LAT)=EG3(3,LAT)+CNSTNT*DZ+CNSTZ
-        EF3(1,LEFQ)=EF3(1,LEFQ)-CNSTNT*DX-CNSTX
-        EF3(2,LEFQ)=EF3(2,LEFQ)-CNSTNT*DY-CNSTY
-        EF3(3,LEFQ)=EF3(3,LEFQ)-CNSTNT*DZ-CNSTZ
-       ATORQ(1,IFRG)=ATORQ(1,IFRG)+CNSTY*DZ-CNSTZ*DY
-       ATORQ(2,IFRG)=ATORQ(2,IFRG)+CNSTZ*DX-CNSTX*DZ
-       ATORQ(3,IFRG)=ATORQ(3,IFRG)+CNSTX*DY-CNSTY*DX
+        DUMX = (CNSTNT*DX+CNSTX)*SWF
+        DUMY = (CNSTNT*DY+CNSTY)*SWF
+        DUMZ = (CNSTNT*DZ+CNSTZ)*SWF
+        EG3(1,LAT)=EG3(1,LAT)+ DUMX
+        EG3(2,LAT)=EG3(2,LAT)+ DUMY
+        EG3(3,LAT)=EG3(3,LAT)+ DUMZ
+        EF3(1,LEFQ)=EF3(1,LEFQ)-DUMX
+        EF3(2,LEFQ)=EF3(2,LEFQ)-DUMY
+        EF3(3,LEFQ)=EF3(3,LEFQ)-DUMZ
+        ATORQ(1,IFRG)=ATORQ(1,IFRG)+ (CNSTY*DZ-CNSTZ*DY)*SWF
+        ATORQ(2,IFRG)=ATORQ(2,IFRG)+ (CNSTZ*DX-CNSTX*DZ)*SWF
+        ATORQ(3,IFRG)=ATORQ(3,IFRG)+ (CNSTX*DY-CNSTY*DX)*SWF
  100   CONTINUE
  120  CONTINUE
+ 121  CONTINUE
       RETURN
       END
 C*MODULE EFGRDA  *DECK EFPDER
@@ -584,6 +873,11 @@ C
      *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
      *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ*MXFGPT),
      *                POLSCR(MXFGPT),IPLSCR,INDSCR
+      COMMON /EFPPBC/ XBOX,YBOX,ZBOX,XCUT,YCUT,ZCUT,RCUT
+     *                ,SWR1,SWR2,ISWF
+      COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
+     *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
+     *                ATORQ(3,MXFRG)
       COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
      *                NPPTS(MXFRG),NPTTPT,IEFP,
      *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
@@ -833,10 +1127,63 @@ C
       AAX = AA*AX
       AAY = AA*AY
       AAZ = AA*AZ
-      DO 819 IC = 1,NPTTPT
-      CX = EFP(1,IC)
-      CY = EFP(2,IC)
-      CZ = EFP(3,IC)
+C
+      IC = 0
+      DO 818 IFRG=1,NFRG
+      PBCX  = ZERO
+      PBCY  = ZERO
+      PBCZ  = ZERO
+      IF(XBOX.NE.ZERO)PBCX=XBOX*ANINT(EFCENT(1,IFRG)/XBOX)
+      IF(YBOX.NE.ZERO)PBCY=YBOX*ANINT(EFCENT(2,IFRG)/YBOX)
+      IF(ZBOX.NE.ZERO)PBCZ=ZBOX*ANINT(EFCENT(3,IFRG)/ZBOX)
+      DX12  = EFCENT(1,IFRG) - PBCX
+      DY12  = EFCENT(2,IFRG) - PBCY
+      DZ12  = EFCENT(3,IFRG) - PBCZ
+      X12   = ABS(DX12)
+      Y12   = ABS(DY12)
+      Z12   = ABS(DZ12)
+      IF(X12.GT.XCUT.OR.Y12.GT.YCUT.OR.Z12.GT.ZCUT)THEN
+         IC = IC + NPPTS(IFRG)
+         GOTO 818
+      END IF
+      R12  = X12*X12+Y12*Y12+Z12*Z12
+      IF(R12.GT.RCUT)THEN
+         IC = IC + NPPTS(IFRG)
+         GOTO 818
+      END IF
+      SWF   = 1.0D+00
+      IF(R12.GT.SWR2*SWR2) THEN
+         IC = IC + NPPTS(IFRG)
+         GO TO 818
+      ELSE IF(R12.GT.SWR1*SWR1) THEN
+         IF(ISWF.EQ.1) THEN
+            DUMY1 = 1.0D+00/(SWR2*SWR2 - SWR1*SWR1)
+            DUMY2 = DUMY1*DUMY1
+            DUMY3 = DUMY2*DUMY1
+            DUMY4 = DUMY2*DUMY2
+            DUMY5 = DUMY2*DUMY3
+            VUMY1 = R12 - SWR1*SWR1
+            VUMY2 = VUMY1*VUMY1
+            VUMY3 = VUMY2*VUMY1
+            VUMY4 = VUMY2*VUMY2
+            VUMY5 = VUMY2*VUMY3
+            SWF   = 1.0D+00 - 10.0D+00*DUMY3*VUMY3
+     *                      + 15.0D+00*DUMY4*VUMY4
+     *                      -  6.0D+00*DUMY5*VUMY5
+         ELSE IF(ISWF.EQ.2) THEN
+            R12   = SQRT(R12)
+            PIL   = 3.1415926535897932D+00/(SWR2-SWR1)
+            DUMY  = (R12 - SWR1) * PIL
+            DUMY2 =-0.50D+00 * SIN(DUMY) * PIL / R12
+            SWF   = 0.50D+00 * (COS(DUMY) + 1.0D+00)
+         END IF
+      END IF
+C
+      DO 819 IPPTS = 1,NPPTS(IFRG)
+      IC = IC + 1
+      CX = EFP(1,IC) - PBCX
+      CY = EFP(2,IC) - PBCY
+      CZ = EFP(3,IC) - PBCZ
       XMU = PT5*(DIND(1,IC)+DINDD(1,IC))
       YMU = PT5*(DIND(2,IC)+DINDD(2,IC))
       ZMU = PT5*(DIND(3,IC)+DINDD(3,IC))
@@ -886,9 +1233,10 @@ C     CALL RT123
       DUMY = DUMY+XIN(NX+MM    )*YIN(NY+MM+100)*ZIN(NZ+MM    )
       DUMZ = DUMZ+XIN(NX+MM    )*YIN(NY+MM    )*ZIN(NZ+MM+100)
   760 MM = MM+20
-      DUM = FIJ(I)
+      DUM = FIJ(I)*SWF
   780 G(N) = G(N)-DUM*(DUMX*XMU+DUMY*YMU+DUMZ*ZMU)
  819  CONTINUE
+ 818  CONTINUE
 C
 C     ----- END OF PRIMITIVE LOOPS -----
 C
@@ -1047,14 +1395,21 @@ C*MODULE EFGRDA  *DECK FRGDER
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
-      LOGICAL GOPARR,DSKWRK,MASWRK
+      CHARACTER*8 POLNAM,DPOLNAM
+C
+      LOGICAL GOPARR,DSKWRK,MASWRK,MP2POL
 C
       DIMENSION DTOT(L2)
 C
-      PARAMETER (MXFRG=1050, MXFGPT=12000,
+      PARAMETER (MXFRG=1050, MXFGPT=12000,MXIFRQ=12,
      *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12 )
 C
-      COMMON /EFPOTD/ METHOF,ISCCHG,MOVE
+      COMMON /EFPOTD/ METHPOL,ISCCHG,MOVE
+      COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
+     *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
+     *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
+     *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ*MXFGPT),
+     *                POLSCR(MXFGPT),IPLSCR,INDSCR
       COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG)
      *                ,EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG)
      *                ,ATORQ(3,MXFRG)
@@ -1064,13 +1419,19 @@ C
      *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
      *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
       COMMON /IOFILE/ IR,IW,IP,IJK,IPK,IDAF,NAV,IODA(950)
+      COMMON /MPDIPL/ DINDMP(3,MXFGPT),DINDDMP(3,MXFGPT)
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
       COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
       COMMON /SIMDAT/ NACC,NREJ,IGOMIN,NRPA,IBWM,NACCT,NREJT,NRPAT,
      *                NPRTGO,IDPUNC,IGOFLG
+      COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
+     *                MPLEVL,MPCTYP
 C
       PARAMETER (ONE=1.0D+00)
       DATA CHECK/8HCHECK    /
+      DATA RHF,UHF,ROHF/8HRHF     ,8HUHF     ,8HROHF    /
+C
+      MP2POL=MPLEVL.EQ.2
 C
 C     ----- GRADIENT FOR EFFECTIVE FRAGMENT RUNS -----
 C
@@ -1093,13 +1454,52 @@ C
       IF(GOPARR) CALL DSCAL(3*NFRG,ONE/NPROC,ATORQ,1)
 C
 C     ----- GET EFFECTIVE FRAGMENT DERIVATIVES -----
+C           FORCES ON QM ATOMS (ELECTRONS)
+C
+C     - MP2-POL NOTE: DTOT = DEN + P(2)
+C       EQ(14) 1ST TERM (WHOLE TERM DONE IN EFPDER, EFPDEF, EFTORP)
 C
       IF(IEFC.EQ.1) CALL EFCDER(DTOT)
       IF(IEFD.EQ.1) CALL EFDDER(DTOT)
       IF(IEFQ.EQ.1) CALL EFQDER(DTOT)
       IF(IEFO.EQ.1) CALL EFODER(DTOT)
-      IF(IEFP.EQ.1) CALL EFPDER(DTOT)
       IF(IREP.EQ.1) CALL REPDER(DTOT)
+      IF(IEFP.EQ.1) CALL EFPDER(DTOT)
+C
+C     - EQ(14) 4TH TERM (ELECTRONIC TERM ONLY)
+      IF(IEFP.EQ.1.AND.MP2POL) THEN
+         CALL VALFM(LOADFM)
+         LDINDSV  = LOADFM   + 1
+         LDINDDSV = LDINDSV  + 3*NPTTPT
+         LDTOTSV  = LDINDDSV + 3*NPTTPT
+         LAST     = LDTOTSV  + L2
+         NEEDMP   = LAST - LOADFM - 1
+         CALL GETFM(NEEDMP)
+         CALL DCOPY(3*NPTTPT,DIND ,1,X(LDINDSV) ,1)
+         CALL DCOPY(3*NPTTPT,DINDD,1,X(LDINDDSV),1)
+         CALL DCOPY(L2,DTOT,1,X(LDTOTSV),1)
+C
+         CALL DCOPY(3*NPTTPT,DINDMP ,1,DIND ,1)
+         CALL DCOPY(3*NPTTPT,DINDDMP,1,DINDD,1)
+C          - WE NEED HF DENSITY
+         IF(SCFTYP.EQ.RHF .OR. SCFTYP.EQ.ROHF) THEN
+            CALL DAREAD(IDAF,IODA,DTOT,L2,308,0)
+         ELSE IF (SCFTYP.EQ.UHF) THEN
+            CALL VALFM(LOADFM)
+            LDENB = LOADFM + 1
+            LAST  = LDENB  + L2
+            NEEDX = LAST - LOADFM - 1
+            CALL GETFM(NEEDX)
+            CALL DAREAD(IDAF,IODA,DTOT,L2,418,0)
+            CALL DAREAD(IDAF,IODA,X(LDENB),L2,428,0)
+            CALL VADD(DTOT,1,X(LDENB),1,DTOT,1,L2)
+            CALL RETFM(NEEDX)
+         END IF
+         CALL EFPDER(DTOT)
+         CALL DCOPY(3*NPTTPT,X(LDINDSV) ,1,DIND ,1)
+         CALL DCOPY(3*NPTTPT,X(LDINDDSV),1,DINDD,1)
+         CALL DCOPY(L2,X(LDTOTSV),1,DTOT,1)
+      END IF
 C
 C     IF THE POSITION OF FRAGMENTS IF FIXED, SAVE CPU BU SKIPPING
 C     THE GRADIENT WITH RESPECT TO FRAGMENT AND TORQUE
@@ -1107,6 +1507,7 @@ C
       IF(MOVE.EQ.0)GOTO 200
 C
 C     ----- GRADIENT WITH RESPECT TO FRAGMENT -----
+C           FORCES/TORQUES ON EFP
 C
       IF(MASWRK .AND. NPRTGO.NE.2) WRITE(IW,*)
      *      'READY TO DO 1E- PART OF GRAD WRT FRAGMENT'
@@ -1120,7 +1521,32 @@ C
       IF(IEFQ.EQ.1) CALL EFQTOR(DTOT,X(LCH),L4)
       IF(IEFO.EQ.1) CALL EFTORO(DTOT,X(LCH),L4)
       IF(IEFP.EQ.1) CALL EFTORP(DTOT,X(LCH),L4)
+C
+      IF(IEFP.EQ.1.AND.MP2POL) THEN
+         CALL DCOPY(3*NPTTPT,DINDMP ,1,DIND ,1)
+         CALL DCOPY(3*NPTTPT,DINDDMP,1,DINDD,1)
+C          - WE NEED HF DENSITY
+         IF(SCFTYP.EQ.RHF .OR. SCFTYP.EQ.ROHF) THEN
+            CALL DAREAD(IDAF,IODA,DTOT,L2,308,0)
+         ELSE IF (SCFTYP.EQ.UHF) THEN
+            CALL VALFM(LOADFM)
+            LDENB = LOADFM + 1
+            LAST  = LDENB  + L2
+            NEEDX = LAST - LOADFM - 1
+            CALL GETFM(NEEDX)
+            CALL DAREAD(IDAF,IODA,DTOT,L2,418,0)
+            CALL DAREAD(IDAF,IODA,X(LDENB),L2,428,0)
+            CALL VADD(DTOT,1,X(LDENB),1,DTOT,1,L2)
+            CALL RETFM(NEEDX)
+         END IF
+         CALL EFTORP(DTOT,X(LCH),L4)
+         CALL EFPDEF(DTOT,X(LCH),L4)
+         CALL DCOPY(3*NPTTPT,X(LDINDSV) ,1,DIND ,1)
+         CALL DCOPY(3*NPTTPT,X(LDINDDSV),1,DINDD,1)
+         CALL DCOPY(L2,X(LDTOTSV),1,DTOT,1)
+      END IF
   200 CONTINUE
+      IF(IEFP.EQ.1.AND.MP2POL) CALL RETFM(NEEDMP)
 C
 C        SUM CONTRIBUTIONS FROM ALL NODES FOR PARALLEL RUNS
 C
@@ -1147,6 +1573,11 @@ C
 C
       COMMON /DSTV  / XINT,YINT,ZINT,T,X0,Y0,Z0,XI,YI,ZI,
      *                XJ,YJ,ZJ,NI,NJ,CX,CY,CZ
+      COMMON /EFPPBC/ XBOX,YBOX,ZBOX,XCUT,YCUT,ZCUT,RCUT
+     *                ,SWR1,SWR2,ISWF
+      COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG)
+     *                ,EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG)
+     *                ,ATORQ(3,MXFRG)
       COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
      *                NPPTS(MXFRG),NPTTPT,IEFP,
      *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
@@ -1401,10 +1832,62 @@ C
       AAY = AA*AY
       AAZ = AA*AZ
 C
-      DO 780 IC = 1,NRTTPT
-      CX   =CREP(1,IC)
-      CY   =CREP(2,IC)
-      CZ   =CREP(3,IC)
+      IC = 0
+      DO 781 IFRG = 1,NFRG
+      PBCX  = ZERO
+      PBCY  = ZERO
+      PBCZ  = ZERO
+      IF(XBOX.NE.ZERO)PBCX=XBOX*ANINT(EFCENT(1,IFRG)/XBOX)
+      IF(YBOX.NE.ZERO)PBCY=YBOX*ANINT(EFCENT(2,IFRG)/YBOX)
+      IF(ZBOX.NE.ZERO)PBCZ=ZBOX*ANINT(EFCENT(3,IFRG)/ZBOX)
+      DX12  = EFCENT(1,IFRG) - PBCX
+      DY12  = EFCENT(2,IFRG) - PBCY
+      DZ12  = EFCENT(3,IFRG) - PBCZ
+      X12   = ABS(DX12)
+      Y12   = ABS(DY12)
+      Z12   = ABS(DZ12)
+      IF(X12.GT.XCUT.OR.Y12.GT.YCUT.OR.Z12.GT.ZCUT)THEN
+         IC = IC + NRPTS(IFRG)
+         GOTO 781 
+      END IF
+      R12  = X12*X12+Y12*Y12+Z12*Z12
+      IF(R12.GT.RCUT)THEN
+         IC = IC + NRPTS(IFRG)
+         GOTO 781
+      END IF
+      SWF   = 1.0D+00
+      IF(R12.GT.SWR2*SWR2) THEN
+         IC = IC + NRPTS(IFRG)
+         GO TO 781
+      ELSE IF(R12.GT.SWR1*SWR1) THEN
+         IF(ISWF.EQ.1) THEN
+            DUMY1 = 1.0D+00/(SWR2*SWR2 - SWR1*SWR1)
+            DUMY2 = DUMY1*DUMY1
+            DUMY3 = DUMY2*DUMY1
+            DUMY4 = DUMY2*DUMY2
+            DUMY5 = DUMY2*DUMY3
+            VUMY1 = R12 - SWR1*SWR1
+            VUMY2 = VUMY1*VUMY1
+            VUMY3 = VUMY2*VUMY1
+            VUMY4 = VUMY2*VUMY2
+            VUMY5 = VUMY2*VUMY3
+            SWF   = 1.0D+00 - 10.0D+00*DUMY3*VUMY3
+     *                      + 15.0D+00*DUMY4*VUMY4
+     *                      -  6.0D+00*DUMY5*VUMY5
+         ELSE IF(ISWF.EQ.2) THEN
+            R12   = SQRT(R12)
+            PIL   = 3.1415926535897932D+00/(SWR2-SWR1)
+            DUMY  = (R12 - SWR1) * PIL
+            DUMY2 =-0.50D+00 * SIN(DUMY) * PIL / R12
+            SWF   = 0.50D+00 * (COS(DUMY) + 1.0D+00)
+         END IF
+      END IF
+C
+      DO 780 IRPTS = 1,NRPTS(IFRG)
+      IC = IC + 1
+      CX   =CREP(1,IC) - PBCX
+      CY   =CREP(2,IC) - PBCY
+      CZ   =CREP(3,IC) - PBCZ
       PCSQ = (AX-CX)**2+(AY-CY)**2+(AZ-CZ)**2
       DO 780 LTERM=KFR(IC),KLR(IC)
       ALFA = ZLPR(LTERM)
@@ -1434,7 +1917,7 @@ C      R TO THE ZERO POWER.
        NX    = IJX(I)
        NY    = IJY(I)
        NZ    = IJZ(I)
-       G(N)=G(N)+DIJ(I)*PREI*BETA*XIN(NX)*YIN(NY)*ZIN(NZ)
+       G(N)=G(N)+DIJ(I)*PREI*BETA*XIN(NX)*YIN(NY)*ZIN(NZ)*SWF
  666   CONTINUE
       ELSE
 C      ONE OVER R.
@@ -1483,10 +1966,11 @@ C      ONE OVER R.
        DO 745 K = 1,NROOTS
        DUM= DUM+XIN(NX+MM)*YIN(NY+MM)*ZIN(NZ+MM)
   745  MM  = MM+16
-       G(N)=G(N)+GIJ(I)*PREI*BETA*DUM
+       G(N)=G(N)+GIJ(I)*PREI*BETA*DUM*SWF
  765   CONTINUE
       END IF
  780  CONTINUE
+ 781  CONTINUE
 C
 C     ----- END OF PRIMITIVE LOOPS -----
 C

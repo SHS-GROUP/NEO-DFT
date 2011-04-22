@@ -1,3 +1,5 @@
+C 10 Dec 10 - HL  - add print out for QM/MM(POL)/CONTINUUM methods
+C 10 Dec 10 - AVM - interfacing with U.Minnesota SMX codes
 C  1 Oct 10 - DJS,HL - ZAPT-PCM GRADIENT
 C 11 Aug 10 - dgf - SYNCH FMO COMMON BLOCK
 C 25 Mar 10 - YLW,HL - Add FIXPVA grads for IDISP's dis and rep terms
@@ -58,9 +60,10 @@ C*MODULE PCM     *DECK PCMINP
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
 C
-      LOGICAL GOPARR,DSKWRK,MASWRK,ABEL
+      LOGICAL GOPARR,DSKWRK,MASWRK,ABEL,SMD
 C
       CHARACTER*8 ZSOL
+      CHARACTER*32 SOLMN
 C
       PARAMETER (MXATM=2000, MXSH=5000)
 C
@@ -80,6 +83,7 @@ C
       COMMON /PCMPLY/ STOT,VOL,CCX,CCY,CCZ,RDIF,NESF,NESFP,NESFF,I_NESF,
      *                L_AST
       COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+      COMMON /SOLSMX/ SOLA,SOLB,SOLC,SOLG,SOLH,SOLN,ISMX
       COMMON /SYMMOL/ GROUP,COMPLEX,IGROUP,NAXIS,ILABMO,ABEL
       COMMON /SYMTRY/ MAPSHL(MXSH,48),MAPCTR(MXATM,48),
      *                T(432),INVT(48),NT
@@ -90,7 +94,7 @@ C
 C
 C     ----- set up the NAMELIST $PCM -----
 C
-      PARAMETER (NNAM=34)
+      PARAMETER (NNAM=41)
       DIMENSION QNAM(NNAM),KQNAM(NNAM)
       DATA PCMWD/8HPCM     /
       DATA QNAM/8HIEF     ,8HSOLVNT  ,8HEPSINF  ,8HEPS     ,8HRSOLV   ,
@@ -100,10 +104,13 @@ C
      *          8HICAV    ,8HIDISP   ,8HIREP    ,8HAXYZ    ,8HBXYZ    ,
      *          8HCXYZ    ,8HNAB     ,8HNAC     ,8HIPRINT  ,
      *          8HIDP     ,8HWB      ,8HWA      ,8HETA2    ,
-     *          8HIFMO    ,8HMXSP    ,8HMXTS    ,8HMODPAR  /
+     *          8HIFMO    ,8HMXSP    ,8HMXTS    ,8HMODPAR  ,
+     *          8HSOLA    ,8HSOLB    ,8HSOLC    ,8HSOLG    ,
+     *          8HSOLH    ,8HSOLN    ,8HSMD     /
       DATA KQNAM/1,5,3,3,3,   3,3,3,3,       3,3,3,3,3,
      *           1,1,1,       1,1,1,33,33,   33,1,1,1,
-     *           1,3,3,3,     1,1,1,1/
+     *           1,3,3,3,     1,1,1,1,       3,3,3,3,
+     *           3,3,0/
 C
       DATA C1/8HC1      /
       DATA RINPUT/8HINPUT   /, RNONE/8HNONE    /
@@ -132,6 +139,34 @@ C
       STENI = ZERO
       DSTENI = ZERO
       CMFI = ZERO
+C
+C        this group defines the MINNESOTA SOLVATION MODELS
+C     SMD   uses the PCM code, IEF-PCM or C-PCM only, and ignores
+C           all inputs here except SOLVNT, EPS, and SOLx parameters.
+C     SMVLE uses the SS(V)PE codes, with local electrostatics added,
+C           that's over in the $SVP input group.
+C     So these operate essentially like PCM or SS(V)PE in terms of
+C     what runs have gradients, et cetera.
+C
+      SMD=.FALSE.
+      SOLMN='UNKNOWN'
+C        ISMX=0 means ordinary PCM or SS(V)PE type runs
+C             1 means SMD is used, but with only a dielectric constant
+C             2 means SMD is used, with EPS and all SOLx parameters
+C             3 means SMVLE is used
+      ISMX = 0
+      SOLAI = ZERO
+      SOLBI = ZERO
+      SOLCI = ZERO
+      SOLGI = ZERO
+      SOLHI = ZERO
+      SOLNI = ZERO
+      SOLA = ZERO
+      SOLB = ZERO
+      SOLC = ZERO
+      SOLG = ZERO
+      SOLH = ZERO
+      SOLN = ZERO
 C
 C       this group defines the cavity
 C
@@ -225,8 +260,10 @@ C
      *            FRO, TABS, VMOLI, TCEI, DSTENI, STENI, CMFI,
      *            NESFP, ICOMP, IFIELD, ICAV, IDISP, IKREP,
      *            AXYZ, BXYZ, CXYZ, NAB, NAC, IPRINT, IDP, WB, WA,
-     *            ETA2, NFMOPCM, MXSP, MXTS, MODPAP,0,0,0,0,0,0,
-     *            0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0, 0,0,0,0)
+     *            ETA2, NFMOPCM, MXSP, MXTS, MODPAP,
+     *            SOLAI, SOLBI, SOLCI, SOLGI, SOLHI, SOLNI, SMD,
+     *            0,0,0,
+     *            0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0)
 C
       IF(JRET.EQ.1) RETURN
 C
@@ -290,21 +327,68 @@ C        representative point of the tessera along the surface normal
 C
       DR = 1.0D-04
 C
+      WRITE(UNIT=ZSOL,FMT='(A8)') RZSOL
+C
+      IF(.NOT.SMD) THEN
+C
+C              set parameter data for PCM solvation
 C        look up numerical parameters for the solvent, default is water
 C        any values which were input should override stored values
 C
-      WRITE(UNIT=ZSOL,FMT='(A8)') RZSOL
-      IF(ZSOL.NE.'INPUT   ') THEN
-         CALL DATSOL(ZSOL,EPS,EPSINF,RSOLV,VMOL,TCE,STEN,DSTEN,CMF)
-      END IF
-      IF(EPSI  .NE.ZERO) EPS    = EPSI
-      IF(EPSINI.NE.ZERO) EPSINF = EPSINI
-      IF(RSOLVI.NE.ZERO) RSOLV  = RSOLVI
-      IF(VMOLI .NE.ZERO) VMOL   = VMOLI
-      IF(TCEI  .NE.ZERO) TCE    = TCEI
-      IF(STENI .NE.ZERO) STEN   = STENI
-      IF(DSTENI.NE.ZERO) DSTEN  = DSTENI
-      IF(CMFI  .NE.ZERO) CMF    = CMFI
+         IF(ZSOL.NE.'INPUT   ')
+     *     CALL DATSOL(ZSOL,EPS,EPSINF,RSOLV,VMOL,TCE,STEN,DSTEN,CMF)
+         IF(EPSI  .NE.ZERO) EPS    = EPSI
+         IF(EPSINI.NE.ZERO) EPSINF = EPSINI
+         IF(RSOLVI.NE.ZERO) RSOLV  = RSOLVI
+         IF(VMOLI .NE.ZERO) VMOL   = VMOLI
+         IF(TCEI  .NE.ZERO) TCE    = TCEI
+         IF(STENI .NE.ZERO) STEN   = STENI
+         IF(DSTENI.NE.ZERO) DSTEN  = DSTENI
+         IF(CMFI  .NE.ZERO) CMF    = CMFI
+      ELSE
+C
+C              set parameter data for U.Minnesota SMD solvation model
+C
+         ISMX = 1
+         EPS = 78.355D+00
+         EPSINF = 1.777849D+00
+         IF(ZSOL.NE.'INPUT   ') THEN
+            CALL DATSOLMN(ZSOL,SOLMN,EPS,EPSINF,SOLA,SOLB,SOLC,
+     *                    SOLG,SOLH,SOLN,IW,MASWRK)
+         ELSE
+            ZSOL   ='UNKNOWN '
+         END IF
+         IF(EPSI  .NE.ZERO) EPS    = EPSI
+         IF(EPSINI.NE.ZERO) EPSINF = EPSINI
+         IF(SOLAI .NE.ZERO) SOLA   = SOLAI
+         IF(SOLBI .NE.ZERO) SOLB   = SOLBI
+         IF(SOLCI .NE.ZERO) SOLC   = SOLCI
+         IF(SOLGI .NE.ZERO) SOLG   = SOLGI
+         IF(SOLHI .NE.ZERO) SOLH   = SOLHI
+         IF(SOLNI .NE.ZERO) SOLN   = SOLNI
+         RSOLV  = ZERO
+         VMOL   = ZERO
+         TCE    = ZERO
+         STEN   = ZERO
+         DSTEN  = ZERO
+         CMF    = ZERO
+         ICAV   = 0
+         IDISP  = 0
+         IKREP  = 0
+         IDP    = 0
+         NESFP  = 0
+         TABS   = 298.0D+00
+         IF ((SOLA+SOLB+SOLC+SOLG+SOLH+SOLN).NE.ZERO) THEN
+            ISMX = 2
+         ELSE
+            SOLA = 1.0D+00
+         ENDIF
+         IF (IEF.NE.3.AND.IEF.NE.10) THEN
+            IF(MASWRK) WRITE(IW,*)
+     * 'SMD=.T. CAN ONLY BE USED WITH IEF = -10, -3, 3, OR 10 IN $PCM'
+            CALL ABRT
+         ENDIF
+      ENDIF
 C
 C        print what we've got for input
 C
@@ -324,7 +408,14 @@ C        print iterative IEF-PCM input
      *    RCUT(1),RCUT(2),IDIRCT,IMGABI,RABI,IMGASC,RASC,
      *    THRSLS,DENSLS,IEFPOL,REFPOL
       END IF
-C
+C        print Minnesota SMD values
+      IF(MASWRK.AND.SMD) THEN
+         IF (ISMX.EQ.1) THEN
+            WRITE(IW,9022) EPS
+         ELSE
+            WRITE(IW,9021) SOLMN,EPS,SOLA,SOLB,SOLC,SOLG,SOLH,SOLN
+         ENDIF
+      END IF
 C
 C        Check that input for booboos
 C
@@ -473,6 +564,14 @@ C
      *   5X,'NESFP =',I8  /
      *   5X,'OMEGA =',F8.4,5X,'RET   =',F8.4,5X,'FRO   =',F8.4//
      *   5X,'TABS  =',F8.4,5X,'IPRINT=',I8)
+ 9021 FORMAT(/5X,36(1H-)/
+     *   5X,'INPUT FOR NONAQUEOUS SMD CALCULATION '/5X,36(1H-)/
+     *   5X,'SOLVNT=',A33,                      'EPS   =',F8.4/
+     *   5X,'SOLA  =',F8.4,5X,'SOLB  =',F8.4,5X,'SOLC  =',F8.4/
+     *   5X,'SOLG  =',F8.4,5X,'SOLH  =',F8.4,5X,'SOLN  =',F8.4)
+ 9022 FORMAT(/5X,33(1H-)/
+     *   5X,'INPUT FOR AQUEOUS SMD CALCULATION '/5X,33(1H-)/
+     *   5X,'EPS   =',F8.4,5X)
  9025 FORMAT(/5X,34(1H-)/
      *   5X,'INPUT FOR ITERATIVE IEF-PCM METHOD '/5X,34(1H-))
  9026 FORMAT(/5X,32(1H-)/
@@ -582,6 +681,7 @@ C
       SOME = NPRINT.NE.-5
       IF(SOME.AND.(IP_F.EQ.1)) THEN
         IF(MASWRK) WRITE(IW,800)
+        IF(MASWRK) WRITE(IW,700)
       ELSE
         IF(SOME .AND. MASWRK) WRITE(IW,900)
       END IF
@@ -995,6 +1095,13 @@ C
      *        10X,'*         BENEDETTA MENNUCCI               *'/
      *        10X,'*             JULY-2000                    *'/
      *        10X,'********************************************')
+  700 FORMAT(/8X,'<><><><><><><><><><><><><><><><><><><><><><><><>'/
+     *        8X,'     VARIATIONAL QM/MM(POL)/CONTINUUM STYLE  '/
+     *        8X,'                 HF, MCSCF, DFT              '/
+     *        8X,'           QM/MM(POL)/CONTINUUM STYLE        '/
+     *        8X,'                 MP2 AND TD-DFT              '/
+     *        8X,'   LI GROUP AT UNIVERSITY OF NEBRASKA-LINCOLN'/
+     *        8X,'<><><><><><><><><><><><><><><><><><><><><><><><>')
       END
 C*MODULE PCM     *DECK MAKECVM
       SUBROUTINE MAKECVM(XE,YE,ZE,ALPHA,RIN)
@@ -1088,6 +1195,7 @@ C
      *                L_AST
       COMMON /PCMTMP/ IDSP(MXATM+MXFRG*5),DPCMFRG(6,MXFRG),
      *                EGPCM(3,MXATM)
+      COMMON /SOLSMX/ SOLA,SOLB,SOLC,SOLG,SOLH,SOLN,ISMX
 C
       PARAMETER (TOANGS=0.52917724924D+00)
 C
@@ -1180,6 +1288,19 @@ C
             END IF
          END IF
       ENDDO
+C
+C        special radii selection for U.Minnesota solvation models
+C
+      IF(ISMX.EQ.1.OR.ISMX.EQ.2) THEN
+         IF(JRET.EQ.0) THEN
+            IF(MASWRK) WRITE(IW,*)
+     *         '$PCMCAV CANNOT BE USED WITH SOLVNT=SMDMODEL IN $PCM'
+            IF(MASWRK) WRITE(IW,9000) CAVWD
+            CALL ABRT
+         END IF
+         CALL SMDCOULRAD(SOLA,RVDW)
+         ALPHA(1) = 1.0D+00
+      ENDIF
 C
 C        check spelling on the RADII keyword
 C

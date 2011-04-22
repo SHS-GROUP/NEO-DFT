@@ -1,3 +1,4 @@
+C 10 DEC 10 - NMT,HL - ASCCYC: SIMULTANEOUSLY INDUCE CHARGE AND DIPOLE
 C 11 AUG 10 - MWS - SYNCHRONIZE INFOTD COMMON
 C 25 MAR 10 - DJS,HL - ADD HETEROGENEOUS CPCM METHOD AND MP2/PCM GRAD,
 C                      USE FULL ACCURACY FOR PCM ITERATIVE SOLVER
@@ -2877,6 +2878,8 @@ C*MODULE PCMIEF  *DECK ASCCYC
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
+      PARAMETER (MXFGPT=12000, MXFRG=1050, MXIFRQ=12,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
       DIMENSION V(NTS),QIN(NTS),QOUT(NTS),D0(NTS),QA(NTS),
      *          DIMAT(MXDII1,MXDII1),QREP(NTSPAR,MXDIIS,2),TMP(NTS,3),
      *          TMP1(MXDII1),TMP2(MXDII1,MXDII1),IPVT(MXDII1),
@@ -2885,14 +2888,28 @@ C
 C
       LOGICAL GOPARR, DSKWRK, MASWRK
 C
+      CHARACTER*8 POLNAM,DPOLNAM
+C
       INTEGER ISTEP
 C
+      COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
+     *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
+     *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
+     *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ*MXFGPT),
+     *                POLSCR(MXFGPT),IPLSCR,INDSCR
+      COMMON /FMCOM / XX(1)
       COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP1,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /MPDIPL/ DINDMP(3,MXFGPT),DINDDMP(3,MXFGPT)
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
       COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
       COMMON /PCMITR/ RCUT(2),THRES,IPCMIT,IMUL,MXDIIS,NREG,MXITR1,
      *                MXITR2,MODPAP
+      COMMON /PCMMP2/ IDOMP2
       COMMON /PCMOPT/ RABI,RASC,REFPOL,THRSLS,DENSLS,WB,WA,ETA2,GD,EVAC,
      *                RHOW,PM,AREATL,AREAKP,BONDRY,OMEGA,RET,FRO,EPSINF,
      *                EPS,DR,RSOLV,VMOL,TCE,STEN,DSTEN,CMF,TABS,IDIRCT,
@@ -2901,6 +2918,7 @@ C
       COMMON /PCMPAR/ IPCM,NFT26,NFT27,IREP,IEF,IP_F,NFMOPCM
 C
       DATA FPI,EPI/12.56637061D+00,25.13274122D+00/
+      DATA ZERO,ONE/0.0D+00,1.0D+00/
 C
 C     COMMON /CONV  / ACURCY,ENUCR,AJUNK(3),DIFF,ITERRO,ICALCP,ICBET
 C     COMMON /NTNOPT/ ENERGY,ENERG0,DEMAX,SQCDF,ITERMC,MICRO,NOTRF
@@ -2967,6 +2985,92 @@ C     CALL TIMIT(1)
 C     WRITE(IW,*) 'ASCPOT IS DONE'
 C     WRITE(IW,*) ' '
 C     END IF
+C
+C     CHARGE-DIPOLE INTERACTION
+C       - ONLY MP2 AND TDDFT GRADIENT CODE WILL USE THIS
+C         PCMFLD SHOULD SKIP THIS
+C         IDOMP2 IS FOR MP2 AND TDDFT GRADIENT
+C
+      IF(IDOMP2.EQ.1 .AND. IPCM.EQ.1 .AND. IEF.EQ.10 .AND.
+     *   NFRG.GT.0 .AND. IEFP.EQ.1) THEN
+C         -- 1. CALCULATE INDUCED DIPOLES
+          CALL VALFM(LOADFM)
+          LDIPNEW  = LOADFM   + 1
+          LDIPNWD  = LDIPNEW  + NFRG
+          LDINDC   = LDIPNWD  + NFRG
+          LDINDDC  = LDINDC   + 3*NPTTPT
+          LDIND_W  = LDINDDC  + 3*NPTTPT
+          LDIND_C  = LDIND_W  + 6*NPTTPT
+          LEWLD1   = LDIND_C  + 6*NPTTPT
+          LEWLD2   = LEWLD1   + 3*NPTTPT
+          LEFLD    = LEWLD2   + 3*NPTTPT
+          LEFADD   = LEFLD    + 3*NPTTPT
+          LAST     = LEFADD   + 3*NPTTPT
+          NEED     = LAST - LOADFM - 1
+          CALL GETFM(NEED)
+          FACTOR=(EPS-ONE)/EPS
+          IPCOUNT = ME-1
+          DO 200 LEFP=1,NPTTPT
+             IF(GOPARR) THEN
+                XX(LEFLD+(LEFP-1)*3  ) = ZERO
+                XX(LEFLD+(LEFP-1)*3+1) = ZERO
+                XX(LEFLD+(LEFP-1)*3+2) = ZERO
+                IPCOUNT = IPCOUNT + 1
+                IF (MOD(IPCOUNT,NPROC).NE.0) GO TO 200
+             END IF
+             PQ_X=ZERO
+             PQ_Y=ZERO
+             PQ_Z=ZERO
+             DO 210 ITS = 1,NTS
+                IF(I.EQ.1) THEN
+                   QITS = (V(ITS)-QA(ITS))*D0(ITS)
+                ELSE
+                   QITS = QOUT(ITS)
+                END IF
+                RR = (EFP(1,LEFP)-XCTS(ITS))**2 +
+     *               (EFP(2,LEFP)-YCTS(ITS))**2 +
+     *               (EFP(3,LEFP)-ZCTS(ITS))**2
+                RR3 = RR * SQRT(RR)
+                DUMMY = FACTOR*QITS/RR3
+                PQ_X = PQ_X + DUMMY*(EFP(1,LEFP)-XCTS(ITS))
+                PQ_Y = PQ_Y + DUMMY*(EFP(2,LEFP)-YCTS(ITS))
+                PQ_Z = PQ_Z + DUMMY*(EFP(3,LEFP)-ZCTS(ITS))
+  210        CONTINUE
+C            -- NOTE DINDMP TEMPORARILY STORES ELECTRIC FIELDS
+             XX(LEFLD+(LEFP-1)*3  ) = PQ_X + DINDMP(1,LEFP)
+             XX(LEFLD+(LEFP-1)*3+1) = PQ_Y + DINDMP(2,LEFP)
+             XX(LEFLD+(LEFP-1)*3+2) = PQ_Z + DINDMP(3,LEFP)
+  200     CONTINUE
+          IF(GOPARR) CALL DDI_GSUMF(699,XX(LEFLD),3*NPTTPT)
+          CALL DIPIT(XX(LEFLD),XX(LEFADD),XX(LDINDC),XX(LDINDDC),
+     *               XX(LDIND_W),XX(LDIND_C),
+     *               NPTTPT,XX(LDIPNEW),XX(LDIPNWD),
+     *               XX(LEWLD1),XX(LEWLD2),NFRG)
+C
+C         -- 2. CALCULATE POTENTIAL DUE TO INDUCED DIPOLES
+          DO ITS=1,NTS
+             XI=XCTS(ITS)
+             YI=YCTS(ITS)
+             ZI=ZCTS(ITS)
+             DUM=ZERO
+             DO LEFP=1,NPTTPT
+                XL=EFP(1,LEFP)
+                YL=EFP(2,LEFP)
+                ZL=EFP(3,LEFP)
+                X1 = XI - XL
+                Y1 = YI - YL
+                Z1 = ZI - ZL
+                R2=X1*X1 + Y1*Y1 + Z1*Z1
+                R = SQRT(R2)
+                R3 =R*R2
+                DUM=DUM+((DIND(1,LEFP)+DINDD(1,LEFP))*X1
+     *                 + (DIND(2,LEFP)+DINDD(2,LEFP))*Y1
+     *                 + (DIND(3,LEFP)+DINDD(3,LEFP))*Z1)/R3/2.0D+00
+             END DO
+             QA(ITS)=QA(ITS)+DUM
+          ENDDO
+          CALL RETFM(NEED)
+      END IF
 C
 C     NEW CHARGES
 C

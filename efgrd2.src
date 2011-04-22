@@ -1,3 +1,5 @@
+C 12 DEC 10 - DGT - EFPVIB,EFPGRD,EFPRST: CHANGES TO USE SUBGROUPS
+C 12 DEC 10 - HL  - EFPVIB: ADD A CALL TO ELMOMC
 C  1 MAY 09 - NMT - NEW DIMENSION FOR EFPBAS AND FRAGMT
 C 20 NOV 08 - HL  - EFPENG: FIX NUMERICAL HESSIAN FOR QM/EFP/PCM
 C 23 OCT 08 - LVS - SYNCHRONIZE THE POLTMP COMMON
@@ -1792,7 +1794,10 @@ C
       END
 C*MODULE EFGRD2  *DECK EFPVIB
       SUBROUTINE EFPVIB(NAT,NUM,DEL,NVIB,NPUN,D,IFCM,FCM,DDM,WRK,
-     *                  SVDEN,SVGRD,SVENG,SVDIP,NVST,NFTODO,LIST,
+     *                  SVDEN,SVGRD,SVENG,SVDIP,
+     *                  MASTID,ICOMPT2,CURPT2,DMPACK2,LENIC2,LENDM2,
+     *                  WORKEG,WORKDEFT,WORKTORQ,
+     *                  NVST,NFTODO,LIST,
      *                  SCFOK,FGONLY,RHFEFP,MCCI,RSTART)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
@@ -1800,9 +1805,18 @@ C
 C        NOTE THAT THE FOUR "SAVE" ARRAYS ARE USED ONLY IF RHFEFP=.TRUE.
 C
       DIMENSION D(2),FCM(*),DDM(*),WRK(*),LIST(*),
-     *          SVDEN(*),SVGRD(*),SVENG(*),SVDIP(3,*)
+     *          SVDEN(*),SVGRD(*),SVENG(*),SVDIP(3,*),
+     *          MASTID(*),
+     *          ICOMPT2(LENIC2),CURPT2(LENIC2),DMPACK2(LENDM2),
+     *          WORKEG(*),WORKDEFT(*),WORKTORQ(*)
 C
       LOGICAL GOPARR,DSKWRK,MASWRK,SCFOK,FGONLY,RHFEFP,MCCI,RSTART
+      LOGICAL ISGDDI,PAROUT,INITGDDI,MYJOB
+      CHARACTER*8 LJNAME,ELJNAM
+C
+      INTEGER DDI_WORLD,DDI_GROUP,DDI_MASTER
+C
+      PARAMETER(DDI_WORLD=0,DDI_GROUP=1,DDI_MASTER=2)
 C
       PARAMETER (MXAO=8192, MXATM=2000, MXSHEF=1000, MXGEFP=4000,
      *           MXPT=2000, MXFRG=1050, MXFGPT=12000, MXDFG=5,
@@ -1820,7 +1834,6 @@ C
       COMMON /EFPCMO/ NOCC(MXDFG),NVIR(MXDFG),NAO(MXDFG),NTAO,
      *                CANFOK(MXAO,MXDFG)
       COMMON /FMCOM / XX(1)
-C
       COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
      *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
      *                ATORQ(3,MXFRG)
@@ -1828,9 +1841,15 @@ C
      *                NPPTS(MXFRG),NPTTPT,IEFP,
      *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
      *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /FRGLJP/ CORDLJ(3,MXPT),ELJCRD(3,MXFGPT),
+     *                POTLJ(2,MXPT),ELJPOT(2,MXFGPT),
+     *                LJNAME(MXPT),ELJNAM(MXFGPT),
+     *                NLJPTS(MXFRG),NLJTTPT,ILJP,NMLJ(2)
       COMMON /FRGTYP/ NDFRG,ISET(MXFRG),NAMIDX(MXDFG)
       COMMON /FROZNC/ IFREEZ(3*MXATM),NFRZ
       COMMON /FUNCT / E,EG(3*MXATM)
+      COMMON /GDDI  / ISCOPE,NGROUPS,MYGROUP,MEGLOB,NPGLOB,NNGLOB,JBTYP,
+     *                ISGDDI,PAROUT,INITGDDI
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
       COMMON /PAULMO/ CENTNM(MXFGPT),CENTCD(3,MXFGPT),NORB(MXFRG),
@@ -1849,17 +1868,24 @@ C
 C     CALCULATE ENERGY + DIPOLE MOMENTS WRT FRAGMENT DISPLACEMENTS
 C     WEI OCT/95
 C
+C
       NCOORD=3*NAT
       NCF=6*NFRG
       NC1=NCOORD+NCF
       NFRG2=2*NFRG
       L2=(NUM*NUM+NUM)/2
 C
+      CALL GDDI_SCOPE(DDI_WORLD)
+      IF (ISGDDI) CALL DDI_CREATE(NAT*3+NFRG*6+4,NFRG*6*2,
+     *                                       IEFPDM) 
+      CALL GDDI_SCOPE(DDI_GROUP)
+      CALL VICLR(ICOMPT2,1,12*NFRG) 
       IF(RHFEFP) THEN
          CALL VCLR(SVDEN,1, L2*NFTODO)
          CALL VCLR(SVGRD,1,NC1*NFTODO)
          CALL VCLR(SVENG,1,    NFTODO)
          CALL VCLR(SVDIP,1,  3*NFTODO)
+C         CALL VICLR(MASTID,1, NPROC)
          IDEN=1
          IGRD=1
          IENG=1
@@ -1882,11 +1908,14 @@ C
          IDIP=IDIP+1
       ENDIF
 C
+      CALL DDI_COMMID(DDI_WORLD,IDWORLD)
+C
 C     ----- CALCULATE ENERGY AND DIPOLES -----
 C     ----- CALCULATE 1E-GRADIENT -OR- FULL GRADIENT -----
 C
       NMST=0
       NPST=0
+      NLJST=0
       NDPST=0
       NRST=0
       NDST=0
@@ -1896,6 +1925,10 @@ C
 C
       INF=1
       INDX=0
+      IF(ISGDDI) THEN
+         CALL GDDI_MASTID(MASTID)
+         CALL GDDICOUNT(-1,LGROUP,MYJOB)
+       END IF
 C
       MXBF=0
       DO I = 1, NFRG
@@ -1910,6 +1943,10 @@ C
       LENPV=MXBF*NTMO
       LENCV=MXBF*NTAO
 C
+      IF(ISGDDI) IDEN =1 
+      IF(ISGDDI)IGRD=1
+      IF(ISGDDI)IENG=1
+      IF(ISGDDI)IDIP=1
 C          LOOP OVER DISPLACEMENTS, FRAGMENT T AND R, AND T/R COMPONENTS
 C
       DO 90 IVIB=1,NVIB
@@ -1921,11 +1958,21 @@ C
          DO 80 IATOM=NAT+1,NAT+NFRG2
             IFCT=MOD((IATOM-NAT),2)
             DO 70 ICOORD=1,3
+               IF(ISGDDI) IDEN=IDEN+L2
+               IF(ISGDDI)IGRD=IGRD+NC1
+               IF(ISGDDI)IENG=IENG+1
+               IF(ISGDDI)IDIP=IDIP+1
                INDX=INDX+1
                IF (LIST(INDX).EQ.1) GO TO 70
                IF(NPUN.GT.0.AND.MASWRK) WRITE(IP,8010) IVIB,IATOM,ICOORD
 C
 C       MAKE A TRANSLATIONAL OR ROTATIONAL DISPLACEMENT
+             IF(ISGDDI) THEN
+                CALL GDDICOUNT(0,LGROUP,MYJOB)
+                IF (.NOT.MYJOB)THEN
+                    GOTO 70
+                END IF
+             END IF
 C
                XDIS=ZERO
                YDIS=ZERO
@@ -1956,7 +2003,7 @@ C
      *            CALL DAREAD(IDAF,IODA,XX(LCANVEC),LENCV,269,0)
 C
                CALL EFDSPL(INF,XDIS,YDIS,ZDIS,RXDS,RYDS,RZDS,
-     *                     NMST,NPST,NDPST,NRST,NDST,NATST,NORST,
+     *                     NMST,NPST,NLJST,NDPST,NRST,NDST,NATST,NORST,
      *                     XX(LPROVEC),NAOST,XX(LCANVEC),MXBF)
 C
                IF (NFRG.GT.0.AND.NTMO.GT.0)
@@ -1985,27 +2032,46 @@ C                                    OTHER AB INITIO+FRAGMENT
                      ELSE
                         CALL HFGRAD
                      END IF
+                     CALL ELMOMC
                   END IF
                END IF
 C
                NV=3*(IATOM-1)+ICOORD
+               NV0 = NV - NCOORD
                CALL SETDDM(DDM,DIP,DEL,NV,IVIB,NC1,NVIB)
 C
                IF(RHFEFP) THEN
+C                  IDEN = NV0*L2
                   CALL DAREAD(IDAF,IODA,SVDEN(IDEN),L2,16,0)
                   CALL GRDSAV(SVGRD(IGRD),NCOORD,NFRG,DEFT,TORQ,FGONLY)
                   SVENG(IENG)=E
                   SVDIP(1,IDIP)=DIP(1)
                   SVDIP(2,IDIP)=DIP(2)
                   SVDIP(3,IDIP)=DIP(3)
-                  IDEN=IDEN+L2
-                  IGRD=IGRD+NC1
-                  IENG=IENG+1
-                  IDIP=IDIP+1
+                  IF(.NOT.ISGDDI)IDEN=IDEN+L2
+                  IF(.NOT.ISGDDI)IGRD=IGRD+NC1
+                  IF(.NOT.ISGDDI)IENG=IENG+1
+                  IF(.NOT.ISGDDI)IDIP=IDIP+1
                ELSE
-                  CALL SETFCM(FCM,NC1,NV,EG,IVIB)
-                  CALL PUVIB(IFCM,IW,RSTART,NCOORD,IVIB,IATOM,ICOORD,
-     *                       E,EG,DIP)
+                  CALL SETFCM(FCM,NC1,NV,EG,IVIB,DEFT,TORQ)
+                  IF(.NOT.ISGDDI)THEN
+                      CALL PUVIB(IFCM,IW,RSTART,NCOORD,IVIB,IATOM, 
+     *                           ICOORD,E,EG,DIP)
+                  ELSE
+                    IF(MASWRK) THEN
+                       CALL PACKEFP(DMPACK2,NFRG,NCOORD,DEFT,TORQ,EG,
+     *                              E,DIP) 
+                       CALL DDI_PUT_COMM(IEFPDM,1,4+NAT*3+6*NFRG,
+     *                                   NV0+6*NFRG*(IVIB-1),
+     *                                   NV0+6*NFRG*(IVIB-1),
+     *                                   DMPACK2,IDWORLD) 
+                       IF(MYGROUP.EQ.0) THEN
+                            CALL EFPUVIB(IEFPDM,DMPACK2,NFRG,NCOORD,
+     *                                   ICOMPT2,CURPT2,WORKEG,
+     *                                   WORKDEFT,WORKTORQ,RSTART)
+                       END IF
+                     END IF
+                   END IF
                END IF
 C
 C         DONE WITH THIS DISPLACEMENT, RESTORE VIB 0 WAVEFUNCTION
@@ -2017,7 +2083,7 @@ C
                   CALL DAREAD(IDAF,IODA,XX(LCANVEC),LENCV,269,0)
                END IF
                CALL EFDSPL(INF,-XDIS,-YDIS,-ZDIS,-RXDS,-RYDS,-RZDS,
-     *                     NMST,NPST,NDPST,NRST,NDST,NATST,NORST,
+     *                     NMST,NPST,NLJST,NDPST,NRST,NDST,NATST,NORST,
      *                     XX(LPROVEC),NAOST,XX(LCANVEC),MXBF)
                IF (NFRG.GT.0.AND.NTMO.GT.0) THEN
                   CALL DAWRIT(IDAF,IODA,XX(LPROVEC),LENPV,267,0)
@@ -2035,6 +2101,7 @@ C               END OF ICOORD LOOP
             IF (IFCT.EQ.0) THEN
                NMST  = NMST  + NMPTS(INF)
                NPST  = NPST  + NPPTS(INF)
+               NLJST = NLJST + NLJPTS(INF)
                NDPST = NDPST + NDPPTS(INF)
                NRST  = NRST  + NRPTS(INF)
                NDST  = NDST  + NDPTS(INF)
@@ -2055,10 +2122,30 @@ C            END OF IATOM LOOP
          NAOST = 0
          INF=1
    90 CONTINUE
-C         END OF IVIB LOOP
-C
       CALL RETFM(NEED)
-C
+      IF (ISGDDI) THEN
+         CALL GDDICOUNT(1,LGROUP,MYJOB)
+         CALL GDDI_SCOPE(DDI_MASTER)
+         IF(RHFEFP) THEN
+            CALL DDI_GSUMF(3745,SVDEN(L2+1),(NFTODO-1)*L2)
+            CALL DDI_GSUMF(1000,SVGRD(NC1+1),(NFTODO-1)*NC1)
+            CALL DDI_GSUMF(1001,SVENG(2),NFTODO-1)
+            CALL DDI_GSUMF(1002,SVDIP,NFTODO*3)
+            CALL DDI_GSUMF(1003,DDM,3*NC1)
+         ELSE
+            IF(MYGROUP.EQ.0) THEN
+               CALL EFPUVIB(IEFPDM,DMPACK2,NFRG,NCOORD,
+     *                      ICOMPT2,CURPT2,WORKEG,WORKDEFT,WORKTORQ,
+     *                      RSTART)
+            END IF
+            CALL DDI_GSUMF(1004,FCM,NC1*NC1)
+            CALL DDI_GSUMF(1005,DDM,3*NC1)
+         END IF
+         CALL GDDI_SCOPE(DDI_WORLD) 
+         CALL DDI_SYNC(3963)
+         CALL DDI_DESTROY(IEFPDM)
+      END IF
+C     
       RETURN
 C
  8010 FORMAT('----- IVIB=',I2,'  IATOM=',I5,'  ICOORD=',I2)
@@ -2131,7 +2218,7 @@ C
          CALL PUVIB(IFCM,IW,.FALSE.,NCOORD,IVIB,IATOM,ICOORD,
      *              ENG(IENG),GRD(IGRD),DIP(IDIP))
          NV=0
-         CALL SETFCM(FCM,NC1,NV,GRD(IGRD),IVIB)
+         CALL SETFCM(FCM,NC1,NV,GRD(IGRD),IVIB,DEFT,TORQ)
 C
          CALL DAWRIT(IDAF,IODA,GRD(IGRD),NCOORD,29,0)
          DO 76 IFR=1,NFRG
@@ -2173,13 +2260,15 @@ C    HUI LI --- IF PHA, PUNCH OUT ENERGY OF -1.00, SO IT IS RESTARTABLE.
                CALL PUVIB(IFCM,IW,.FALSE.,NCOORD,IVIB,IATOM,ICOORD,
      *                    ENG(IENG),GRD(IGRD),DIP(IDIP))
                NV=3*(IATOM-1)+ICOORD
-               CALL SETFCM(FCM,NC1,NV,GRD(IGRD),IVIB)
+               CALL SETFCM(FCM,NC1,NV,GRD(IGRD),IVIB,DEFT,TORQ)
                IGRD=IGRD+NC1
                IENG=IENG+1
                IDIP=IDIP+3
   270       CONTINUE
   280    CONTINUE
   290 CONTINUE
+C
+      CALL DDI_COMMID(0,IDWORLD)
 C
 C     SINCE THIS HAS NOT BEEN A NORMAL SEQUENCE OF EVENTS, BY
 C     CALLING ENERGX/HFGRAD, BUT INSTEAD ONEEI,WFN, CALLED IN
@@ -2194,21 +2283,28 @@ C
 C
       END
 C*MODULE EFGRD2  *DECK EFPRST
-      SUBROUTINE EFPRST(IFCM,FCM,NFRG,NAT,DEL,NVIB,DDM,RSTART,
+      SUBROUTINE EFPRST(IFCM,FCM,NFRG,NAT,DEL,NVIB,DDM,
+     *                  WORKEG,WORKDEFT,WORKTORQ,RSTART,
      *                  NVST,NFTODO,IREAD,LIST,REDOVB,GOTWFN)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
       LOGICAL EOF,RSTART,DIRSCF,FDIFF,REDOVB,GOTWFN
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      LOGICAL ISGDDI,PAROUT,INITGDDI
 C
-      DIMENSION DDM(*),FCM(*),LIST(*)
+      DIMENSION DDM(*),FCM(*),LIST(*),
+     *          WORKEG(3*NAT),WORKDEFT(3*NFRG),WORKTORQ(3*NFRG)
 C
       PARAMETER (MXATM=2000)
       PARAMETER (SMALL=1.0D-06)
 C
       COMMON /FUNCT / E,EG(3*MXATM)
+      COMMON /GDDI  / ISCOPE,NGROUPS,MYGROUP,MEGLOB,NPGLOB,NNGLOB,JBTYP,
+     *                ISGDDI,PAROUT,INITGDDI
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
       COMMON /OPTSCF/ DIRSCF,FDIFF
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
       COMMON /XYZPRP/ DUM(3),DIP(3),DUMM(32)
 C
 C     THIS ROUTINE HANDLES RESTART $VIB READING FOR FRAGMENTS
@@ -2251,7 +2347,7 @@ C
 C        READ ALL AVAILABLE FRAGMENT DISPLACEMENT RESTART INFORMATION
 C        SET HESSIAN AND DIPOLE DERIVATIVE WITH WHATEVER WE FIND.
 C        DUPLICATE THE VIBRATION INFORMATION INTO A NEW RESTART FILE.
-C        NOTE WE DON'T HAVE REPLACEMENTS FOR UNCONVERGED POINTS YET.
+C      WE DON'T HAVE REPLACEMENTS FOR UNCONVERGED POINTS YET.
 C
       INDX=0
       DO 150 IVIB=1,NVIB
@@ -2260,8 +2356,11 @@ C
             DO 130 ICOORD=1,3
                INDX=INDX+1
                NV=NVA+ICOORD
-               CALL RDVIB(IR,IW,IREAD,NCOORD,IVIB,IATOM+NAT,ICOORD,
-     *                    E,EG,DIP,EOF)
+               IATOM0 = IATOM
+               ICOORD0 = ICOORD
+               IVIB0 = IVIB
+               CALL RDVIB(IR,IW,IREAD,NCOORD,IVIB0,IATOM0,ICOORD0,
+     *                    E,WORKEG,DIP,EOF,WORKDEFT,WORKTORQ)
                IF (EOF) THEN
                   RSTART=.FALSE.
                   RETURN
@@ -2271,11 +2370,22 @@ C
                   GO TO 130
                ENDIF
                NFTODO=NFTODO-1
-               CALL PUVIB(IFCM,IW,RSTART,NCOORD,IVIB,IATOM+NAT,ICOORD,
-     *                    E,EG,DIP)
-               CALL SETFCM(FCM,NC1,NV,EG,IVIB)
-               CALL SETDDM(DDM,DIP,DEL,NV,IVIB,NC1,NVIB)
-               LIST(INDX)=1
+               CALL PUVIB(IFCM,IW,RSTART,NCOORD,IVIB0,IATOM0,ICOORD0,
+     *                    E,WORKEG,DIP)
+               NVA0 = 3*(IATOM0-1)
+               NVA = 3*(IATOM0-NAT-1)
+               NV = NVA + ICOORD0 
+               NV0 = NVA0+ICOORD0
+               IF(MASWRK) THEN
+                  CALL SETFCM(FCM,NC1,NV0,WORKEG,IVIB0,
+     *                        WORKDEFT,WORKTORQ)
+                  CALL SETDDM(DDM,DIP,DEL,NV0,IVIB0,NC1,NVIB)
+               END IF
+               IF(.NOT.ISGDDI) THEN 
+                  LIST(INDX)=1
+               ELSE
+                  LIST(NV+NFRG*6*(IVIB0-1)) = 1
+               END IF
   130       CONTINUE
   140    CONTINUE
   150 CONTINUE
@@ -2436,10 +2546,110 @@ C
       RETURN
       END
 C
+C*MODULE EFGRD2  *DECK PACKEFP
+      SUBROUTINE PACKEFP(DMPACK,NFRG,NCOORD,DEFT0,TORQ0,EG,E,DIP) 
 C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
 C
+      DIMENSION DEFT0(NFRG*3),TORQ0(NFRG*3),EG(NCOORD),DIP(3)  
+      DIMENSION DMPACK(NFRG*6+NCOORD+3+1)
 C
+      INDEX = 1
+      DMPACK(INDEX) = E
+      DO I=1, 3*NFRG
+         INDEX = INDEX+1
+         DMPACK(INDEX) = DEFT0(I)
+      END DO
+      DO I=1,3*NFRG
+         INDEX = INDEX+1
+         DMPACK(INDEX) = TORQ0(I)
+      END DO 
+      DO I=1,NCOORD
+         INDEX = INDEX+1
+         DMPACK(INDEX) = EG(I)
+      END DO
+      DO I=1,3
+         INDEX = INDEX+1
+         DMPACK(INDEX) = DIP(I)
+      END DO
 C
+      RETURN
+      END  
 C
+C*MODULE EFGRD2  *DECK UNPACKEFP
+      SUBROUTINE UNPACKEFP(DMPACK,NFRG,NCOORD,DEFT0,TORQ0,EG,E,DIP)  
 C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
 C
+      DIMENSION DEFT0(NFRG*3),TORQ0(NFRG*3),EG(NCOORD),DIP(3)
+      DIMENSION DMPACK(NFRG*6+NCOORD+3+1)
+C
+      INDEX = 1
+      E = DMPACK(INDEX)
+      DO I=1,3*NFRG
+         INDEX = INDEX + 1
+         DEFT0(I)=DMPACK(INDEX)
+      END DO
+      DO I=1,3*NFRG
+         INDEX = INDEX+1
+         TORQ0(I)= DMPACK(INDEX)
+      CALL FLSHBF(6)
+      END DO
+      DO I=1,NCOORD
+         INDEX= INDEX+1
+         EG(I) = DMPACK(INDEX)
+      END DO
+      DO I=1,3
+         INDEX = INDEX+1
+         DIP(I) = DMPACK(INDEX)
+      END DO
+C
+      RETURN
+      END 
+C
+C*MODULE EFPGRD2  *DECK EFPUVIB
+      SUBROUTINE EFPUVIB(IEFPDM,DMPACK,NFRG,NCOORD,ICOMPT2,CURPT2,
+     *                   WORKEG,WORKDEFT,WORKTORQ,RSTART)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL RSTART
+C
+      PARAMETER (MXATM=2000)
+C
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+C
+      DIMENSION DMPACK(NFRG*6+NCOORD+4),
+     *          ICOMPT2(2*NFRG*6),CURPT2(2*NFRG*6),
+     *          WORKEG(*),WORKDEFT(*),WORKTORQ(*)
+      DIMENSION DIP(3)
+C
+      CALL DDI_COMMID(0,IDWORLD)
+C
+      CALL VCLR(CURPT2,1,2*6*NFRG) 
+      IROWSIZE = NFRG*6 + NCOORD + 3 + 1
+C
+      CALL DDI_GET_COMM(IEFPDM,1,1,1,2*NFRG*6,CURPT2,IDWORLD)   
+      ICOUNT = 0
+      DO IVIB = 1,2
+         DO IATOM=NAT+1,NFRG*2+NAT
+            DO ICOORD =1,3
+               ICOUNT = ICOUNT + 1
+               IF(CURPT2(ICOUNT).NE.0.AND.ICOMPT2(ICOUNT).EQ.0) THEN 
+                   ICOMPT2(ICOUNT) = 1
+                   CALL DDI_GET_COMM(IEFPDM,1,IROWSIZE,ICOUNT,ICOUNT,
+     *                               DMPACK,IDWORLD) 
+C
+                   CALL UNPACKEFP(DMPACK,NFRG,NCOORD,
+     *                            WORKDEFT,WORKTORQ,WORKEG,E,DIP)
+                   CALL PUVIB(35,IW,RSTART,NCOORD,IVIB,IATOM,ICOORD,E,
+     *                        WORKEG,DIP)
+               END IF
+            END DO
+         END DO
+      END DO
+C
+      RETURN
+      END

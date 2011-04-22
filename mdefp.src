@@ -1,3 +1,4 @@
+C 12 Dec 10 - HL  - allow periodic boundary condition for qmmm
 C 11 Aug 10 - TN  - changes for FMO/MD
 C  1 May 09 - LVS - GATHER EFP FORCES AT FORCE POINTS
 C  1 May 09 - NMT - new dimension for EFPBAS and FRAGMT
@@ -297,16 +298,10 @@ C
 C
 C  ---- check for PBC
 C
-      IF(MDTYP.EQ.EFP) THEN
-         IF (XBOX.LT.ZERO .OR. YBOX.LT.ZERO .OR. ZBOX.LT.ZERO) THEN
-            IF(MASWRK) WRITE(IW,5040) XBOX,YBOX,ZBOX
-            NERR=NERR+1
-         END IF
-      ELSE
-         XBOX = 100000.0D+00/AU2ANG
-         YBOX = 100000.0D+00/AU2ANG
-         ZBOX = 100000.0D+00/AU2ANG
-      ENDIF
+      IF (XBOX.LT.ZERO .OR. YBOX.LT.ZERO .OR. ZBOX.LT.ZERO) THEN
+         IF(MASWRK) WRITE(IW,5040) XBOX,YBOX,ZBOX
+         NERR=NERR+1
+      END IF
 C
       IF(NERR.GT.0) THEN
          IF(MASWRK) WRITE(IW,5050) NERR
@@ -811,7 +806,6 @@ C
      *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
 C
       COMMON /CONVMD/ AU2KCAL, EK2KCAL, AU2ANG, AU2SEC, AU2AMU, EK2BAR
-      COMMON /EFPOTD/ METHOD,INABIO,MOVE
       COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
      *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
      *                ATORQ(3,MXFRG)
@@ -821,14 +815,8 @@ C
      *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
       COMMON /VIRPR / VIR(3), PRXX, PRYY, PRZZ
 C
-      IF (METHOD.EQ.6) THEN
-         CALL EFCM
-         CALL SPCEG
-         CALL SPCTGT
-      ELSE
-         CALL EFSP
-         CALL EFGRAD
-      ENDIF
+      CALL EFSP
+      CALL EFGRAD
 C
       F2F = -AU2KCAL / EK2KCAL
       DO I = 1, NFRG
@@ -861,6 +849,7 @@ C
       PARAMETER (MXATM=2000)
       DOUBLE PRECISION MDTYP
       INTEGER INTMD
+      CHARACTER*8 LJNAME,ELJNAM
 C
       COMMON /ATMDAT/ VX(MXFRG), VY(MXFRG), VZ(MXFRG),
      *                QW(MXFRG), QX(MXFRG), QY(MXFRG), QZ(MXFRG),
@@ -888,6 +877,10 @@ C
      *                NPPTS(MXFRG),NPTTPT,IEFP,
      *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
      *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /FRGLJP/ CORDLJ(3,MXPT),ELJCRD(3,MXFGPT),
+     *                POTLJ(2,MXPT),ELJPOT(2,MXFGPT),
+     *                LJNAME(MXPT),ELJNAM(MXFGPT),
+     *                NLJPTS(MXFRG),NLJTTPT,ILJP,NMLJ(2)
       COMMON /FRGTYP/ NDFRG,ISET(MXFRG),NAMIDX(MXDFG)
       COMMON /FUNCT / E, EG(3,MXATM)
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
@@ -912,6 +905,7 @@ C        call mdwrit(1)
         NMST = 0
         NPST = 0
         NDPST = 0
+        NLJST = 0
         NRST = 0
         NATST = 0
         NORST = 0
@@ -1133,11 +1127,12 @@ C        here to get newest COM coords
 C
           CALL MDDSPQ(I,CENTDX,CENTDY,CENTDZ,QWSAV,QXSAV,QYSAV,QZSAV,
      *                QW(I),QX(I),QY(I),QZ(I),
-     *                NMST,NPST,NDPST,NRST,NDST,NATST,NORST,
+     *                NMST,NPST,NLJST,NDPST,NRST,NDST,NATST,NORST,
      *                XX(LPROVEC),NAOST,XX(LCANVEC),MXBF,INTMD)
 C
           NMST  = NMST  + NMPTS(I)
           NPST  = NPST  + NPPTS(I)
+          NLJST = NLJST + NLJPTS(I)
           NDPST = NDPST + NDPPTS(I)
           NRST  = NRST  + NRPTS(I)
           NDST  = NDST  + NDPTS(I)
@@ -1555,7 +1550,7 @@ C       *** verlet algorithm and quaternions                  ***
 C       *********************************************************
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       DOUBLE PRECISION MDTYP,IRATYZ,IRATZX,IRATXY
-      CHARACTER*8 FRCNME
+      CHARACTER*8 FRCNME,LJNAME,ELJNAM
       LOGICAL IFRCPNT
 C
       PARAMETER (MXFGPT=12000, MXFRG=1050,
@@ -1597,6 +1592,10 @@ C
      *                NPPTS(MXFRG),NPTTPT,IEFP,
      *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
      *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /FRGLJP/ CORDLJ(3,MXPT),ELJCRD(3,MXFGPT),
+     *                POTLJ(2,MXPT),ELJPOT(2,MXFGPT),
+     *                LJNAME(MXPT),ELJNAM(MXFGPT),
+     *                NLJPTS(MXFRG),NLJTTPT,ILJP,NMLJ(2)
       COMMON /FRGTYP/ NDFRG,ISET(MXFRG),NAMIDX(MXDFG)
       COMMON /EFPCMO/ NOCC(MXDFG),NVIR(MXDFG),NAO(MXDFG),NTAO,
      *                CANFOK(MXAO,MXDFG)
@@ -1619,6 +1618,7 @@ C
 C
       NMST = 0
       NPST = 0
+      NLJST = 0
       NDPST = 0
       NRST = 0
       NATST = 0
@@ -1721,11 +1721,13 @@ C        here to get newest COM coords
 C
        CALL MDDSPQ(J,CENTDX,CENTDY,CENTDZ,QWSAV,QXSAV,QYSAV,QZSAV,
      *             QW(J),QX(J),QY(J),QZ(J),
-     *             NMST,NPST,NDPST,NRST,NDST,NATST,NORST,XX(LPROVEC),
+     *             NMST,NPST,NLJST,NDPST,NRST,NDST,
+     *             NATST,NORST,XX(LPROVEC),
      *             NAOST,XX(LCANVEC),MXBF,INTMD)
 C
       NMST  = NMST  + NMPTS(J)
       NPST  = NPST  + NPPTS(J)
+      NLJST = NLJST + NLJPTS(J)
       NDPST = NDPST + NDPPTS(J)
       NRST  = NRST  + NRPTS(J)
       NDST  = NDST  + NDPTS(J)
@@ -2449,7 +2451,8 @@ C
 C
 C*MODULE MDEFP   *DECK MDDSPQ
       SUBROUTINE MDDSPQ(N,XDEL,YDEL,ZDEL,QWOLD,QXOLD,QYOLD,QZOLD,
-     *                  QW,QX,QY,QZ,NMST,NPST,NDPST,NRST,NDST,NATST,
+     *                  QW,QX,QY,QZ,NMST,NPST,NLJST,
+     *                  NDPST,NRST,NDST,NATST,
      *                  NORST,PROVEC,NAOST,CANVEC,MXBF,INTMD)
 C
 C    ****************************************************************
@@ -2470,7 +2473,7 @@ C
       PARAMETER (CONST=2.0D+00/1.7320508D+00)
 C
       CHARACTER*8 FRGNME,POLNAM,REPNAM,DPOLNAM,FRCNME
-      CHARACTER*8 DNAME,DPSNAM
+      CHARACTER*8 DNAME,DPSNAM,LJNAME,ELJNAM
 C
       DIMENSION T3(3,3),T3T(3,3)
       DIMENSION T1(3,3), T2(3,3)
@@ -2509,7 +2512,6 @@ C
      *                POLSCR(MXFGPT),IPLSCR,INDSCR
       COMMON /EFPPBC/ XBOX,YBOX,ZBOX,XCUT,YCUT,ZCUT,RCUT
      *                ,SWR1,SWR2,ISWF
-      COMMON /EFPOTD/ METHOD,INABIO,MOVE
       COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
      *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
      *                ATORQ(3,MXFRG)
@@ -2517,6 +2519,10 @@ C
      *                NPPTS(MXFRG),NPTTPT,IEFP,
      *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
      *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /FRGLJP/ CORDLJ(3,MXPT),ELJCRD(3,MXFGPT),
+     *                POTLJ(2,MXPT),ELJPOT(2,MXFGPT),
+     *                LJNAME(MXPT),ELJNAM(MXFGPT),
+     *                NLJPTS(MXFRG),NLJTTPT,ILJP,NMLJ(2)
       COMMON /FRGTYP/ NDFRG,ISET(MXFRG),NAMIDX(MXDFG)
       COMMON /PAULMO/ CENTNM(MXFGPT),CENTCD(3,MXFGPT),NORB(MXFRG),
      *                NPBF(MXFRG),NTMO
@@ -2631,7 +2637,6 @@ C     WRITE(6,*)'ROTATED COORDINATES,ME,NSERCH',ME,NSERCH
         EFC(3,NMST+I) = EFC(3,NMST+I) + ZDEL
 C       WRITE(6,FMT='(3F9.5)') (EFC(J,I+NMST), J=1,3)
   550 CONTINUE
-      IF (METHOD .EQ. 6) RETURN
 C
 C ROTATING DIPOLE MOMENTS
 C
@@ -2783,6 +2788,21 @@ C
         EFPOL(9,NPST+I) = T1(3,2)
         EFPOL(3,NPST+I) = T1(3,3)
   690 CONTINUE
+C
+C  ROTATING LENNARD-JONES POTENTIAL
+C
+      ILJPTS = NLJPTS(N)
+      DO I=1,ILJPTS
+         DO J=1,3
+            TEMP(J,I) = ELJCRD(J,I+NLJST) - EFCENT(J,N)
+         ENDDO
+      ENDDO
+      CALL MRARBR(T3,3,3,3,TEMP,3,ILJPTS,ELJCRD(1,NLJST+1),3)
+      DO I = 1,ILJPTS
+         ELJCRD(1,I+NLJST)=ELJCRD(1,I+NLJST)+EFCENT(1,N)+XDEL
+         ELJCRD(2,I+NLJST)=ELJCRD(2,I+NLJST)+EFCENT(2,N)+YDEL
+         ELJCRD(3,I+NLJST)=ELJCRD(3,I+NLJST)+EFCENT(3,N)+ZDEL
+      ENDDO
 C
 C IVANA ADDING DYNAMIC POLARIZABILITY
 C  ROTATING DYNAMIC POLARIZABILITY-COORDINATES AND TENSOR
@@ -5970,11 +5990,14 @@ C     MD with a QM piece has no properties
 C     Soohaeng thinks Ewald sums don't compute virial correctly
 C     Mike thinks none of these have been properly tested, so he
 C          has put in the final choice below, as of April 2009.
+C     Hui fixed the virial calculation in December 2010, but
+C         only one Ewald sum test changed its property printing.
 C
                        EXECPROP=.TRUE.
       IF (.NOT.MASWRK) EXECPROP=.FALSE.
       IF (NAT.GT.0)    EXECPROP=.FALSE.
       IF (IFEWLD)      EXECPROP=.FALSE.
+C
                        EXECPROP=.FALSE.    ! UNTIL SOMEONE VERIFIES THIS
 C
       IF (EXECPROP) THEN

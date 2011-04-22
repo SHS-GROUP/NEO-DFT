@@ -1,3 +1,5 @@
+C 10 DEC 10 - NMT,DJS,HL - UMP2-PCM GRADIENT
+C                          QM/MM(POL)/CONTINUUM STYLE MP2 AND TDDFT
 C  1 OCT 10 - DJS,HL - ZAPT-PCM GRADIENT
 C 11 AUG 10 - DGF - SYNCH FMO COMMON BLOCK
 C 29 MAR 10 - DGF - ADD A SCREENING IN FELECQ FOR FMO-PCM
@@ -310,6 +312,7 @@ C
           IF(METHOD(I).EQ.4) WRITE(IW,9010) I,INITS(I),'  FIXPVA'
         ENDDO
       END IF
+      IF(MASWRK .AND. METHOD(1).EQ.4) WRITE(IW,9020)
 C
       IF(MXTS.EQ.0) THEN
 C       VERY SMALL MOLECULES DO NOT HAVE MUCH REDUCTION OF TESSERAE
@@ -340,6 +343,11 @@ C
      *   5X,'AREATL  =',F10.4//
      *   5X,'SPHERE     INITS       METHOD')
  9010 FORMAT(5X,I6,5X,I5,5X,A)
+ 9020 FORMAT(/5X,'------------------------------'/
+     *        5X,' FIXPVA TESSELLATION FOR PCM'/
+     *        5X,'    PEIFENG SU AND HUI LI'/
+     *        5X,'UNIVERSITY OF NEBRASKA-LINCOLN'/
+     *        5X,'------------------------------'/)
       END
 C*MODULE PCMCV2  *DECK CPCMMV
       SUBROUTINE CPCMMV(DMATM1,WORK,IPVT,XCTS,YCTS,ZCTS,AS)
@@ -601,21 +609,30 @@ C
         ENDIF
 C
         IF(TDDFT) THEN
-           CALL TDDFTQ(XX(LQPOTXY),XX(LQPOTMN),XX(LQ0),XX(LQ1),Q2,
+           IF(IEFP.EQ.0) THEN
+              CALL TDDFTQ(XX(LQPOTXY),XX(LQPOTMN),XX(LQ0),XX(LQ1),Q2,
      *              XX(LQ3),XX(LD0),XX(LQA),XX(LDIMAT),XX(LQREP),
      *              XX(LTMP0),XX(LTMP1),XX(LTMP2),XX(LIPVT),
      *              XX(LRMUL),NTSPAR,XCTS,YCTS,ZCTS,AS,
      *              XX(LQSEXY),XX(LQSEMN),XE,YE,ZE,RE,ISPHE,
      *              XX(LLIST),XX(LTA),XX(LV1),L1,L2,MXDII1,XX(LDTEMP))
+           ELSE IF(IEFP.EQ.1) THEN
+              CALL TDCHGDIP(XX(LQSEXY),XX(LQSEMN),
+     *                      XX(LTA),XX(LV1),L1,L2,XX(LDTEMP))
+           END IF
         END IF
 C
         IF(MP2PCM) THEN
-           CALL MP2CHG(XX(LQPOTMP),XX(LQ0),XX(LQ1),Q2,
-     *              XX(LQ3),XX(LD0),XX(LQA),XX(LDIMAT),XX(LQREP),
-     *              XX(LTMP0),XX(LTMP1),XX(LTMP2),XX(LIPVT),
-     *              XX(LRMUL),NTSPAR,XCTS,YCTS,ZCTS,AS,
-     *              XX(LQSEMP),XE,YE,ZE,RE,ISPHE,
-     *              XX(LLIST),XX(LPMP),L2,MXDII1)
+           IF(IEFP.EQ.0) THEN
+              CALL MP2CHG(XX(LQPOTMP),XX(LQ0),XX(LQ1),Q2,
+     *                    XX(LQ3),XX(LD0),XX(LQA),XX(LDIMAT),XX(LQREP),
+     *                    XX(LTMP0),XX(LTMP1),XX(LTMP2),XX(LIPVT),
+     *                    XX(LRMUL),NTSPAR,XCTS,YCTS,ZCTS,AS,
+     *                    XX(LQSEMP),XE,YE,ZE,RE,ISPHE,
+     *                    XX(LLIST),XX(LPMP),L2,MXDII1)
+           ELSE IF(IEFP.EQ.1) THEN
+              CALL MP2CHGDIP(XX(LQSEMP),XX(LPMP))
+           END IF
         END IF
 C
         CALL CCMBEM(XX(LD),XX(LSOLEF),XX(LSOLQM),
@@ -693,7 +710,7 @@ C
       DATA ZERO, ONE /0.0D+00, 1.0D+00/
       DATA PT5/0.5D+00/
       DATA FPI/12.56637062D+00/
-      DATA UHF,ROHF,GVB/8HUHF     ,8HROHF    ,8HGVB     /
+      DATA RHF,UHF,ROHF,GVB/8HRHF     ,8HUHF     ,8HROHF    ,8HGVB     /
       DATA RNONE  /8HNONE    /
 C---------------------------------------------------------------------
 C     COMPUTE THE C-PCM AND IEF-PCM GRADIENTS
@@ -719,22 +736,34 @@ C
 C     -- READ DENSITY MATRIX
 C
       IF(NAT.GT.0) THEN
-         IF(TDDFT.OR.MP2PCM) THEN
-            CALL DAREAD(IDAF,IODA,DEN,L2,308,0)
+         IF(TDDFT) THEN
+            IF (SCFTYP.EQ.RHF) CALL DAREAD(IDAF,IODA,DEN,L2,308,0)
+         ELSE IF (MP2PCM) THEN
+            IF (SCFTYP.EQ.RHF .OR. SCFTYP.EQ.ROHF) THEN
+               CALL DAREAD(IDAF,IODA,DEN,L2,308,0)
+            ELSE IF (SCFTYP.EQ.UHF) THEN
+               CALL VALFM(LOADFM)
+               LDENB = LOADFM + 1
+               LAST  = LDENB  + L2
+               NEED  = LAST - LOADFM - 1
+               CALL GETFM(NEED)
+               CALL DAREAD(IDAF,IODA,DEN,L2,418,0)
+               CALL DAREAD(IDAF,IODA,XX(LDENB),L2,428,0)
+               CALL VADD(DEN,1,XX(LDENB),1,DEN,1,L2)
+               CALL RETFM(NEED)
+            END IF
          ELSE
             CALL DAREAD(IDAF,IODA,DEN,L2,16,0)
-         END IF
-         IF(SCFTYP.EQ.ROHF .OR. SCFTYP.EQ.UHF
-     *                     .OR. SCFTYP.EQ.GVB) THEN
-            CALL VALFM(LOADFM)
-            LDENB = LOADFM + 1
-            LAST  = LDENB  + L2
-            NEED  = LAST - LOADFM - 1
-            CALL GETFM(NEED)
-            CALL DENDD1(DEN,XX(LDENB),L2)
-            CALL RETFM(NEED)
-C           - READ DENSITY FROM 308 IF ZAPT-PCM
-            IF(MP2PCM) CALL DAREAD(IDAF,IODA,DEN,L2,308,0)
+            IF(SCFTYP.EQ.ROHF .OR. SCFTYP.EQ.UHF
+     *                        .OR. SCFTYP.EQ.GVB) THEN
+               CALL VALFM(LOADFM)
+               LDENB = LOADFM + 1
+               LAST  = LDENB  + L2
+               NEED  = LAST - LOADFM - 1
+               CALL GETFM(NEED)
+               CALL DENDD1(DEN,XX(LDENB),L2)
+               CALL RETFM(NEED)
+            END IF
          END IF
       END IF
 C
@@ -780,7 +809,14 @@ C
 C     -- COMPUTE THE FORCE IMPOSED ON EACH EFP BY ASC ON EACH TESSERAE
 C        THE PAIRS OF FORCES STORED IN FFRGQ
 C
+      IF(TDDFT)  CALL VADD(QSEMN,1,QT,1,QT,1,NTS)
+      IF(MP2PCM) CALL VADD(QSEMP,1,QT,1,QT,1,NTS)
       CALL FFRAGQ(FFRGQ,QT,XCTS,YCTS,ZCTS)
+      IF(MP2PCM) CALL VSUB(QSEMP,1,QT,1,QT,1,NTS)
+      IF(TDDFT)  CALL VSUB(QSEMN,1,QT,1,QT,1,NTS)
+      IF(MP2PCM .AND.IEFP.EQ.1) CALL FFRAGQ2(FFRGQ,QT,XCTS,YCTS,ZCTS)
+      IF(TDDFT  .AND.IEFP.EQ.1) CALL FFRAGQ3(FFRGQ,QT,XCTS,YCTS,ZCTS)
+      IF(TDDFT  .AND.IEFP.EQ.1) CALL FFRAGQ4(FFRGQ,QSEXY,XCTS,YCTS,ZCTS)
 C
 C     -- COMPUTE THE VECTOR A^(-1)*S*A^(-1)*Q2 STORE IN VECTMP
 C
@@ -835,7 +871,7 @@ C
          FNUCQY = ZERO
          FNUCQZ = ZERO
          DO ITS = 1, NTS
-            IF(ISPHE(ITS).NE.IATGLB) THEN
+            IF(ISPHE(ITS).NE.IATGLB .OR. NESFP.GT.0) THEN
 C              - ELECTRONS -
                FELEQX=FELEQX+FEQ(1,IAT,ITS)
                FELEQY=FELEQY+FEQ(2,IAT,ITS)
@@ -881,6 +917,7 @@ C
          FQ2QX = ZERO
          FQ2QY = ZERO
          FQ2QZ = ZERO
+         IF(NESFP.EQ.0)THEN
          DO ITS = 1, NTS
             IF(ISPHE(ITS).EQ.IATGLB) THEN
                XI = XCTS(ITS)
@@ -938,6 +975,7 @@ C
                END DO
             END IF
          END DO
+         END IF
 C
 C
 C
@@ -946,7 +984,7 @@ C
          FQ2Q2X=ZERO
          FQ2Q2Y=ZERO
          FQ2Q2Z=ZERO
-         IF(IEF.EQ.3) THEN
+         IF(IEF.EQ.3 .AND. NESFP.EQ.0) THEN
             DO I = 1, NTS
                XI=XCTS(I)
                YI=YCTS(I)
@@ -999,6 +1037,7 @@ C
          FQNUCX = ZERO
          FQNUCY = ZERO
          FQNUCZ = ZERO
+         IF(NESFP.EQ.0)THEN
          DO ITS = 1, NTS
             IF(ISPHE(ITS).EQ.IATGLB) THEN
                DO JAT = 1, NAT
@@ -1029,12 +1068,14 @@ C
                END DO
             END IF
          END DO
+         END IF
 C
 C        TERM 4. FORCE IMPOSED ON ASC(IAT) BY EFPS
 C
          FQEFPX = ZERO
          FQEFPY = ZERO
          FQEFPZ = ZERO
+         IF(NESFP.EQ.0)THEN
          DO ITS = 1, NTS
             IF(ISPHE(ITS).EQ.IATGLB) THEN
                DO IFRG = 1, NFRG
@@ -1044,13 +1085,14 @@ C
                END DO
             END IF
          END DO
+         END IF
 C
 C        TERM 5. FORCE DUE TO TESSARA AREA CHANGE (FIXPVA)
 C
          FAX = ZERO
          FAY = ZERO
          FAZ = ZERO
-         IF(IPCDER.EQ.3) THEN
+         IF(IPCDER.EQ.3 .AND. NESFP.EQ.0) THEN
          SQRTPI = SQRT(3.1415926535897932D+00)
          DO ITS = 1, NTS
             DO III = 1, IDDAI(21,ITS)
@@ -1145,6 +1187,7 @@ C
          TQ2QX = ZERO
          TQ2QY = ZERO
          TQ2QZ = ZERO
+         IF(NESFP.EQ.0) THEN
          DO ITS = 1, NTS
             IF(IDSP(ISPHE(ITS)).EQ.IFRG) THEN
                XI = XCTS(ITS)
@@ -1164,6 +1207,15 @@ C
                      R = SQRT(R2)
                      R3= R*R2
                      FT = QTITS*QTJTS/R3
+                     IF(TDDFT) THEN
+                        FT=FT+2.0D+00*QSEXY(ITS)*QSEXY(JTS)/R3
+     *                                + QTJTS*QSEMN(ITS)/R3
+     *                                + QTITS*QSEMN(JTS)/R3
+                        END IF
+                     IF(MP2PCM) THEN
+                        FT=FT+(QTJTS*QSEMP(ITS)/R3
+     *                       + QTITS*QSEMP(JTS)/R3)
+                     END IF
                      FQQX = FQQX - (XI-XJ)*FT
                      FQQY = FQQY - (YI-YJ)*FT
                      FQQZ = FQQZ - (ZI-ZJ)*FT
@@ -1189,6 +1241,7 @@ C
                END DO
             END IF
          END DO
+         END IF
 C
 C        SCALE FOR C-PCM
          IF(IEF.EQ.10)THEN
@@ -1209,7 +1262,7 @@ C
          TQ2Q2X = ZERO
          TQ2Q2Y = ZERO
          TQ2Q2Z = ZERO
-         IF(IEF.EQ.3) THEN
+         IF(IEF.EQ.3 .AND. NESFP.EQ.0) THEN
             DO I = 1, NTS
                XI=XCTS(I)
                YI=YCTS(I)
@@ -1278,7 +1331,7 @@ C
          TQNUCX = ZERO
          TQNUCY = ZERO
          TQNUCZ = ZERO
-         IF(NAT.GT.0) THEN
+         IF(NAT.GT.0 .AND. NESFP.EQ.0) THEN
             DO ITS = 1, NTS
                IF(IDSP(ISPHE(ITS)).EQ.IFRG) THEN
                   XI = XCTS(ITS)
@@ -1308,6 +1361,8 @@ C
                      R  = SQRT(R2)
                      R3 = R*R2
                      DUM = ZAN(JAT) * QT(ITS) /R3
+                     IF (TDDFT) DUM = DUM + ZAN(JAT) * QSEMN(ITS) /R3
+                     IF(MP2PCM) DUM = DUM + ZAN(JAT) * QSEMP(ITS) /R3
                      FQNUCX = FQNUCX + DUM*(XN-XI)
                      FQNUCY = FQNUCY + DUM*(YN-YI)
                      FQNUCZ = FQNUCZ + DUM*(ZN-ZI)
@@ -1330,6 +1385,7 @@ C
          TQEFPX = ZERO
          TQEFPY = ZERO
          TQEFPZ = ZERO
+         IF(NESFP.EQ.0) THEN
          DO ITS = 1, NTS
             IF(IDSP(ISPHE(ITS)).EQ.IFRG) THEN
                XI = XCTS(ITS)
@@ -1354,6 +1410,7 @@ C
                END DO
             END IF
          END DO
+         END IF
 C
 C        TERM 5. FORCE/TORQE DUE TO TESSARA AREA CHANGE (FIXPVA)
 C
@@ -1363,7 +1420,7 @@ C
          TAX = ZERO
          TAY = ZERO
          TAZ = ZERO
-         IF(IPCDER.EQ.3) THEN
+         IF(IPCDER.EQ.3 .AND. NESFP.EQ.0) THEN
          SQRTPI = SQRT(3.1415926535897932D+00)
          DO ISP = 1, I_NESF
             IF(IDSP(ISP).EQ.IFRG)THEN
@@ -1375,6 +1432,14 @@ C
                      IF(ISP.EQ.IDDAI(III,ITS)) THEN
                         DUM=-1.07D+00*SQRTPI/
      *                      SQRT(AS(ITS)**3)*0.5D+00*QT(ITS)*QT(ITS)
+                        IF(MP2PCM)THEN
+                           DUM = DUM -1.07D+00*SQRTPI/SQRT(AS(ITS)**3)*
+     *                        (QT(ITS)*QSEMP(ITS))
+                        END IF
+                        IF(TDDFT) THEN
+                           DUM = DUM -1.07D+00*SQRTPI/SQRT(AS(ITS)**3)*
+     *                        (QSEXY(ITS)*QSEXY(ITS)+QT(ITS)*QSEMN(ITS))
+                        END IF
                         FAX=FAX+DUM*DAI(1,III,ITS)
                         FAY=FAY+DUM*DAI(2,III,ITS)
                         FAZ=FAZ+DUM*DAI(3,III,ITS)
@@ -4009,6 +4074,239 @@ C
                DIPX=0.5D+00*(DIND(1,IDP)+DINDD(1,IDP))
                DIPY=0.5D+00*(DIND(2,IDP)+DINDD(2,IDP))
                DIPZ=0.5D+00*(DIND(3,IDP)+DINDD(3,IDP))
+               DX = XN-XI
+               DY = YN-YI
+               DZ = ZN-ZI
+               R2 = DX**2+DY**2+DZ**2
+               R  = SQRT(R2)
+               R3 = R2*R
+               R5 = R2*R3
+               DUMDIP1= QTITS/R3
+               DUMDIP2= THREE*(DIPX*DX+DIPY*DY+DIPZ*DZ)*QTITS/R5
+               FORCEX = - DUMDIP1*DIPX + DUMDIP2*DX
+               FORCEY = - DUMDIP1*DIPY + DUMDIP2*DY
+               FORCEZ = - DUMDIP1*DIPZ + DUMDIP2*DZ
+               FFRGQ(1,IFRG,ITS) = FFRGQ(1,IFRG,ITS) + FORCEX
+               FFRGQ(2,IFRG,ITS) = FFRGQ(2,IFRG,ITS) + FORCEY
+               FFRGQ(3,IFRG,ITS) = FFRGQ(3,IFRG,ITS) + FORCEZ
+               FFRGQ(4,IFRG,ITS) = FFRGQ(4,IFRG,ITS)
+     *                             - FORCEY*(ZN-EFCENT(3,IFRG))
+     *                             + FORCEZ*(YN-EFCENT(2,IFRG))
+     *                             - DUMDIP1*(DIPY*DZ - DIPZ*DY)
+               FFRGQ(5,IFRG,ITS) = FFRGQ(5,IFRG,ITS)
+     *                             - FORCEZ*(XN-EFCENT(1,IFRG))
+     *                             + FORCEX*(ZN-EFCENT(3,IFRG))
+     *                             - DUMDIP1*(DIPZ*DX - DIPX*DZ)
+               FFRGQ(6,IFRG,ITS) = FFRGQ(6,IFRG,ITS)
+     *                             - FORCEX*(YN-EFCENT(2,IFRG))
+     *                             + FORCEY*(XN-EFCENT(1,IFRG))
+     *                             - DUMDIP1*(DIPX*DY - DIPY*DX)
+            END DO
+         END DO
+      END DO
+C
+      RETURN
+      END
+C*MODULE PCMCV2  *DECK FFRAGQ2
+      SUBROUTINE FFRAGQ2(FFRGQ,QT,XCTS,YCTS,ZCTS)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      CHARACTER*8 POLNAM,DPOLNAM
+C
+      PARAMETER (MXFRG=1050, MXFGPT=12000, MXIFRQ=12,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
+     *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
+     *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
+     *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ*MXFGPT),
+     *                POLSCR(MXFGPT),IPLSCR,INDSCR
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
+     *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
+     *                ATORQ(3,MXFRG)
+      COMMON /MPDIPL/ DINDMP(3,MXFGPT),DINDDMP(3,MXFGPT)
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+C
+      DIMENSION FFRGQ(6,NFRG,NTS), QT(NTS), XCTS(*),YCTS(*),ZCTS(*)
+C
+      DATA THREE/3.0D+00/
+C
+      DO ITS = 1, NTS
+         XI = XCTS(ITS)
+         YI = YCTS(ITS)
+         ZI = ZCTS(ITS)
+         QTITS= QT(ITS)
+         IDP= 0
+         DO IFRG = 1, NFRG
+            DO III = 1, NPPTS(IFRG)
+               IDP = IDP + 1
+               XN = EFP(1,IDP)
+               YN = EFP(2,IDP)
+               ZN = EFP(3,IDP)
+               DIPX=0.5D+00*(DINDMP(1,IDP)+DINDDMP(1,IDP))
+               DIPY=0.5D+00*(DINDMP(2,IDP)+DINDDMP(2,IDP))
+               DIPZ=0.5D+00*(DINDMP(3,IDP)+DINDDMP(3,IDP))
+               DX = XN-XI
+               DY = YN-YI
+               DZ = ZN-ZI
+               R2 = DX**2+DY**2+DZ**2
+               R  = SQRT(R2)
+               R3 = R2*R
+               R5 = R2*R3
+               DUMDIP1= QTITS/R3
+               DUMDIP2= THREE*(DIPX*DX+DIPY*DY+DIPZ*DZ)*QTITS/R5
+               FORCEX = - DUMDIP1*DIPX + DUMDIP2*DX
+               FORCEY = - DUMDIP1*DIPY + DUMDIP2*DY
+               FORCEZ = - DUMDIP1*DIPZ + DUMDIP2*DZ
+               FFRGQ(1,IFRG,ITS) = FFRGQ(1,IFRG,ITS) + FORCEX
+               FFRGQ(2,IFRG,ITS) = FFRGQ(2,IFRG,ITS) + FORCEY
+               FFRGQ(3,IFRG,ITS) = FFRGQ(3,IFRG,ITS) + FORCEZ
+               FFRGQ(4,IFRG,ITS) = FFRGQ(4,IFRG,ITS)
+     *                             - FORCEY*(ZN-EFCENT(3,IFRG))
+     *                             + FORCEZ*(YN-EFCENT(2,IFRG))
+     *                             - DUMDIP1*(DIPY*DZ - DIPZ*DY)
+               FFRGQ(5,IFRG,ITS) = FFRGQ(5,IFRG,ITS)
+     *                             - FORCEZ*(XN-EFCENT(1,IFRG))
+     *                             + FORCEX*(ZN-EFCENT(3,IFRG))
+     *                             - DUMDIP1*(DIPZ*DX - DIPX*DZ)
+               FFRGQ(6,IFRG,ITS) = FFRGQ(6,IFRG,ITS)
+     *                             - FORCEX*(YN-EFCENT(2,IFRG))
+     *                             + FORCEY*(XN-EFCENT(1,IFRG))
+     *                             - DUMDIP1*(DIPX*DY - DIPY*DX)
+            END DO
+         END DO
+      END DO
+C
+      RETURN
+      END
+C*MODULE PCMCV2  *DECK FFRAGQ3
+      SUBROUTINE FFRAGQ3(FFRGQ,QT,XCTS,YCTS,ZCTS)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      CHARACTER*8 POLNAM,DPOLNAM
+C
+      PARAMETER (MXFRG=1050, MXFGPT=12000, MXIFRQ=12,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      COMMON /DEIDIP/ PMIND(3,MXFGPT),PMINDD(3,MXFGPT),
+     *                XYIND(3,MXFGPT),XYINDD(3,MXFGPT)
+      COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
+     *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
+     *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
+     *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ*MXFGPT),
+     *                POLSCR(MXFGPT),IPLSCR,INDSCR
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
+     *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
+     *                ATORQ(3,MXFRG)
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+C
+      DIMENSION FFRGQ(6,NFRG,NTS), QT(NTS), XCTS(*),YCTS(*),ZCTS(*)
+C
+      DATA THREE/3.0D+00/
+C
+      DO ITS = 1, NTS
+         XI = XCTS(ITS)
+         YI = YCTS(ITS)
+         ZI = ZCTS(ITS)
+         QTITS= QT(ITS)
+         IDP= 0
+         DO IFRG = 1, NFRG
+            DO III = 1, NPPTS(IFRG)
+               IDP = IDP + 1
+               XN = EFP(1,IDP)
+               YN = EFP(2,IDP)
+               ZN = EFP(3,IDP)
+               DIPX=0.5D+00*(PMIND(1,IDP)+PMINDD(1,IDP))
+               DIPY=0.5D+00*(PMIND(2,IDP)+PMINDD(2,IDP))
+               DIPZ=0.5D+00*(PMIND(3,IDP)+PMINDD(3,IDP))
+               DX = XN-XI
+               DY = YN-YI
+               DZ = ZN-ZI
+               R2 = DX**2+DY**2+DZ**2
+               R  = SQRT(R2)
+               R3 = R2*R
+               R5 = R2*R3
+               DUMDIP1= QTITS/R3
+               DUMDIP2= THREE*(DIPX*DX+DIPY*DY+DIPZ*DZ)*QTITS/R5
+               FORCEX = - DUMDIP1*DIPX + DUMDIP2*DX
+               FORCEY = - DUMDIP1*DIPY + DUMDIP2*DY
+               FORCEZ = - DUMDIP1*DIPZ + DUMDIP2*DZ
+               FFRGQ(1,IFRG,ITS) = FFRGQ(1,IFRG,ITS) + FORCEX
+               FFRGQ(2,IFRG,ITS) = FFRGQ(2,IFRG,ITS) + FORCEY
+               FFRGQ(3,IFRG,ITS) = FFRGQ(3,IFRG,ITS) + FORCEZ
+               FFRGQ(4,IFRG,ITS) = FFRGQ(4,IFRG,ITS)
+     *                             - FORCEY*(ZN-EFCENT(3,IFRG))
+     *                             + FORCEZ*(YN-EFCENT(2,IFRG))
+     *                             - DUMDIP1*(DIPY*DZ - DIPZ*DY)
+               FFRGQ(5,IFRG,ITS) = FFRGQ(5,IFRG,ITS)
+     *                             - FORCEZ*(XN-EFCENT(1,IFRG))
+     *                             + FORCEX*(ZN-EFCENT(3,IFRG))
+     *                             - DUMDIP1*(DIPZ*DX - DIPX*DZ)
+               FFRGQ(6,IFRG,ITS) = FFRGQ(6,IFRG,ITS)
+     *                             - FORCEX*(YN-EFCENT(2,IFRG))
+     *                             + FORCEY*(XN-EFCENT(1,IFRG))
+     *                             - DUMDIP1*(DIPX*DY - DIPY*DX)
+            END DO
+         END DO
+      END DO
+C
+      RETURN
+      END
+C*MODULE PCMCV2  *DECK FFRAGQ4
+      SUBROUTINE FFRAGQ4(FFRGQ,QSEXY,XCTS,YCTS,ZCTS)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      CHARACTER*8 POLNAM,DPOLNAM
+C
+      PARAMETER (MXFRG=1050, MXFGPT=12000, MXIFRQ=12,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      COMMON /DEIDIP/ PMIND(3,MXFGPT),PMINDD(3,MXFGPT),
+     *                XYIND(3,MXFGPT),XYINDD(3,MXFGPT)
+      COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
+     *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
+     *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
+     *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ*MXFGPT),
+     *                POLSCR(MXFGPT),IPLSCR,INDSCR
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
+     *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
+     *                ATORQ(3,MXFRG)
+      COMMON /PCMDIM/ MXSP,MXTS,MEMPCM1,MEMPCM2,NTS
+C
+      DIMENSION FFRGQ(6,NFRG,NTS), QSEXY(NTS), XCTS(*),YCTS(*),ZCTS(*)
+C
+      DATA THREE/3.0D+00/
+C
+      DO ITS = 1, NTS
+         XI = XCTS(ITS)
+         YI = YCTS(ITS)
+         ZI = ZCTS(ITS)
+         QTITS= QSEXY(ITS)
+         IDP= 0
+         DO IFRG = 1, NFRG
+            DO III = 1, NPPTS(IFRG)
+               IDP = IDP + 1
+               XN = EFP(1,IDP)
+               YN = EFP(2,IDP)
+               ZN = EFP(3,IDP)
+               DIPX=(XYIND(1,IDP)+XYINDD(1,IDP))
+               DIPY=(XYIND(2,IDP)+XYINDD(2,IDP))
+               DIPZ=(XYIND(3,IDP)+XYINDD(3,IDP))
                DX = XN-XI
                DY = YN-YI
                DZ = ZN-ZI
