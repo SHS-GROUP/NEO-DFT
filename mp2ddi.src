@@ -1,3 +1,4 @@
+C  1 OCT 10 - DJS,HL - ZAPT-PCM GRADIENT
 C 11 AUG 10 - DGF - ALLOCATE NEEDED STORAGE FOR PRJGRD
 C 11 AUG 10 - RP  - FIX COSMO INTERFACE
 C 23 JUN 10 - RP  - UPDATE COSMO INTERFACE, SET UP DOUBLE HYBRIDS
@@ -112,7 +113,7 @@ C
       DATA CHECK/8HCHECK   /
       DATA ZAPT/8HZAPT    /
       DATA UHF/8HUHF     /
-      DATA RHF/8HRHF     /
+      DATA RHF,ROHF/8HRHF     ,8HROHF    /
       DATA G3MP2/8HG3MP2   /
 C
 C COSMO INFORMATION
@@ -221,7 +222,8 @@ C
           IF (SCFTYP.EQ.RHF) WRITE(ICHANL,1)
           IF (SCFTYP.EQ.UHF) WRITE(ICHANL,4)
           IF (OSPT.EQ.ZAPT)  WRITE(ICHANL,6)
-          IF (SCFTYP.EQ.RHF .AND. IPCM.EQ.1) WRITE(ICHANL,7)
+          IF ((SCFTYP.EQ.RHF .OR. SCFTYP.EQ.ROHF)
+     *        .AND. IPCM.EQ.1) WRITE(ICHANL,7)
         END IF
         CALL FLSHBF(ICHANL)
       END IF
@@ -6588,8 +6590,8 @@ C*MODULE MP2DDI  *DECK PCMZVEC
       SUBROUTINE PCMZVEC(U,UNXT,CMO)
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
-      PARAMETER (ZERO=0.0D+00,ONE=1.0D+00,FOUR=4.0D+00)
-      LOGICAL OUTPUT,MP2ENG,UMP2GD,IPCFP
+      PARAMETER (ZERO=0.0D+00,ONE=1.0D+00,TWO=2.0D+00,FOUR=4.0D+00)
+      LOGICAL OUTPUT,MP2ENG,UMP2GD,IPCFP,ZAPTGD
       DOUBLE PRECISION U(*),UNXT(*),CMO(NBF,*)
 C
       COMMON /MP2XTR/ NBF,NACORE,NBSQ,NBTR,NSTR,MXSHL,NACT,NOCC
@@ -6602,6 +6604,8 @@ C
      *                LINIPCM,LMEPCM,LAXYZCT,LXYZCT2,LNVERT,LQSN,LQSE,
      *                LQFS,LQIND,LISPHE,LVAD,LQOR,LVECMUL,LAIPRJ,LFIPRJ,
      *                LPEL,LPCMCDR,LDAI,LIDDAI,LQSND,LQSED
+      COMMON /ZAPTGR/ NOCD,NOCD1,NOCS,NOCSTR,IXYEXC,ICHIX,ITIA,IZVEC
+     *,               ZAPTGD
       COMMON /FMCOM / XX(1)
 C
       NUM  = NBF
@@ -6632,9 +6636,29 @@ C
       LAST     = LPMO    + NVIR*NOCC
       NEED     = LAST    - LOADFM
       CALL GETFM(NEED)
-      CALL MRARTR(U,NVIR,NVIR,NOCC,CMO,NBF,NBF,XX(LXT),NBF)
-      CALL DGEMM('N','N',NBF,NBF,NVIR,ONE,CMO(1,NOP1),NBF,XX(LXT),
-     *           NBF,ZERO,XX(LPAO),NBF)
+C
+      IF(ZAPTGD) THEN
+C        - YJ BLOCK = NOCS*NOCD
+         CALL MRARTR(U,NOCS,NOCS,NOCD,CMO,NBF,NBF,XX(LXT),NBF)
+         CALL DGEMM('N','N',NBF,NBF,NOCS,ONE,CMO(1,NOCD+1),NBF,XX(LXT),
+     *              NBF,ZERO,XX(LPAO),NBF)
+C        - BJ BLOCK = NVIR*NOCD
+         CALL MRARTR(U(NOCS*NOCD+1),NVIR,NVIR,NOCD,CMO,NBF,NBF,
+     *               XX(LXT),NBF)
+         CALL DGEMM('N','N',NBF,NBF,NVIR,TWO,CMO(1,NOCD+NOCS+1),
+     *              NBF,XX(LXT),
+     *              NBF,ONE,XX(LPAO),NBF)
+C        - BY BLOCK = NVIR*NOCS
+         CALL MRARTR(U(NOCS*NOCD+NVIR*NOCD+1),NVIR,NVIR,NOCS,
+     *               CMO(1,NOCD+1),NBF,NBF,XX(LXT),NBF)
+         CALL DGEMM('N','N',NBF,NBF,NVIR,ONE,CMO(1,NOCD+NOCS+1),
+     *              NBF,XX(LXT),
+     *              NBF,ONE,XX(LPAO),NBF)
+      ELSE
+         CALL MRARTR(U,NVIR,NVIR,NOCC,CMO,NBF,NBF,XX(LXT),NBF)
+         CALL DGEMM('N','N',NBF,NBF,NVIR,ONE,CMO(1,NOP1),NBF,XX(LXT),
+     *              NBF,ZERO,XX(LPAO),NBF)
+      END IF
 C
 C     -- MAKE SQUARE MATRIX INTO TRIANGLE ---
       CALL SQTR(XX(LPAO),XX(LPMN),NBF)
@@ -6665,18 +6689,62 @@ C
 C     -- MAKE TRIANGLE INTO SQUARE MATRIX---
       CALL CPYTSQ(XX(LBMN),XX(LPAO),NBF,1)
 C
-C     ---- TRANSFORM BMN3 TO MO BASIS ----
-      CALL MRARBR(XX(LPAO),NBF,NBF,NBF,CMO,NBF,NOCC,XX(LXT),NBF)
-      CALL DGEMM('T','N',NVIR,NOCC,NBF,ONE,CMO(1,NOP1),NBF,
-     *           XX(LXT),NBF,ZERO,XX(LPMO),NVIR)
-C
-      IV2 = 0
-      DO II = 1,NOCC
-         DO JJ = 1,NVIR
-            IV2 = IV2 + 1
-            UNXT(IV2)=UNXT(IV2) + XX(LPMO+IV2-1)
+      IF(ZAPTGD) THEN
+         IV2=0
+         IF(NOCS.GT.0)THEN
+C        - XI BLOCK = NOCS*NOCD
+         CALL MRARBR(XX(LPAO),NBF,NBF,NBF,CMO,NBF,NOCD,XX(LXT),NBF)
+         CALL DGEMM('T','N',NOCS,NOCD,NBF,ONE,CMO(1,NOCD+1),NBF,
+     *           XX(LXT),NBF,ZERO,XX(LPMO),NOCS)
+         KKK = 0
+         DO II = 1,NOCD
+            DO JJ = 1,NOCS
+               IV2 = IV2+1
+               KKK = KKK+1
+               UNXT(IV2)=UNXT(IV2)+0.25D+00*XX(LPMO+KKK-1)
+            ENDDO
          ENDDO
-      ENDDO
+         END IF
+C        - AI BLOCK = NVIR*NOCD
+         CALL MRARBR(XX(LPAO),NBF,NBF,NBF,CMO,NBF,NOCD,XX(LXT),NBF)
+         CALL DGEMM('T','N',NVIR,NOCD,NBF,ONE,CMO(1,NOCD+NOCS+1),NBF,
+     *           XX(LXT),NBF,ZERO,XX(LPMO),NVIR)
+         KKK = 0
+         DO II = 1,NOCD
+            DO JJ = 1,NVIR
+               IV2 = IV2+1
+               KKK = KKK+1
+               UNXT(IV2)=UNXT(IV2)+0.50D+00*XX(LPMO+KKK-1)
+            ENDDO
+         ENDDO
+C        - AX BLOCK = NVIR*NOCS
+         CALL MRARBR(XX(LPAO),NBF,NBF,NBF,CMO(1,NOCD+1),
+     *               NBF,NOCS,XX(LXT),NBF)
+         CALL DGEMM('T','N',NVIR,NOCS,NBF,ONE,CMO(1,NOCD+NOCS+1),NBF,
+     *           XX(LXT),NBF,ZERO,XX(LPMO),NVIR)
+         KKK = 0
+         DO II = 1,NOCS
+            DO JJ = 1,NVIR
+               IV2 = IV2+1
+               KKK = KKK+1
+               UNXT(IV2)=UNXT(IV2)+0.25D+00*XX(LPMO+KKK-1)
+            ENDDO
+         ENDDO
+      ELSE
+C        ---- TRANSFORM BMN3 TO MO BASIS ----
+         CALL MRARBR(XX(LPAO),NBF,NBF,NBF,CMO,NBF,NOCC,XX(LXT),NBF)
+         CALL DGEMM('T','N',NVIR,NOCC,NBF,ONE,CMO(1,NOP1),NBF,
+     *              XX(LXT),NBF,ZERO,XX(LPMO),NVIR)
+C
+         IV2 = 0
+         DO II = 1,NOCC
+            DO JJ = 1,NVIR
+               IV2 = IV2 + 1
+               UNXT(IV2)=UNXT(IV2) + XX(LPMO+IV2-1)
+            ENDDO
+         ENDDO
+      END IF
+C
       CALL RETFM(NEED)
       RETURN
       END
@@ -6685,7 +6753,7 @@ C*MODULE MP2DDI  *DECK PCM1PDM
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
       PARAMETER (ZERO=0.0D+00,ONE=1.0D+00, TWO=2.0D+00)
-      LOGICAL OUTPUT,MP2ENG,UMP2GD,IPCFP
+      LOGICAL OUTPUT,MP2ENG,UMP2GD,IPCFP,ZAPTGD
       DOUBLE PRECISION CMO(NBF,*),PMAT(NBF,*),WMAT(NBF,*)
 C
       COMMON /FMCOM / XX(1)
@@ -6699,6 +6767,8 @@ C
      *                LINIPCM,LMEPCM,LAXYZCT,LXYZCT2,LNVERT,LQSN,LQSE,
      *                LQFS,LQIND,LISPHE,LVAD,LQOR,LVECMUL,LAIPRJ,LFIPRJ,
      *                LPEL,LPCMCDR,LDAI,LIDDAI,LQSND,LQSED
+      COMMON /ZAPTGR/ NOCD,NOCD1,NOCS,NOCSTR,IXYEXC,ICHIX,ITIA,IZ
+     *,               ZAPTGD
 C
       L1   = NBF
       L2   = (NBF*(NBF+1))/2
@@ -6761,15 +6831,56 @@ C
 C     -- MAKE TRIANGLE INTO SQUARE MATRIX---
       CALL CPYTSQ(XX(LBMN),XX(LPAO),NBF,1)
 C
-C     -- TRANSFORM TO MO --
-      CALL MRARBR(XX(LPAO),NBF,NBF,NBF,CMO,NBF,NOCC,XX(LXT),NBF)
-      CALL DGEMM('T','N',NVIR,NOCC,NBF,ONE,CMO(1,NOP1),NBF,XX(LXT)
-     *           ,NBF,ZERO,XX(LPMO),NVIR)
-      DO II = 1,NVIR
-         DO JJ = 1,NOCC
-            WMAT(II+NOCC,JJ)=WMAT(II+NOCC,JJ)+XX(LPMO+(JJ-1)*NVIR+II-1)
+      IF(ZAPTGD) THEN
+C        - XI BLOCK = NOCS*NOCD
+         IF(NOCS.GT.0)THEN
+         CALL MRARBR(XX(LPAO),NBF,NBF,NBF,CMO,NBF,NOCD,XX(LXT),NBF)
+         CALL DGEMM('T','N',NOCS,NOCD,NBF,ONE,CMO(1,NOCD+1),
+     *              NBF,XX(LXT),NBF,ZERO,XX(LPMO),NOCS)
+         DO II = 1,NOCS
+            DO JJ = 1,NOCD
+               WMAT(JJ,II+NOCD)=WMAT(JJ,II+NOCD)
+     *            + 0.50D+00*XX(LPMO+(JJ-1)*NOCS+II-1)
+C                   HERE SHOULD BE 0.5    EQ (64)
+            ENDDO
          ENDDO
-      ENDDO
+         END IF
+C        - AI BLOCK = NVIR*NOCD
+         CALL MRARBR(XX(LPAO),NBF,NBF,NBF,CMO,NBF,NOCD,XX(LXT),NBF)
+         CALL DGEMM('T','N',NVIR,NOCD,NBF,ONE,CMO(1,NOCD+NOCS+1),
+     *              NBF,XX(LXT),NBF,ZERO,XX(LPMO),NVIR)
+         DO II = 1,NVIR
+            DO JJ = 1,NOCD
+               WMAT(JJ,II+NOCD+NOCS)=WMAT(JJ,II+NOCD+NOCS)
+     *            + XX(LPMO+(JJ-1)*NVIR+II-1)
+C                   HERE SHOULD BE 1.0   EQ (65)
+            ENDDO
+         ENDDO
+C        - AX BLOCK = NVIR*NOCS
+         CALL MRARBR(XX(LPAO),NBF,NBF,NBF,CMO(1,NOCD+1),NBF,
+     *               NOCS,XX(LXT),NBF)
+         CALL DGEMM('T','N',NVIR,NOCS,NBF,ONE,CMO(1,NOCD+NOCS+1),
+     *              NBF,XX(LXT),NBF,ZERO,XX(LPMO),NVIR)
+         DO II = 1,NVIR
+            DO JJ = 1,NOCS
+               WMAT(NOCD+JJ,II+NOCD+NOCS)=WMAT(NOCD+JJ,II+NOCD+NOCS)
+     *            + 0.50D+00*XX(LPMO+(JJ-1)*NVIR+II-1)
+C                   HERE SHOULD BE 0.5    EQ (66)
+            ENDDO
+         ENDDO
+      ELSE
+C        -- TRANSFORM TO MO --
+         CALL MRARBR(XX(LPAO),NBF,NBF,NBF,CMO,NBF,NOCC,XX(LXT),NBF)
+         CALL DGEMM('T','N',NVIR,NOCC,NBF,ONE,CMO(1,NOP1),NBF,XX(LXT)
+     *              ,NBF,ZERO,XX(LPMO),NVIR)
+         DO II = 1,NVIR
+            DO JJ = 1,NOCC
+               WMAT(II+NOCC,JJ)=WMAT(II+NOCC,JJ)
+     *                         +XX(LPMO+(JJ-1)*NVIR+II-1)
+            ENDDO
+         ENDDO
+      END IF
+C
       CALL RETFM(NEED)
       RETURN
       END
@@ -6778,8 +6889,8 @@ C*MODULE MP2DDI  *DECK PCMWOV
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
       PARAMETER (ZERO=0.0D+00,ONE=1.0D+00,TWO=2.0D+00)
-      LOGICAL OUTPUT,MP2ENG,UMP2GD,IPCFP
-      DOUBLE PRECISION PMAT(NBF,*),WMAT(NBF,*),CMO(*)
+      LOGICAL OUTPUT,MP2ENG,UMP2GD,IPCFP,ZAPTGD
+      DOUBLE PRECISION PMAT(NBF,*),WMAT(NBF,*),CMO(NBF,*)
 C
       COMMON /MP2XTR/ NBF,NACORE,NBSQ,NBTR,NSTR,MXSHL,NACT,NOCC
      *,               NVIR,NOV,NOSQ,NVSQ,NOTR,NVTR,NCP1,NOP1
@@ -6792,6 +6903,8 @@ C
      *                LQFS,LQIND,LISPHE,LVAD,LQOR,LVECMUL,LAIPRJ,LFIPRJ,
      *                LPEL,LPCMCDR,LDAI,LIDDAI,LQSND,LQSED
       COMMON /FMCOM / XX(1)
+      COMMON /ZAPTGR/ NOCD,NOCD1,NOCS,NOCSTR,IXYEXC,ICHIX,ITIA,IZ
+     *,               ZAPTGD
 C
       L1   = NBF
       L2   = (NBF*(NBF+1))/2
@@ -6855,17 +6968,57 @@ C
 C     -- MAKE TRIANGLE INTO SQUARE MATRIX---
       CALL CPYTSQ(XX(LBMN),XX(LPAO),NBF,1)
 C
-C     ---- TRANSFORM BMN3 TO MO BASIS ----
-      CALL VCLR(XX(LXT),1,NBSQ)
-      CALL MRARBR(XX(LPAO),NBF,NBF,NBF,CMO,NBF,NOCC,XX(LXT),NBF)
-      CALL DGEMM('T','N',NOCC,NOCC,NBF,ONE,CMO,NBF,XX(LXT),NBF,
-     *           ZERO,XX(LPMO),NOCC)
-C
-      DO J = 1, NOCC
-         DO I = 1, NOCC
-            WMAT(I,J) = WMAT(I,J) - XX(LPMO+(J-1)*NOCC+I-1)
+      IF(ZAPTGD) THEN
+C        - IJ BLOCK = NOCD*NOCD
+         CALL MRARBR(XX(LPAO),NBF,NBF,NBF,CMO,NBF,NOCD,XX(LXT),NBF)
+         CALL DGEMM('T','N',NOCD,NOCD,NBF,ONE,CMO,NBF,
+     *              XX(LXT),NBF,ZERO,XX(LPMO),NOCD)
+         DO I = 1, NOCD
+            DO J = 1, NOCD
+               WMAT(J,I) = WMAT(J,I)-XX(LPMO+(J-1)*NOCD+I-1)
+C                    HERE SHOULD BE 1.00     EQ(57)
+            END DO
          END DO
-      END DO
+C        - XI BLOCK = NOCS*NOCD
+         IF(NOCS.GT.0)THEN
+         CALL MRARBR(XX(LPAO),NBF,NBF,NBF,CMO,NBF,NOCD,XX(LXT),NBF)
+         CALL DGEMM('T','N',NOCS,NOCD,NBF,ONE,CMO(1,NOCD+1),NBF,
+     *              XX(LXT),NBF,ZERO,XX(LPMO),NOCS)
+         DO I = 1, NOCS
+            DO J = 1, NOCD
+               WMAT(J,NOCD+I) = WMAT(J,NOCD+I)
+     *                  -0.50D+00*XX(LPMO+(J-1)*NOCS+I-1)
+               WMAT(NOCD+I,J) = WMAT(J,NOCD+I)
+C                    HERE SHOULD BE 0.50    BUT EQ(60) SAYS 1.0. ??
+            END DO
+         END DO
+C        - XX BLOCK = NOCS*NOCS
+         CALL MRARBR(XX(LPAO),NBF,NBF,NBF,CMO(1,NOCD+1),
+     *               NBF,NOCS,XX(LXT),NBF)
+         CALL DGEMM('T','N',NOCS,NOCS,NBF,ONE,CMO(1,NOCD+1),NBF,
+     *              XX(LXT),NBF,ZERO,XX(LPMO),NOCS)
+         DO I = 1, NOCS
+            DO J = 1, NOCS
+               WMAT(NOCD+J,NOCD+I) = WMAT(NOCD+J,NOCD+I)
+     *                  -0.50D+00*XX(LPMO+(J-1)*NOCS+I-1)
+C                    HERE SHOULD BE 0.50     EQ(58)
+            END DO
+         END DO
+         END IF
+      ELSE
+C        ---- TRANSFORM BMN3 TO MO BASIS ----
+         CALL VCLR(XX(LXT),1,NBSQ)
+         CALL MRARBR(XX(LPAO),NBF,NBF,NBF,CMO,NBF,NOCC,XX(LXT),NBF)
+         CALL DGEMM('T','N',NOCC,NOCC,NBF,ONE,CMO,NBF,XX(LXT),NBF,
+     *              ZERO,XX(LPMO),NOCC)
+C
+         DO J = 1, NOCC
+            DO I = 1, NOCC
+               WMAT(I,J) = WMAT(I,J) - XX(LPMO+(J-1)*NOCC+I-1)
+            END DO
+         END DO
+      END IF
+C
       CALL RETFM(NEED)
 C
       RETURN

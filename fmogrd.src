@@ -1,3 +1,4 @@
+C  1 Oct 10 - DGF - added active atom input IACTAT to OPTFMO
 C 11 Aug 10 - DGF,TN - changes for FMO 4.0 
 C 25 Mar 10 - DGF - gradient projection args changed
 C 14 Oct 09 - DGF - changes for FMO 3.3
@@ -22,7 +23,7 @@ c
 C*MODULE fmogrd  *DECK optfmox
       SUBROUTINE optfmox
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
-      PARAMETER (nnam=12,tiny=1.0D-06,zero=0.0D+00,one=1.0D+00,
+      PARAMETER (nnam=13,tiny=1.0D-06,zero=0.0D+00,one=1.0D+00,
      *           three=3.0D+00,UNITS=0.52917724924D+00,diagval=THREE)
       PARAMETER (MXRT=100, MXFRG=1050, MXFGPT=12000, MXDFG=5,
      *           MXATM=2000, MXAO=8192, MXPT=2000, 
@@ -95,10 +96,10 @@ C*MODULE fmogrd  *DECK optfmox
      *                LPOPDMAT,lidmpnt,liddpnt,livmpnt
       COMMON /SCZVEC/ LIPTZVEC,LIPTLG,IDFZVEC
       dimension KQNAM(nnam),QNAM(nnam),dum3(3)
-      DATA KQNAM /3,3,1,5,1, 5,5,1,3,3, 3,1/
+      DATA KQNAM /3,3,1,5,1, 5,5,1,3,3, 3,1,1/
       DATA QNAM/8HOPTTOL  ,8HSTEP    ,8HNSTEP   ,8HMETHOD  ,8HLINSER  ,
      *          8HUPDATE  ,8HHESS    ,8HIFREEZ  ,8HSTPMIN  ,8HSTPMAX  ,
-     *          8HSTPFAC  ,8HNFGD    /
+     *          8HSTPFAC  ,8HNFGD    ,8HIACTAT  /
      *     optfmo/8HOPTFMO  /,steep/8HSTEEP   /,cg/8HCG      /,
      *     hssupd/8HHSSUPD  /,bfgsl/8HLBFGS   /,bfgs/8HBFGS    /,
      *     dfp/8HDFP     /,rnone/8HNONE    /,GUESS/8HGUESS   /
@@ -140,9 +141,11 @@ C
       nc2=(nc1*nc1+nc1)/2
       CALL VALFM(LOADFM)
       lifreez=LOADFM+1
-      last=lifreez+(NCVAL-1)/nwdvar+1
+      liactat=lifreez+(NCVAL-1)/nwdvar+1
+      last=liactat+(natfmo-1)/nwdvar+1
       NEED2 = LAST- LOADFM -1
       CALL GETFM(NEED2)
+c     liactat above does not provide space for freezing EFP atoms!
 c
       opttol=1.0D-04
       nstep=200
@@ -171,14 +174,16 @@ c
 c     IFREEZ is the array of coordinates to be brozen. Only Cartesians are
 c     supported 
       KQNAM(8)=nc1*10+1
+      KQNAM(13)=natfmo*10+1
       call viclr(x(lifreez),1,NCVAL)
+      call viclr(x(liactat),1,natfmo)
       nfgd=0
 c
       JRET = 0
       CALL NAMEIO(IR,JRET,optfmo,NNAM,QNAM,KQNAM,
      *            opttol,step,nstep,rmethod,
      *            linser,update,hess,x(lifreez),stepmin,stepmax,stepfac,
-     *            nfgd,0,0,
+     *            nfgd,x(liactat),0,
      *            0,0,0,0,0,  0,0,0,0,0,
      *            0,0,0,0,0,  0,0,0,0,0,   0,0,0,0,0,  0,0,0,0,0,
      *            0,0,0,0,0,  0,0,0,0,0,   0,0,0,0,0,  0,0,0,0,0)
@@ -266,6 +271,8 @@ c       write(6,*) 'Buffer',n2ebuf,nhblock
           iuse2e=1
         endif
       endif
+      if(ixftch(x(liactat),1).ne.0) 
+     *  call setactat(natfmo,natfmo,x(liactat),x(lifreez))
 c
       nfrz=0
       do i=1,NCVAL
@@ -1577,9 +1584,11 @@ C*MODULE fmogrd  *DECK gmsprop
       subroutine gmsprop(modef,nfthes,nc1,fmode,fmomas,nfcrec,grandmas,
      *                   LGLOE)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      integer ddi_world,ddi_group
+      logical grandmas,LGLOE
       dimension fmode(3,*),fmomas(*)
       parameter (MXATM=2000,mxrt=100)
-      logical grandmas,LGLOE
+      Parameter(ddi_world=0,ddi_group=1)
       COMMON /EFPFMO/ RUNEFP,REFFMO,REPNUCEFP,IEFPFMO,ISWENUC,EFPEFP
       COMMON /ENRGYS/ ENUCR,EELCT,ETOT,SZ,SZZ,ECORE,ESCF,EERD,E1,E2,
      *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2),EDISP
@@ -1616,6 +1625,10 @@ c       write(6,*) 'gradient Copied',natfmo
       endif
 c     if(maswrk) CLOSE(UNIT=IDAF,STATUS='DELETE')
       call CLOSDA('DELETE')
+c
+c     Write this in the world scope for OPTIMIZE to read
+c
+      call gddi_scope(ddi_world)
       CALL OPENDA(0)
       if(modef.ne.0) then
 c     only the grand master has the true hessian, other nodes write zeroes.
@@ -1638,8 +1651,9 @@ c     if(meglob.eq.0) then
          read(nfthes) nserch0,nc10
 c        dummy
          if(nserch0.lt.0) nserch0=nserch+nc10
-         read(nfthes) (x(lFCM+i),i=0,nc3-1)
-         if(runtyp.eq.hssian) read(nfthes) (x(lddm+i),i=0,nc13-1)
+c        read(nfthes) (x(lFCM+i),i=0,nc3-1)
+c        if(runtyp.eq.hssian) read(nfthes) (x(lddm+i),i=0,nc13-1)
+         call readfcm(nfthes,nc3,nc13,x(lFCM),x(lddm))
       else
          call vclr(x(lFCM),1,nc3) 
          if(nc13.ne.0) call vclr(x(lddm),1,nc13) 
@@ -1663,6 +1677,7 @@ c     if(nerr.gt.1.and.nfcrec.eq.4) then
 c       write(6,*) 'Emergent punch of hessian enforced',NC1
 c       CALL FCMPUN(x(lFCM),NC1)
 c     endif
+      call gddi_scope(ddi_group)
       return
       END
 c
@@ -3172,5 +3187,14 @@ c       read alpha and beta densities and add them up.
           CALL DAREAD(IDAF,IODA,da,L2,308,0)
         END IF
       endif
+      RETURN
+      END
+C*MODULE FMOGRD  *DECK readfcm
+      SUBROUTINE readfcm(nfthes,nc3,nc13,FCM,ddm)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      dimension fcm(nc3),ddm(nc13)
+c
+      read(nfthes) FCM
+      if(nc13.ne.0) read(nfthes) ddm
       RETURN
       END

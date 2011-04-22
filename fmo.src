@@ -1,3 +1,5 @@
+C  1 Oct 10 - CS  - ADDED EFMO CHANGES
+C  1 Oct 10 - DGF - EDIMER: correction for Grimme's dispersion option
 C 11 Aug 10 - DGF,TN - changes for FMO 4.0 
 C 25 Mar 10 - DGF - tickles to complete FMO 3.3 release
 C 14 Oct 09 - DGF,TN - changes for FMO 3.3
@@ -41,8 +43,8 @@ C
      *        SG1,SG1T,projgrad,doexc,doci,totfock,skipesd,DOEFPIEA,
      *        urohf,dodistr,hopgrd,DC,DCCHG,DCABC,dodc,dodimden,
      *        MCMIN,LGLOE,LGLOEG,mulgeom,dodiff,LSCZVEC,lfmoefp,
-     *        TAMMD
-      Integer ddi_world,ddi_group
+     *        TAMMD,dcsav
+      Integer ddi_world,ddi_group,EFMODIM
       Parameter(ddi_world=0,ddi_group=1)
       Parameter(MXATM=2000,MXAO=8192,MXRT=100,MAXNZ=137,MaxLay=5,
      *          MXSFMO=MaxLay*40,MXGFMO=MaxLay*100,MXAFMO=MaxLay*10,
@@ -50,6 +52,8 @@ C
      *          MXDPPT=MXFRG*MXDFG*12,MXGRID=10)
       parameter (nstfmo=10,maxpst=10,zero=0.0D+00,one=1.0D+00,maxelm=3,
      *           nextracc=17,nedft=2)
+      PARAMETER (MXEFMOPTS=50,MXEFMOPPTS=60,MXNEFMOPTS=17,
+     *           MXNEFMOPPTS=15)
       dimension mcnvfmo(nstfmo),ngrfmo(maxpst,MaxLay),nstjob(maxpst),
      *          loadbf(maxpst,MaxLay),loadgr(maxpst,MaxLay),ncvscf(2),
      *          nelm(0:maxelm),dum3(3),vdwrad(MAXNZ),extracc(nextracc,3)
@@ -69,6 +73,9 @@ C
      *                IZCORE(MXATM)
       COMMON /EFFMOP/ LEFLDFMO,LEFADDFMO,LDINDFMO,LDINDDFMO,
      *                LDEFEF,LDEFTF,LTORQF
+      COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,IEFMORUN,
+     *                IEFMORT,IEFMOCFRG,IEFMONFRG,EFMODIM(2)
+      COMMON /EFMOPO/ LNEFMOPTS,LEFMOPTS,LEFMOPPTS,LEFMODIMG,LEFMOTOTG
       COMMON /EFPFMO/ RUNEFP,REFFMO,REPNUCEFP,IEFPFMO,ISWENUC,EFPEFP
       COMMON /EFPOTD/ METHOF,ISCCHG,MOVE
       COMMON /ELPROP/ ELDLOC,ELMLOC,ELPLOC,ELFLOC,
@@ -510,6 +517,8 @@ c     if(dolat) mfg2=0
 c     dolat is undefined, and rij is allocated some space which is wasted
 c     for lattice runs (as it is reallocated below).
 c
+c
+c
       CALL VALFM(LOADFM)
       llibish=LOADFM+1
       llibnsh=llibish+(MAXNZ*maxbas*nlayer-1)/nwdvar+1
@@ -944,6 +953,22 @@ c     if(nacut.ne.0) call fmoauto(nacut,x(lindat))
         write(iw,*) 'Total Fock matrix cannot be done with NBDFG>0.'
         call abrt
       endif
+      IF( IEFMORUN.GT.0.AND.IEFPFMO.NE.0 ) THEN
+        WRITE(IW,*) "EFMO and FMO/EFP are not compatible."
+        CALL ABRT
+      ENDIF
+      IF( IEFMORUN.GT.0.AND.NBDFG.GT.0 ) THEN
+        WRITE(IW,*) "EFMO does not currently support fragment bonds."
+        CALL ABRT
+      ENDIF
+      IF( IEFMORUN.GT.0.AND.GCORREL ) THEN
+        WRITE(IW,*) "EFMO has yet to be coded for correlated methods."
+        CALL ABRT
+      ENDIF
+      IF( IEFMORUN.GT.0.AND.IPCM.GT.0 ) THEN
+        WRITE(IW,*) "EFMO does not currently support PCM."
+        CALL ABRT
+      ENDIF
 c     check the above guess of ne0bda=(nbdfg)=2*nbdfg
       if(n0bda.eq.0.and.ipieda.ne.0.and.ne0bda.lt.nbdfg) call abrt
 c
@@ -956,14 +981,15 @@ c
 c       having non-zero rcorsd creates a bug below (edim? overused)
       endif
       dodc=dc
-      if(gcorrel) dodc=.false.
+c     if(gcorrel) dodc=.false.
+      if(gcorrel.and.dodc.and.nder.gt.0.and.rcorsd.ne.resdim) call abrt
 c     dodc is used below in processing pair corrections.
 c     Only purely non-correlated runs can save them separately, otherwise only 
 c     bulk values containing DC are stored. 
       nenc=0
       if(gcorrel) nenc=2
       nen=nenc+2
-      if(dodc) nen=nen+1
+      if(.not.gcorrel.and.dodc) nen=nen+1
       if(.not.gcorrel.and.dopleda) nen=nen+2
 c     dopleda=.t. with RHF actually needs just one extra element, but the
 c     indexing becomes sandwiched (see the usage of the 4th element in edimer).
@@ -1867,6 +1893,21 @@ c     write(6,*) 'wwwmem',need0,need,need1,need2,needl
      *              nxg,nyg,nzg,ngm,vdwrad,grdpad,spargrid,nxyzg,ifgfmo0
      *             ,mpcmit,iexcit,nafo,naoafo,ndmsizp,gcorrel)
 c
+c     efmo banner and memory
+      IF( IEFMORUN.GT.0 ) THEN
+        CALL VALFM(LOADFM)
+        lnefmopts = LOADFM + 1
+        lefmopts = lnefmopts + (2*nfg)/NWDVAR + 1
+        lefmoppts = lefmopts + nfg*MXNEFMOPTS*MXEFMOPTS
+        lefmodimg = lefmoppts + nfg*MXNEFMOPPTS*MXEFMOPPTS
+        lefmototg = lefmodimg + 3*natfmo
+        last = lefmototg + 3*natfmo
+        NEEDEFMO = last - loadfm -1
+        CALL GETFM(NEEDEFMO)
+        CALL EFMOM(X(lnefmopts),X(lefmopts),X(lefmoppts),
+     *             X(lefmodimg),X(lefmototg),NEEDEFMO)
+      ENDIF
+
 c     emolfrg is used as temporary buffer. Note that moldim should be called
 c     after fmoout to have the original array printed out.
       call moldim(x(lmolfrg),x(lemolfrg))
@@ -1884,6 +1925,8 @@ c     if(needdm) call gddi_create(nfg2,iddm)
 c       the actual number of used elements is nscf (defined below)
       didcc=.false.
       didmp=.false.
+      dcsav=dc
+      idcvers=idcver
 c
 c     The PCM loop is hidden inside monoscf for unilayer nfmopcm=1.
 c     the explicit loop here is used otherwise.
@@ -1990,6 +2033,15 @@ c
           citypi=rnone
           if(maswrk) write(iw,*) 'Turning off TDDFT/CI...'
         endif 
+        dc=dcsav
+        idcver=idcvers
+        if((DC.or.idcver.gt.0).and.(mplevli.ne.0.or.CCTYPi.ne.rnone))
+     *  then
+          dc=.false.
+          idcver=0
+          if(maswrk) write(iw,*) 'Turning off DC...'
+c         MP2 or CC with DC is nonsense
+        endif
         if(maswrk) then
           write(iw,9100) ilay,nbody,scftypi,mplevli,dftype,CITYPi,
      *                   CCTYPi,TDDFTi
@@ -2140,6 +2192,11 @@ C
           CALL DDI_CREATE(1,NZVSZ,IDFZVEC)
           IF (ISGDDI) CALL GDDI_SCOPE(DDI_GROUP)
         END IF
+c       FOR EFMO
+        IF( IEFMORUN.GT.0 ) THEN
+          IEFMORT = 1
+          IEFMONFRG = nfg
+        ENDIF
 c
 c       Now the big monomer SCF iterations start
 c
@@ -2178,7 +2235,7 @@ c
      *              gcorrel,doddcor,e1efmo,ekinfmo,m1efmo,x(leigfmo),
      *              X(LEFPIEA),X(LFGINT),X(LFMOFCM),X(LFCMWRK),
      *              X(LABFLDT),hopgrd,dodc,x(lindtmp),x(lfmohard),
-     *              x(leaip))
+     *              x(leaip),nevsav)
 c
 c       if(dodistr) then
 c         do ifg=1,nfg
@@ -2219,6 +2276,13 @@ c
         if(nfglay.ne.0) call eminout(1,ilay1,ifgfmo0,x(llayfrg),x(lemon)
      *                              ,some)
         if(nbody.lt.2) goto 105
+c
+c      START EFMO EVAULATION OF THE TOTAL POLARIZATION ENERGY
+       IF( IEFMORUN.GT.0.AND.IEFMORT.EQ.1 ) THEN
+         IEFMORT = 4
+         CALL EFMOTOT(x(lfmode))
+         IEFMORT = 3
+       ENDIF
 c
 c       compute all dimer energies and BBSE corrections if requested.
 c
@@ -2294,7 +2358,7 @@ c         ifmoqit=ifmoqit+1
      *               ,gcorrel,skipesd,dodistr,X(LFMOFCM),X(LFCMWRK),
      *                X(LZVLAG),X(LIPTLG),X(LNQMTFG),hopgrd,dodc,
      *                dodimden,x(liddpnt),nevsav,x(lindtmp),x(lfmohard),
-     *                some)
+     *                some,x(lefmodimg))
           if(ntimout.gt.1) nbody=2
           if(ntimout.ne.0) goto 110
 c      write(6,*) '2NI stat: ',(nni(i),i=1,9),'NJ stat: ',(nnj(i),i=1,9)
@@ -2763,6 +2827,8 @@ c         FMOZAN has the true nuclear charge.
         endif
       endif
 c
+      IF( IEFMORUN.GT.0 ) CALL RETFM(NEEDEFMO)
+c
       if(dolat) CALL RETFM(NEEDL)
       CALL RETFM(NEED1)
       CALL RETFM(NEED2)
@@ -2833,6 +2899,8 @@ c     is not returned, therefore, restore the pristine value.
       cityp=cityps
       tddftyp=tddftyps
       mfrz=mfrzs
+      dc=dcsav
+      idcver=idcvers
       return
 c9000 format(//1x,'Successfully finished FMO calculation.',/)
  9010 format(/1x,'Orbital conversion requires unilayer sequential run',
@@ -3772,9 +3840,10 @@ C*MODULE fmo     *DECK monoscf
      *                   POPDMAT,naoafo3,naoafod,dafo,nbndfg,irec0ini,
      *                   dopdc,nsetgrid,iwhere,gcorrel,doddcor,e1efmo,
      *                   ekinfmo,m1efmo,eigfmo,EFPIEA,FGINT,FMOFCM,
-     *                   FCMWRK,ABFLDT,hopgrd,dodc,potat,fmohard,eaip)
+     *                   FCMWRK,ABFLDT,hopgrd,dodc,potat,fmohard,eaip,
+     *                   nevsav)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-      integer ddi_world,ddi_group
+      integer ddi_world,ddi_group,EFMODIM
       Parameter(ddi_world=0,ddi_group=1)
       parameter(MXATM=2000,MXAO=8192,MXRT=100,MXGRID=10,maxpst=10,
      *          zero=0.0D+00,one=1.0D+00,half=0.5D+00)
@@ -3795,10 +3864,11 @@ C*MODULE fmo     *DECK monoscf
      *                NANGPT(MXGRID),NANGPT0(MXGRID),SG1,jans
       COMMON /DFTPAR/ DFTTYP(20),EXENA,EXENB,EXENC,IDFT34,NAUXFUN,
      *                                                    NAUXSHL
-      COMMON /NLRC  / LCFLAG,LRINT,EMU,EMU2,LRFILE
       COMMON /DMPING/ SHIFTO,SHIFTV,DMPCUT,SWDIIS,DIRTHR
       COMMON /EFPFM2/ fk_cntp,poltot,fk_frg,labfldt,ldindf2,ldinddf2,
      *                lfmoefp
+      COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,IEFMORUN,
+     *                IEFMORT,IEFMOCFRG,IEFMONFRG,EFMODIM(2)
       COMMON /EFPFMO/ RUNEFP,REFFMO,REPNUCEFP,IEFPFMO,ISWENUC,EFPEFP
       COMMON /ELPROP/ ELDLOC,ELMLOC,ELPLOC,ELFLOC,
      *                IEDEN,IEMOM,IEPOT,IEFLD,MODENS,
@@ -3829,6 +3899,7 @@ C*MODULE fmo     *DECK monoscf
       COMMON /MFRPAR/ MFRZ,NUMFRZ,NORFRZ,IFRZ(MXAO)
       COMMON /MP2PAR/ OSPT,CODEMP,SCSPT,TOL,METHOD,NWDMP2,MEMPRI,MPPROP,
      *                NACORE,NBCORE,NOA,NOB,NORB,NBF,NOMIT,MOCPHF,MAXITC
+      COMMON /NLRC  / LCFLAG,LRINT,EMU,EMU2,LRFILE
       COMMON /OPTSCF/ DIRSCF,FDIFF
       COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
@@ -3930,7 +4001,7 @@ c
       do ifg=1,nfg
         if(layfrg(ifg).ge.ilay.and.scffrg(ifg).ne.rnone) nfglay=nfglay+1
       enddo
-      if(coroff.ne.0) then
+      if(coroff.ne.0.or.nevsav.gt.0) then
 c       turn off grid switching for FMO monomers
         NRAD0=NRAD
         NPHI0=NPHI
@@ -4524,6 +4595,11 @@ c         loop twice for MP2 grad/prop: RHF and then MP2.
 c
           mp2run=mplevl 
           if(doddcori) nloop=1
+c         a funky hack to allow for efmo to derive
+c         properties based on the RHF wavefunction only
+c         which works except for correlated monomers energies
+c         where no hacks from fmo are made.
+          if(correl.and.IEFMORUN.GT.0.and.nder.eq.0)  nloop=1
           do iloop=nloop,0,-1
             if(iloop.gt.0) then
               mplevl=0
@@ -4638,7 +4714,8 @@ c             CALL daread(IDAF,IODA,da,l2,16,0)
               call mulpop(l1,da,db,popmul(1,ifg,inxtpop))
               if(dospc) then
                 if(NPTSTN.ne.0) then
-                  if(nprint.eq.-5.or.ISKPRP.ne.0) call stone(ip,rnone,0)
+                if((nprint.eq.-5.or.ISKPRP.ne.0).and..not.IEFMORUN.GT.0)
+     *              call stone(ip,rnone,0)
                   call dcopy(nat,stonep,1,popmat(1,ifg,inxtpop),1)
                   if(nfrgmul.gt.0.and.maswrk) call storemul(0,ifg,nat,
      *        nfrgmul,frgmul,frgmul(1,1,inxtpop),natfrg,c,stonep(1+nat))
@@ -4817,7 +4894,17 @@ c             do not accumulate RHF monomer properties
               if(nbody.gt.1) idad=-nmdfrg(ifg,2)
               if(nbody.gt.2) idat= nmtfrg(ifg,2)
             endif
-c
+C
+
+C           DETERMINE PROPERTIES FOR EFMO FRAGMENTS
+C           BUT NOT ON A CORRELATED WAVEFUNCTION
+            IF(DOVAC.AND.IEFMORUN.GT.0.AND.IEFMORT.EQ.1.AND.ILAY.EQ.1
+     *         .AND.ILOOP.EQ.NLOOP) THEN
+              IEFMOCFRG = IFG
+              CALL EFMOGFRG
+            ENDIF
+C           CHANGE EFMO RUNTYPE TO 2 TO ALLOW FOR GRADIENT UPDATES
+            IEFMORT = 2
 c           iloop=1 SCF nmdfrg(ifg,1)
 c           iloop=0 MP2 nmdfrg(ifg,2)
 c           idat=((nfg-2)*(nfg-3))/2-1
@@ -4983,6 +5070,9 @@ c           if(doprop.and.nder.gt.0.and.maswrk) then
                 if(nbody.gt.2) CALL EFPDEG(idam+idad+idat,3)
               ENDIF
             endif
+C
+C           RESET EFMO RUNTYPE TO 1
+            IF( IEFMORUN.GT.0 ) IEFMORT = 1
 C 
 C           Hessian contribution
 C 
@@ -5406,7 +5496,8 @@ C*MODULE fmo     *DECK edimer
      *                  isumd,eexfg,nocctdm,nvirtdm,ctdm,exfid,dopdc,
      *                  modcha,iwhere,gcorrel,skipesd,dodistr,
      *                  FMOFCM,FCMWRK,ZVLAG,IPTLG,NQMTFG,hopgrd,dodc,
-     *                  dodimden,iddpnt,nevsav,potat,fmohard,some)
+     *                  dodimden,iddpnt,nevsav,potat,fmohard,some,
+     *                  efmodimg)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       parameter(MXATM=2000,MXSH=5000,MXGTOT=20000,MXRT=100,MXGRID=10,
      *          maxpst=10,zero=0.0D+00,one=1.0D+00,half=0.5D+00)
@@ -5422,7 +5513,7 @@ C*MODULE fmo     *DECK edimer
      *        dodc,dodimden,lfmoefp
       character*8 dimdek,end
       character*1 flipch
-      integer ddi_world,ddi_group
+      integer ddi_world,ddi_group,EFMODIM
       Parameter(ddi_world=0,ddi_group=1)
       dimension jobgrp(*),loadm(*),loadd(*),mulfg(*),layfrg(*),numfrg(*)
      *         ,cfrg(3,*),iodfmo(*),maxl30(*),indat(*),fmoc(3,*),
@@ -5449,7 +5540,8 @@ C*MODULE fmo     *DECK edimer
      *                NANGPT(MXGRID),NANGPT0(MXGRID),SG1,jans
       COMMON /DFTPAR/ DFTTYP(20),EXENA,EXENB,EXENC,IDFT34,NAUXFUN,
      *                                                    NAUXSHL
-      COMMON /NLRC  / LCFLAG,LRINT,EMU,EMU2,LRFILE
+      COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,IEFMORUN,
+     *                IEFMORT,IEFMOCFRG,IEFMONFRG,EFMODIM(2)
       COMMON /EFPFM2/ fk_cntp,poltot,fk_frg,labfldt,ldindf2,ldinddf2,
      *                lfmoefp
       COMMON /EFPFMO/ RUNEFP,REFFMO,REPNUCEFP,IEFPFMO,ISWENUC,EFPEFP
@@ -5470,6 +5562,7 @@ C*MODULE fmo     *DECK edimer
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
       COMMON /MP2PAR/ OSPT,CODEMP,SCSPT,TOL,METHOD,NWDMP2,MEMPRI,MPPROP,
      *                NACORE,NBCORE,NOA,NOB,NORB,NBF,NOMIT,MOCPHF,MAXITC
+      COMMON /NLRC  / LCFLAG,LRINT,EMU,EMU2,LRFILE
       COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
      *                CF(MXGTOT),CG(MXGTOT),ch(mxgtot),ci(mxgtot),
      *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
@@ -5538,6 +5631,8 @@ c     haver=rESDIM.ne.zero
       mp2sav=mplevl
       hfssav=DFTTYP(3)
       tdsav=tddftyp
+c     always assume separated dimers for EFMO
+      IEFMODIM = 1
 c     if(needdm) call viclr(job2grp,1,nfg2)
 c     WRITE(IW,9086)
 c     CALL EGOUT(fmode(1,1,2),natfmo)
@@ -5550,7 +5645,7 @@ c    *        citypi.ne.rnone
       if(doddcor) ixesp=ixesp+1024
 c     raising 1024th bit signals ESPs to always use RHF densities.
       memon=1
-      if(gcorrel) memon=2
+      if(gcorrel.or.dodc) memon=2
       if(dopleda) memon=memon+2
 C   
 C     clear ZVLAG
@@ -5771,6 +5866,14 @@ c           and IFG can come in "random" order.
      *                   XYZCTS,QSE,ISPHE,qtmp)
           endif
 c         ijskip=0
+c
+C         DO EFMO CALCULATION TO SET UP VARIABLES AND GRADIENT CONTRIBUTIONS
+          IF(IEFMORUN.GT.0.AND.IEFMORT.EQ.3) THEN
+            ECHNRG = ZERO
+            EPOLNRG = ZERO
+            CALL EFMOFRGS(IFG,JFG,ECHNRG,EPOLNRG)
+          ENDIF
+c
           esd2m=emon(ifg,memon)+emon(jfg,memon)
           if(rij.gt.resdim.and.resdim.ne.zero .or. ipieda.ne.0) then
 c           ijskip=1
@@ -5778,6 +5881,7 @@ c           compute energies of separated dimers.
 c           note that no BSSE check is done which means for separated dimers
 c           we ignore BSSE corrections (be it good or bad).
 c           jfg and ifg are interchanged to have ifg<jfg order
+c
 c
 c           esdim is called with DB because FMOESP overwrites DA
 c
@@ -5791,6 +5895,7 @@ c
               jfrg=jfg
               flipch='d'
             endif
+            IF(IEFMORUN.GT.0.AND.IEFMORT.EQ.3) GOTO 420
             call esdim(nder,jfrg,ifrg,esd2,rij,ilay,irec0,irec0,idmrec0,
      *                 layfrg,iodfmo,maxl30,scffrg,wrk,fmoespa,db,dij,
      *                 isdrec,orbxch,dodistr)
@@ -5808,7 +5913,15 @@ c
             call dumpfock(totfock,wrk,num,(num*num+num)/2,0,wrk,wrk,wrk)
 c             There is no contribution to e1efmo and ekinfmo
             endif
+  420       CONTINUE
+            IEFMODIM = 1
             if(maswrk) then
+              IF( IEFMORUN.GT.0 .AND. IEFMORT.EQ.3 ) THEN
+C               SEPARATED EFMO ENERGY AND GRADIENT CONTRIBUTION
+                call makemol(ifg,jfg,0,ilay,0,0,0,0,0,0,0,.false.)
+                esd2 = esd2 + echnrg
+              ENDIF
+
               edim(ijfg,1)=edim(ijfg,1)+esd2
 c             if(nfmopcm.ne.0) esolv(nfg+ijfg)=esolv(ifg)+esolv(jfg)
               write(iw,9020) flipch,ifg,jfg,ll1,edim(ijfg,1)
@@ -6449,6 +6562,12 @@ c 315     continue
             call daxpy(nedft,fda,edft,1,etotdft,1)
           endif
 c
+          IF( IEFMORUN.GT.0.AND.IEFMORT.EQ.3.AND.MASWRK ) THEN
+            EDIM(IJFG,1) = EDIM(IJFG,1) - EPOLNRG
+            EDIM(IJFG,3) = EDIM(IJFG,3) - EPOLNRG
+            IEFMODIM = -1
+          ENDIF
+c
 c         accumulate gradient
 c
 c         if(nbody.eq.2) ida=0
@@ -6479,6 +6598,7 @@ c             effectively, this is always ilay=2 (since nbody(1)=3,2)
               CALL EFPDEG(1,2)
               if(nbody.gt.2.and.1+ida.ne.0) CALL EFPDEG(1+ida,3)
             ENDIF
+
           endif
 C
 C         Hessian contribution
@@ -6526,6 +6646,12 @@ c         save data for restarts
 c         synchronise the format with edin
 c
   440     continue
+c
+c         finish up efmo gradient
+          IF( IEFMORUN.GT.0 .AND. MASWRK .AND. IEFMORT.EQ.3.AND.
+     *        NDER.GT.0) THEN
+            CALL EFMODEG(IEFMODIM,FMODE(1,1,2),IAGLOB,EFMODIMG)
+          ENDIF
           if(savgrd) call grdrst(1,nfthes,ngrdsiz,fmode,nelmsiz,fmoelm,
      *                  nesdsiz,isdrec,lie,IDAFMO,ndar30,NDAR30f,iodfmo)
   445     continue
@@ -6554,10 +6680,12 @@ c
 c
 c     finish up separated dimer gradients.
 c
-      if(esd) call esdgrd(ilay,loadhf,jobgrp,loadm,layfrg,numfrg,iodfmo,
+      if(esd.and.iefmorun.eq.0) 
+     *  call esdgrd(ilay,loadhf,jobgrp,loadm,layfrg,numfrg,iodfmo,
      *                    maxl30,iaglob,scffrg,ngrfmo,mannod,mastid,da,
      *                    fmoespa,fmoespb,wrk,fmode,fmopg,isdrec,
      *                    orbxch,irec0,dodistr)
+
 C 
 C    FMO CPHF CALCULATION: Z-VECTOR METHOD
 C 

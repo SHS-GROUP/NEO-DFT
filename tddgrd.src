@@ -1,3 +1,4 @@
+C  1 OCT 10 - NM  - TDDFTM: USE DISTRIBUTED FILES IN PARALLEL RUN
 C 11 AUG 10 - NM  - CHANGES TO DO TDDFT/EFP1 GRADIENTS, ADDED TDDFTM
 C 23 JUN 10 - FZ  - META-GGA FUNCTIONALS FOR TDDFT
 C 25 MAR 10 - YLW,HL - TDDFTQ: ADDED TO DO TDDFT/PCM GRADIENTS
@@ -2395,6 +2396,7 @@ C*MODULE TDDGRD  *DECK TDDFTM
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
+      LOGICAL SVDSKW,GOPARR,DSKWRK,MASWRK
       LOGICAL TRIPLET,SG1T,TAMMD
 C
       CHARACTER*8 POLNAM,DPOLNAM
@@ -2420,6 +2422,7 @@ C
      *                NSTAT,NTRIAL,MAXVEC,NTHST,IRECTD,ITDFG,NONEQR,
      *                ITDPRP,TAMMD
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
 C
       DIMENSION PM(*),XPY(*),XEFI(*),YEFI(*),ZEFI(*)
       DIMENSION DUM(L1,L1)
@@ -2454,12 +2457,27 @@ C**** READ X+Y IN AO-BASIS *********************************************
             XPY(IJ) = DUM(I,J) + DUM(J,I)
          END DO
       END DO
+C**** INITIALIZE PARALLEL **********************************************
+      IPCOUNT = ME - 1
 C
+      SVDSKW = DSKWRK
+      DSKWRK = .TRUE.
       NFT25 = 25
       CALL SEQREW(NFT25)
 C
       DO LEFP=1,NPTTPT
-C**** READ EFI *********************************************************
+C**** GO PARALLEL! *****************************************************
+         IF(GOPARR) THEN
+            FLD1(1,LEFP) = ZERO
+            FLD1(2,LEFP) = ZERO
+            FLD1(3,LEFP) = ZERO
+            FLD2(1,LEFP) = ZERO
+            FLD2(2,LEFP) = ZERO
+            FLD2(3,LEFP) = ZERO
+            IPCOUNT = IPCOUNT + 1
+            IF(MOD(IPCOUNT,NPROC).NE.0) GO TO 100
+         END IF
+C**** ELECTRIC FIELD INTEGRALS *****************************************
          CALL SQREAD(NFT25,XEFI,L2)
          CALL SQREAD(NFT25,YEFI,L2)
          CALL SQREAD(NFT25,ZEFI,L2)
@@ -2471,7 +2489,16 @@ C**** TRACE[(X+Y)*EFI] *************************************************
          FLD2(1,LEFP) = TRACEP(XPY,XEFI,L1)
          FLD2(2,LEFP) = TRACEP(XPY,YEFI,L1)
          FLD2(3,LEFP) = TRACEP(XPY,ZEFI,L1)
+  100    CONTINUE
       END DO
+C
+      IF (GOPARR) THEN
+         CALL DDI_GSUMF(668,FLD1,3*N)
+         CALL DDI_GSUMF(669,FLD2,3*N)
+      END IF
+C
+      CALL SEQREW(NFT25)
+      DSKWRK = SVDSKW
 C****                 **************************************************
 C**** INDUCED DIPOLES **************************************************
 C****                 **************************************************
@@ -2489,9 +2516,7 @@ C
 C
       NEED = LAST - LOADFM - 1
       CALL GETFM(NEED)
-C
 C**** SAVE DIND AND DINDD **********************************************
-C
       IC = LBUFF - 6
       DO LEFP=1,NPTTPT
          IC = IC + 6
