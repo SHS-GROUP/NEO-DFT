@@ -1,0 +1,94 @@
+#BASH allows the pipeline to return a fail if any command fails
+#Since the $(COMP) command below outputs "module.f" in warnings and errors
+#replacing this string with the path to the real source file will make special
+#features of VIM and EMACS work.
+SHELL=bash -o pipefail
+
+#All MODULES will be added by config
+
+#These objects are not always necessary but it may be a good idea to compile them anyway
+#LINK will determine if they are necessary
+AUX = blaswrap vector blas
+
+COMP       = $(GMS_PATH)/comp
+COMPALL    = $(GMS_PATH)/compall
+LINK       = $(GMS_PATH)/lked
+OBJ_DIR    = $(GMS_BUILD_PATH)/object
+OBJ        = $(patsubst %,$(OBJ_DIR)/%.o,$(MODULES))
+LIS        = $(patsubst %,$(OBJ_DIR)/%.lis,$(MODULES))
+ACT        = $(patsubst %,$(OBJ_DIR)/%.f,$(MODULES))
+OBJ_AUX    = $(patsubst %,$(OBJ_DIR)/%.o,$(AUX))
+SRC_DIR    = $(GMS_PATH)/source
+DDI_DIR    = $(GMS_BUILD_PATH)/ddi
+DDI_LIB    = $(DDI_DIR)/libddi.a
+DDIKICK    = $(GMS_BUILD_PATH)/ddikick.x
+DDITEST    = $(GMS_BUILD_PATH)/ddi_test.x
+DATASERVER = $(GMS_BUILD_PATH)/data_server.x
+ACTVTE     = $(GMS_BUILD_PATH)/tools/actvte.x
+EXE        = gamess
+GAMESS     = $(GMS_BUILD_PATH)/$(EXE).$(GMS_VERSION).x
+CTAGS      = ctagsf
+FTNCHEK    = ftnchek
+FTNCHEK_OPT= -noextern -common=2 -arguments=1 -array=0 -calltree=0 -nocrossref -portability=tab -f77=automatic-array,relops,cycle-exit,case-construct
+FTNCHEK_OPT2= -noextern -common=2 -arguments=1 -array=0 -calltree=0 -nocrossref -resources=yes -f77=automatic-array,relops -portability=tab
+
+SEDSRC     = 's%\([a-z0-9]*\)\.f%$(SRC_DIR)\/\1\.src%'
+SEDSRC2    = 's%$(OBJ_DIR)/\([a-z0-9]*\)\.f%$(SRC_DIR)/\1\.src%'
+
+#GAMESS executable
+gamess : $(GAMESS)
+$(GAMESS) : $(DDI_LIB) $(OBJ) $(OBJ_AUX) $(OBJ_DIR)/zunix.o
+	$(LINK) $(EXE) $(GMS_VERSION)
+
+#Compile any module (can I make "make $(module)" work?)
+$(OBJ_DIR)/%.o :$(ACTVTE) $(SRC_DIR)/%.src 
+	@if [ -e $(OBJ_DIR)/$(notdir $(basename $@)).f ]; then rm $(OBJ_DIR)/$(notdir $(basename $@)).f;fi
+	$(COMP) $(notdir $(basename $@)) 2>&1 | sed -e $(SEDSRC)
+$(OBJ_DIR)/%.f :$(ACTVTE) $(SRC_DIR)/%.src
+	@if [ -e $(OBJ_DIR)/$(notdir $(basename $@)).f ]; then rm $(OBJ_DIR)/$(notdir $(basename $@)).f;fi
+	$(COMP) $(notdir $(basename $@)) true
+$(OBJ_DIR)/%.lis :$(ACTVTE) $(SRC_DIR)/%.src $(OBJ_DIR)/%.f
+	$(FTNCHEK) $(FTNCHEK_OPT) $(OBJ_DIR)/$(notdir $(basename $@)).f 2>&1 | sed -e $(SEDSRC2) > $@
+modules : $(OBJ)
+$(ACTVTE) :
+	 Compilation of $(ACTVTE) requires running $(GMS_PATH)/config
+$(OBJ_DIR)/zunix.o : $(SRC_DIR)/zunix.c
+	$(COMPALL) 1
+
+$(OBJ_DIR)/blaswrap.o : $(GMS_PATH)/misc/blaswrap.src
+	$(COMP) blaswrap 2>&1 | sed -e $(SEDSRC)
+$(OBJ_DIR)/blas.o : $(SRC_DIR)/blas.src
+	$(COMP) blas 2>&1 | sed -e $(SEDSRC)
+$(OBJ_DIR)/vector.o : $(SRC_DIR)/vector.src
+	$(COMP) vector 2>&1 | sed -e $(SEDSRC)
+
+
+ddi : $(DDI_LIB) $(DDIKICK)
+$(DDI_LIB) $(DDIKICK) :
+	$(GMS_PATH)/ddi/compddi
+	if [ -e $(GMS_PATH)/ddi/ddikick.x ]; then mv $(GMS_PATH)/ddi/ddikick.x $(DDIKICK);fi
+	if [ -e $(GMS_PATH)/ddi/ddi_test.x ]; then mv $(GMS_PATH)/ddi/ddi_test.x $(DDITEST);fi
+	if [ -e $(GMS_PATH)/ddi/data_server.x ]; then mv $(GMS_PATH)/ddi/data_server.x $(DATASERVER);fi
+	if [ -e $(GMS_PATH)/ddi/libddi.a ]; then mv $(GMS_PATH)/ddi/libddi.a  $(DDI_LIB);fi
+
+tags : $(SRC_DIR)/*.src
+	$(CTAGS) --langmap=fortran:.src $(SRC_DIR)/* $(GMS_PATH)/ddi/src/*
+
+gamess.lis : $(ACT) $(LIS)
+	$(FTNCHEK) $(FTNCHEK_OPT2) $(ACT) 2>&1 | sed -e $(SEDSRC2) > gamess.lis
+check : gamess.lis
+	@awk '{if($$0 ~ "[1-9]+ syntax errors") print "------\n",$$0,"\n------"}' gamess.lis
+	@awk '{if($$0 ~ "[1-9]+ warning[s]* issued") print $$0}' gamess.lis
+
+clean :
+	rm -rf $(OBJ)
+	rm -rf $(ACT)
+	rm -rf $(LIS)
+	rm -rf $(GAMESS)
+	rm -rf gamess.lis
+
+clean_ddi :
+	rm -rf $(DDI_LIB)
+	rm -rf $(DDIKICK)
+	rm -rf $(DDITEST)
+	rm -rf $(DATASERVER)

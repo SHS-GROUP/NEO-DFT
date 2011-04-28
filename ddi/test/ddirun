@@ -1,0 +1,443 @@
+#!/bin/csh
+#
+#  ddirun   27.06.07  GDF
+#  someday, this will run over both MPI and TCP/IP
+#  for now, this file is not really in use...
+#
+#  This is a C-shell script to launch a parallel job over DDI, by typing
+#       ddirun EXE NCPUS JOB
+#
+#  Where,
+#  EXE    is the name of the executable 
+#  NCPUS  is the number of processors to be used.
+#  JOB    is the name of the input file
+#
+#  Unfortunately execution is harder to standardize than compiling,
+#  so you have to do a bit more than name your machine type here:
+#    a) choose the target for execution from: 
+#
+#       Select "sockets", or perhaps one of the following special cases:
+#           compaq-sc, cray-t3e, cray-x1, cray-xt3, ibm64-sp, sgi64
+#
+#       Select "sockets" if your compile time target was any of these:
+#           amd64, axp64, cray-pvp, cray-xd1, fuji-pp, hpux32, hpux64,
+#           ibm32, ibm64, linux-ia64, linux-pc, mac32, macG5, necsx,
+#           sgi32, sun32, sun64
+#       as all of these systems use TCP/IP sockets.  Do not name your
+#       machine, instead, type "sockets".
+#
+#       Select "mpi" only if you have deliberately chosen to do the hard
+#       work to use MPI for some very special reason.  Your hard work
+#       is not yet over, as the mpirun below is unlikely to be correct
+#       for your system.
+#
+#           Search on the words typed in capital letters just below
+#           in order to find the right place to select each one:
+#    b) choose a directory SCR where large temporary files can reside.
+#       This should be the fastest possible disk access, very spacious,
+#       and almost certainly a local disk.
+#       Translation: do not put these files on a slow network file system!
+#    c) customize the execution section for your target below,
+#       each has its own list of further requirements.
+#    d) it is entirely possible to make 'ddirun' run in a batch queue,
+#       be it PBS, DQS, et cetera.  This is so installation dependent
+#       that we leave it to up to you. 
+#
+set TARGET=sockets
+set DDIPATH=~$USER/ddi
+#
+#       end of user-defined variables
+#
+set EXE=$1           # name of executable program
+set NCPUS=$2         # number of compute processes to be run
+set JOB=$3           # an input file name
+#
+#       end of input variables
+#
+set HOME=`pwd`
+set SCR=$HOME
+#
+# provide default if NCPUS is not given to this script
+if (null$NCPUS == null) set NCPUS=1
+if (null$JOB == null) set JOB=NOINPUT
+#
+echo ----- DDI execution script ----- 
+echo Primary developers Ryan Olsen, Graham Fletcher, Mike Schmidt
+echo Iowa State University
+echo DDI is maintained jointly at ISU \(p.o.c. Mike Schmidt\)
+echo and Daresbury Laboratory, UK \(p.o.c. Graham Fletcher\)
+#
+set master=`hostname`
+echo This job is running on host $master
+echo under operating system `uname` at `date`
+#
+#   now execute DDI
+#
+#   Most workstations run DDI over TCP/IP sockets, and therefore execute
+#   according to the following clause.  The installer must
+#      a) Set the path to point to the DDIKICK and executables.
+#      b) Build the HOSTLIST variable as a word separated string, i.e. ()'s.
+#         There should be one host name for every compute process that is
+#         to be run.  DDIKICK will automatically generate a set of data
+#         server processes (if required) on the same hosts.
+#   An extended explanation of the arguments to ddikick.x can be found
+#   in the file readme.ddi, if you have any trouble executing.
+#
+if ($TARGET == sockets) then
+#
+   set os=`uname`
+#
+#  some special options
+#
+#         IBM's AIX needs special setting if node is more than a 4-way SMP
+   if ($os == AIX) setenv EXTSHM ON
+#         HP's HP-UX uses a nonstandard name for its 'rsh' command
+   if ($os == HP-UX) setenv DDI_RSH /usr/bin/remsh
+#         Fedora Core 1 can't run DDI processes w/o placing a finite
+#         but large limit on the stack size (2**27 bytes seems OK)
+   if ($os == Linux) limit stacksize 131072
+#         In case this Linux system is using Intel's Math Kernel Library
+#         to obtain its BLAS, we insist each process runs single-threaded.
+   if ($os == Linux) setenv MKL_SERIAL YES
+#
+#       Five examples of how to build the HOSTLIST are shown....
+#           terminology: CPU= processor, NODE= physical enclosure (box)
+#
+#       1. Sequential execution is sure to be on this very same host
+   if ($NCPUS == 1) then
+      set NNODES=1
+      set HOSTLIST=(`hostname`)
+   endif
+#
+#       2. This is an example of how to run on a 4-way SMP enclosure,
+#          where all CPUs are inside a single NODE.
+   if ((`hostname` == ti.fi.ameslab.gov) && ($NCPUS > 1)) then
+      set NNODES=1
+      if ($NCPUS > 4) set NCPUS=4
+      set HOSTLIST=(ti.fi.ameslab.gov:cpus=$NCPUS)
+   endif
+#          same example, just a different node, which is a 4-way SMP
+   if ((`hostname` == sc.fi.ameslab.gov) && ($NCPUS > 1)) then
+      set NNODES=1
+      if ($NCPUS > 4) set NCPUS=4
+      set HOSTLIST=(sc.fi.ameslab.gov:cpus=$NCPUS)
+   endif
+#          same example, my dual processor G5 Macintosh
+   if ((`hostname` == he.fi.ameslab.gov) && ($NCPUS > 1)) then
+      set NNODES=1
+      if ($NCPUS > 2) set NCPUS=2
+      set HOSTLIST=(he.fi.ameslab.gov:cpus=$NCPUS)
+   endif
+#
+#       3. A phony example, of six uniprocessors (arbitrary names)
+#          Because they are uniprocessors, we just set NNODES = NCPUS.
+#          Since their names never change, we just can just specify them.
+#          Note that we can use a short name like 'bb' if and only if 
+#          system name resolution can map them onto the true host names.
+   if (`hostname` == aa.fi.ameslab.gov) then
+      set NNODES=$NCPUS
+      set HOSTLIST=(aa bb cc dd ee ff)
+   endif
+#
+#       4. An example of 16 uniprocessor boxes in a Beowulf-type cluster.
+#          Because they are uniprocessors, we just set NNODES = NCPUS.
+#          Their host names fall into the pattern fly1 to fly16,
+#          which we can turn into a HOSTLIST with a small loop.
+   if (`hostname` == fly1.fi.ameslab.gov) then
+      set NNODES=$NCPUS
+      set HOSTLIST=()
+      set nmax=$NCPUS
+      if ($nmax > 16) set nmax=16
+      @ CPU=1
+      while ($CPU <= $nmax)
+         set HOSTLIST=($HOSTLIST fly$CPU)
+         @ CPU++
+      end
+      unset $CPU
+   endif
+#
+#       5. Scalable Computing Lab's clusters running PBS batch queues.
+#          Here the task is to manipulate the dynamically assigned host
+#          names into the HOSTLIST string for the kickoff program,
+#          and to request the host name of the fast network adapters.
+#
+    if ($?PBS_JOBID) then
+#
+#          the SCL clusters use SSH2 for remote process generation.
+      setenv DDI_RSH ssh
+#
+#         The IBM cluster has two Gigabit adapters in each 4-way SMP,
+#         while the AXP cluster is based on a Myrinet network.
+      if (`uname` == AIX)   set NETEXT=".gig,.gig2"
+      if (`uname` == Linux) set NETEXT=".myri"
+#
+#         repeated host names in the PBS host file indicate being assigned
+#         CPUs in the same SMP enclosure, which we must count up correctly.
+#         Fortunately PBS gives duplicate host names in a row, not scrambled.
+#         The number of hosts in the PBS node file (nmax) should equal the
+#         requested processor count, NCPUS.  We need to count duplicates
+#         in order to learn the number of SMP enclosures, NNODES, and how
+#         many CPUs inside each SMP were assigned (NSMPCPU).  For example,
+#         if we are assigned the host names "a a a b b c c c" we must build
+#         the string "a:cpus=3 b:cpus=2 c:cpus=3" so that ddikick.x will
+#         know the SMP structure of the assigned node names.  (C-shell handles
+#         variable substitution followed by colon gracefully by ${HOST}:cpus.)
+#
+      set HOSTLIST=()
+      set nmax=`wc -l $PBS_NODEFILE`
+      set nmax=$nmax[1]
+      if ($nmax != $NCPUS) then
+         echo There is processor count confusion
+         exit
+      endif
+#            1st host in the list is sure to be a new SMP enclosure
+      set MYNODE=`sed -n -e "1 p" $PBS_NODEFILE`
+      set MYNODE=`echo $MYNODE | awk '{split($0,a,"."); print a[1]}'`
+#            IPROC counts assigned processors (up to NCPUS),
+#            NNODES counts number of SMP enclosures.
+#            NSMPCPU counts processors in the current SMP enclosure
+      @ IPROC = 2
+      @ NNODES = 1
+      @ NSMPCPU = 1
+      set spacer1=":cpus="
+      set spacer2=":netext="
+      while($IPROC <= $nmax)
+         set MYPROC=`sed -n -e "$IPROC p" $PBS_NODEFILE`
+         set MYPROC=`echo $MYPROC | awk '{split($0,a,"."); print a[1]}'`
+         if($MYPROC != $MYNODE) then
+            set HOSTLIST = ($HOSTLIST $MYNODE$spacer1$NSMPCPU$spacer2$NETEXT)
+            set MYNODE=$MYPROC
+            @ NSMPCPU = 0
+            @ NNODES++
+         endif
+         @ IPROC++
+         @ NSMPCPU++
+      end
+      set HOSTLIST = ($HOSTLIST $MYNODE$spacer1$NSMPCPU$spacer2$NETEXT)
+   endif
+#
+#        we have now finished setting up a correct HOSTLIST.
+#        uncomment the next two if you are doing script debugging.
+#--echo "The generated host list is"
+#--echo $HOSTLIST
+
+#
+#  gdf  19.06.07  socket test on cselnx1 at Daresbury
+#
+   if (`hostname` == cselnx1 ) then
+      set NNODES=1
+      set HOSTLIST=(cselnx1.dl.ac.uk:cpus=$NCPUS)
+   endif 
+#
+#        Just make sure we have the binaries, before we try to run
+#
+   if ((-x $EXE) && (-x $DDIPATH/ddikick.x)) then
+   else
+      echo Executable $EXE not found, or else
+      echo the DDIKICK executable ddikick.x
+      echo could not be found in directory $DDIPATH,
+      echo or else they did not properly link to executable permission.
+      exit 8
+   endif
+#
+#        OK, now we are ready to execute!
+#    The kickoff program initiates process(es) on all CPUs/nodes.
+#    If your site has rsh turned off, consider "setenv DDI_RSH /usr/bin/ssh"
+#
+   set echo
+   $DDIPATH/ddikick.x $EXE $JOB -ddi $NNODES $NCPUS $HOSTLIST \
+       -scr $SCR < /dev/null
+   unset echo
+endif
+
+#      ------ end of the TCP/IP socket execution sections -------
+
+#   Compaq running SHMEM wants you to
+#      a) set the path to point to the executable
+if ($TARGET == compaq-sc) then
+   chdir $SCR
+   set echo
+   prun -n $NNODES $EXE 
+   unset echo
+endif
+ 
+#   Cray T3E running SHMEM wants you to
+#      a) set the path to point to the executable
+if ($TARGET == cray-t3e) then
+   chdir $SCR
+   set echo
+   mpprun -n $NCPUS $EXE
+   unset echo
+endif
+
+#   Cray X1 running SHMEM wants you to
+#      a) set the path to point to the executable
+if ($TARGET == cray-x1) then
+   set OPTS="-m exclusive"
+   if ($NCPUS > 16) then
+      set PERNODE=16
+   else
+      set PERNODE=$NCPUS
+   endif
+   chdir $SCR
+   set echo
+   aprun -c core=0 -n $NCPUS -N $PERNODE $OPTS $EXE
+   unset echo
+endif
+
+#   SGI Origin running SHMEM wants you to
+#      a) set the path to point to the executable
+#   We've heard that setting the environment variable
+#       SMA_SYMMETRIC_SIZE to 2147483648 (2 GB)
+#   may be helpful if you see DDI_SHPALLOC error messages.
+#
+if ($TARGET == sgi64) then
+   chdir $SCR
+   set echo
+   mpirun -np $NCPUS $EXE
+   unset echo
+endif
+
+#   CRAY-XT3 running MPI wants you to
+#      a) set the path to point to the executable
+#   we also start data server processes to match the compute processes,
+#   because of using "pure-mpi" support for DDI.
+#
+if ($TARGET == cray-xt3) then
+   @ NNODES = $NCPUS + $NCPUS
+   setenv IOBUF_SIZE 32768   # use 1 line (133) to debug, much larger to run
+   setenv IOBUF_COUNT 2
+   setenv IOBUF_PARAMS '%stdout'
+   env | grep IOBUF
+   set echo
+   yod -stack 16m -size $NNODES $EXE
+   unset echo
+endif
+
+#   The IBM SP running DDI using mixed LAPI/MPI messaging wants you to
+#      a) set the path to point to the executable
+#      b) define hosts in a host file, which are probably defined by
+#         a batch queue system.  An example for LoadLeveler is given.
+#   Please note that most IBM systems schedule their batch jobs with
+#   the LoadLeveler software product.  
+#
+if ($TARGET == ibm64-sp) then
+#
+#     point this to where your executable is located
+#
+#  set path=($path $DDIPATH)
+#
+#     error messages defaulted to American English, try C if lacking en_US
+   setenv LOCPATH /usr/lib/nls/loc:/usr/vacpp/bin
+   setenv LANG en_US
+#
+#     this value is picked up inside DDI, then used in a "chdir $SCR"
+   setenv DDI_SCRATCH $SCR
+#
+#     define the name of a host name file.
+#
+   setenv HOSTFILE $SCR/$JOB.poehosts
+   if (-e $HOSTFILE) rm -f $HOSTFILE
+#
+#        If the job was scheduled by LoadLeveler, let LL control everything.
+#
+#  if ($?LOADLBATCH) then
+#        just get POE to tell us what nodes we were dynamically assigned to.
+#     /usr/bin/poe hostname -stdoutmode ordered > $HOSTFILE
+#     set SMP_SIZE = $TPN
+#
+#        Otherwise, if this was not an LoadLeveler job, here's a hack!
+#        It is unlikely this will match your SP's characteristics, as
+#        we just guess its a 4-way node, 4 processors, run interactively.
+#        It is here mainly to illustrate the sort of MP_XXX's you need.
+#  else
+#     set SMP_SIZE=4
+#     set NCPUS=4
+#     set NNODES=1
+#     echo `hostname`  > $HOSTFILE
+#     echo `hostname` >> $HOSTFILE
+#     echo `hostname` >> $HOSTFILE
+#     echo `hostname` >> $HOSTFILE
+
+#     echo "Variables controlling Parallel Environment process kickoff are"
+#     set echo
+#     setenv MP_NODES          $NNODES
+#     setenv MP_PROCS          $NCPUS
+#     setenv MP_HOSTFILE       $HOSTFILE
+#     setenv MP_CPU_USE        unique
+#     setenv MP_ADAPTER_USE    dedicated
+#       DDI is implemented using both MPI and LAPI active messages.
+#     setenv MP_MSG_API        MPI,LAPI
+#     setenv MP_EUILIB         us
+#       SP systems with one switch adapter might use css0, not striping csss
+#     setenv MP_EUIDEVICE      csss
+#     setenv MP_RESD           no
+#     unset echo
+#  endif
+
+#       and now we are ready to execute, using poe to kick off the tasks.
+#  @ NNODES = ($NCPUS - 1) / $SMP_SIZE + 1
+#  echo "Running $NCPUS processes on $NNODES nodes ($SMP_SIZE-way SMP)."
+   set echo
+#gdf   22.05.07  just to make sure
+   cd $SCR
+#
+#  gdf  19/06/06   POE ignores -llfile in batch mode
+#
+#  /usr/bin/poe $EXE $JOB -stdinmode none
+#
+   /usr/bin/poe $EXE $JOB -stdinmode none -llfile inter_lapi.ll
+   unset echo
+endif
+
+#                        - a MPI example -
+#     For a system with Myrinet connecting AXP uniprocessors.
+#     The batch scheduler puts a list of host names assigned to
+#     this job into PBS_NODEFILE, containing one name per line,
+#     such as "a1/a5/a8/a16" for a p=4 job.  Network adapters are
+#     called aX.myri and aX.fast in each node.  The mpirun will
+#     select the myrinet directly from names like "aX" for MPI
+#     traffic, but the small amount of TCP/IP traffic is directed
+#     to one or the other adapter by -netext.
+#     DDI will later sort out the host names looking for repeats
+#     to learn the SMP nature of the cluster, so launch the MPI
+#     processes in any order, but be sure to duplicate processes
+#     on every CPU so that you get data servers, too.
+#
+if ($TARGET == mpi) then
+#            note doubling of process count, and double copy of host file
+   @ NPROCS = $NCPUS + $NCPUS
+   cat $PBS_NODEFILE  > ~/scr/ddi-hostlist.$JOB
+   cat $PBS_NODEFILE >> ~/scr/ddi-hostlist.$JOB
+   set echo
+   /usr/local/mpich-gm/bin/mpirun.ch_gm -np $NPROCS \
+         -machinefile ~/scr/ddi-hostlist.$JOB \
+         --gm-recv blocking \
+         $EXE -scr $SCR -netext .myri
+   unset echo
+   rm -f ~/scr/ddi-hostlist.$JOB
+endif
+
+#   NEC SX Series wants you to
+#      a) set the path variable to point to the executable
+#   this isn't correct, it uses MPI, but need to save the F_ stuff???
+#
+if ($TARGET == necsx) then
+   chdir $SCR
+   setenv F_RECLUNIT BYTE
+   setenv F_ABORT YES
+   setenv F_ERROPT1 252,252,2,2,1,1,2,1
+   setenv F_PROGINF detail
+   setenv F_SETBUF 4096
+   echo Running @NCPUS compute processes and $NCPUS data server processes...
+   @ NPROCS = $NCPUS + $NCPUS
+   set echo
+   #--mpirun -np $NPROCS $EXE < /dev/null
+   unset echo
+endif
+#
+#  and this is the end
+#
+time
+exit
+
