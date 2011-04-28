@@ -1,0 +1,1621 @@
+C 11 AUG 10 - DGF - SYNCH COMMON BLOCK ENRGYS
+C 14 OCT 09 - DGF - PAD ENRGMP
+C 15 DEC 08 - DGF - SYNCHRONIZE PRPOPT COMMON
+C 20 NOV 08 - MK  - CHANGES TO ADD THE DIVIDE-AND-CONQUER METHOD
+C 22 DEC 06 - DGF - SYNCHRONISE MP2PAR
+C  6 NOV 06 - MWS - ADJUST WAVEFUNCTION COMMON BLOCK
+C 10 JUL 06 - SS  - LOCALIZED HYPERPOLARIZABILITY FUNCTION ADDED
+C 29 MAR 06 - FLG - FFLDX: ADD MOPAC DIPOLE MOMENT COMPUTATION
+C  2 FEB 06 - MWS - ONEFLD OPTION FIXED
+C 14 NOV 05 - DGF - PAD COMMON BLOCK ENRGYS
+C 19 SEP 05 - SG  - DO ALL 3 FIELD DIRECTIONS TO PRODUCE FULL TENSORS
+C  5 JUL 05 - MWS - SELECT NEW ATOM,BASIS,EFP,PCM,DAF DIMENSIONS
+C 19 MAY 04 - JAB - PRINT A MESSAGE ONLY ONCE IN PARALLEL JOBS
+C  9 DEC 03 - MWS - SYNCH COMMON BLOCK RUNOPT
+C 26 MAR 03 - MWS - TAKE ENERGY FROM FUNCT COMMON BLOCK, NOT ENRGYS
+C  6 SEP 01 - MWS - ADD DUMMY ARGUMENTS TO NAME IO CALL
+C 25 JUN 01 - MWS - ALTER COMMON BLOCK WFNOPT
+C 13 FEB 99 - MAF - FFLDX: CORRECT SYMMETRY OFF/ON FOR SPHER HARMONICS
+C 13 JUN 96 - VAG - ADD VARIABLE FOR CI TYPE TO SCFOPT COMMON
+C  5 MAR 96 - MWS - CHANGE SHELL SYMMETRY PACKING COMMONS
+C  3 JAN 96 - MWS - FFLDX: CALL NEW ONE ELECTRON INTEGRAL DRIVER
+C 28 SEP 95 - MWS - FFLDX: USE DIPINT ROUTINE TO GET THESE INTEGRALS
+C 10 NOV 94 - MWS - FFLDX: REMOVE FTNCHEK WARNINGS
+C 27 OCT 94 - MWS - FFLDX: DELETE OLD MP2PAR COMMON
+C 10 AUG 94 - MWS - INCREASE NUMBER OF DAF RECORDS
+C  2 MAY 94 - MWS - FFLDX: FIX CHECK RUNS
+C 16 JUL 93 - MWS - INCREASE MAXIMUM CI ROOTS TO 100
+C 31 OCT 92 - MWS - PREVENT SEMIEMPIRICAL FIELDS (NO DIPOLE INTEGRALS)
+C 22 JUN 92 - MWS - ADD 2ND ARG TO GUESMO CALL
+C  1 MAY 92 - MWS - INCLUDE HENRY KURTZ' FFIELD CALCULATION IN GAMESS
+C
+C*MODULE FFIELD  *DECK FFLDX
+      SUBROUTINE FFLDX
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL ONEFLD,OFFDIA,GOPARR,DSKWRK,MASWRK,
+     *        MCCI,SYM,PK,PKSAVE,PANDK,BLOCK,EFLDL,LCUT,LOCHYP
+C
+      PARAMETER (MXATM=2000, MXSH=5000, NMO=500)
+C
+      DIMENSION EFIELD(5),EFVAL(3),FFENER(13),KFLI(13),KFLJ(13),
+     *          DIP(13,3),EONE(3),COM(3),ALPHAE(3,3),BETAE(3,3),
+     *          GAMMAE(3,3),ALPHAD(3,3),BETAD(3,3),GAMMAD(3,3),
+     *          FDIPOL(3),DDIPOL(3),ENSAV(3,2:3),DPSAV(3,2:3,3)
+C
+      COMMON /EFLDC / EVEC(3),EFLDL
+      COMMON /ELGIDX/ LCUT
+      COMMON /ENRGMP/ EMP2,EMP3,EMP4,EMP2A
+      COMMON /FLDCUT/ EFCUT(3),IGFLD
+      COMMON /FMCOM / X(1)
+      COMMON /FUNCT / E,EG(3,MXATM)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /LOCHYP/ VMTOL, CENLMO(3,NMO), FLDLMO(3), ESTLOC,
+     *                NPRDTL, LOCLNA(1), NIFLD
+      COMMON /MP2PAR/ OSPT,CODEMP,SCSPT,TOL,METHOD,NWDMP2,MEMPRI,MPPROP,
+     *                NACORE,NBCORE,NOA,NOB,NORB,NBF,NOMIT,MOCPHF,MAXITC
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROCS,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PKFIL / PK,PANDK,BLOCK
+      COMMON /RESTAR/ TIMLIM,IREST,NREC,INTLOC,IST,JST,KST,LST
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+      COMMON /SYMTRY/ MAPSHL(MXSH,48),MAPCTR(MXATM,48),
+     *                T(432),INVT(48),NT
+      COMMON /TMVALS/ TI,TX,TIM
+      COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
+     *                MPLEVL,MPCTYP
+      COMMON /XYZPRP/ XP,YP,ZP,
+     *                DIPMX,DIPMY,DIPMZ,
+     *                QXX,QYY,QZZ,QXY,QXZ,QYZ,
+     *                QMXX,QMYY,QMZZ,QMXY,QMXZ,QMYZ,
+     *                OXXX,OXXY,OXXZ,OXYY,OYYY,OYYZ,
+     *                OXZZ,OYZZ,OZZZ,OXYZ,
+     *                OMXXX,OMXXY,OMXXZ,OMXYY,OMYYY,
+     *                OMYYZ,OMXZZ,OMYZZ,OMZZZ,OMXYZ
+C
+C     CHANGE FOR DIVIDE-AND-CONQUER METHOD
+C
+      LOGICAL DCFLG
+      COMMON /DCOPT / SUBTYP,BUFTYP,SUBLNG,BUFRAD,NDCPRT,NSUBS,DCFLG
+C
+      PARAMETER (ZERO=0.0D+00, TWO=2.0D+00, DFAC=2.541766D+00,
+     *           ZAPTOL=1.0D-04)
+C
+      PARAMETER (NNAM=6)
+      DIMENSION QNAM(NNAM),KQNAM(NNAM)
+      DATA FFCALC/8HFFCALC  /
+      DATA QNAM/8HEFIELD  ,8HONEFLD  ,8HSYM     ,
+     *          8HESTEP   ,8HOFFDIA  ,8HLOCHYP  /
+      DATA KQNAM/33,0,0,  3,0,0/
+C
+      DATA KFLI/1,3,3,1,2,2,2,1,3,5,5,4,4/
+      DATA KFLJ/1,1,2,2,2,1,3,3,3,5,4,4,5/
+C
+      DATA RMC/8HMCSCF    /
+      DATA UHF/8HUHF      /
+      DATA CHECK/8HCHECK   /
+      DATA RNONE/8HNONE    /
+      DATA NONE/4HNONE/
+C
+C        CALCULATION OF POLARIZABILITY QUANTITIES BY APPLIED FIELDS,
+C        STATIC ALPHA, BETA, AND GAMMA COMPUTED BY FINITE DIFFERENCING
+C
+C        THE METHOD IS DESCRIBED IN THE PAPER
+C       "CALCULATION OF NONLINEAR OPTICAL PROPERTIES OF MOLECULES"
+C        H.A.KURTZ, J.J.P.STEWART, K.M.DIETER
+C        J.COMPUT.CHEM.  11, 82-87 (1990)
+C
+C        THIS CODE CONTRIBUTED BY HENRY KURTZ TO GAMESS IN APRIL 1992
+C        MODIFIED BY SANKHA GHOSH IN SEPT. 2005 TO COMPUTE FULL TENSORS
+C
+      IF(MASWRK) WRITE(IW,9000)
+      MCCI = SCFTYP.EQ.RMC  .OR.  CITYP.NE.RNONE
+C
+      EONE(1) = ZERO
+      EONE(2) = ZERO
+      EONE(3) = ZERO
+      ONEFLD  = .FALSE.
+      SYM     = .FALSE.
+      ESTEP   = 1.0D-03
+      OFFDIA  = .TRUE.
+      LOCHYP  = .FALSE.
+C
+      JRET = 0
+      CALL NAMEIO (IR,JRET,FFCALC,NNAM,QNAM,KQNAM,
+     *             EONE,ONEFLD,SYM,ESTEP,OFFDIA,LOCHYP,
+     *             0,0,0,
+     *   0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,
+     *   0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,
+     *   0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0)
+      IF(JRET.GT.1) THEN
+         IF(MASWRK) WRITE(IW,*) 'ERROR IN $FFCALC GROUP'
+         CALL ABRT
+      END IF
+C
+      IF(MASWRK) THEN
+         WRITE(IW,9010)
+         ESTLOC = ESTEP
+         IF(LOCHYP) CALL LOCHPX(0)
+         IF(ONEFLD) THEN
+            WRITE(IW,9015) ONEFLD,SYM,(EONE(IE),IE=1,3)
+         ELSE
+            WRITE(IW,9016) OFFDIA,ESTEP
+         END IF
+      END IF
+C
+      IF(LCUT) THEN
+         IF(ONEFLD) THEN
+            EFCUT(1) = EONE(1)
+            EFCUT(2) = EONE(2)
+            EFCUT(3) = EONE(3)
+         ELSE
+            IF(MASWRK) WRITE(IW,*) 'CUT-OFF WAS DONE FOR ONEFLD'
+         END IF
+      END IF
+C
+C     *******************************************
+C     MP2 SHOULD GO FASTEST WITH JK INTEGRAL FILE
+C     *******************************************
+C
+      PKSAVE = PK
+      NOPKSV = NOPK
+      IF(MPLEVL.EQ.2) PK=.FALSE.
+      IF(MPLEVL.EQ.2) NOPK=1
+C
+C     --- ENERGY COMPUTATION USING ONLY ONE APPLIED FIELD ---
+C     NOTE THAT DIPOLE INTEGRALS SHOULD PRE-EXIST FROM ABOVE.
+C     RESET SYMMETRY TO C1 FOR ASYMMETRIC APPLIED FIELDS.
+C
+      IF(ONEFLD) THEN
+         EFVAL(1) = EONE(1)
+         EFVAL(2) = EONE(2)
+         EFVAL(3) = EONE(3)
+         MFLD=1
+         IF(MASWRK) WRITE(IW,9090) MFLD,(EFVAL(J),J=1,3)
+C
+C                 SET UP FOR A TYPICAL $EFIELD COMPUTATION
+C           EFLDL CAUSES DIPOLE INTS TO BE ADDED TO H INSIDE -ONEEI-,
+C           IT WILL ALSO LEAD TO CORRECTING THE NUCLEAR REP. ENERGY.
+C
+         EFLDL = .TRUE.
+         EVEC(1) = EONE(1)
+         EVEC(2) = EONE(2)
+         EVEC(3) = EONE(3)
+C
+         IF(.NOT.SYM) CALL SYMOFF
+         CALL ONEEI
+         CALL GUESMO(GUESS)
+         CALL JANDK
+         CALL WFN
+         GO TO 888
+      END IF
+C
+C     ***************************************
+C     CALCULATE FIELD-FREE ENERGY OF MOLECULE
+C     ***************************************
+C
+      IF(MASWRK) WRITE(IW,9020)
+      CALL ENERGX
+C
+      IF(E.EQ.ZERO  .AND.  EXETYP.NE.CHECK) THEN
+         IF(MASWRK) WRITE(IW,9030)
+         CALL ABRT
+         STOP
+      END IF
+      IF(TIM .GE. TIMLIM) THEN
+         IF(MASWRK) WRITE(IW,9040)
+         CALL ABRT
+         STOP
+      END IF
+C
+C     ***************************************************
+C     EVALUATE AND SAVE DIPOLE INTEGRALS IN C.O.M. COORDS
+C     ***************************************************
+C
+      CALL CALCOM(XP,YP,ZP)
+      COM(1) = XP
+      COM(2) = YP
+      COM(3) = ZP
+      CALL DIPINT(COM(1),COM(2),COM(3),.FALSE.)
+C
+      L1 = NUM
+      L2 = (L1*L1+L1)/2
+      L3 = L1*L1
+C
+      CALL VALFM(LOADFM)
+      LHAM = LOADFM + 1
+      LVEC = LHAM   + L2
+      LD   = LVEC   + L3
+      LMU  = LD     + L2
+      LAST = LMU    + L2
+      NEED = LAST - LOADFM - 1
+      CALL GETFM(NEED)
+C
+C     ***********************
+C     SAVE FIELD FREE RESULTS
+C     ***********************
+C
+      IF(MPLEVL .GT. 0) THEN
+        FFENER(1) = EMP2
+      ELSE
+        FFENER(1) = E
+      END IF
+C
+      IF(MPLEVL .GT. 0 .AND. MPPROP .EQ. 1) THEN
+         DIP(1,1) = DIPMX/DFAC
+         DIP(1,2) = DIPMY/DFAC
+         DIP(1,3) = DIPMZ/DFAC
+      ELSE IF(CCTYP .NE. RNONE .OR.
+     *        (MPLEVL .GT. 0 .AND. MPPROP .EQ. 0))THEN
+         DIP(1,1) = ZERO
+         DIP(1,2) = ZERO
+         DIP(1,3) = ZERO
+      END IF
+C
+C             EVALUATE MOPAC DIPOLE ON THE SPOT
+      IF(MPCTYP.NE.NONE) THEN
+         CALL DAREAD(IDAF,IODA,X(LD),L2,16,0)
+         CALL DAREAD(IDAF,IODA,X(LMU),L2,95,0)
+         DIPMX = -TRACEP(X(LD),X(LMU),L1)
+         CALL DAREAD(IDAF,IODA,X(LMU),L2,96,0)
+         DIPMY = -TRACEP(X(LD),X(LMU),L1)
+         CALL DAREAD(IDAF,IODA,X(LMU),L2,97,0)
+         DIPMZ = -TRACEP(X(LD),X(LMU),L1)
+         DIPMX = DIPMX*DFAC
+         DIPMY = DIPMY*DFAC
+         DIPMZ = DIPMZ*DFAC
+      ENDIF
+C
+      IF(MASWRK) THEN
+         WRITE(IW,9050) 1,ZERO,ZERO,ZERO
+         WRITE(IW,9060) FFENER(1)
+         WRITE(IW,9070) DIPMX,DIPMY,DIPMZ
+      END IF
+C
+C     **************************************
+C     LOCALIZED HYPERPOLARIZABILITY ANALYSIS
+C     **************************************
+      IF(LOCHYP) CALL LOCHPX(1)
+C
+C     ************************************************
+C     SAVE FIELD FREE ORBITALS, AND POSSIBLY CI VECTOR
+C     ************************************************
+      IF(.NOT.DCFLG) THEN
+         CALL FFSVMO(0,X(LVEC))
+         IF(MCCI) CALL FFSVCI(0)
+      ELSE
+C        IN DC-SCF CASE, ONLY DENSITY MATRIX IS SAVED
+         CALL DAREAD(IDAF,IODA,X(LVEC),L2,16,0)
+         CALL DAWRIT(IDAF,IODA,X(LVEC),L2,32,0)
+         IF(SCFTYP.EQ.UHF) THEN
+            CALL DAREAD(IDAF,IODA,X(LVEC),L2,20,0)
+            CALL DAWRIT(IDAF,IODA,X(LVEC),L2,33,0)
+         ENDIF
+      ENDIF
+C     **********************************************
+C     SAVE ORIGINAL ONE ELECTRON INTEGRALS FOR LATER
+C     **********************************************
+      CALL DAREAD(IDAF,IODA,X(LHAM),L2,11,0)
+      CALL DAWRIT(IDAF,IODA,X(LHAM),L2,94,0)
+      CALL RETFM(NEED)
+C
+C     *************************************************************
+C     *           -----  SET UP THE BASE FIELDS -----             *
+C     *  IF AXIAL COMPONENTS ONLY (JAXIS.EQ.0) THEN FIELDS ARE    *
+C     *  1:    0                                                  *
+C     *  2:    I      4:  2I                                      *
+C     *  3:   -I      5: -2I                                      *
+C     *                                                           *
+C     *  IF OFF AXIS (JAXIS.NE.0) THEN GO AROUND THE PLANE IN     *
+C     *  AS SYSTEMATIC WAY AS POSSIBLE TO HELP CONVERGENCE.       *
+C     *  1:    0    0                                             *
+C     *  2:   -I    0        6:    I    0          10:  -2I  -2J  *
+C     *  3:   -I    J        7:    I   -J          11:  -2I   2J  *
+C     *  4:    0    J        8:    O   -J          12:   2I   2J  *
+C     *  5:    I    J        9:   -I   -J          13:   2I  -2J  *
+C     *************************************************************
+C
+      EFIELD(1) =  ZERO
+      EFIELD(2) =  ESTEP
+      EFIELD(3) = -ESTEP
+      EFIELD(4) =  TWO*ESTEP
+      EFIELD(5) = -TWO*ESTEP
+      NFLDS     =  5
+      SYM       = .FALSE.
+C
+C     ----- RESET SYMMETRY TO C1 FOR ASYMMETRIC APPLIED FIELDS -----
+C     IF NECESSARY, CALCULATE A GRANDE LIST OF TWO ELECTRON INTEGRALS
+C     AND ALSO TURN OFF USE OF SYMMETRY IN FOCK DIAGONALIZATIONS.
+C     USING SYMOFF FOR C1 LOOKS STUPID, BUT SETS UP SYMON CALL LATER.
+C
+      IF(NT.GT.1) THEN
+         IF(MASWRK) WRITE(IW,9080)
+         CALL SYMOFF
+         CALL JANDK
+      ELSE
+         CALL SYMOFF
+      END IF
+C
+      IF(TIM .GE. TIMLIM) THEN
+         IF(MASWRK) WRITE(IW,9040)
+         CALL ABRT
+         STOP
+      END IF
+C
+      IF(EXETYP.EQ.CHECK) THEN
+         CALL VCLR(FFENER,1,13  )
+         CALL VCLR(DIP   ,1,13*3)
+      END IF
+C
+C     ***********************
+C     INITIALIZE THE MATRICES
+C     ***********************
+C
+      CALL VCLR(FDIPOL,1,3)
+      CALL VCLR(DDIPOL,1,3)
+      CALL VCLR(ALPHAE,1,9)
+      CALL VCLR(ALPHAD,1,9)
+      CALL VCLR( BETAE,1,9)
+      CALL VCLR( BETAD,1,9)
+      CALL VCLR(GAMMAE,1,9)
+      CALL VCLR(GAMMAD,1,9)
+C
+C     ******************
+C     LOOP OVER THE AXIS
+C     ******************
+      DO IAXIS = 1,3
+C
+C        ****************************
+C        LOOP OVER ALL APPLIED FIELDS
+C        ****************************
+            NPRINT = -5
+            DO 400 IFLD = 2,NFLDS
+               FFENER(IFLD) = ZERO
+               DIP(IFLD,1)  = ZERO
+               DIP(IFLD,2)  = ZERO
+               DIP(IFLD,3)  = ZERO
+               EFVAL(1)     = ZERO
+               EFVAL(2)     = ZERO
+               EFVAL(3)     = ZERO
+C
+C            SETUP THIS ELECTRIC FIELD
+C
+               EFVAL(IAXIS) = EFIELD(IFLD)
+C
+               MFLD = IFLD-1
+               IF(MASWRK) WRITE(IW,9090) MFLD,(EFVAL(J),J=1,3)
+               IF(EXETYP.EQ.CHECK) GO TO 400
+C           **********************************************
+C           ADD ELECTRIC FIELD TO ONE ELECTRON HAMILTONIAN
+C           **********************************************
+               CALL VALFM (LOADFM)
+               LMU  = LOADFM + 1
+               LH   = LMU    + L2
+               LD   = LH     + L2
+               LAST = LD     + L2
+               NEED = LAST - LOADFM - 1
+               CALL GETFM(NEED)
+C
+               CALL DAREAD(IDAF,IODA,X(LH),L2,94,0)
+C
+               IF(EFVAL(1).NE.ZERO) THEN
+                 CALL DAREAD(IDAF,IODA,X(LMU),L2,95,0)
+                 CALL DAXPY(L2,EFVAL(1),X(LMU),1,X(LH),1)
+               END IF
+               IF(EFVAL(2).NE.ZERO) THEN
+                 CALL DAREAD(IDAF,IODA,X(LMU),L2,96,0)
+                 CALL DAXPY(L2,EFVAL(2),X(LMU),1,X(LH),1)
+               END IF
+               IF(EFVAL(3).NE.ZERO) THEN
+                 CALL DAREAD(IDAF,IODA,X(LMU),L2,97,0)
+                 CALL DAXPY(L2,EFVAL(3),X(LMU),1,X(LH),1)
+               END IF
+C
+               CALL DAWRIT(IDAF,IODA,X(LH),L2,11,0)
+C           *******************************************
+C           RECOVER THE FIELD FREE ORBITALS AND DENSITY
+C           *CAUTION, STORAGE AT -LMU- IS USED AS L3!*
+C           *******************************************
+               IF(.NOT.DCFLG) THEN
+                  CALL FFSVMO(1,X(LMU))
+                  IF(MCCI) CALL FFSVCI(1)
+                  CALL ORTHDN
+               ELSE
+C                 IN DC-SCF CASE, ONLY DENSITY MATRIX WAS SAVED
+                  CALL DAREAD(IDAF,IODA,X(LMU),L2,32,0)
+                  CALL DAWRIT(IDAF,IODA,X(LMU),L2,16,0)
+                  IF(SCFTYP.EQ.UHF) THEN
+                     CALL DAREAD(IDAF,IODA,X(LMU),L2,33,0)
+                     CALL DAWRIT(IDAF,IODA,X(LMU),L2,20,0)
+                  ENDIF
+               ENDIF
+               CALL RETFM(NEED)
+C           ***************************************
+C           CALCULATE WAVEFUNCTION UNDER THIS FIELD
+C           ***************************************
+               CALL WFN
+C
+               IF(E.EQ.ZERO) THEN
+               IF(MASWRK) WRITE(IW,9030)
+                 CALL ABRT
+                 STOP
+               END IF
+C
+               IF(TIM .GE. TIMLIM) THEN
+               IF(MASWRK) WRITE(IW,9040)
+                 CALL ABRT
+                 STOP
+               END IF
+C           ***********************************
+C           ADD NUCLEAR CONTRIBUTION FROM FIELD
+C           ***********************************
+               ANUCF = ZERO
+               DO JNUF = 1,NAT
+                  DO INUF = 1,3
+                     COMCOR = C(INUF,JNUF) - COM(INUF)
+                     ANUCF = ANUCF - EFVAL(INUF)*COMCOR*ZAN(JNUF)
+                  END DO
+               END DO
+C
+               EWITHF = E + ANUCF
+               FFENER(IFLD) = EWITHF
+C           **************************************
+C           LOCALIZED HYPERPOLARIZABILITY ANALYSIS
+C           **************************************
+            IF(LOCHYP) THEN
+               FLDLMO(1)=EFVAL(1)
+               FLDLMO(2)=EFVAL(2)
+               FLDLMO(3)=EFVAL(3)
+               CALL LOCHPX(2)
+            END IF
+C
+C           ****************
+C           CALCULATE DIPOLE
+C           ****************
+               IF(CCTYP.NE.RNONE .OR.
+     *           (MPLEVL.GT.0 .AND. MPPROP.EQ.0))THEN
+                 DIP(IFLD,1) = ZERO
+                 DIP(IFLD,2) = ZERO
+                 DIP(IFLD,3) = ZERO
+               ELSE IF(MPLEVL.GT.0 .AND. MPPROP.EQ.1)THEN
+                 CALL ELMOMC
+                 DIP(IFLD,1) = DIPMX/DFAC
+                 DIP(IFLD,2) = DIPMY/DFAC
+                 DIP(IFLD,3) = DIPMZ/DFAC
+               ELSE
+                 IF(MPCTYP.EQ.NONE) THEN
+                    CALL ELMOMC
+                    DIP(IFLD,1) = DIPMX/DFAC
+                    DIP(IFLD,2) = DIPMY/DFAC
+                    DIP(IFLD,3) = DIPMZ/DFAC
+                 ELSE
+                    CALL DAREAD(IDAF,IODA,X(LD),L2,16,0)
+                    CALL DAREAD(IDAF,IODA,X(LMU),L2,95,0)
+                    DIPMX = -TRACEP(X(LD),X(LMU),L1)
+                    CALL DAREAD(IDAF,IODA,X(LMU),L2,96,0)
+                    DIPMY = -TRACEP(X(LD),X(LMU),L1)
+                    CALL DAREAD(IDAF,IODA,X(LMU),L2,97,0)
+                    DIPMZ = -TRACEP(X(LD),X(LMU),L1)
+                    DIPMX = DIPMX*DFAC
+                    DIPMY = DIPMY*DFAC
+                    DIPMZ = DIPMZ*DFAC
+                 END IF
+               END IF
+C           ************************************
+C           SAVE THE RESULTS FOR FIELDS : I & -I
+C           ************************************
+               IF(IFLD .EQ. 2 .OR. IFLD .EQ. 3) THEN
+                 ENSAV(IAXIS,IFLD)   = FFENER(IFLD)
+                 DPSAV(IAXIS,IFLD,1) = DIP(IFLD,1)
+                 DPSAV(IAXIS,IFLD,2) = DIP(IFLD,2)
+                 DPSAV(IAXIS,IFLD,3) = DIP(IFLD,3)
+               END IF
+C
+               IF(MASWRK) THEN
+                 MFLD = IFLD-1
+                 WRITE(IW,9050) MFLD,(EFVAL(J),J=1,3)
+                 WRITE(IW,9060) EWITHF
+                 WRITE(IW,9070) DIPMX,DIPMY,DIPMZ
+               END IF
+  400       CONTINUE
+C
+C              NOTES ADDED BY MWS, JAN 2006.
+C    THE DIFFERENTIATIONS ARE MORE THAN A BIT DODGY, FOR
+C    A SYMMETRIC MOLECULE LIKE WATER WE END UP WITH SOME
+C    OF THE BB BELOW BEING 1D-13.  THERE PROBABLY SHOULD
+C    BE A TEST ZAPPING ALL THE NUMERATORS TO ZERO IF THEY
+C    ARE VERY SMALL COMPARED TO THE ESTEP POWER BEING
+C    USED IN THEIR DENOMINATOR.  SHOULD ESTEP BE BIGGER?
+C
+C    I'D GUESS THAT THERE ARE ONLY 3 SIGNIFICANT FIGURES
+C    IN THE BETA AND GAMMA TENSOR COMPONENTS.  PRINT LESS?
+C
+C    ALSO, SHOULDN'T THERE BE GAMMA COMPONENTS LIKE XXXY?
+C
+               BD = -(2.0D+00/3.0D+00) *(FFENER(2)-FFENER(3))
+     *              + (1.0D+00/12.0D+00)*(FFENER(4)-FFENER(5))
+               FDIPOL(IAXIS) = BD/ESTEP
+               BD = (2.0D+00/3.0D+00)*(DIP(2,IAXIS) + DIP(3,IAXIS))
+     *             - (1.0D+00/6.0D+00)*(DIP(4,IAXIS) + DIP(5,IAXIS))
+               DDIPOL(IAXIS) = BD
+               BA =  (5.0D+00/2.0D+00) * FFENER(1)
+     *              - (4.0D+00/3.0D+00) *(FFENER(2) + FFENER(3))
+     *              + (1.0D+00/12.0D+00)*(FFENER(4) + FFENER(5))
+               ALPHAE(IAXIS,IAXIS) = BA/(ESTEP*ESTEP)
+               DO IB = 1,3
+                  BA = (2.0D+00/3.0D+00) *(DIP(2,IB) - DIP(3,IB))
+     *                 - (1.0D+00/12.0D+00)*(DIP(4,IB) - DIP(5,IB))
+                  ALPHAD(IAXIS,IB) = BA/ESTEP
+               END DO
+               BB = (FFENER(2)-FFENER(3)) -
+     *              (1.0D+00/2.0D+00)*(FFENER(4)-FFENER(5))
+               BETAE(IAXIS,IAXIS) = BB/(ESTEP**3)
+               DO IB = 1,3
+                  BB = (1.0D+00/3.0D+00)*(DIP(4,IB) + DIP(5,IB) -
+     *                                    DIP(2,IB) - DIP(3,IB))
+                  BETAD(IAXIS,IB) = BB/(ESTEP*ESTEP)
+               END DO
+               BG = -6.0D+00*FFENER(1) + 4.0D+00*(FFENER(2)+FFENER(3))
+     *              - (FFENER(4) + FFENER(5))
+               GAMMAE(IAXIS,IAXIS) = BG/(ESTEP**4)
+               BG = (1.0D+00/2.0D+00)*(DIP(4,IAXIS) - DIP(5,IAXIS)) -
+     *              (DIP(2,IAXIS) - DIP(3,IAXIS))
+               GAMMAD(IAXIS,IAXIS) = BG/(ESTEP**3)
+      END DO
+C
+C     **************************************
+C     OFF-AXIAL COMPONENTS ONLY IF REQUESTED
+C     **************************************
+      IF (OFFDIA) THEN
+        NFLDS = 13
+C       *******************
+C       LOOP OVER THE PLANE
+C       *******************
+        DO IAXIS = 1,3
+           DO JAXIS = IAXIS,3
+              IF (IAXIS .NE. JAXIS) THEN
+C          **********************************
+C          BEGIN LOOP OVER ALL APPLIED FIELDS
+C          **********************************
+               NPRINT = -5
+            DO 500 IFLD = 2,NFLDS
+C
+               FFENER(IFLD) = ZERO
+               DIP(IFLD,1)  = ZERO
+               DIP(IFLD,2)  = ZERO
+               DIP(IFLD,3)  = ZERO
+               EFVAL(1)     = ZERO
+               EFVAL(2)     = ZERO
+               EFVAL(3)     = ZERO
+C
+C            SETUP THIS ELECTRIC FIELD
+C
+               EFVAL(IAXIS) = EFIELD(KFLI(IFLD))
+               EFVAL(JAXIS) = EFIELD(KFLJ(IFLD))
+               MFLD = IFLD-1
+               IF(MASWRK) WRITE(IW,9090) MFLD,(EFVAL(J),J=1,3)
+               IF(EXETYP.EQ.CHECK) GO TO 500
+C
+               IF (IFLD .EQ. 2) THEN
+                  FFENER(IFLD) = ENSAV(IAXIS,3)
+                  DIP(IFLD,1)  = DPSAV(IAXIS,3,1)
+                  DIP(IFLD,2)  = DPSAV(IAXIS,3,2)
+                  DIP(IFLD,3)  = DPSAV(IAXIS,3,3)
+               ELSE IF (IFLD .EQ. 4) THEN
+                  FFENER(IFLD) = ENSAV(JAXIS,2)
+                  DIP(IFLD,1)  = DPSAV(JAXIS,2,1)
+                  DIP(IFLD,2)  = DPSAV(JAXIS,2,2)
+                  DIP(IFLD,3)  = DPSAV(JAXIS,2,3)
+               ELSE IF (IFLD .EQ. 6) THEN
+                  FFENER(IFLD) = ENSAV(IAXIS,2)
+                  DIP(IFLD,1)  = DPSAV(IAXIS,2,1)
+                  DIP(IFLD,2)  = DPSAV(IAXIS,2,2)
+                  DIP(IFLD,3)  = DPSAV(IAXIS,2,3)
+               ELSE IF (IFLD .EQ. 8) THEN
+                  FFENER(IFLD) = ENSAV(JAXIS,3)
+                  DIP(IFLD,1)  = DPSAV(JAXIS,3,1)
+                  DIP(IFLD,2)  = DPSAV(JAXIS,3,2)
+                  DIP(IFLD,3)  = DPSAV(JAXIS,3,3)
+               ELSE
+C
+C           **********************************************
+C           ADD ELECTRIC FIELD TO ONE ELECTRON HAMILTONIAN
+C           **********************************************
+               CALL VALFM (LOADFM)
+               LMU  = LOADFM + 1
+               LH   = LMU    + L2
+               LAST = LH     + L2
+               NEED = LAST - LOADFM - 1
+               CALL GETFM(NEED)
+C
+               CALL DAREAD(IDAF,IODA,X(LH),L2,94,0)
+C
+               IF(EFVAL(1).NE.ZERO) THEN
+                 CALL DAREAD(IDAF,IODA,X(LMU),L2,95,0)
+                 CALL DAXPY(L2,EFVAL(1),X(LMU),1,X(LH),1)
+               END IF
+               IF(EFVAL(2).NE.ZERO) THEN
+                 CALL DAREAD(IDAF,IODA,X(LMU),L2,96,0)
+                 CALL DAXPY(L2,EFVAL(2),X(LMU),1,X(LH),1)
+               END IF
+               IF(EFVAL(3).NE.ZERO) THEN
+                 CALL DAREAD(IDAF,IODA,X(LMU),L2,97,0)
+                 CALL DAXPY(L2,EFVAL(3),X(LMU),1,X(LH),1)
+               END IF
+C
+               CALL DAWRIT(IDAF,IODA,X(LH),L2,11,0)
+C           *******************************************
+C           RECOVER THE FIELD FREE ORBITALS AND DENSITY
+C           *CAUTION, STORAGE AT -LMU- IS USED AS L3!*
+C           *******************************************
+               IF(.NOT.DCFLG) THEN
+                  CALL FFSVMO(1,X(LMU))
+                  IF(MCCI) CALL FFSVCI(1)
+                  CALL ORTHDN
+               ELSE
+C                 IN DC-SCF CASE, ONLY DENSITY MATRIX WAS SAVED
+                  CALL DAREAD(IDAF,IODA,X(LMU),L2,32,0)
+                  CALL DAWRIT(IDAF,IODA,X(LMU),L2,16,0)
+                  IF(SCFTYP.EQ.UHF) THEN
+                     CALL DAREAD(IDAF,IODA,X(LMU),L2,33,0)
+                     CALL DAWRIT(IDAF,IODA,X(LMU),L2,20,0)
+                  ENDIF
+               ENDIF
+               CALL RETFM(NEED)
+C           ***************************************
+C           CALCULATE WAVEFUNCTION UNDER THIS FIELD
+C           ***************************************
+               CALL WFN
+C
+               IF(E.EQ.ZERO) THEN
+               IF(MASWRK) WRITE(IW,9030)
+                 CALL ABRT
+                 STOP
+               END IF
+C
+               IF(TIM .GE. TIMLIM) THEN
+               IF(MASWRK) WRITE(IW,9040)
+                 CALL ABRT
+                 STOP
+               END IF
+C           ***********************************
+C           ADD NUCLEAR CONTRIBUTION FROM FIELD
+C           ***********************************
+               ANUCF = ZERO
+               DO JNUF = 1,NAT
+                  DO INUF = 1,3
+                     COMCOR = C(INUF,JNUF) - COM(INUF)
+                     ANUCF = ANUCF - EFVAL(INUF)*COMCOR*ZAN(JNUF)
+                  END DO
+               END DO
+C
+               EWITHF = E + ANUCF
+               FFENER(IFLD) = EWITHF
+C           **************************************
+C           LOCALIZED HYPERPOLARIZABILITY ANALYSIS
+C           **************************************
+            IF(LOCHYP) THEN
+               FLDLMO(1)=EFVAL(1)
+               FLDLMO(2)=EFVAL(2)
+               FLDLMO(3)=EFVAL(3)
+               CALL LOCHPX(2)
+            END IF
+C
+C           ****************
+C           CALCULATE DIPOLE
+C           ****************
+               IF(CCTYP .NE. RNONE .OR.
+     *           (MPLEVL .GT. 0 .AND. MPPROP .EQ. 0))THEN
+                 DIP(IFLD,1) = ZERO
+                 DIP(IFLD,2) = ZERO
+                 DIP(IFLD,3) = ZERO
+               ELSE IF(MPLEVL .GT. 0 .AND. MPPROP .EQ. 1)THEN
+                 CALL ELMOMC
+                 DIP(IFLD,1) = DIPMX/DFAC
+                 DIP(IFLD,2) = DIPMY/DFAC
+                 DIP(IFLD,3) = DIPMZ/DFAC
+               ELSE
+                 CALL ELMOMC
+                 DIP(IFLD,1) = DIPMX/DFAC
+                 DIP(IFLD,2) = DIPMY/DFAC
+                 DIP(IFLD,3) = DIPMZ/DFAC
+               END IF
+               END IF
+C
+               IF(MASWRK) THEN
+                 MFLD = IFLD-1
+                 WRITE(IW,9050) MFLD,(EFVAL(J),J=1,3)
+                 WRITE(IW,9060) EWITHF
+                 WRITE(IW,9070) DIPMX,DIPMY,DIPMZ
+               END IF
+  500 CONTINUE
+C
+               AIJ = (FFENER(10)-FFENER(11)-FFENER(13)+FFENER(12)) /
+     *                              48.0D+00
+     *              -(FFENER(5)-FFENER(7)-FFENER(3)+FFENER(9))/3.0D+00
+               ALPHAE(IAXIS,JAXIS) = AIJ/(ESTEP*ESTEP)
+               ALPHAE(JAXIS,IAXIS) = ALPHAE(IAXIS,JAXIS)
+C
+               BIJJ = 0.5D+00*(FFENER(9)-FFENER(5)+FFENER(3)-FFENER(7))
+     *                       + FFENER(6) - FFENER(2)
+               BETAE(IAXIS,JAXIS) = BIJJ/(ESTEP**3)
+               BJII = 0.5D+00*(FFENER(9)-FFENER(5)+FFENER(7)-FFENER(3))
+     *                       + FFENER(4) - FFENER(8)
+               BETAE(JAXIS,IAXIS) = BJII/(ESTEP**3)
+C
+               GIIJJ = -4.0D+00*FFENER(1) - (FFENER(5)+FFENER(9) +
+     *                                       FFENER(7)+FFENER(3))
+     *               + 2.0D+00*(FFENER(6) + FFENER(2))
+     *               + 2.0D+00*(FFENER(4) + FFENER(8))
+               GAMMAE(IAXIS,JAXIS) = GIIJJ/(ESTEP**4)
+               GAMMAE(JAXIS,IAXIS) = GAMMAE(IAXIS,JAXIS)
+C
+               GDIP = 0.5D+00*(DIP(5,IAXIS) - DIP(3,IAXIS) +
+     *                         DIP(7,IAXIS) - DIP(9,IAXIS))
+     *                      - (DIP(6,IAXIS) - DIP(2,IAXIS))
+               GAMMAD(IAXIS,JAXIS) = GDIP/(ESTEP**3)
+               GAMMAD(JAXIS,IAXIS) = GAMMAD(IAXIS,JAXIS)
+C
+C
+           END IF
+           END DO
+        END DO
+      END IF
+C           ZAP OUT SMALL COMPONENTS
+C
+      DO J=1,3
+         IF(ABS(FDIPOL(J)).LT.ZAPTOL) FDIPOL(J) = ZERO
+         IF(ABS(DDIPOL(J)).LT.ZAPTOL) DDIPOL(J) = ZERO
+         DO I=1,3
+            IF(ABS(ALPHAE(I,J)).LT.ZAPTOL) ALPHAE(I,J) = ZERO
+            IF(ABS( BETAE(I,J)).LT.ZAPTOL)  BETAE(I,J) = ZERO
+            IF(ABS(GAMMAE(I,J)).LT.ZAPTOL) GAMMAE(I,J) = ZERO
+            IF(ABS(ALPHAD(I,J)).LT.ZAPTOL) ALPHAD(I,J) = ZERO
+            IF(ABS( BETAD(I,J)).LT.ZAPTOL)  BETAD(I,J) = ZERO
+            IF(ABS(GAMMAD(I,J)).LT.ZAPTOL) GAMMAD(I,J) = ZERO
+         ENDDO
+      ENDDO
+C
+      IF(MASWRK) THEN
+        WRITE(IW,8050)
+        WRITE(IW,8010) (FDIPOL(K),K=1,3)
+        WRITE(IW,8020) ((ALPHAE(I,J),J=1,3),I=1,3)
+        WRITE(IW,8030) ((BETAE(I,J),I=1,3),J=1,3)
+        WRITE(IW,8040) ((GAMMAE(I,J),J=1,3),I=1,3)
+        WRITE(IW,8060)
+        WRITE(IW,8010) (DDIPOL(K),K=1,3)
+        WRITE(IW,8020) ((ALPHAD(I,J),J=1,3),I=1,3)
+        WRITE(IW,8030) ((BETAD(I,J),J=1,3),I=1,3)
+        WRITE(IW,8040) ((GAMMAD(I,J),J=1,3),I=1,3)
+      END IF
+C
+  888 CONTINUE
+      IF(.NOT.SYM) CALL SYMON
+        PK = PKSAVE
+        NOPK=NOPKSV
+C     *****************************************
+C     CALCULATE LOCALIZED HYPERPOLARIZABILITIES
+C     *****************************************
+      IF(LOCHYP) CALL LOCHPX(3)
+C
+      IF(MASWRK) THEN
+        WRITE(IW,*) '..... DONE WITH FINITE FIELD CALCULATION .....'
+        CALL TIMIT(1)
+      END IF
+      RETURN
+C
+ 9000 FORMAT(//'      ******************************'/
+     *         '      *                            *'/
+     *         '      *  FINITE FIELD CALCULATION  *'/
+     *         '      *                            *'/
+     *         '      ******************************')
+ 9010 FORMAT(/5X,13(1H-)/5X,'$FFCALC INPUT'/5X,13(1H-))
+ 9015 FORMAT(1X,'ONEFLD=',L1,'   SYM=',L1/
+     *       1X,'USER SPECIFIED FIELD IS E(X,Y,Z)=',3F9.5)
+ 9016 FORMAT(1X,'FULL TENSOR OPTIONS: OFFDIA=',L1,'   ESTEP=',F9.5)
+ 9020 FORMAT(//1X,'CALCULATING ENERGY WITH NO FIELD PRESENT')
+ 9030 FORMAT(1X,'*** FFIELD RUN STOPPED BY CONVERGENCE FAILURE ***')
+ 9040 FORMAT(1X,'*** INSUFFICIENT TIME TO CONTINUE FFIELD JOB ***')
+ 9050 FORMAT(//1X,'APPLIED FIELD',I3,' IS E(X,Y,Z) = ',3F9.5)
+ 9060 FORMAT(1X,'ENERGY WITH THE FIELD ON ',F30.16)
+ 9070 FORMAT(1X,'X DIPOLE WITH FIELD ON   ',F30.16/
+     *       1X,'Y DIPOLE WITH FIELD ON   ',F30.16/
+     *       1X,'Z DIPOLE WITH FIELD ON   ',F30.16//)
+ 9080 FORMAT(1X,'RECALCULATING INTEGRALS W/O POINT GROUP SYMMETRY')
+ 9090 FORMAT(//1X,'--- EVALUATING WAVEFUNCTION FOR FIELD',I3,' ---'/
+     *          1X,'APPLIED AT STRENGTH E(X,Y,Z) = ',3F9.5)
+ 8010 FORMAT(1X,'DIPOLE',1X,'#',8X,'X',18X,'Y',18X,'Z',3X,'(A.U.)'/,
+     *    1X,'##########################################################
+     ##########',/,
+     *       8X,'#',1X,1P,E15.7,4X,E15.7,4X,E15.7,0P/)
+ 8020 FORMAT(2X,'ALPHA',1X,'#',8X,'X',18X,'Y',18X,'Z',3X,'(A.U.)'/,
+     *    1X,'##########################################################
+     ##########',/,
+     *       3X,'X',4X,'#',1X,1P,E15.7,4X,E15.7,4X,E15.7,0P/,
+     *       3X,'Y',4X,'#',1X,1P,E15.7,4X,E15.7,4X,E15.7,0P/,
+     *       3X,'Z',4X,'#',1X,1P,E15.7,4X,E15.7,4X,E15.7,0P/)
+ 8030 FORMAT(2X,'BETA',2X,'#',8X,'X',18X,'Y',18X,'Z',3X,'(A.U.)'/,
+     *    1X,'##########################################################
+     ##########',/,
+     *       2X,'XX',4X,'#',1X,1P,E15.7,4X,E15.7,4X,E15.7,0P/,
+     *       2X,'YY',4X,'#',1X,1P,E15.7,4X,E15.7,4X,E15.7,0P/,
+     *       2X,'ZZ',4X,'#',1X,1P,E15.7,4X,E15.7,4X,E15.7,0P/)
+ 8040 FORMAT(2X,'GAMMA',1X,'#',8X,'XX',17X,'YY',17X,'ZZ',3X,'(A.U.)'/,
+     *    1X,'##########################################################
+     ##########',/,
+     *       2X,'XX',4X,'#',1X,1P,E15.7,4X,E15.7,4X,E15.7,0P/,
+     *       2X,'YY',4X,'#',1X,1P,E15.7,4X,E15.7,4X,E15.7,0P/,
+     *       2X,'ZZ',4X,'#',1X,1P,E15.7,4X,E15.7,4X,E15.7,0P//)
+ 8050 FORMAT(//,19X,'----ENERGY BASED RESULTS----',12X/)
+ 8060 FORMAT(//,19X,'----DIPOLE BASED RESULTS----',12X/)
+      END
+C
+C
+C*MODULE FFIELD  *DECK LOCHPX
+      SUBROUTINE LOCHPX(IMODE)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      LOGICAL MOIDON,EDCOMP,DIPDCM,DEPRNT,QADDCM,ZDO,POLDCM,POLANG,
+     *        POLAPP,KMIDPT,POLDYN
+C
+      PARAMETER (MXATM=2000, NMO=500, MXMOL=10)
+C
+      COMMON /EDCMP / ZIJ(NMO),ZMO(5,NMO),OCCUP(NMO),DPFREQ(50),
+     *                MOIDNO(5,NMO),IJMO(2,NMO),MOIJ(NMO),NMOIJ(NMO),
+     *                NMOAT(NMO),NDPFREQ,IPROT(5),NPROT,
+     *                MOIDON,EDCOMP,DIPDCM,DEPRNT,QADDCM,ZDO,POLDCM,
+     *                POLANG,POLAPP,KMIDPT,POLDYN
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /LOCHYP/ VMTOL, CENLMO(3,NMO), FLDLMO(3), ESTLOC,
+     *                NPRDTL, LOCLNA(1), NIFLD
+      COMMON /MOINFO/ NMORO,NMOL,MONO(MXMOL),NSHLLS(MXMOL),NBAS(MXMOL),
+     *                NEM(MXMOL),ICHM(MXMOL),NLOC(MXMOL),IEQM(MXMOL),
+     *                IBSSE,ICTPPL,ICTPLX,IMOROX,IRVS,IDUM
+      COMMON /PAR   / ME,MASTER,NPROCS,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PRPOPT/ ETOLLZ,ILOCAL,IAHARD
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+C
+      DATA AMOROK /8HMOROKUMA/
+      DATA CHECK/8HCHECK   /
+C
+      PARAMETER (TWO=2.0D+00, THREE=3.0D+00, FIVE=5.0D+00, SIX=6.0D+00)
+C
+C     *****************************************
+C     CALCULATE LOCALIZED HYPERPOLARIZABILITIES
+C     *****************************************
+C
+C     LOCALIZED HYPERPOLARIZABILITY CALCULATION WILL BE PERFORMED.
+C     S. SUEHARA,ET AL,PHYS.REV.B70,205121(2005),IBID.B73,092203(2006)
+C
+C       FITTING WILL BE IS PERFORMED WITH 3RD-ORDER DIPOLE FUNCTION
+C     WITH FIVE POINTS FOR EACH (NON)DIAGONAL AXIS.
+C       CVGLOC/$LOCAL VALUE SHOULD BE SEVERER(LESS THAN DEFAULT VALUE
+C     OF 1.0D-06 OR CONV/$SCF?), ESPECIALLY FOR ENERGY LOCALIZATION.
+C     A SEVERAL FIELD SELECTING CALCULATION ROUTINE WITH A FUNCTION
+C     OF CONVERGENCE CHECKING OF (HYPER)POLARIZABILITIES WILL BE
+C     ADDED IN THE FUTURE.
+C                                               S. SUEHARA ON 05MAY06
+C
+C     FIELD ID AND STRENGTH (IN UNIT OF ESTEP)
+C
+C                           DIAGONALS
+C     FLD 1:  0   0   0
+C     FLD 2:  1   0   0     FLD 6:  0   1   0     FLD10:  0   0   1
+C     FLD 3: -1   0   0     FLD 7:  0  -1   0     FLD11:  0   0  -1
+C     FLD 4:  2   0   0     FLD 8:  0   2   0     FLD12:  0   0   2
+C     FLD 5: -2   0   0     FLD 9:  0  -2   0     FLD13:  0   0  -2
+C
+C                           NONDIAGONALS
+C     FLD14: -1   1   0     FLD22: -1   0   1     FLD30:  0  -1   1
+C     FLD15:  1   1   0     FLD23:  1   0   1     FLD31:  0   1   1
+C     FLD16:  1  -1   0     FLD24:  1   0  -1     FLD32:  0   1  -1
+C     FLD17: -1  -1   0     FLD25: -1   0  -1     FLD33:  0  -1  -1
+C     FLD18: -2  -2   0     FLD26: -2   0  -2     FLD34:  0  -2  -2
+C     FLD19: -2   2   0     FLD27: -2   0   2     FLD35:  0  -2   2
+C     FLD20:  2   2   0     FLD28:  2   0   2     FLD36:  0   2   2
+C     FLD21:  2  -2   0     FLD29:  2   0  -2     FLD37:  0   2  -2
+C
+      DIMENSION REFLMO(3,NMO),CORLMO(3,NMO),SWPLMO(3)
+      DIMENSION DIPLOC(3),ALPLOC(3,3),BTALOC(3,6),GMALOC(3,10)
+      DIMENSION TDIP(3),TALP(3,3),TBTA(3,6),TGMA(3,10)
+      PARAMETER (NFDMX=37,NORDMX=4)
+      DIMENSION SAMPX(NFDMX),SAMPY(NFDMX)
+      DIMENSION BMTRX(NORDMX)
+C     LOCREF TABLE IS USED FOR LMO REASSIGNMENT.
+      DIMENSION LOCREF(NFDMX)
+      DATA LOCREF/1,
+     *            1, 1, 2, 3,   1, 1, 6, 7,   1, 1,10,11,
+     *            1, 1, 1, 1,  17,14,15,16,
+     *            1, 1, 1, 1,  25,22,23,24,
+     *            1, 1, 1, 1,  33,30,31,32/
+      DIMENSION IFREF(45)
+      DATA IFREF/ 1, 2, 3, 4, 5,  1, 6, 7, 8, 9,  1,10,11,12,13,
+     *            1,15,17,18,20,  1,14,16,19,21,
+     *            1,31,33,34,36,  1,30,32,35,37,
+     *            1,23,25,26,28,  1,22,24,27,29/
+      DIMENSION  IALP(3),IBTA(6),IGMA(10)
+      DATA       IALP /4H *X ,4H *Y ,4H *Z /
+      DATA       IBTA /4H*XX ,4H*YY ,4H*ZZ ,
+     *                 4H*YZ ,4H*ZX ,4H*XY /
+      DATA       IGMA /4H*XXX,4H*YYY,4H*ZZZ,
+     *                 4H*XXY,4H*XYY,4H*YYZ,
+     *                 4H*YZZ,4H*XXZ,4H*XZZ,4H*XYZ/
+C
+C     LOCALIZED HYPERPOLARIZABILITY WORK FILE POINTERS ARE TEMPORARILY
+C     297-299. THESE ASSIGNMENTS WILL BE CHANGED BY A MAIN PROGRAMMER.
+C     "RUNGMS" SCRIPT SHOULD BE INCLUDED THE LINES:
+C        SETENV LHYPWRK  $SCR/$JOB.F297 # WORK FOR PREORDERED LMOS
+C        SETENV LHYPWK2  $SCR/$JOB.F298 # WORK FOR REASSIGNED LMOS
+C        SETENV BONDDPF  $SCR/$JOB.F299 # BOND DIPOLES WITH EFIELDS
+      ILHYP  = 297
+      ILHYP2 = 298
+      ILHYP3 = 299
+C
+      IF(IMODE.EQ.0) THEN
+C
+C * MODE 0 * LOCALIZED HYPERPOLARIZABILITY NOTIFICATION
+C
+         WRITE(IW,1000)
+         WRITE(IW,*) 'NPRDTL LEVEL', NPRDTL
+      END IF
+C
+      IF(IMODE.EQ.1) THEN
+C
+C * MODE 1 * STORE FIELD-FREE LMOS AND ASSIGNED CORE(S) RESULTS
+C
+         IF (ILOCAL.EQ.0) RETURN
+         IF (ILOCAL.EQ.1) CALL LMOLOC(ILOCAL)
+         IF (ILOCAL.EQ.2) CALL LOCENG
+         IF (ILOCAL.EQ.3) CALL LMOLOC(ILOCAL)
+         IF (RUNTYP.EQ.AMOROK .AND. NMORO.LE.2) RETURN
+         CALL MOIDM
+         CALL DIPLMM
+         CALL SEQOPN(ILHYP,'LHYPWRK','NEW',.FALSE.,'UNFORMATTED')
+         CALL SQWRIT(ILHYP,LOCLNA,1)
+         CALL SQWRIT(ILHYP,NMOAT,LOCLNA(1))
+         CALL SQWRIT(ILHYP,MOIDNO,5*LOCLNA(1))
+         CALL SQWRIT(ILHYP,CENLMO,3*LOCLNA(1))
+         CALL JANDK
+         NIFLD = 1
+      END IF
+C
+      IF(IMODE.EQ.2) THEN
+C
+C * MODE 2 * STORE LMOS UNDER FIELD
+C
+         IF (ILOCAL.EQ.0) RETURN
+         IF (ILOCAL.EQ.1) CALL LMOLOC(ILOCAL)
+         IF (ILOCAL.EQ.2) CALL LOCENG
+         IF (ILOCAL.EQ.3) CALL LMOLOC(ILOCAL)
+         IF (RUNTYP.EQ.AMOROK .AND. NMORO.LE.2) RETURN
+         CALL DIPLMM
+         CALL SQWRIT(ILHYP,FLDLMO,3)
+         CALL SQWRIT(ILHYP,CENLMO,3*LOCLNA(1))
+         CALL JANDK
+         NIFLD = NIFLD + 1
+      END IF
+C
+      IF(IMODE.EQ.3) THEN
+C
+C * MODE 3 * CALCULATING LOCALIZED HYPERPOLARIZABILITY
+C
+         CALL SEQCLO(ILHYP,'KEEP')
+C
+C        SAVE FIELD-FREE LMO INFORMATION
+         CALL LMORDX(ILHYP,'LHYPWRK',1)
+         CALL SEQOPN(ILHYP2,'LHYPWK2','NEW',.FALSE.,'UNFORMATTED')
+         CALL SQWRIT(ILHYP2,LOCLNA,1)
+         CALL SQWRIT(ILHYP2,NMOAT,LOCLNA(1))
+         CALL SQWRIT(ILHYP2,MOIDNO,5*LOCLNA(1))
+         CALL SQWRIT(ILHYP2,CENLMO,3*LOCLNA(1))
+         CALL SEQCLO(ILHYP2,'KEEP')
+         ILHYP2T = 4
+C
+C        CALCULATE CENTER POSITION OF CORE(S) BELONGING TO EACH LMO.
+C        NMOAT SHOULD BE EXPECTED 1 OR 2.
+C        IF NOT, SHOULD PRINT WARNING AFTER ?
+         CALL VCLR(CORLMO,1,3*LOCLNA(1))
+         DO I=1,LOCLNA(1)
+            DO K=1,NMOAT(I)
+               DO L=1,3
+                  CORLMO(L,I)=CORLMO(L,I)+C(L,MOIDNO(K,I))
+               END DO
+            END DO
+            DO L=1,3
+               CORLMO(L,I)=CORLMO(L,I)/NMOAT(I)
+            END DO
+         END DO
+C
+         CALL SEQOPN(ILHYP3,'BONDDPF','NEW',.FALSE.,'UNFORMATTED')
+C
+C        CALCULATION OF FIELD-FREE LOCALIZED DIPOLE MOMENTS (IN A.U.)
+C        AND STORING THEM INTO BONDDPF FILE.
+C        CF. BOND DIPOLE MOMENT = E(R+R')-2E<LMO|R|LMO>
+C
+         CALL VCLR(FLDLMO,1,3)
+         CALL SQWRIT(ILHYP3,LOCLNA,1)
+         CALL SQWRIT(ILHYP3,NMOAT,LOCLNA(1))
+         CALL SQWRIT(ILHYP3,MOIDNO,5*LOCLNA(1))
+         CALL SQWRIT(ILHYP3,FLDLMO,3)
+         DO I=1,LOCLNA(1)
+            DO L=1,3
+               SWPLMO(L)=TWO*(CORLMO(L,I)-CENLMO(L,I))
+            END DO
+            CALL SQWRIT(ILHYP3,SWPLMO,3)
+         END DO
+C
+C        REASSIGN AND MAKE BOND DIPOLES UNDER FIELDS
+C
+         DO I=2,NIFLD
+C
+C           AUTOMATIC LMO REASSIGNMENT IS PERFORMED WITH
+C           NEAREST LMO ALREADY IDENTIFIED .
+            CALL LMORDX(ILHYP2,'LHYPWK2',LOCREF(I))
+            DO J=1,LOCLNA(1)
+               DO L=1,3
+                  REFLMO(L,J) = CENLMO(L,J)
+               END DO
+            END DO
+C
+            CALL LMORDX(ILHYP,'LHYPWRK',I)
+            CALL SQWRIT(ILHYP3,FLDLMO,3)
+            DO J=1,LOCLNA(1)
+               DISMAX=3.0D+00
+               DO K=J,LOCLNA(1)
+                  DISREF =(CENLMO(1,K)-REFLMO(1,J))**2
+     *                   +(CENLMO(2,K)-REFLMO(2,J))**2
+     *                   +(CENLMO(3,K)-REFLMO(3,J))**2
+                  IF(DISREF.LT.DISMAX) THEN
+C                    SWAP LMO CENTERS
+                     DO L=1,3
+                        SWPLMO(L)=CENLMO(L,J)
+                        CENLMO(L,J)=CENLMO(L,K)
+                        CENLMO(L,K)=SWPLMO(L)
+                     END DO
+                     DISMAX=DISREF
+                  END IF
+               END DO
+C              CALCULATION OF BOND DIPOLE MOMENTS (IN A.U.)
+C              UNDER FIELDS AND STORING THEM INTO LMODPF FILE.
+               DO L=1,3
+                  SWPLMO(L)=TWO*(CORLMO(L,J)-CENLMO(L,J))
+               END DO
+               CALL SQWRIT(ILHYP3,SWPLMO,3)
+            END DO
+C
+            CALL SEQOPN(ILHYP2,'LHYPWK2','UNKNOWN',
+     *                            .FALSE.,'UNFORMATTED')
+            CALL SEQREW(ILHYP2)
+            DO J=1,ILHYP2T
+               CALL SEQADV(ILHYP2)
+            END DO
+            CALL SQWRIT(ILHYP2,FLDLMO,3)
+            CALL SQWRIT(ILHYP2,CENLMO,3*LOCLNA(1))
+            CALL SEQCLO(ILHYP2,'KEEP')
+            ILHYP2T = ILHYP2T + 2
+         END DO
+         CALL SEQCLO(ILHYP3,'KEEP')
+C        END OF SETUP
+C
+C        LOCALIZED HYPERPOLARIZABILITY CALC. START
+C
+         IF (MASWRK) WRITE(IW,1300)
+C
+         IF(EXETYP.NE.CHECK) THEN
+C
+         IF (MASWRK.AND.NPRDTL.GE.1) THEN
+C        DISPLAY CORE(S) POSITIONS FOR LMO
+            WRITE(IW,*)
+            WRITE(IW,1080)
+            DO I=1,LOCLNA(1)
+               WRITE(IW,1020) I,(CORLMO(J,I),J=1,3),
+     *             (MOIDNO(KK,I),KK=1,NMOAT(I))
+            END DO
+            WRITE(IW,2010)
+         END IF
+C
+         IF (NPRDTL.GE.4) THEN
+C        DISPLAY PRE-ORDERED LMOS
+            IF (MASWRK) WRITE(IW,1100)
+            DO I=1,NIFLD
+               CALL LMORDX(ILHYP,'LHYPWRK',I)
+               IF (MASWRK) THEN
+                  WRITE(IW,1030) I,(FLDLMO(J),J=1,3)
+                  DO K=1,LOCLNA(1)
+                     WRITE(IW,1040) K,(CENLMO(J,K),J=1,3)
+                  END DO
+               END IF
+            END DO
+         END IF
+C
+         IF (NPRDTL.GE.3) THEN
+C        DISPLAY ORDERED LMO CENTERS, CLUSTER AND BOND DIPOLES
+            IF (MASWRK) THEN
+               WRITE(IW,*)
+               WRITE(IW,1090)
+            END IF
+            CALL SEQOPN(ILHYP3,'BONDDPF','UNKNOWN',
+     *                          .FALSE.,'UNFORMATTED')
+            CALL SEQREW(ILHYP3)
+            DO I=1,3
+               CALL SEQADV(ILHYP3)
+            END DO
+            DO I=1,NIFLD
+               CALL VCLR(TDIP,1,3)
+               CALL SEQADV(ILHYP3)
+               DO J=1,LOCLNA(1)
+                  LENSQ=3
+                  CALL SQREAD(ILHYP3,SWPLMO,LENSQ)
+                  DO L=1,3
+                     REFLMO(L,J) = SWPLMO(L)
+                     TDIP(L) = TDIP(L) + SWPLMO(L)
+                  END DO
+               END DO
+               CALL LMORDX(ILHYP2,'LHYPWK2',I)
+               IF (MASWRK) THEN
+                  WRITE(IW,1070) I,(FLDLMO(J),J=1,3),(TDIP(L),L=1,3)
+                  DO K=1,LOCLNA(1)
+                     WRITE(IW,1060) K,(CENLMO(J,K),J=1,3),
+     *                              (REFLMO(JJ,K),JJ=1,3)
+                  END DO
+               END IF
+            END DO
+            CALL SEQCLO(ILHYP3,'KEEP')
+         END IF
+C
+C        LOOP OVER LMOS FOR LOCALIZED (HYPER)POLARIZABILITY
+C
+         CALL VCLR(TDIP,1,3)
+         CALL VCLR(TALP,1,9)
+         CALL VCLR(TBTA,1,18)
+         CALL VCLR(TGMA,1,30)
+         CALL VCLR(ALPLOC,1,9)
+         CALL VCLR(BTALOC,1,18)
+         CALL VCLR(GMALOC,1,30)
+C
+         DO I=1,LOCLNA(1)
+C           * AXIALS *
+            DO IAXIS=0,2
+               DO II=1,3
+                  DO J=1,5
+                     CALL BDPRDX(ILHYP3,'BONDDPF',IFREF(J+IAXIS*5),I)
+                     SAMPX(J)=FLDLMO(1+IAXIS)
+                     SAMPY(J)=CENLMO(II,1)
+                  END DO
+                  CALL FITDPX(4,5,SAMPX,SAMPY,BMTRX)
+                  IF (II.EQ.(1+IAXIS)) DIPLOC(II) = BMTRX(1)
+                  ALPLOC(II,1+IAXIS)=BMTRX(2)
+                  BTALOC(II,1+IAXIS)=BMTRX(3)*TWO
+                  GMALOC(II,1+IAXIS)=BMTRX(4)*SIX
+               END DO
+            END DO
+C
+            IF (NIFLD.GT.13) THEN
+C          * NONAXIALS *
+C           E(E,E,0)/E(E,-E,0)
+            DO ISW=1,2
+               DO II=1,3
+                  DO J=1,5
+                     CALL BDPRDX(ILHYP3,'BONDDPF',IFREF(J+IAXIS*5),I)
+                     SAMPX(J)=FLDLMO(1)
+                     SAMPY(J)=CENLMO(II,1)
+                  END DO
+                  CALL FITDPX(4,5,SAMPX,SAMPY,BMTRX)
+                  IF (ISW.EQ.1) THEN
+                     BTALOC(II,6)=BMTRX(3)
+                     IF (II.EQ.1) GMALOC(II,5)=BMTRX(4)
+                     IF (II.EQ.2) GMALOC(II,4)=BMTRX(4)
+                     IF (II.EQ.3) THEN
+                        GMALOC(II,4)=BMTRX(4)
+                        GMALOC(II,5)=BMTRX(4)
+                     END IF
+                  ELSE
+                     BTALOC(II,6)=(BTALOC(II,6)-BMTRX(3))/TWO
+                     IF (II.EQ.1) GMALOC(II,5)= GMALOC(II,5)
+     *                           +BMTRX(4)-GMALOC(II,1)/THREE
+                     IF (II.EQ.2) GMALOC(II,4)= GMALOC(II,4)
+     *                           -BMTRX(4)-GMALOC(II,2)/THREE
+                     IF (II.EQ.3) THEN
+                        GMALOC(II,4)= GMALOC(II,4)-BMTRX(4)
+     *                               -GMALOC(II,2)/THREE
+                        GMALOC(II,5)= GMALOC(II,5)+BMTRX(4)
+     *                               -GMALOC(II,1)/THREE
+                     END IF
+                  END IF
+               END DO
+               IAXIS=IAXIS+1
+            END DO
+C
+C           E(0,E,E)/E(0,E,-E)
+            DO ISW=1,2
+               DO II=1,3
+                  DO J=1,5
+                     CALL BDPRDX(ILHYP3,'BONDDPF',IFREF(J+IAXIS*5),I)
+                     SAMPX(J)=FLDLMO(2)
+                     SAMPY(J)=CENLMO(II,1)
+                  END DO
+                  CALL FITDPX(4,5,SAMPX,SAMPY,BMTRX)
+                  IF (ISW.EQ.1) THEN
+                     BTALOC(II,4)=BMTRX(3)
+                     IF (II.EQ.1) THEN
+                        GMALOC(II,6)=BMTRX(4)
+                        GMALOC(II,7)=BMTRX(4)
+                     END IF
+                     IF (II.EQ.2) GMALOC(II,7)=BMTRX(4)
+                     IF (II.EQ.3) GMALOC(II,6)=BMTRX(4)
+                  ELSE
+                     BTALOC(II,4)=(BTALOC(II,4)-BMTRX(3))/TWO
+                     IF (II.EQ.1) THEN
+                        GMALOC(II,6)= GMALOC(II,6)-BMTRX(4)
+     *                               -GMALOC(II,3)/THREE
+                        GMALOC(II,7)= GMALOC(II,7)+BMTRX(4)
+     *                               -GMALOC(II,2)/THREE
+                     END IF
+                     IF (II.EQ.2) GMALOC(II,7)=GMALOC(II,7)
+     *                           +BMTRX(4)-GMALOC(II,2)/THREE
+                     IF (II.EQ.3) GMALOC(II,6)= GMALOC(II,6)
+     *                           -BMTRX(4)-GMALOC(II,3)/THREE
+                  END IF
+               END DO
+               IAXIS=IAXIS+1
+            END DO
+C
+C           E(E,0,E)/E(-E,0,E)
+            DO ISW=1,2
+               DO II=1,3
+                  DO J=1,5
+                     CALL BDPRDX(ILHYP3,'BONDDPF',IFREF(J+IAXIS*5),I)
+                     SAMPX(J)=FLDLMO(3)
+                     SAMPY(J)=CENLMO(II,1)
+                  END DO
+                  CALL FITDPX(4,5,SAMPX,SAMPY,BMTRX)
+                  IF (ISW.EQ.1) THEN
+                     BTALOC(II,5)=BMTRX(3)
+                     IF (II.EQ.1) GMALOC(II,9)=BMTRX(4)
+                     IF (II.EQ.2) THEN
+                        GMALOC(II,8)=BMTRX(4)
+                        GMALOC(II,9)=BMTRX(4)
+                     END IF
+                     IF (II.EQ.3) GMALOC(II,8)=BMTRX(4)
+                  ELSE
+                     BTALOC(II,5)=(BTALOC(II,5)-BMTRX(3))/TWO
+                     IF (II.EQ.1) GMALOC(II,9)= GMALOC(II,9)
+     *                           -BMTRX(4)-GMALOC(II,1)/THREE
+                     IF (II.EQ.2) THEN
+                                  GMALOC(II,8)= GMALOC(II,8)
+     *                           +BMTRX(4)-GMALOC(II,3)/THREE
+                                  GMALOC(II,9)= GMALOC(II,9)
+     *                           -BMTRX(4)-GMALOC(II,1)/THREE
+                     END IF
+                     IF (II.EQ.3) GMALOC(II,8)= GMALOC(II,8)
+     *                           +BMTRX(4)-GMALOC(II,3)/THREE
+                  END IF
+               END DO
+               IAXIS=IAXIS+1
+            END DO
+            END IF
+C
+C           SUM OF LOCALIZED DIPOLES AND (HYPER)POLARIZABILITIES
+C
+            DO K=1,3
+               TDIP(K)=TDIP(K)+DIPLOC(K)
+               DO J=1,10
+                 IF(J.LE.3) TALP(K,J)=TALP(K,J)+ALPLOC(K,J)
+                 IF(J.LE.6) TBTA(K,J)=TBTA(K,J)+BTALOC(K,J)
+                 TGMA(K,J)=TGMA(K,J)+GMALOC(K,J)
+               END DO
+            END DO
+C
+C           RESULTS FOR EACH BOND DIPOLES
+C
+            DIPVEC=SQRT(DIPLOC(1)**2+DIPLOC(2)**2+DIPLOC(3)**2)
+            ALPISO=(ALPLOC(1,1)+ALPLOC(2,2)+ALPLOC(3,3))/THREE
+            BTAX  =TWO*BTALOC(2,6)+TWO*BTALOC(3,5)
+     *            +BTALOC(1,2)+BTALOC(1,3)+THREE*BTALOC(1,1)
+            BTAY  =TWO*BTALOC(1,6)+TWO*BTALOC(3,4)
+     *            +BTALOC(2,1)+BTALOC(2,3)+THREE*BTALOC(2,2)
+            BTAZ  =TWO*BTALOC(1,5)+TWO*BTALOC(2,4)
+     *            +BTALOC(3,1)+BTALOC(3,2)+THREE*BTALOC(3,3)
+            BTAVEC=SQRT(BTAX**2+BTAY**2+BTAZ**2)
+            GMAISO=(GMALOC(1,1)+GMALOC(2,2)+GMALOC(3,3)
+     *             +GMALOC(1,5)+GMALOC(1,9)+GMALOC(2,4)
+     *             +GMALOC(2,7)+GMALOC(3,6)+GMALOC(3,8))/FIVE
+C
+            IF(MASWRK.AND.NPRDTL.GE.1) THEN
+               WRITE(IW,1200) I,I,(MOIDNO(KK,I),KK=1,NMOAT(I))
+               WRITE(IW,1500)
+               WRITE(IW,2000) '     ',(DIPLOC(K),K=1,3)
+               IF(NPRDTL.GE.2) THEN
+                  WRITE(IW,2010)
+                  WRITE(IW,2000) '/DIP/',DIPVEC
+               END IF
+               WRITE(IW,1600)
+               DO L=1,3
+                  WRITE(IW,2000) IALP(L),(ALPLOC(K,L),K=1,3)
+               END DO
+               IF(NPRDTL.GE.2) THEN
+                  WRITE(IW,2010)
+                  WRITE(IW,2000) 'ISO-A',ALPISO
+               END IF
+               WRITE(IW,1700)
+               DO L=1,3
+                  WRITE(IW,2000) IBTA(L),(BTALOC(K,L),K=1,3)
+               END DO
+               IF (NIFLD.GT.13) THEN
+                  DO L=4,6
+                     WRITE(IW,2000) IBTA(L),(BTALOC(K,L),K=1,3)
+                  END DO
+                  IF (NPRDTL.GE.2) THEN
+                     WRITE(IW,2010)
+                     WRITE(IW,2000) 'B_XYZ',BTAX,BTAY,BTAZ
+                     WRITE(IW,2000) 'B_VEC',BTAVEC
+                  END IF
+               END IF
+               WRITE(IW,1800)
+               DO L=1,3
+                  WRITE(IW,2000) IGMA(L),(GMALOC(K,L),K=1,3)
+               END DO
+               IF (NIFLD.GT.13) THEN
+                  DO L=4,9
+                     WRITE(IW,2000) IGMA(L),(GMALOC(K,L),K=1,3)
+                  END DO
+                  IF (NPRDTL.GE.2) THEN
+                     WRITE(IW,2010)
+                     WRITE(IW,2000) 'ISO-G',GMAISO
+                  END IF
+               END IF
+               WRITE(IW,2010)
+            END IF
+         END DO
+C
+C        RESULTS FOR CLUTER
+C
+         DIPVEC=SQRT(TDIP(1)**2+TDIP(2)**2+TDIP(3)**2)
+         ALPISO=(TALP(1,1)+TALP(2,2)+TALP(3,3))/THREE
+         BTAX  =TWO*TBTA(2,6)+TWO*TBTA(3,5)+TBTA(1,2)+TBTA(1,3)
+     *         +THREE*TBTA(1,1)
+         BTAY  =TWO*TBTA(1,6)+TWO*TBTA(3,4)+TBTA(2,1)+TBTA(2,3)
+     *         +THREE*TBTA(2,2)
+         BTAZ  =TWO*TBTA(1,5)+TWO*TBTA(2,4)+TBTA(3,1)+TBTA(3,2)
+     *         +THREE*TBTA(3,3)
+         BTAVEC=SQRT(BTAX**2+BTAY**2+BTAZ**2)
+         GMAISO=(TGMA(1,1)+TGMA(2,2)+TGMA(3,3)
+     *          +TGMA(1,5)+TGMA(1,9)+TGMA(2,4)
+     *          +TGMA(2,7)+TGMA(3,6)+TGMA(3,8))/FIVE
+C
+         IF(MASWRK) THEN
+            WRITE(IW,1400)
+            WRITE(IW,1500)
+            WRITE(IW,2000) '     ',(TDIP(K),K=1,3)
+            WRITE(IW,2010)
+            WRITE(IW,2000) '/DIP/',DIPVEC
+            WRITE(IW,1600)
+            DO L=1,3
+               WRITE(IW,2000) IALP(L),(TALP(K,L),K=1,3)
+            END DO
+            WRITE(IW,2010)
+            WRITE(IW,2000) 'ISO-A',ALPISO
+            WRITE(IW,1700)
+            DO L=1,3
+               WRITE(IW,2000) IBTA(L),(TBTA(K,L),K=1,3)
+            END DO
+            IF (NIFLD.GT.13) THEN
+               DO L=4,6
+                  WRITE(IW,2000) IBTA(L),(TBTA(K,L),K=1,3)
+               END DO
+               WRITE(IW,2010)
+               WRITE(IW,2000) 'B_XYZ',BTAX,BTAY,BTAZ
+               WRITE(IW,2000) 'B_VEC',BTAVEC
+            END IF
+            WRITE(IW,1800)
+            DO L=1,3
+               WRITE(IW,2000) IGMA(L),(TGMA(K,L),K=1,3)
+            END DO
+            IF (NIFLD.GT.13) THEN
+               DO L=4,9
+                  WRITE(IW,2000) IGMA(L),(TGMA(K,L),K=1,3)
+               END DO
+               WRITE(IW,2010)
+               WRITE(IW,2000) 'ISO-G',GMAISO
+            END IF
+            WRITE(IW,2010)
+         END IF
+         END IF
+         IF (MASWRK) WRITE(IW,2020)
+C        TURN OFF FOLLOWING LOCALIZATION.
+         ILOCAL=0
+      END IF
+C
+      RETURN
+C
+ 1000 FORMAT(/,1X,'LOCALIZED HYPERPOLARIZABILITY CALCULATION (LOCHYP)
+     *IS SELECTED.'/
+     *1X,'MOIDON IS INTERNALLY SWITCHED ON FOR FIELD-FREE CASE.'/)
+ 1020 FORMAT(1X,'LMO',I4,1X,3(F10.5,1X),3X,5I3)
+ 1030 FORMAT(1X,40(1H-)/1X,'FLD',I4,1X,3(F10.5,1X)/1X,40(1H-))
+ 1040 FORMAT(1X,'LMO',I4,1X,3(F10.5,1X))
+ 1060 FORMAT(1X,'LMO',I4,1X,3(F10.5,1X),3X,3(F10.5,1X))
+ 1070 FORMAT(1X,40(1H-),3X,33(1H-)/
+     *       1X,'FLD',I4,1X,3(F10.5,1X),3X,3(F10.5,1X)/
+     *       1X,40(1H-),3X,33(1H-))
+ 1080 FORMAT(1X,'CENTER POSITIONS OF CORE(S)',
+     *       1X,'ASSIGNED TO LMOS (A.U.)'/
+     *         1X,53(1H=)/
+     *         1X,'LMO',1X,10X,'X',10X,'Y',10X,'Z',9X,'CORE(S)'/
+     *         1X,53(1H-))
+ 1090 FORMAT(1X,'LMO CENTERS, BOND AND CLUSTER',
+     *       1X,'DIPOLE MOMENTS UNDER FIELDS (IN A.U.)')
+ 1100 FORMAT(/,1X,'LMO CENTERS BEFORE REASSIGNMENT UNDER FIELDS')
+ 1200 FORMAT(/,1X,'BOND DIPOLE',I4,1X,'FROM LMO',I4,1X,'AND',
+     *         1X,'CORE(S)',5I3,')')
+ 1300 FORMAT(/,3X,50(1H=)/
+     *         3X,'LOCALIZED (HYPER)POLARIZABILITY CALCULATION (A.U.)'/
+     *         3X,50(1H=))
+ 1400 FORMAT(/,5X,'BOND DIPOLE BASED RESULTS FOR CLUSTER (A.U.)')
+ 1500 FORMAT(1X,53(1H=)/
+     *       1X,' MU  ',1X,7X,'DX',14X,'DY',14X,'DZ'/
+     *       1X,53(1H-))
+ 1600 FORMAT(1X,53(1H-)/
+     *       1X,'ALPHA',1X,7X,'X*',14X,'Y*',14X,'Z*'/
+     *       1X,53(1H-))
+ 1700 FORMAT(1X,53(1H-)/
+     *       1X,'BETA ',1X,6X,'X**',13X,'Y**',13X,'Z**'/
+     *       1X,53(1H-))
+ 1800 FORMAT(1X,53(1H-)/
+     *       1X,'GAMMA',1X,6X,'X***',12X,'Y***',12X,'Z***'/
+     *       1X,53(1H-))
+ 2000 FORMAT(1X,A5,1X,3(F15.6,1X))
+ 2010 FORMAT(1X,53(1H-))
+ 2020 FORMAT(/,
+     *  1X,'.... DONE WITH LOCALIZED HYPERPOLARIZABILITY CALC ....'/)
+      END
+C
+C*MODULE FFIELD  *DECK BDPRDX
+      SUBROUTINE BDPRDX(IUNIT,FNAME,IFLD,IBDP)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      CHARACTER*(*)   FNAME
+      PARAMETER (NMO=500)
+      LOGICAL MOIDON,EDCOMP,DIPDCM,DEPRNT,QADDCM,ZDO,POLDCM,POLANG,
+     *        POLAPP,KMIDPT,POLDYN
+      COMMON /EDCMP / ZIJ(NMO),ZMO(5,NMO),OCCUP(NMO),DPFREQ(50),
+     *                MOIDNO(5,NMO),IJMO(2,NMO),MOIJ(NMO),NMOIJ(NMO),
+     *                NMOAT(NMO),NDPFREQ,IPROT(5),NPROT,
+     *                MOIDON,EDCOMP,DIPDCM,DEPRNT,QADDCM,ZDO,POLDCM,
+     *                POLANG,POLAPP,KMIDPT,POLDYN
+      COMMON /LOCHYP/ VMTOL, CENLMO(3,NMO), FLDLMO(3), ESTLOC,
+     *                NPRDTL, LOCLNA(1), NIFLD
+C
+C     READ THE -IBDP-TH BOND DIPOLE MOMENT IN -IFLD-THE FIELD
+C     FROM BONDDPF
+C
+      CALL SEQOPN(IUNIT,FNAME,'UNKNOWN',.FALSE.,'UNFORMATTED')
+      CALL SEQREW(IUNIT)
+C
+C     READING HEADER INFO
+      LENSQ=1
+      CALL SQREAD(IUNIT,LOCLNA,LENSQ)
+      LENSQ=LOCLNA(1)
+      CALL SQREAD(IUNIT,NMOAT,LENSQ)
+      LENSQ=5*LOCLNA(1)
+      CALL SQREAD(IUNIT,MOIDNO,LENSQ)
+C     SKIP TO IFLDTH FIELD INFO BLOCK
+      ISKIP = (IFLD-1)*(LOCLNA(1)+1)
+      DO I=1,ISKIP
+         CALL SEQADV(IUNIT)
+      END DO
+C     READ -IFLD-TH FIELD
+      LENSQ=3
+      CALL SQREAD(IUNIT,FLDLMO,LENSQ)
+      ISKIP = IBDP-1
+      DO I=1,ISKIP
+         CALL SEQADV(IUNIT)
+      END DO
+C     READ -IBDP-TH BOND DIPOLE IN -IFLD-TH FIELD
+      LENSQ=3
+      CALL SQREAD(IUNIT,CENLMO,LENSQ)
+      CALL SEQCLO(IUNIT,'KEEP')
+C
+      RETURN
+      END
+C
+C*MODULE FFIELD  *DECK LMORDX
+      SUBROUTINE LMORDX(IUNIT,FNAME,IFLD)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      CHARACTER*(*)   FNAME
+      PARAMETER (NMO=500)
+      LOGICAL MOIDON,EDCOMP,DIPDCM,DEPRNT,QADDCM,ZDO,POLDCM,POLANG,
+     *        POLAPP,KMIDPT,POLDYN
+      COMMON /EDCMP / ZIJ(NMO),ZMO(5,NMO),OCCUP(NMO),DPFREQ(50),
+     *                MOIDNO(5,NMO),IJMO(2,NMO),MOIJ(NMO),NMOIJ(NMO),
+     *                NMOAT(NMO),NDPFREQ,IPROT(5),NPROT,
+     *                MOIDON,EDCOMP,DIPDCM,DEPRNT,QADDCM,ZDO,POLDCM,
+     *                POLANG,POLAPP,KMIDPT,POLDYN
+      COMMON /LOCHYP/ VMTOL, CENLMO(3,NMO), FLDLMO(3), ESTLOC,
+     *                NPRDTL, LOCLNA(1), NIFLD
+C
+C     READ -IFLD-TH FIELD'S LMOS FROM LMO FILES(LHYPWRK/LHYPWK2)
+C
+      CALL SEQOPN(IUNIT,FNAME,'UNKNOWN',.FALSE.,'UNFORMATTED')
+      CALL SEQREW(IUNIT)
+C
+      CALL VCLR(FLDLMO,1,3)
+      LENSQ=1
+      CALL SQREAD(IUNIT,LOCLNA,LENSQ)
+      LENSQ=LOCLNA(1)
+      CALL SQREAD(IUNIT,NMOAT,LENSQ)
+      LENSQ=5*LOCLNA(1)
+      CALL SQREAD(IUNIT,MOIDNO,LENSQ)
+      LENSQ=3*LOCLNA(1)
+      CALL SQREAD(IUNIT,CENLMO,LENSQ)
+C
+      IF(IFLD.EQ.1) RETURN
+      DO I=2,IFLD
+         LENSQ=3
+         CALL SQREAD(IUNIT,FLDLMO,LENSQ)
+         LENSQ=3*LOCLNA(1)
+         CALL SQREAD(IUNIT,CENLMO,LENSQ)
+      END DO
+      CALL SEQCLO(IUNIT,'KEEP')
+C
+      RETURN
+      END
+C
+C*MODULE FFIELD  *DECK FITDPX
+      SUBROUTINE FITDPX(NORD,NSAM,SAMPX,SAMPY,BMTRX)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      INTEGER*4 NORD1,NORD2,INFO,IONE
+C
+      PARAMETER (NFDMX=37,NORDMX=4,ZERO=0.0D+00)
+      DIMENSION SAMPX(NFDMX),SAMPY(NFDMX)
+      DIMENSION AMTRX(NORDMX*NORDMX),AMTRC(2*NORDMX)
+      DIMENSION BMTRX(NORDMX)
+C
+C     FITTING DIPOLES WITH -NORD-1-TH ORDER.
+C
+C     MAKING MATRIX
+C
+      NORD1 = NORD
+      NORD2 = NORD * 2
+      DO I=1, NORD2 + 1
+         AMTRC(I) = ZERO
+         DO J=1, NSAM
+            K=I-1
+            AMTRC(I) = AMTRC(I) + SAMPX(J)**K
+         END DO
+      END DO
+      DO I=1, NORD
+         DO J=1, NORD
+            K=I+J-1
+            L=(I-1)*NORD+J
+            AMTRX(L) = AMTRC(K)
+         END DO
+      END DO
+      DO I=1, NORD
+         BMTRX(I) = ZERO
+         DO J=1, NSAM
+            K=I-1
+            BMTRX(I) = BMTRX(I) + (SAMPX(J)**K)*SAMPY(J)
+         END DO
+      END DO
+C
+C     LAPACK LEAST-SQUARE APPROACH
+C
+      IONE=1
+      CALL DGELS('N',NORD1,NORD1,IONE,AMTRX,NORD1,BMTRX,NORD1,
+     *            AMTRC,NORD2,INFO)
+C
+      RETURN
+      END
+C

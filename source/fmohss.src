@@ -1,0 +1,929 @@
+C 11 Aug 10 - TN  - new module for Hessians in FMO
+c
+C*MODULE FMOHSS  *DECK FMODEH
+      SUBROUTINE FMODEH(ida,FCM,FMOFCM,fmopg,iaglob)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      dimension fmopg(3,*),iaglob(*)
+      DIMENSION FMOFCM(3*natfmo,*),FCM(3*nat,*)
+      Parameter (MXATM=2000)
+CZCZ  common /GRAD  / DE(3,MXATM)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+CZCZ  COMMON /PCMPAR/ IPCM,NFT26,NFT27,IRPPCM,IEF,IP_F,nfmopcm
+      Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
+cz    common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
+cz   *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
+cz   *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
+cz   *                IESDPPC,idoprop,mp2run
+c
+c     gather FMO HESSIAN contributions coming from the analytic gradient of a
+c     monomer/dimer.
+c
+      write(6,*) 'Grad accs',ida
+      if(ida.eq.0) return
+      if(nat.lt.0) write(iw,*) fmopg(1,1)
+
+      NC1 = 3*NAT
+      CALL DAREAD(IDAF,IODA,FCM,NC1*NC1,4,0)
+   
+      da = ida
+      do i = 1, nat
+        ih  = iaglob(i)
+        ii  = 3*(i-1)
+        ims = 3*(ih-1)
+        do j = 1, nat
+          jh  = iaglob(j)
+          jj  = 3*(j-1)
+          jms = 3*(jh-1)
+          do k = 1,3
+            do l = 1,3
+              if (maswrk) fmofcm(ims+k,jms+l) = fmofcm(ims+k,jms+l)
+     *                                        + da*fcm(ii+k,jj+l)
+            end do
+          end do
+        end do
+      end do
+
+      CALL VCLR(FCM,1,NC1*NC1)
+      CALL DAWRIT(IDAF,IODA,FCM,NC1*NC1,4,0)
+
+c     No FMO/PCM contribution for separated dimers.
+CZCZ  if(nfmopcm.gt.0.and.ifmostp.ne.6.and.ifmostp.ne.7
+CZCZ *   .and.IESDPPC.eq.0) call daxpy(natfmo*3,da,fmopg,1,fmode,1)
+      return
+      end
+C*MODULE FMOHSS  *DECK FMOHSSX
+      SUBROUTINE FMOHSSX(VIBOVR,GOTWFN)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      DOUBLE PRECISION METHOD,METHNR
+C
+      LOGICAL PRTIFC,PURIFY,PROJCT,VIBANL,RDHESS,DECOMP,LINEAR,
+     *        GOTEG,GOTEH,GOTDDM,GOTADM,STATPT,SOME,PRTSCN,GOTFRQ,
+     *        VIBOVR,GOTWFN,GOPARR,DSKWRK,MASWRK,TEST,
+     *        PULCOR,EFLDL,POLAR,HSSEND,SCFOK,REDOVB,OK,FGONLY,
+     *        QMMM,MMONLY,CARTSN,CANONC,FCORE,FORS,NOCI,EKT,LINSER,
+     *        MPGRD,CIGRD,DIISON
+C
+      PARAMETER (MXATM=2000, MXAO=8192, MXPT=2000, MXFRG=1050,
+     *           MXFGPT=12000, MXNORO=250, MAXNFRAGS=10,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+      PARAMETER (NNAM=18)
+C
+      DIMENSION QNAM(NNAM), KQNAM(NNAM), APOL(6), RAMALF(6)
+C
+      COMMON /CHFINF/ CHFSLV,CPTYPE,NWDCHF,POLAR
+      COMMON /EFLDC / EVEC(3),EFLDL
+      COMMON /FMCOM / X(1)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /FRGMSS/ FPMASS(MXPT),FMASS(MXFGPT),
+     *                FPNUC(MXPT),FGNUC(MXFGPT)
+      COMMON /FROZNC/ IFREEZ(3*MXATM),NFRZ
+      COMMON /FUNCT / E,EG(3,MXATM)
+      COMMON /GVBWFN/ CICOEF(2,12),F(25),ALPHA(325),BETA(325),NO(10),
+     *                NCO,NSETO,NOPEN,NPAIR,NORB,NCONF(MXAO),NHAM
+      COMMON /HSSCTL/ IHESSM,IHREP,HSSEND
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /INTOPT/ ISCHWZ,IECP,NECP,IEFLD
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /MCINP / METHNR,CISTEP,ACURCY,ENGTOL,DAMP,MICIT,NWORD,
+     *                NORBMC,NOROT(2,MXNORO),MOFRZ(15),NPFLG(10),
+     *                NOFO,MCFMO,CANONC,FCORE,FORS,NOCI,EKT,LINSER
+      COMMON /MIOPT / DTOL,CNVLOC,DIISTL,ALPHAX,
+     *                NF(MAXNFRAGS),MF(MAXNFRAGS),NFRAGS,MSHIFT,ITERMI,
+     *                ITLOC,IGUESS,MXDIIS,
+     *                IOPT,MIFLAG,DIISON
+      COMMON /MP2PAR/ OSPT,CODEMP,SCSPT,TOLMP,METHMP,NWDMP2,MEMPRI,
+     *                MPPROP,NACORMP,NBCORMP,NOAMP,NOBMP,NORBMP,NBFMP,
+     *                NOMITMP,MPCPHF,MAXITCMP
+      COMMON /NEOJOB/ NEORUN,NELERM
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMPAR/ IPCM,NFT26,NFT27,IRPPCM,IEF,IP_F,NFMOPCM
+      COMMON /RELWFN/ RMETHOD,QRQMT,CLIG,CLIG2,QRTOL,IQRORD,MODQR,NESOC,
+     *                NRATOM,NUMU,NQMTR,NQRDAF,MORDA,NDARELB
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+      COMMON /SVPOPT/ ISVP,NSVP,MTHSVP,NCAV,NVLPL,IQP
+      COMMON /THERMD/ FREQ(3*MXATM),TEMP(10),SCLFAC,NTEMP,PRTSCN,GOTFRQ
+      COMMON /TINOPT/ mparti,MMONLY,QMMM
+      COMMON /VBDCMP/ DECOMP,NROW,NDEG
+      COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
+     *                MPLEVL,MPCTYP
+      COMMON /ZMAT  / NZMAT,NZVAR,NVAR,NSYMC,LINEAR
+      COMMON /ZRFPAR/ GZRF,FIND(3),GNUCF,EBORN,DIELEC,IZRF,ICALC
+c
+      common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
+      common /fmopnt/ lichfg,lmulfg,lidmrec,lfrgnam,llayfrg,lindat,
+     *                lnCBS,lfmozan,lfmoc,lfmomas,lizbas,liaglob,libdgh,
+     *                liabdfg,ljabdfg,lnCAO,lidxCAO,liaprjo,ljaprjo,
+     *                lCoreAO,lOccCor,lshiftb,liodfmo,lfmoda,lfmodb,
+     *                lfmoespa,lfmoespb,llocfmo,lscffrg,lfmoscf,lrij,
+     *                lpopmul,lpopmat,lialoc,lindbd,liatfrg,lindfrg,
+     *                lindgfrg,lnatfrg,lnat0frg,lianfrg,lzanfrg,lcfrg,
+     *                llibish,llibnsh,llibng,lindatg,lfmobuf(3),lfmode,
+     *                lnumfrg,lloctat,liaoglob,lloadm,lfmoge,ldgrid,
+     *                liodcfmo,ljob2grp,lfmopg,lemocdr,luntxyz,luntrot,
+     *                lstonep,lmapsu,lfrgmul,lclmo,lialmo,lindlmo,
+     *                latclmo,llmobdf,lfgflmo,lnfglmo,llfglmo,lpfglmo,
+     *                LPOPDMAT,lidmpnt,liddpnt,livmpnt
+      COMMON /MACHIN/ NWDVAR,MAXFM,MAXSM,LIMFM,LIMSM
+C
+C     COSMO information
+C
+      LOGICAL ISEPS,USEPS
+      COMMON /ISEPS / ISEPS, USEPS
+      LOGICAL COSBUG,COSWRT,DCOSMO,PRFCND,IOUTCH
+      COMMON /COSDAT/ SE2,SECORR,QVCOSMO,ELAST,EMP2COS,EMP2LAST,
+     *                COSVOL,COSSAR,EDIEL,EOC1,DEOC_RS,SUMQSC,
+     *                SUMQSCOLD,ZSUM,ZSUM2,ZSUM3,FEPSI,RDS,DISEX2,
+     *                EPSI,COSRAD,DISEX,OUTCHG,EDIEL_SAVE,
+     *                MAXNPS,ICORR,ITRIP,NQS,MP2TRIP,MP2ITER,
+     *                ICFREQ,NSPA,NSPH,NPSD,NPS,NPS2,NDEN,NPSPHER,
+     *                COSBUG,COSWRT,DCOSMO,PRFCND,IOUTCH
+C
+      PARAMETER (TOLG=0.0005D+00, ZERO=0.0D+00)
+C
+C     ----- SET UP NAMELIST SIMULATION -----
+C
+      DATA FORCE/8HFORCE   /
+      DATA QNAM/8HNVIB    ,8HVIBSIZ  ,8HPRTIFC  ,8HPURIFY  ,8HPROJCT  ,
+     *          8HMETHOD  ,8HVIBANL  ,8HRDHESS  ,8HDECOMP  ,8HSCLFAC  ,
+     *          8HTEMP    ,8HFREQ    ,8HPRTSCN  ,8HNPRT    ,8HNPUN    ,
+     *          8HPULCOR  ,8HTEST    ,8HREDOVB  /
+      DATA KQNAM/1,3,0,0,0,5,0,0,0,3,103,-3,0,1,1,0,0,0/
+C
+      DATA HSSIAN/8HHESSIAN /
+      DATA GAMMA/8HGAMMA    /
+      DATA ANAL,SNUM,FNUM,RNUM
+     *      /8HANALYTIC,8HSEMINUM ,8HFULLNUM ,8HNUMERIC /
+      DATA RHF,ROHF,UHF/8HRHF     ,8HROHF    ,8HUHF     /
+      DATA      GVB,RMC/8HGVB     ,8HMCSCF   /
+      DATA GENCI,GUGA,CIS/8HGENCI   ,8HGUGA    ,8HCIS     /
+      DATA ZAPT/8HZAPT    /
+      DATA NONE,RNONE/4HNONE,8HNONE    /
+      DATA CHECK/8HCHECK   /
+czcz
+      DATA FMOHSS/8HFMOHSS  /
+      dimension dum3(3)
+czcz
+C
+C     ----- MAIN DRIVER TO OBTAIN HESSIAN MATRIX -----
+C
+C     THE ENERGY, GRADIENT, HESSIAN, AND DIPOLE DERIVATIVE TENSOR
+C     ARE OBTAINED BY READING THEM FROM CARDS, OR COMPUTING THEM.
+C     THE ALPHA POLARIZABILITY DERIVATIVE TENSOR IS OBTAINED ONLY
+C     BY READING IT FROM CARDS.  IT IS COMPUTED ONLY BY RUNTYP=RAMAN.
+C
+C     THE CALLING ARGUMENTS PERMIT YOU TO OVERRIDE THE VALUE OF
+C     VIBANL GIVEN IN $FORCE BELOW, AND INDICATE THE SUCCESFUL
+C     CONCLUSION OF A GEOMETRY SEARCH, USEFUL FOR $STATPT 'HSSEND'
+C
+CZCZ    
+CZ    Scan $FMOXYZ to find natfmo.
+CZ    
+      call fmoxyz(' $FMOXYZ',1,natfmo,dum,dum3,idum)
+CZ
+      CALL VALFM(LOADFM)
+      LFMOC   = LOADFM  + 1
+      LFMOZAN = LFMOC   + 3*(NATFMO+1)
+      LFMOMAS = LFMOZAN + NATFMO
+      LIZBAS  = LFMOMAS + NATFMO
+      LAST    = LIZBAS  + (NATFMO-1)/NWDVAR+1 
+      NEEDFMO = LAST - LOADFM - 1
+      CALL GETFM(NEEDFMO)
+CZCZ
+
+      SOME = NPRINT.NE.-5 .AND. MASWRK
+CZCZ  NCOORD = 3*NAT
+      NCOORD = 3*natfmo
+      NCF    = 6*NFRG
+      GOTEG  = .FALSE.
+      GOTEH  = .FALSE.
+      GOTDDM = .FALSE.
+      GOTADM = .FALSE.
+C
+C     ----- READ $FORCE INPUT GROUP -----
+C
+C        THE STRATEGY FOR DETERMINING THE DEFAULT DIFFERENTIATION
+C        IS TO PERFORM AN ANALYTIC CALCULATION IF POSSIBLE, OR TO
+C        CHOOSE SEMI-NUMERICAL DIFFERENTIATION OF ANALYTIC GRADIENTS.
+C        IF THE ANALYTIC GRADIENT IS NOT CODED, THE USER IS PERMITTED
+C        TO REQUEST FULLY NUMERIC DIFFERENTIATION, BUT BECAUSE THIS
+C        IS REASONABLE ONLY FOR SMALL MOLECULES, WE NEVER PICK THAT
+C        AS A DEFAULT (THEY MUST TYPE IT).
+C
+      METHOD=ANAL
+C
+C     ---- THE FOLLOWING METHODS ONLY ALLOW SEMI-NUMERIC HESSIANS ----
+C        BASIS SETS WITH F OR G FUNCTIONS
+C        UHF, OR GVB WITH MORE THAN ONE PERFECT PAIR
+C        MCSCF IF IT DOES NOT USE FULL ACTIVE SPACE DETERMINANT CODE
+C        CI, MP2 (RHF OR UHF), DFT
+C        MOPAC WAVEFUNCTIONS
+C        SIMOMM MODEL
+C        SOLVENT MODELS: EFP, ONSAGER, PCM, OR COSMO
+C        SCALAR RELATIVISTIC CORRECTIONS
+C        APPLIED EXTERNAL ELECTRIC FIELD
+C        SCF-MI
+C     ALL OF WHICH HAVE ANALYTIC GRADIENTS PROGRAMMED.
+C     IN ADDITION, THE PARTIAL HESSIAN ANALYSIS IS SEMI-NUMERIC
+C
+      CALL BASCHK(LMAX)
+      IF(LMAX.GT.2)                             METHOD=SNUM
+      IF(SCFTYP.EQ.UHF)                         METHOD=SNUM
+      IF(SCFTYP.EQ.GVB  .AND.  NPAIR.GT.1)      METHOD=SNUM
+      IF(SCFTYP.EQ.RMC  .AND.  CISTEP.EQ.GUGA)  METHOD=SNUM
+      IF(SCFTYP.EQ.RMC  .AND.  CISTEP.EQ.GENCI) METHOD=SNUM
+      IF(MPLEVL.GT.0)                           METHOD=SNUM
+      IF(CITYP.NE.RNONE)                        METHOD=SNUM
+      IF(DFTYPE.NE.RNONE)                       METHOD=SNUM
+      IF(SCFTYP.EQ.RHF  .AND. TDDFTYP.NE.RNONE) METHOD=SNUM
+      IF(MPCTYP.NE.NONE)                        METHOD=SNUM
+      IF(IECP.EQ.5)                             METHOD=SNUM
+      IF(QMMM)                                  METHOD=SNUM
+      ISOLV = NFRG + IZRF + IPCM
+      IF(ISOLV.GE.1  .OR.  ISEPS)               METHOD=SNUM
+      IF(RMETHOD.NE.RNONE)                      METHOD=SNUM
+      IF(EFLDL)                                 METHOD=SNUM
+      IF(MIFLAG.EQ.1)                           METHOD=SNUM
+      IF(RUNTYP.EQ.HSSIAN.AND.IFREEZ(1).NE.0)   METHOD=SNUM
+      IF(NEORUN.EQ.1)                           METHOD=SNUM
+C
+C         IF WE HAVE THE ENERGY, BUT NOT THE ANALYTIC GRADIENTS...
+C
+      MPGRD = SCFTYP.EQ.RHF  .OR.  SCFTYP.EQ.UHF
+     *                       .OR. (SCFTYP.EQ.ROHF  .AND.  OSPT.EQ.ZAPT)
+      CIGRD = SCFTYP.EQ.RHF .AND. (CITYP.EQ.GUGA  .OR.  CITYP.EQ.CIS)
+      IF(MPLEVL.GT.0  .AND.  .NOT.MPGRD)           METHOD=RNONE
+      IF(CITYP.NE.RNONE  .AND.  .NOT.CIGRD)        METHOD=RNONE
+      IF(CCTYP.NE.RNONE)                           METHOD=RNONE
+      IF(VBTYP.NE.RNONE)                           METHOD=RNONE
+      IF(SCFTYP.NE.RHF  .AND. TDDFTYP.NE.RNONE)    METHOD=RNONE
+      IF(ISVP.EQ.1)                                METHOD=RNONE
+C        NOTE THAT WE ARE LETTING EFP SLIDE HERE,
+C        FOR TRADITIONAL REASONS,
+C        BUT WE DON'T HAVE MP2/CI+EFP GRADIENTS CORRECTLY CODED.
+      IF(MPLEVL.GT.0  .OR.  CITYP.NE.RNONE) THEN
+         IF(IZRF.GE.1 .OR.  IPCM.EQ.1  .OR. ISEPS) METHOD=RNONE
+      END IF
+C
+C         REMEMBER THIS DEFAULT FOR ERROR CHECKING LATER
+C
+      IANAL=0
+      ISNUM=0
+      IFNUM=0
+      IF(METHOD.EQ.ANAL)  IANAL=1
+      IF(METHOD.EQ.SNUM)  ISNUM=1
+      IF(METHOD.EQ.RNONE) IFNUM=1
+C
+      FGONLY = NUM.EQ.0  .AND.  NFRG.GT.0
+      IF(ISEPS) ICFREQ=1
+      RDHESS=.FALSE.
+      NVIB = 1
+      MPRINT=NPRINT
+      VIBSIZ=0.01D+00
+      PURIFY=.FALSE.
+      PRTIFC=.FALSE.
+      VIBANL=.FALSE.
+czcz  IF(RUNTYP.EQ.HSSIAN) VIBANL=.TRUE.
+      IF(RUNTYP.EQ.FMOHSS) VIBANL=.TRUE.
+      DECOMP=.FALSE.
+      PROJCT=.FALSE.
+      IF(IFREEZ(1).NE.0.AND.RUNTYP.EQ.HSSIAN) PROJCT=.TRUE.
+      SCLFAC = 1.0D+00
+      DO 100 I=1,10
+         TEMP(I) = ZERO
+  100 CONTINUE
+      TEMP(1) = 298.15D+00
+      KQNAM(12) = NCOORD*10+3
+      DO 110 I=1,NCOORD
+         FREQ(I) = ZERO
+  110 CONTINUE
+      PRTSCN = .FALSE.
+      NPRT = 0
+      NPUN = 0
+      PULCOR=.FALSE.
+      REDOVB=.TRUE.
+C
+C     "TEST" IS AN UNDOCUMENTED WAY TO AVOID THE CHECK MADE
+C     BELOW AS TO WHEN ANALYTIC HESSIANS CAN BE REQUESTED.
+C
+      TEST=.FALSE.
+C
+      JRET=0
+      CALL NAMEIO(IR,JRET,FORCE,NNAM,QNAM,KQNAM,
+     *            NVIB,VIBSIZ,PRTIFC,PURIFY,PROJCT,METHOD,VIBANL,
+     *            RDHESS,DECOMP,SCLFAC,TEMP,FREQ,PRTSCN,NPRT,NPUN,
+     *            PULCOR,TEST,REDOVB,
+     *            0,  0,0,0,0,0,
+     *    0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,
+     *    0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0)
+      NERR=0
+      IF(JRET.EQ.2) NERR=NERR+1
+C
+C       'NUMERIC ' IS TO BE CONSIDERED AN ACCEPTABLE TYPO FOR 'SEMINUM '
+      IF(METHOD.EQ.RNUM) METHOD=SNUM
+C
+      IF(NPRT.LT.0) NPRT=0
+      IF(NPRT.GT.1) NPRT=1
+      IF(NPUN.LT.0) NPUN=0
+      IF(NPUN.GT.2) NPUN=2
+C
+      IF(SOME) WRITE(IW,9010) METHOD,NVIB,VIBSIZ,
+     *                        RDHESS,PURIFY,PRTIFC,
+     *                        VIBANL,DECOMP,PROJCT,
+     *                        SCLFAC,PRTSCN,NPRT,
+     *                        PULCOR,NPUN,REDOVB
+C
+      NTEMP=0
+      DO 200 I=1,10
+         IF(TEMP(I).NE.ZERO) NTEMP=NTEMP+1
+  200 CONTINUE
+      IF(SOME  .AND.  VIBANL) WRITE(IW,9012) NTEMP,(TEMP(I),I=1,NTEMP)
+C
+      NFREQ=0
+      DO 210 I=1,NCOORD
+         IF(FREQ(I).NE.ZERO) NFREQ=NFREQ+1
+  210 CONTINUE
+      IF(NFREQ.GT.0) THEN
+         IF (SOME) WRITE(IW,9014) NFREQ,(FREQ(I),I=1,NFREQ)
+         GOTFRQ=.TRUE.
+      END IF
+C
+      IF(NVIB.LE.0  .OR.  NVIB.GT.2) NERR=NERR+1
+      IF(ABS(VIBSIZ).GT.0.25D+00) NERR=NERR+1
+C
+      OK=.FALSE.
+      IF(METHOD.EQ.ANAL) OK=.TRUE.
+      IF(METHOD.EQ.SNUM) OK=.TRUE.
+      IF(METHOD.EQ.FNUM) OK=.TRUE.
+      IF(.NOT.OK) THEN
+         IF(MASWRK) WRITE(IW,*)
+     *       '*** ERROR: METHOD = ANALYTIC, SEMINUM, OR FULLNUM ONLY'
+         NERR=NERR+1
+      END IF
+      IF(METHOD.EQ.ANAL) NHLEVL=0
+      IF(METHOD.EQ.SNUM) NHLEVL=1
+      IF(METHOD.EQ.FNUM) NHLEVL=2
+C
+      IF(NGLEVL.EQ.1) THEN
+         IF(MASWRK) WRITE(IW,9090)
+         NERR=NERR+1
+      END IF
+C
+C        CHECK TO SEE IF DIFFERENTIATION METHOD IS REASONABLE
+C     THE UNDOCUMENTED KEYWORD -TEST- ALLOWS SKIPPING THESE CHECKS.
+C     OF COURSE, -TEST- SHOULD BE CHOSEN ONLY BY SOMEONE WHO IS
+C     TRYING TO PROGRAM A MISSING METHOD.
+C
+      IF(.NOT.TEST) THEN
+         IF(METHOD.EQ.ANAL  .AND.  (ISNUM+IFNUM).GT.0) THEN
+            IF(MASWRK) WRITE(IW,9100)
+            IF(MASWRK) WRITE(IW,9105) METHOD
+            NERR=NERR+1
+         END IF
+         IF(METHOD.EQ.SNUM  .AND.  IFNUM.GT.0) THEN
+            IF(MASWRK) WRITE(IW,9100)
+            IF(MASWRK) WRITE(IW,9105) METHOD
+            NERR=NERR+1
+         END IF
+      END IF
+C
+C        PRINT SOME FRIENDLY ADVISE IF A HIGHER METHOD IS FEASIBLE
+C
+      IF(MASWRK) THEN
+         IF(METHOD.EQ.SNUM  .AND.  IANAL.EQ.1) WRITE(IW,9106) ANAL,SNUM
+         IF(METHOD.EQ.FNUM  .AND.  IANAL.EQ.1) WRITE(IW,9106) ANAL,FNUM
+         IF(METHOD.EQ.FNUM  .AND.  ISNUM.EQ.1) WRITE(IW,9106) SNUM,FNUM
+      END IF
+C
+      IF(NERR.GT.0) THEN
+         IF(MASWRK) WRITE(IW,*)
+     *      'ERROR IN $FORCE INPUT, PLEASE FIX AND TRY AGAIN.'
+         CALL ABRT
+      END IF
+C
+      IF(GOTFRQ) GO TO 800
+C
+C     ----- READ INTERNALS, GENERATE B MATRIX -----
+C     THIS MUST BE DONE AFTER -DECOMP- IS KNOWN, AS THE DECOMPOSITION
+C     SOMETIMES USES MORE THAN 3N-6 COORDINATES.  THE Z-MATRIX
+C     CODE PERMITS MORE THAN 3N-6 COORDINATES ONLY IF DECOMP=.T.
+C
+      CARTSN = NZVAR.EQ.0
+      IF(NZVAR.GT.0 .AND. RUNTYP.EQ.HSSIAN) THEN
+         CALL ZMATIN(CARTSN)
+         CALL BANDBI
+         CALL PZANDG(F,0)
+      END IF
+C
+C     ----- OBTAIN THE INFORMATION FROM CARD INPUT -----
+C
+      IF(RDHESS) THEN
+         CALL VALFM(LOADFM)
+         LFCM   = LOADFM+1
+         LDDM   = LFCM   + (NCOORD+NCF)*(NCOORD+NCF)
+         LADM   = LDDM   + 3*(NCOORD+NCF)
+C
+C            NOTE THAT $ALPDR IS NOT SET UP TO WORK WITH ANY
+C        --- SOLVATION MODELS, SO ONLY 6*NCOORDS WORDS ARE
+C            NEEDED INSTEAD OF 6*(NCOORD+NCF)
+C
+         LEG    = LADM   + 6*NCOORD
+         LAST   = LEG    + NCOORD
+         NEED = LAST-LOADFM
+         CALL GETFM(NEED)
+C
+C           LOOK FOR OPTIONAL GRADIENT VECTOR
+C           LOOK FOR HESSIAN MATRIX
+C           LOOK FOR OPTIONAL DIPOLE DERIVATIVE TENSOR
+C           LOOK FOR OPTIONAL ALPHA POLARIZABILITY DERIVATIVE TENSOR
+C
+         CALL EGIN(X(LEG),NCOORD,GOTEG,' $GRAD  ')
+         CALL FCMIN(X(LFCM),NCOORD+NCF,GOTEH)
+         CALL DDMIN(X(LDDM),NCOORD+NCF,GOTDDM)
+         CALL ADMIN(RAMALF,X(LADM),NCOORD,GOTADM)
+         CALL RETFM(NEED)
+         IF(GOTEH) THEN
+            SCFOK=.TRUE.
+            GO TO 700
+         ELSE
+            IF (MASWRK) WRITE(IW,9030)
+            CALL ABRT
+         END IF
+      END IF
+C
+C     ----- OTHERWISE, THEY MUST BE COMPUTED -----
+C
+CZ 
+CZ    FMO HESSIAN CALCULATION
+CZ
+      if (.not.rdhess) then
+        if (maswrk) write(6,*) 'HESS CALC IN FMOHSS DRIVER STARTS'
+        CALL FMOX(0)
+        if (maswrk) write(6,*) 'HESS CALC IN FMOHSS DRIVER ENDS'
+        ncoord = natfmo*3
+        SCFOK = .TRUE.
+      end if
+cz
+cz    Tricky part: this is just for the vibrational analysis
+cz
+      nat = natfmo
+czcz
+
+cz    IF(METHOD.EQ.ANAL) THEN
+cz       IHESSM=2
+cz       GOTDDM=.TRUE.
+cz       GOTEG =.TRUE.
+cz       CALL VALFM(LOADFM)
+cz       LDDM = LOADFM+1
+cz       LAST = LDDM  + 3*NCOORD
+cz       NEED = LAST-LOADFM
+cz       CALL GETFM(NEED)
+cz       CALL VCLR(X(LDDM),1,3*NCOORD)
+cz       CALL DAWRIT(IDAF,IODA,X(LDDM),3*NCOORD,34,0)
+cz       CALL RETFM(NEED)
+cz       CALL HSSANA(GOTWFN)
+cz       SCFOK=.TRUE.
+cz    END IF
+C
+cz    IF(METHOD.EQ.SNUM) THEN
+cz       IHESSM=1
+cz       GOTDDM=.TRUE.
+cz       GOTEG =.TRUE.
+cz       CALL VALFM(LOADFM)
+cz       LFCM   = LOADFM + 1
+cz       LDDM   = LFCM   +   (NCOORD+6*NFRG)**2
+cz       LIST   = LDDM   + 3*(NCOORD+6*NFRG)
+cz       LSKIP  = LIST   + 6*NFRG*NVIB
+cz       LSKIP2 = LSKIP  + NAT+2*NFRG
+cz       LWRK   = LSKIP2 + NAT*NAT
+cz       LAST   = LWRK   + NUM*NUM
+cz       NEED = LAST-LOADFM
+cz       CALL GETFM(NEED)
+cz       NATM = NAT
+cz       CALL HSSNUM(X(LFCM),X(LDDM),X(LSKIP),X(LSKIP2),X(LWRK),
+cz   *               X(LIST),NCOORD+6*NFRG,NAT+2*NFRG,NATM,
+cz   *               NVIB,VIBSIZ,NPRT,NPUN,SCFOK,GOTWFN,REDOVB)
+cz       CALL RETFM(NEED)
+cz    END IF
+c
+cz    IF(METHOD.EQ.FNUM) THEN
+cz       IHESSM=0
+cz       IF(NFRG.GT.0) THEN
+cz          IF(MASWRK) WRITE(IW,*)
+cz   *          'FULLY NUMERIC HESSIAN NOT AVAILABLE WITH EFP'
+cz          CALL ABRT
+cz       END IF
+cz       GOTDDM = .FALSE.
+cz       GOTEG  = .FALSE.
+cz       MYNC1  = 3*NAT
+C           THE ACTUAL NUMBER OF POINTS DONE CANNOT EXCEED MXSP
+cz       MXSP   = 1 + 24*NAT + 18*NAT*NAT
+cz       CALL VALFM(LOADFM)
+cz       LFCM   = LOADFM + 1         ! START OF FCM
+cz       LDDM   = LFCM   + MYNC1**2  ! START OF DDM
+cz       LSKIP  = LDDM   + 3*MYNC1   ! START OF SKIP ARRAY
+cz       LATMP  = LSKIP  + NAT       ! START OF ATOM PAIR ARRAY
+cz       LWRK   = LATMP  + NAT*NAT   ! STORT OF VIB0 ORBITALS
+cz       LESP   = LWRK   + NUM*NUM   ! START OF SINGLE POINT ENERGIES
+cz       LEG    = LESP   + MXSP      ! START OF GRADIENT
+cz       LAST   = LEG    + NCOORD    ! LAST ADDRESS ON STACK
+cz       NEED   = LAST - LOADFM
+cz       CALL GETFM(NEED)
+cz       CALL HSSFUL(X(LESP),X(LFCM),X(LSKIP),X(LATMP),X(LWRK),
+cz   *               NAT,MYNC1,MXSP,VIBSIZ,GOTEG,SCFOK)
+cz       CALL RETFM(NEED)
+cz    END IF
+C
+C         THE HESSIAN COMPUTATION IS NOW FINISHED
+C
+  700 CONTINUE
+C
+C         HESSIAN MAY BE COMPUTED AS PART OF A GEOMETRY OPTIMIZATION,
+C         ETC., AND THOSE RUNS MAY NOW TEST -IHESSM- TO KNOW THEY ARE
+C         NO LONGER IN A HESSIAN CALCULATION PHASE...
+C
+      IHESSM=0
+C
+C     --- PURIFY THE HESSIAN,DIPOLE DERIVATIVES,ALPHA POLARIZABILITY ---
+C
+      NPRINT=MPRINT
+      IF(NZVAR.GT.0 .AND. (PURIFY.OR.PRTIFC.OR.DECOMP.OR.PULCOR)) THEN
+         CALL VALFM(LOADFM)
+         LFCM   = LOADFM + 1
+         LFCMI  = LFCM  + NCOORD*NCOORD
+         LEG    = LFCMI + NROW*NROW
+         LDDM   = LEG   + MAX(NCOORD,NROW)
+         LDDN   = LDDM  + 3*NCOORD
+         LADM   = LDDN  + 3*NVAR
+         LADMI  = LADM  + 6*NCOORD
+         LBMAT  = LADMI + 6*NVAR
+         LBINV  = LBMAT + NVAR*NCOORD
+         LWRK   = LBINV + NCOORD*NVAR
+         LZMAT  = LWRK  + MAX(NCOORD,NROW)
+         LIZMAT = LZMAT + NVAR
+         LIWRK  = LIZMAT+ NZMAT
+         LAST   = LIWRK + NVAR
+         NEED = LAST - LOADFM - 1
+         CALL GETFM(NEED)
+C
+C    PURIFY GRADIENT AND/OR PRINT INTERNAL GRADIENT
+C
+         IF(PRTIFC.OR.PURIFY) THEN
+            CALL DAREAD(IDAF,IODA,X(LEG),NCOORD,3,0)
+            CALL TRANG(X(LEG),NVAR,NCOORD)
+            IF (PRTIFC) THEN
+               CALL PZANDG(X(LEG),1)
+               IF (NSYMC .EQ. 0)
+     *            CALL PUZMAT(X(LZMAT),X(LIZMAT),X(LIWRK),NVAR,NZMAT)
+            END IF
+            IF (PURIFY) CALL TRANGB(X(LEG),NVAR,NCOORD)
+         END IF
+C
+         CALL PURFCM(X(LFCM),X(LFCMI),X(LIZMAT),NCOORD,NROW,NVAR,
+     *               NZMAT,PURIFY,PRTIFC,DECOMP)
+C
+         IF (PULCOR) THEN
+C---         CALL HSSCOR(X(LFCM),X(LFCMI),X(LBINV),X(LEG),NCOORD,NVAR)
+             IF(MASWRK) WRITE(IW,*) 'OPTION -PULCOR- IS INACTIVE'
+         END IF
+C
+         IF(GOTDDM  .AND.  PURIFY)
+     *      CALL PURDDM(X(LDDM),X(LDDN),X(LBMAT),X(LBINV),X(LWRK),
+     *                  NCOORD,NVAR)
+         IF(GOTADM .AND. PURIFY)
+     *      CALL PURADM(X(LADM),X(LADMI),X(LBMAT),X(LBINV),X(LWRK),
+     *                  NCOORD,NVAR)
+         CALL RETFM(NEED)
+      END IF
+C
+C     ----- PRINT/PUNCH GRADIENT, HESSIAN, DIPOLE DERIVATIVES,
+C     ----- ALPHA POLARIZABILITY DERIVATIVES.
+C
+      CALL VALFM(LOADFM)
+      LFCM = LOADFM + 1
+      LEG  = LFCM   + (NCOORD+6*NFRG)*(NCOORD+6*NFRG)
+      LDDM = LEG    + NCOORD
+      LADM = LDDM   + 3*(NCOORD+6*NFRG)
+      LAST = LADM   + 6*NCOORD
+      NEED = LAST - LOADFM - 1
+      CALL GETFM(NEED)
+C
+      IF(NAT.GT.0) CALL DAREAD(IDAF,IODA,X(LEG) ,NCOORD,3,0)
+      CALL DAREAD(IDAF,IODA,X(LFCM),(NCOORD+6*NFRG)**2, 4,0)
+      IF(GOTDDM) THEN
+         CALL DAREAD(IDAF,IODA,X(LDDM),3*(NCOORD+6*NFRG) ,34,0)
+      ELSE
+         CALL VCLR(X(LDDM),1,3*(NCOORD+6*NFRG))
+      END IF
+C
+      IF(RUNTYP.EQ.GAMMA) CALL FCMSAV(X(LFCM),NCOORD)
+C
+      IF(GOTEG .AND. .NOT. FGONLY) THEN
+         GRMS = DDOT(NCOORD,X(LEG),1,X(LEG),1)
+         GRMS = SQRT(GRMS/NCOORD)
+         LOCMX = IDAMAX(NCOORD,X(LEG),1)
+         GMAX = X(LEG-1+LOCMX)
+         STATPT = GMAX.LT.TOLG  .AND.  GRMS.LT.(TOLG/3.0D+00)
+      ELSE
+         STATPT = .TRUE.
+      END IF
+C
+czcz  IF(RUNTYP.EQ.HSSIAN  .OR.  GOTWFN) THEN
+      IF(RUNTYP.EQ.FMOHSS  .OR.  GOTWFN) THEN
+         IF(GOTEG.AND.MASWRK) WRITE(IW,9040)
+         IF(GOTEG)  CALL  EGOUT(X(LEG) ,NAT)
+CZCZ                CALL FCMOUT(X(LFCM),NCOORD+6*NFRG)
+                    CALL FMOFCMOUT(X(LFCM),NCOORD+6*NFRG)
+         IF(POLAR  .AND.  EXETYP.NE.CHECK) THEN
+            IF(IFREEZ(1).EQ.0) THEN
+               CALL DAREAD(IDAF,IODA,APOL,6,251,0)
+               CALL POLOUT(APOL)
+            END IF
+         END IF
+         IF(GOTDDM .AND. .NOT.FGONLY) THEN
+            IF(IFREEZ(1).EQ.0) THEN
+               CALL DDMOUT(X(LDDM),NCOORD+6*NFRG)
+            END IF
+         END IF
+         IF(GOTADM .AND. .NOT.FGONLY) THEN
+            CALL POLOUT(RAMALF)
+            CALL ADMOUT(X(LADM),NCOORD)
+         END IF
+      END IF
+C
+      IF(GOTEG)  CALL  EGPUN(X(LEG) ,NAT,' $GRAD  ')
+                 CALL FCMPUN(X(LFCM),NCOORD+6*NFRG)
+      IF(GOTDDM) CALL DDMPUN(X(LDDM),NCOORD+6*NFRG)
+      IF(GOTADM) CALL ADMPUN(E,RAMALF,X(LADM),NCOORD)
+      CALL RETFM(NEED)
+C
+C     ----- NORMAL COORDINATE VIBRATIONAL ANALYSIS -----
+C
+  800 CONTINUE
+      IF(.NOT.VIBANL  .AND.  .NOT.VIBOVR) RETURN
+      NC1 = NCOORD+6*NFRG
+      NC2 = (NC1**2+NC1)/2
+      NC3 = NC1**2
+C
+      NPART = NAT
+      KMASS=0
+      DO 820 IFRG=1,NFRG
+         DO 810 III=1,NMPTS(IFRG)
+            IF(FMASS(III+KMASS).GT.ZERO) NPART=NPART+1
+  810    CONTINUE
+         KMASS=KMASS+NMPTS(IFRG)
+  820 CONTINUE
+C
+      CALL VALFM(LOADFM)
+      LVEC   = LOADFM + 1
+      LFCM   = LVEC   + NC3
+      LE     = LFCM   + NC2
+      LSCR   = LE     + NC1
+      LIA    = LSCR   + NC1*8
+      LRM    = LIA    + NC1
+      LSVT   = LRM    + (NCOORD+21*NFRG)
+      LSVR   = LSVT   + NC1*3
+      LSVTT  = LSVR   + NC1*3
+      LSVRT  = LSVTT  + NC1
+      LCC    = LSVRT  + NC1
+      LCOM   = LCC    + 3*NPART
+      LZMS   = LCOM   + 3*NPART
+      LBUF1  = LZMS   +   NPART
+      LBUF2  = LBUF1  + NC3
+      LDDM   = LBUF2  + NC3
+      LADM   = LDDM   + NC1*3
+      LAST   = LADM   + NC1*6
+      NEED = LAST-LOADFM
+      CALL GETFM(NEED)
+CZ    NATM = NAT+2*NFRG
+      IF(NEORUN.EQ.0) THEN
+         CALL FGMTRX(X(LVEC),X(LFCM),X(LE),X(LSCR),X(LIA),X(LRM),
+     *               X(LSVT),X(LSVR),X(LSVTT),X(LSVRT),
+     *               X(LCC),X(LCOM),X(LZMS),X(LBUF1),X(LBUF2),
+     *               NC1,NC2,NPART,X(LDDM),GOTDDM,X(LADM),GOTADM,
+     *               PROJCT,STATPT,SCFOK)
+      ELSE
+         CALL FGMTRX_NEO(X(LVEC),X(LFCM),X(LE),X(LSCR),X(LIA),X(LRM),
+     *               X(LSVT),X(LSVR),X(LSVTT),X(LSVRT),
+     *               X(LCC),X(LCOM),X(LZMS),X(LBUF1),X(LBUF2),
+     *               NC1,NC2,NPART,X(LDDM),GOTDDM,X(LADM),GOTADM,
+     *               PROJCT,STATPT,SCFOK)
+      END IF
+C
+C        SAVE HARMONIC FREQUENCIES AND NORMAL MODES FOR EXTENDED TDHF
+C
+      IF(IGETOLI(1).NE.0) THEN
+        CALL SVGFNM(FREQ,X(LVEC),NC1,LINEAR)
+      END IF
+C
+      CALL RETFM(NEED)
+czcz
+      call retfm(needfmo)
+czcz
+      IF (MASWRK) WRITE(IW,9020)
+      CALL TIMIT(1)
+      RETURN
+C
+ 9010 FORMAT(/5X,33(1H-)/
+     *        5X,'HESSIAN MATRIX CONTROL PARAMETERS'/5X,33(1H-)/
+     *        5X,'METHOD=',A8,3X,'NVIB  =',I8,3X,'VIBSIZ=',F8.5/
+     *        5X,'RDHESS=',L8,3X,'PURIFY=',L8,3X,'PRTIFC=',L8/
+     *        5X,'VIBANL=',L8,3X,'DECOMP=',L8,3X,'PROJCT=',L8/
+     *        5X,'SCLFAC=',F8.5,3X,'PRTSCN=',L8,3X,'NPRT  =',I8/
+     *        5X,'PULCOR=',L8,3X,'NPUN  =',I8,3X,'REDOVB=',L8)
+ 9012 FORMAT(5X,'THERMOCHEMISTRY WILL BE PRINTED FOR',I5,
+     *          ' TEMPERATURES:'/(3X,5F12.5/))
+ 9014 FORMAT(5X,'HESSIAN COMPUTATION WILL BE SKIPPED AS'/
+     *       5X,'A TOTAL OF',I5,' FREQUENCIES WERE INPUT:'/
+     *      (5X,5F12.5/))
+ 9020 FORMAT(1X,'......END OF NORMAL COORDINATE ANALYSIS......')
+ 9030 FORMAT(1X,'RDHESS IS TRUE, BUT NO HESSIAN MATRIX WAS FOUND IN',
+     *          ' YOUR INPUT FILE.')
+ 9040 FORMAT(/10X,15(1H-)/10X,'ENERGY GRADIENT'/10X,15(1H-))
+ 9090 FORMAT(/1X,'PLEASE DO NOT USE NUMGRD=.TRUE. DURING HESSIAN JOBS,'/
+     *   1X,'INSTEAD USE METHOD=ANALYTIC, SEMINUM, OR FULLNUM ONLY.'/
+     *   1X,'(IF NECESSARY, RUN THE HESSIAN IN A SEPARATE JOB THAN'/
+     *   1X,'A GEOMETRY SEARCH (I.E. AVOID HESS=CALC OR HSSEND=.TRUE.)')
+ 9100 FORMAT(/10X,'**** ERROR IN DIFFERENTIATION METHOD ****'//
+     *  1X,'ANALYTIC COMPUTATION OF THE HESSIAN IS IMPLEMENTED'/
+     *  5X,'FOR S,P,D BASIS SETS (INCLUDING ECP USAGE) FOR AB INITIO',
+     *     ' RHF, ROHF,'/
+     *  5X,'GVB (OPEN SHELL OR TCSCF) AND MCSCF (CISTEP=ALDET)',
+     *     ' WAVEFUNCTIONS.'//
+     *  1X,'SEMI-NUMERIC HESSIANS CAN BE COMPUTED WHEN ANALYTIC',
+     *     ' GRADIENTS ARE AVAILABLE:'/
+     *  5X,'IF F,G FUNCTIONS ARE IN THE BASIS SET,'/
+     *  5X,'IF USING GRID-BASED OR GRID-FREE DFT,'/
+     *  5X,'IF UHF, OR IF GVB WITH MORE THAN ONE PERFECT PAIR,'/
+     *  5X,'IF MCSCF USES SOME CISTEP OTHER THAN ALDET,'/
+     *  5X,'IF MPLEVL=2 FOR RHF OR UHF WAVEFUNCTIONS,'/
+     *  5X,'IF EXCITED STATE CIS FOR RHF WAVEFUNCTIONS,'/
+     *  5X,'IF GROUND OR EXCITED STATE GUGA CI FOR RHF WAVEFUNCTIONS,'/
+     *  5X,'IF SEMI-EMPIRICAL MODELS AM1, PM3, OR MNDO ARE USED,'/
+     *  5X,'IF EFP, PCM, ONSAGER, OR COSMO SOLVENT MODELS ARE USED,'/
+     *  5X,'IF THERE IS AN APPLIED EXTERNAL ELECTRIC FIELD,'/
+     *  5X,'IF SCALAR RELATIVISTIC TRANSFORMATIONS ARE IN USE, OR'/
+     *  5X,'IF RUNNING SCF-MI COMPUTATIONS.'//
+     *  1X,'FULLY NUMERIC HESSIANS CAN BE COMPUTED WHEN ONLY THE',
+     *     ' ENERGY IS AVAILABLE:'/
+     *  5X,'WHEN MODEL CORE POTENTIAL INTEGRALS ARE USED,'/
+     *  5X,'WHEN MPLEVL=2 FOR SCFTYP=ROHF/OSPT=RMP OR SCFTYP=MCSCF,'/
+     *  5X,'WHEN CITYP IS SELECTED AND THE SCFTYP IS NOT RHF,'/
+     *  5X,'WHEN THE CITYP SELECTED IS NOT CIS OR GUGA, OR'/
+     *  5X,'WHEN ANY CCTYP IS SELECTED'/)
+ 9105 FORMAT(1X,'YOUR INPUT MISTAKENLY REQUESTED METHOD=',A8)
+ 9106 FORMAT(/15X,'* * * EFFICIENCY NOTE * * *'/
+     *        1X,'THIS CALCULATION CAN BE RUN WITH DIFFERENTIATION',
+     *           ' METHOD=',A8/
+     *        1X,'THIS MIGHT BE MORE ACCURATE AND/OR FASTER THAN',
+     *           ' YOUR CHOICE,'/
+     *        1X,'BUT THE REQUESTED CALCULATION METHOD=',A8,
+     *           ' IS PROCEEDING.'/)
+      END
+C*MODULE FMOHSS  *DECK FMOFCMOUT
+      SUBROUTINE FMOFCMOUT(FCM,NCOORD)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      LOGICAL GOPARR,DSKWRK,MASWRK
+C
+      DIMENSION FCM(NCOORD,NCOORD)
+      DIMENSION CLAB(3)
+czcz
+      character*4 cdum4(4)
+      character*8 cdum8
+czcz
+C
+      PARAMETER (MXATM=2000, MXFRG=1050,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /FROZNC/ IFREEZ(3*MXATM),NFRZ
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+Cz    COMMON /RUNLAB/ TITLE(10),ANAM(MXATM),BNAM(MXATM),BFLAB(MXAO)
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+CZ
+      COMMON /FMCOM / X(1)
+      common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
+      common /fmopnt/ lichfg,lmulfg,lidmrec,lfrgnam,llayfrg,lindat,
+     *                lnCBS,lfmozan,lfmoc,lfmomas,lizbas,liaglob,libdgh,
+     *                liabdfg,ljabdfg,lnCAO,lidxCAO,liaprjo,ljaprjo,
+     *                lCoreAO,lOccCor,lshiftb,liodfmo,lfmoda,lfmodb,
+     *                lfmoespa,lfmoespb,llocfmo,lscffrg,lfmoscf,lrij,
+     *                lpopmul,lpopmat,lialoc,lindbd,liatfrg,lindfrg,
+     *                lindgfrg,lnatfrg,lnat0frg,lianfrg,lzanfrg,lcfrg,
+     *                llibish,llibnsh,llibng,lindatg,lfmobuf(3),lfmode,
+     *                lnumfrg,lloctat,liaoglob,lloadm,lfmoge,ldgrid,
+     *                liodcfmo,ljob2grp,lfmopg,lemocdr,luntxyz,luntrot,
+     *                lstonep,lmapsu,lfrgmul,lclmo,lialmo,lindlmo,
+     *                latclmo,llmobdf,lfgflmo,lnfglmo,llfglmo,lpfglmo,
+     *                LPOPDMAT,lidmpnt,liddpnt,livmpnt
+czcz
+C
+      DATA CLAB /4H   X,4H   Y,4H   Z/
+      DATA HSSIAN/8HHESSIAN /
+C
+      IF(.NOT.MASWRK) RETURN
+C
+      WRITE(IW,9000)
+C
+      IF(IFREEZ(1).NE.0.AND.RUNTYP.EQ.HSSIAN.AND.MASWRK)
+     *  WRITE (IW, 9005)
+C
+      cdum8 = '        '
+      INCR= 2
+      IF(NPRINT.EQ.6) INCR=4
+      DO 140 MINCOL=1,NATfmo,INCR
+         MAXCOL = MINCOL+INCR-1
+         IF (MAXCOL .GT. NAT) MAXCOL = NATfmo
+         ico = 0
+         do ii = mincol, maxcol
+           ico = ico + 1
+CZ         ztmp = x(lfmomas+ii-1)
+           iantmp = int(x(lfmozan+ii-1)+0.1D+00)
+           call zsymnum(cdum8,cdum4(ico),iantmp)
+         end do
+         WRITE(IW,9010) (N,N = MINCOL,MAXCOL)
+CZ       WRITE(IW,9020) (ANAM(N),BNAM(N),N = MINCOL,MAXCOL)
+         WRITE(IW,9020) (cdum4(N),cdum8,N = 1,ico)
+         WRITE(IW,9030) ((CLAB(M),M = 1,3),N = MINCOL,MAXCOL)
+         J0 = 3*(MINCOL-1)+1
+         J1 = 3*MAXCOL
+         IFC=1
+         DO 120 IAT = MINCOL,NATfmo+2*NFRG
+            I0 = 3*(IAT-1)
+            IF(IAT.LE.NATfmo) THEN
+CZ             ztmp = x(lfmomas+iat-1)
+               iantmp = int(x(lfmozan+iat-1)+0.1D+00)
+               call zsymnum(cdum8,cdum4(1),iantmp)
+               WRITE(IW,9040) IAT,cdum4(1),cdum8,CLAB(1),
+     *                         (FCM(I0+1,J),J = J0,J1)
+            ELSE
+               IFCT=MOD(IAT-NAT,2)
+               IF(IFCT.EQ.1) THEN
+                 WRITE(IW,9050) IFC,CLAB(1),
+     *                         (FCM(I0+1,J),J = J0,J1)
+               ELSE IF(IFCT.EQ.0) THEN
+                 WRITE(IW,9060) IFC,CLAB(1),
+     *                         (FCM(I0+1,J),J = J0,J1)
+               IFC=IFC+1
+               END IF
+            END IF
+            WRITE(IW,9070) CLAB(2),(FCM(I0+2,J),J = J0,J1)
+            WRITE(IW,9070) CLAB(3),(FCM(I0+3,J),J = J0,J1)
+  120    CONTINUE
+  140 CONTINUE
+C                    TWO SETS OF COLUMNS (TRANSLATION AND ROTATION)
+C                    FOR PRINTING THE FRAGMENT/FRAGMENT BLOCK
+      DO 150 IFRG=1,NFRG
+         WRITE(IW,9080) IFRG
+         WRITE(IW,9030) ((CLAB(M),M = 1,3),N = 1,2)
+         J0 = 3*NAT + 6*(IFRG-1) + 1
+         J1 = J0 + 5
+         DO 130 JFRG = IFRG,NFRG
+            I0 = 3*NAT + 6*(JFRG-1)
+            WRITE(IW,9050) JFRG,CLAB(1),(FCM(I0+1,J),J = J0,J1)
+            WRITE(IW,9070)      CLAB(2),(FCM(I0+2,J),J = J0,J1)
+            WRITE(IW,9070)      CLAB(3),(FCM(I0+3,J),J = J0,J1)
+            WRITE(IW,9060) JFRG,CLAB(1),(FCM(I0+4,J),J = J0,J1)
+            WRITE(IW,9070)      CLAB(2),(FCM(I0+5,J),J = J0,J1)
+            WRITE(IW,9070)      CLAB(3),(FCM(I0+6,J),J = J0,J1)
+  130    CONTINUE
+  150 CONTINUE
+      RETURN
+C
+ 9000 FORMAT(/10X,31(1H-)/10X,'CARTESIAN FORCE CONSTANT MATRIX'/
+     *        10X,31(1H-))
+ 9005 FORMAT(//1X,'THERE ARE FROZEN COORDINATES, ',
+     *'PARTIAL HESSIAN ANALYSIS WILL BE DONE.'//1X,
+     *'FOR THE FROZEN ATOMS AND FRAGMENTS, ',
+     *'DIAGONAL MATRIX ELEMENTS ARE '/1X,'SET TO BE 1.0D-08,',
+     *' ALL THE OTHER MATRIX ELEMENTS RELATED TO FROZEN '/1X,
+     *'ATOMS AND FRAGMENTS ARE SET TO BE ZERO.'//)
+ 9010 FORMAT(/20X,4(12X,I4,11X))
+ 9020 FORMAT( 20X,4(11X,A8,A2,6X))
+ 9030 FORMAT( 20X,4(3X,A4,5X,A4,5X,A4,2X))
+ 9040 FORMAT(I3,3X,A8,A2,A4,12F9.6)
+ 9050 FORMAT(1X,'FRAG.',I3,1X,'TRANS.',A4,12F9.6)
+ 9060 FORMAT(1X,'FRAG.',I3,1X,'ROT.  ',A4,12F9.6)
+ 9070 FORMAT(16X,A4,12F9.6)
+ 9080 FORMAT(/20X,'FRAGMENT',I3,3X,'TRANSLATION',13X,'ROTATION ')
+      END

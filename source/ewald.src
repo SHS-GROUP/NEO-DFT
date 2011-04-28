@@ -1,0 +1,3257 @@
+C  1 MAY 09 - MWS - SYNCH VIRPR COMMON
+C 23 OCT 08 - JMM - ADDED INTERNAL VIRIAL CALC
+C 28 AUG 07 - LVS - 3 VERY SMALL FIXES
+C 20 AUG 07 - LVS - NEW MODULE FOR EWALD SUMS
+C
+C*MODULE EWALD   *DECK EWALDX
+      SUBROUTINE EWALDX
+C
+      IMPLICIT DOUBLE PRECISION (A-H, O-Z)
+C
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      LOGICAL IFEWLD,TNFOIL,EWLDPL
+C
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /EWALD / IFEWLD,TNFOIL,BETA,ELCNST,EPSLN,CUTOFF,CUTLST,
+     *                KMAX,NKVEC,LEVEL,EWLDPL
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+C
+C         SET UP NAMELIST SIMULATION
+      PARAMETER (NNAM=10)
+      DIMENSION QNAM( NNAM )
+      DIMENSION KQNAM( NNAM )
+      DATA EWALD/8HEWALD   /
+      DATA QNAM /8HIFEWLD  ,8HTNFOIL  ,8HBETA    ,8HELCNST  ,
+     *           8HEPSLN   ,8HCUTOFF  ,8HCUTLST  ,8HKMAX    ,8HLEVEL   ,
+     *           8HEWLDPL  /
+      DATA KQNAM/0, 0, 3, 3, 3, 3, 3, 1, 1, 0/
+C
+C*********************************************************
+C**        DRIVER FOR EWALD SUMMATIONS FOR EFP          **
+C**                LYUDMILA V. SLIPCHENKO
+C*********************************************************
+C
+C   *** SET DEFAULT VARIABLE VALUES FOR $EWALD GROUP ***
+C
+      IFEWLD = .FALSE.
+      TNFOIL = .TRUE.
+      EWLDPL = .FALSE.
+C   ---- 5/L
+      BETA = 0.2D+00
+      ELCNST = 1.0D+00
+      EPSLN = 1.0D+00
+      CUTOFF = 1000.0D+00
+      CUTLST = 1000.0D+00
+C  ---- LEVEL OF EWALD SUM METHOD
+C       1 - CHARGE-CHARGE; 2 - ADDED CHARGE-DIPOLE, DIPOLE-DIPOLE
+C       3 - ADDED CHARGE-QUADRUPOLE
+      LEVEL = 1
+      KMAX = 10
+      NKVEC=0
+C
+C   **** READ USER-DEFINED VARIABLES FROM $EWALD GROUP
+C
+      IRET = 0
+      CALL NAMEIO(IR,IRET,EWALD,NNAM,QNAM,KQNAM,
+     *            IFEWLD,TNFOIL,BETA,ELCNST,EPSLN,CUTOFF,CUTLST,KMAX,
+     *            LEVEL,EWLDPL,
+     *                          0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,
+     *            0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,
+     *            0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0)
+      IF ( IRET .EQ. 2 ) THEN
+         IF(MASWRK) WRITE(IW,*) 'ERROR READING $EWALD GROUP'
+         CALL ABRT
+      ENDIF
+C
+C  **** OUTPUT $EWALD VARIABLE VALUES ***
+C
+        IF (MASWRK) THEN
+          WRITE(IW,900)  IFEWLD, TNFOIL,BETA,ELCNST,EPSLN,CUTOFF,
+     *                   CUTLST,LEVEL,KMAX,EWLDPL
+        ENDIF
+C
+C  ---- CALCULATE SELF ENERGIES HERE AND SAVE THEM TO COMMOM/SELFE/
+C  ---- PREPARE K-VECTORS FOR RECIPROCAL SUM
+        IF (IFEWLD) THEN
+           CALL SELFCC
+           CALL KVECTORS
+           IF (EWLDPL) CALL EXCL_FIELD
+        END IF
+C
+  900 FORMAT(/,5X,'$EWALD OPTIONS',/,5X,11('-'),/,/,
+     *         5X,'IFEWLD   = ',L8,  9X,'TINFOIL        = ',L8,  /,
+     *         5X,'BETA    = ',F8.3,9X,'ELECTRIC CONST = ',F8.2,/,
+     *         5X,'EPSILON = ',F8.2,9X,'CUT_OFF        = ',E8.2,/,
+     *         5X,'CUTLIST = ',F8.2,9X,'LEVEL          = ',I4, /,
+     *         5X,'KMAX    = ',I8,9X,'EWLDPL         = ',L8   )
+C
+      RETURN
+      END
+C
+C*MODULE EWALD   *DECK KVECTORS
+      SUBROUTINE KVECTORS
+C
+      IMPLICIT DOUBLE PRECISION (A-H, O-Z)
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      LOGICAL IFEWLD,TNFOIL,EWLDPL
+C
+      PARAMETER (MAXVEC=20000)
+C
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /EFPPBC/ XBOX,YBOX,ZBOX,XCUT,YCUT,ZCUT,RCUT
+     *                ,SWR1,SWR2,ISWF
+      COMMON /EWALD / IFEWLD,TNFOIL,BETA,ELCNST,EPSLN,CUTOFF,CUTLST,
+     *                KMAX,NKVEC,LEVEL,EWLDPL
+      COMMON /EWALD1/ RKEXPEL(MAXVEC),RKVEC(3,MAXVEC)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+C
+      DIMENSION VTMP(3)
+      PARAMETER (ONE=1.0D+00, TWO=2.0D+00)
+C     PARAMETER (PT5=0.5D+00,THREE=3.0D+00)
+C
+      PI=4*ATAN(1.0D+00)
+C
+C   ---- RETURN IF THE WAVE-VECTORS DO NOT NEED TO BE CALCULATED.
+C
+       IF ( NKVEC .GT. 0) RETURN
+C
+C   ---- CALCULATE THE NUMBER OF K-VECTORS (WITHOUT THE CENTRAL BOX
+C           AND TAKING INTO ACCOUNT INVERSES).
+C      NKVEC = ( (2*KMAX(1)+1 )*(2*KMAX(2)+1 )*(2*KMAX(3)+1)-1)/2
+      NKVEC = ( (2*KMAX+1 )*(2*KMAX+1 )*(2*KMAX+1)-1)/2
+      IF(NKVEC .GT. MAXVEC) THEN
+         IF(MASWRK) WRITE(IW,*)'ERROR: NKVEC EXCEEDS MAXVEC. ABORT'
+         CALL ABRT
+      END IF
+C
+      CALL VCLR(RKVEC,1,3*MAXVEC)
+      CALL VCLR(RKEXPEL,1,MAXVEC)
+C      CALL VCLR(RKEXPLJ,1,MAXVEC)
+C
+C  ---- LOOP OVER THE K-VECTORS.
+      N = 0
+      DO 10 IZ = -KMAX,KMAX
+         DO 20 IY = -KMAX,KMAX
+            DO 30 IX = -KMAX,KMAX
+C
+C   ---- SKIP THE CENTRAL BOX.
+               IF(IX.EQ.0 .AND. IY.EQ.0 .AND. IZ.EQ.0) GOTO 30
+C
+C   ---- SAVE THE VECTOR.
+               VTMP(1) = ONE*IX
+               VTMP(2) = ONE*IY
+               VTMP(3) = ONE*IZ
+C
+C   ---- CHECK THE PREVIOUS K-VECTORS FOR THE INVERSE.
+               DO I = 1,N
+                  IF ( VTMP(1).EQ.(-RKVEC(1,I)) .AND.
+     *                 VTMP(2).EQ.(-RKVEC(2,I)) .AND.
+     *                 VTMP(3).EQ.(-RKVEC(3,I))) GOTO 30
+               END DO
+C
+C   ---- SAVE THE VECTOR.
+               N = N + 1
+               DO K=1,3
+                  RKVEC(K,N) = VTMP(K)
+               END DO
+C
+C   ---- END OF THE LOOP.
+  30        CONTINUE
+  20     CONTINUE
+  10  CONTINUE
+C
+C   ---- LOOP OVER THE K-VECTORS.
+      DO I = 1,NKVEC
+C
+C   ---- SCALE RKVEC.
+         RKVEC(1,I)= TWO*PI*RKVEC(1,I)/XBOX
+         RKVEC(2,I)= TWO*PI*RKVEC(2,I)/YBOX
+         RKVEC(3,I)= TWO*PI*RKVEC(3,I)/ZBOX
+C
+C   ---- CALCULATE K2 AND X.
+         RK2 = DDOT(3,RKVEC(1,I),1,RKVEC(1,I),1)
+         X  = SQRT ( RK2 ) / ( TWO * BETA )
+C
+C   ---- CALCULATE SOME ADDITIONAL FACTORS.
+         EXPFAC = EXP ( - X * X )
+C
+C   ---- CALCULATE THE ELECTROSTATIC PREFACTORS.
+         RKEXPEL(I) = EXPFAC / RK2
+C         RKEXPLJ(I) = (PT5 - X*X ) * EXPFAC+SQRT(PI)*X**3 * GMSERFC(X)
+C
+      END DO
+C      WRITE(IW,*)'RKEXPEL=',(RKEXPEL(J),J=1,NKVEC)
+C
+C   ---- SCALE RKEXPEL (WITH A FACTOR OF 2 FOR INVERSES)
+      RCOEFF=TWO*(ELCNST/EPSLN)*(TWO*PI/(XBOX*YBOX*ZBOX))
+      CALL DSCAL(MAXVEC, RCOEFF,RKEXPEL,1)
+C      RCOEFFLJ = -TWO*(SQRT(PI**3)*BETA**3)/(THREE*XBOX*YBOX*ZBOX)
+C      CALL DSCAL(MAXVEC, RCOEFFLJ,RKEXPLJ,1)
+C
+C   ---- SAVE THE BOX-SIZE.
+C      BOXOLD(1) = XBOX
+C      BOXOLD(2) = YBOX
+C      BOXOLD(3) = ZBOX
+C
+C   ---- PRINT OUT SOME INFORMATION IF REQUIRED.
+      IF (MASWRK) WRITE(IW,900) NKVEC
+  900 FORMAT(1X,'NUMBER OF RECIPROCAL SPACE K-VECTORS GENERATED = ',I5)
+C
+      RETURN
+      END
+C
+C*MODULE EWALD   *DECK RECIPR
+      SUBROUTINE RECIPR(ERCPRCC,ERCPRCD,ERCPRDD,ERCPRCQ,ERCPRDQ,
+     *                    ERCPRQQ,ERCPRCO,QGRAD)
+C
+      IMPLICIT DOUBLE PRECISION (A-H, O-Z)
+      LOGICAL QGRAD, IFEWLD,TNFOIL,EWLDPL
+      LOGICAL DOMONO,DODIPO,DOQUAD,DOOCTU
+      LOGICAL GOPARR,DSKWRK,MASWRK
+C
+      PARAMETER (MXFRG=1050, MXFGPT=12000,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+      PARAMETER (MAXVEC=20000)
+C
+      CHARACTER*8 FRGNME
+C
+      COMMON /DOMULT/ DOMONO(MXFGPT),DODIPO(MXFGPT),DOQUAD(MXFGPT),
+     *                DOOCTU(MXFGPT)
+      COMMON /EFMULT/ EFC(3,MXFGPT),EFCHG(2,MXFGPT),EFATRM(MXFGPT),
+     *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
+     *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
+     *                EFOCT(10,MXFGPT),FRGNME(MXFGPT)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /EFPGES/ DESFRG(6,MXFRG)
+      COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
+     *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
+     *                ATORQ(3,MXFRG)
+      COMMON /EWALD / IFEWLD,TNFOIL,BETA,ELCNST,EPSLN,CUTOFF,CUTLST,
+     *                KMAX,NKVEC,LEVEL,EWLDPL
+      COMMON /EWALD1/ RKEXPEL(MAXVEC),RKVEC(3,MAXVEC)
+      COMMON /EWALD2/ COSDIP(MAXVEC),SINDIP(MAXVEC),COSCH(MAXVEC),
+     *                SINCH(MAXVEC),CSDIPI(MAXVEC),SNDIPI(MAXVEC),
+     *                CSDIP1(MAXVEC),SNDIP1(MAXVEC),
+     *                CSDIP2(MAXVEC),SNDIP2(MAXVEC)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /VIRPR / VIR(3), PRXX, PRYY, PRZZ
+C
+C   ---- LOCAL ARRAYS.
+      DIMENSION GCHCH(3),
+     *          GCHDIP(3),GDIPDIP(3),GCHQUAD(3),GCHOCT(3),
+     *          GDIPQUAD(3),GQUQU(3),
+     *          QCHDIP(3),QDIPDIP(3),QCHQUAD(3),
+     *          TCHCH(MAXVEC),TCHDIP(MAXVEC),
+     *          TDIPDIP(MAXVEC),
+     *          COSQUA(MAXVEC),SINQUA(MAXVEC),TCHQUAD(MAXVEC)
+C     *          COSOCT(MAXVEC),SINOCT(MAXVEC),
+C     *          TDIPQUAD(MAXVEC),TQUQU(MAXVEC),
+C     *          TCHOCT(MAXVEC),
+      DIMENSION QUA(6,MXFGPT)
+C     *         ,OCT(10,MXFGPT)
+C
+      PARAMETER (ZERO=0.0D+00, TWO=2.0D+00,THREE=3.0D+00)
+      PARAMETER (ONE=1.0D+00,PT5=0.5D+00,ONEPT5=1.5D+00)
+C
+C      IF (LEVEL.LE. 3) HIGH_EWALD = .FALSE.
+C
+      ERCPRCC = ZERO
+      ERCPRCD = ZERO
+      ERCPRDD = ZERO
+      ERCPRCQ = ZERO
+      ERCPRDQ = ZERO
+      ERCPRQQ = ZERO
+      ERCPRCO = ZERO
+C
+      IF (LEVEL.GE.3) THEN
+C
+C    --- THINGS FOR QUADRUPOLES & OCTOPOLES
+C
+C.... REPLACE THE SECOND MOMENTS OF THE CHARGE DISTRIBUTION ....
+C.... WITH ELECTRIC QUADRUPOLE MOMENT TENSORS               ....
+C.... REPLACE THIRD MOMENTS WITH OCTUPOLE MOMENTS           ....
+C.... SEE BUCKINGHAM, ET AL, "MOLECULAR QUADRUPOLE MOMENTS" ....
+C.... QUART. REV. (LONDON) -13-, 183-214 (1959)             ....
+C.... EQUATION 15.                                          ....
+C
+      DO I = 1,NMTTPT
+        IF(.NOT.DOQUAD(I)) GO TO 210
+        XX = EFQAD(1,I)
+        YY = EFQAD(2,I)
+        ZZ = EFQAD(3,I)
+        XY = EFQAD(4,I)
+        XZ = EFQAD(5,I)
+        YZ = EFQAD(6,I)
+        DUM = XX + YY + ZZ
+        QUA(1,I) = PT5 * (THREE * XX - DUM)
+        QUA(2,I) = PT5 * (THREE * YY - DUM)
+        QUA(3,I) = PT5 * (THREE * ZZ - DUM)
+        QUA(4,I) = ONEPT5 * XY
+        QUA(5,I) = ONEPT5 * XZ
+        QUA(6,I) = ONEPT5 * YZ
+210     CONTINUE
+C        IF (LEVEL .GT.3) THEN
+C        IF(.NOT.DOOCTU(I)) GO TO 242
+C         XXX = EFOCT(1,I) * PT5
+C         YYY = EFOCT(2,I) * PT5
+C         ZZZ = EFOCT(3,I) * PT5
+C         XXY = EFOCT(4,I) * PT5
+C         XXZ = EFOCT(5,I) * PT5
+C         XYY = EFOCT(6,I) * PT5
+C         YYZ = EFOCT(7,I) * PT5
+C         XZZ = EFOCT(8,I) * PT5
+C         YZZ = EFOCT(9,I) * PT5
+C         XYZ = EFOCT(10,I) * PT5
+C         DUMX = XXX + XYY + XZZ
+C         DUMY = XXY + YYY + YZZ
+C         DUMZ = XXZ + YYZ + ZZZ
+C         OCT(1,I) = FIVE * XXX - THREE * DUMX
+C         OCT(2,I) = FIVE * YYY - THREE * DUMY
+C         OCT(3,I) = FIVE * ZZZ - THREE * DUMZ
+C         OCT(4,I) = FIVE * XXY - DUMY
+C         OCT(5,I) = FIVE * XXZ - DUMZ
+C         OCT(6,I) = FIVE * XYY - DUMX
+C         OCT(7,I) = FIVE * YYZ - DUMZ
+C         OCT(8,I) = FIVE * XZZ - DUMX
+C         OCT(9,I) = FIVE * YZZ - DUMY
+C         OCT(10,I) = FIVE * XYZ
+C242      CONTINUE
+C         END IF
+      END DO
+      END IF
+C
+C   ---- INITIALIZATION.
+      CALL VCLR(COSCH,1,MAXVEC)
+      CALL VCLR(SINCH,1,MAXVEC)
+      CALL VCLR(COSDIP,1,MAXVEC)
+      CALL VCLR(SINDIP,1,MAXVEC)
+      CALL VCLR(COSQUA,1,MAXVEC)
+      CALL VCLR(SINQUA,1,MAXVEC)
+      CALL VCLR(TCHCH,1,MAXVEC)
+      CALL VCLR(TCHDIP,1,MAXVEC)
+      CALL VCLR(TDIPDIP,1,MAXVEC)
+      CALL VCLR(TCHQUAD,1,MAXVEC)
+C      CALL VCLR(TDIPQUAD,1,MAXVEC)
+C      CALL VCLR(TQUQU,1,MAXVEC)
+C      CALL VCLR(TCHOCT,1,MAXVEC)
+C
+C     ----- INTIALIZE PARALLEL -----
+      IPCOUNT = ME - 1
+      DO 300 IKVEC = 1,NKVEC
+C
+C   ---- LOOP OVER THE ATOMS.
+         DO 280 IM = 1,NFRG
+C
+C   ---- GO PARALLEL!
+            IF (GOPARR) THEN
+               IPCOUNT = IPCOUNT + 1
+               IF (MOD(IPCOUNT,NPROC).NE.0) GO TO 275
+            END IF
+C
+            IC1 = LSTMPTS(IM)-1
+            DO 270 IPX=1,NMPTS(IM)
+               IC1=IC1+1
+               Q = EFCHG(1,IC1)+EFCHG(2,IC1)
+C
+C   ---- CALCULATE THE DOT PRODUCTS WITH THE K-VECTOR.
+               RK = DDOT(3,RKVEC(1,IKVEC),1,EFC(1,IC1),1)
+               DK=ZERO
+               IF (LEVEL .GE. 2 .AND. DODIPO(IC1)) THEN
+               DK = DDOT(3,EFDIP(1,IC1),1,RKVEC(1,IKVEC),1)
+               END IF
+C
+               QUADK = ZERO
+               IF (LEVEL .GE.3 .AND. DOQUAD(IC1)) THEN
+C   ---- CALCULATE THE DOT PRODUCT OF THE QUADRUPOLE WITH K-VECTORS,
+               QUADK = QUADK+RKVEC(1,IKVEC)*(RKVEC(1,IKVEC)*QUA(1,IC1)+
+     *                 RKVEC(2,IKVEC)*QUA(4,IC1)+
+     *                 RKVEC(3,IKVEC)*QUA(5,IC1))
+               QUADK = QUADK+RKVEC(2,IKVEC)*(RKVEC(1,IKVEC)*QUA(4,IC1)+
+     *                 RKVEC(2,IKVEC)*QUA(2,IC1)+
+     *                 RKVEC(3,IKVEC)*QUA(6,IC1))
+               QUADK = QUADK+RKVEC(3,IKVEC)*(RKVEC(1,IKVEC)*QUA(5,IC1)+
+     *                 RKVEC(2,IKVEC)*QUA(6,IC1)+
+     *                 RKVEC(3,IKVEC)*QUA(3,IC1))
+C
+               END IF
+C               IF (HIGH_EWALD) THEN
+C   ---- CALCULATE THE DOT PRODUCT OF THE OCTOPOLE WITH K-VECTORS
+C               OCTK = ZERO
+C               OCTK = OCTK + RKVEC(1,IKVEC)*RKVEC(1,IKVEC)*
+C     *                RKVEC(1,IKVEC)*OCT(1,IC1)+
+C     *                RKVEC(2,IKVEC)*RKVEC(2,IKVEC)*
+C     *                RKVEC(2,IKVEC)*OCT(2,IC1)+
+C     *                RKVEC(3,IKVEC)*RKVEC(3,IKVEC)*
+C     *                RKVEC(3,IKVEC)*OCT(3,IC1)
+C               OCTK = OCTK + THREE*(RKVEC(1,IKVEC)*RKVEC(1,IKVEC)*
+C     *                RKVEC(2,IKVEC)*OCT(4,IC1)+
+C     *                RKVEC(1,IKVEC)*RKVEC(1,IKVEC)*
+C     *                RKVEC(3,IKVEC)*OCT(5,IC1)+
+C     *                RKVEC(1,IKVEC)*RKVEC(2,IKVEC)*
+C     *                RKVEC(2,IKVEC)*OCT(6,IC1)+
+C     *                RKVEC(2,IKVEC)*RKVEC(2,IKVEC)*
+C     *                RKVEC(3,IKVEC)*OCT(7,IC1)+
+C     *                RKVEC(1,IKVEC)*RKVEC(3,IKVEC)*
+C     *                RKVEC(3,IKVEC)*OCT(8,IC1)+
+C     *                RKVEC(2,IKVEC)*RKVEC(3,IKVEC)*
+C     *                RKVEC(3,IKVEC)*OCT(9,IC1))
+C               OCTK = OCTK + SIX*(RKVEC(1,IKVEC)*RKVEC(2,IKVEC)*
+C     *                RKVEC(3,IKVEC)*OCT(10,IC1))
+C               END IF
+C
+C
+C   ---- CALCULATE THE COS AND SIN.
+               COSKR = COS ( RK )
+               SINKR = SIN ( RK )
+C
+C   ---- CALCULATE THE CONTRIBUTIONS TO THE COSINE AND SINE FACTORS.
+               COSCH(IKVEC) = COSCH(IKVEC) + Q*COSKR
+               SINCH(IKVEC) = SINCH(IKVEC) + Q*SINKR
+               IF (LEVEL .GE. 2 .AND. DK.NE.ZERO) THEN
+               COSDIP(IKVEC) = COSDIP(IKVEC) + DK*COSKR
+               SINDIP(IKVEC) = SINDIP(IKVEC) + DK*SINKR
+               END IF
+               IF (LEVEL.GE.3 .AND. DOQUAD(IC1)) THEN
+               COSQUA(IKVEC) = COSQUA(IKVEC) + QUADK*COSKR
+               SINQUA(IKVEC) = SINQUA(IKVEC) + QUADK*SINKR
+               END IF
+C               IF (HIGH_EWALD)  THEN
+C               COSOCT(IKVEC) = COSOCT(IKVEC) + OCTK*COSKR
+C               SINOCT(IKVEC) = SINOCT(IKVEC) + OCTK*SINKR
+C               END IF
+C
+  270       CONTINUE
+C   ----  END PARALLEL LOOP
+  275       CONTINUE
+  280    CONTINUE
+C
+C     ----- SUM UP PARTIAL CONTRIBUTIONS IF PARALLEL -----
+         IF (GOPARR) THEN
+            CALL DDI_GSUMF(901,COSCH(IKVEC),1)
+            CALL DDI_GSUMF(902,SINCH(IKVEC),1)
+            IF (LEVEL .GE. 2) THEN
+               CALL DDI_GSUMF(903,COSDIP(IKVEC),1)
+               CALL DDI_GSUMF(904,SINDIP(IKVEC),1)
+            END IF
+            IF (LEVEL .GE. 3) THEN
+               CALL DDI_GSUMF(905,COSQUA(IKVEC),1)
+               CALL DDI_GSUMF(906,SINQUA(IKVEC),1)
+            END IF
+         END IF
+C
+         TCHCH(IKVEC)=TCHCH(IKVEC)+COSCH(IKVEC)*COSCH(IKVEC)+
+     *              SINCH(IKVEC)*SINCH(IKVEC)
+         IF (LEVEL .GE. 2) THEN
+            TCHDIP(IKVEC)=TCHDIP(IKVEC)+SINCH(IKVEC)*COSDIP(IKVEC)-
+     *              COSCH(IKVEC)*SINDIP(IKVEC)
+            TDIPDIP(IKVEC)=TDIPDIP(IKVEC)+COSDIP(IKVEC)*COSDIP(IKVEC)+
+     *              SINDIP(IKVEC)*SINDIP(IKVEC)
+         END IF
+         IF (LEVEL .GE. 3) THEN
+            TCHQUAD(IKVEC)=TCHQUAD(IKVEC)+COSCH(IKVEC)*COSQUA(IKVEC)+
+     *              SINCH(IKVEC)*SINQUA(IKVEC)
+         END IF
+C         IF (HIGH_EWALD) THEN
+C         TDIPQUAD(IKVEC)=TDIPQUAD(IKVEC)+SINDIP(IKVEC)*COSQUA(IKVEC)-
+C     *              COSDIP(IKVEC)*SINQUA(IKVEC)
+C         TQUQU(IKVEC)=TQUQU(IKVEC)+COSQUA(IKVEC)*COSQUA(IKVEC)+
+C     *              SINQUA(IKVEC)*SINQUA(IKVEC)
+C         TCHOCT(IKVEC)=TCHOCT(IKVEC)+COSCH(IKVEC)*SINOCT(IKVEC)-
+C     *              SINCH(IKVEC)*COSOCT(IKVEC)
+C         END IF
+C
+  300 CONTINUE
+C
+C   ---- CALCULATE ENERGIES OF THE RECIPROCAL SPACE TERMS
+      ERCPRCC = DDOT(NKVEC,RKEXPEL,1,TCHCH,1)
+      IF (LEVEL .GE. 2) THEN
+         ERCPRCD = TWO*DDOT(NKVEC,RKEXPEL,1,TCHDIP,1)
+         ERCPRDD = DDOT(NKVEC,RKEXPEL,1,TDIPDIP,1)
+      END IF
+      IF (LEVEL .GE. 3) THEN
+         ERCPRCQ = -TWO/THREE*DDOT(NKVEC,RKEXPEL,1,TCHQUAD,1)
+      END IF
+C      IF (HIGH_EWALD) THEN
+C      ERCPRDQ = TWO/THREE*DDOT(NKVEC,RKEXPEL,1,TDIPQUAD,1)
+C      ERCPRQQ = ONE/9.0D+00*DDOT(NKVEC,RKEXPEL,1,TQUQU,1)
+C      ERCPRCO = TWO/15.0D+00*DDOT(NKVEC,RKEXPEL,1,TCHOCT,1)
+C      END IF
+C
+C   ---- CALCULATION OF THE GRADIENT.
+      IF ( QGRAD ) THEN
+C        INITIALIZE PARALLEL
+         IPCOUNT = ME -1
+C
+         DO 180 IM = 1,NFRG
+C   ---- GO PARALLEL!
+            IF (GOPARR) THEN
+               IPCOUNT = IPCOUNT + 1
+               IF (MOD(IPCOUNT,NPROC).NE.0) GO TO 175
+            END IF
+C
+C            CQTX=ZERO
+C            CQTY=ZERO
+C            CQTZ=ZERO
+            IC1 = LSTMPTS(IM)-1
+            DO 170 IPX=1,NMPTS(IM)
+C
+               IC1=IC1+1
+               Q = EFCHG(1,IC1)+EFCHG(2,IC1)
+C
+C   ---- INITIALIZATION.
+               DO I=1,3
+                  GCHCH(I)=ZERO
+                  GCHDIP(I)=ZERO
+                  GCHQUAD(I)=ZERO
+                  GDIPDIP(I)=ZERO
+                  GCHOCT(I)=ZERO
+                  GDIPQUAD(I)=ZERO
+                  GQUQU(I)=ZERO
+                  QCHDIP(I) = ZERO
+                  QDIPDIP(I) = ZERO
+                  QCHQUAD(I) = ZERO
+               END DO
+               CONX=ZERO
+               CONY=ZERO
+               CONZ=ZERO
+C
+C   ---- LOOP OVER THE K-VECTORS.
+               DO 160 IKVEC = 1,NKVEC
+C
+C   ---- CALCULATE DOT PRODUCT OF THE ATOM POSITION AND THE K-VECTOR.
+                  RK = DDOT(3,RKVEC(1,IKVEC),1,EFC(1,IC1),1)
+                  COSKR = COS ( RK )
+                  SINKR = SIN ( RK )
+C
+                  DK = ZERO
+                  DKTORQ1=ZERO
+                  DKTORQ2=ZERO
+                  DKTORQ3=ZERO
+                  IF (LEVEL .GE. 2 .AND. DODIPO(IC1) ) THEN
+C   ---- CALCULATE THE DOT PRODUCT OF THE DIPOLE AND THE K-VECTOR.
+                     DK = DDOT(3,EFDIP(1,IC1),1,RKVEC(1,IKVEC),1)
+                     DKTORQ1 = EFDIP(2,IC1)*RKVEC(3,IKVEC)-
+     *                         EFDIP(3,IC1)*RKVEC(2,IKVEC)
+                     DKTORQ2 = EFDIP(3,IC1)*RKVEC(1,IKVEC)-
+     *                         EFDIP(1,IC1)*RKVEC(3,IKVEC)
+                     DKTORQ3 = EFDIP(1,IC1)*RKVEC(2,IKVEC)-
+     *                         EFDIP(2,IC1)*RKVEC(1,IKVEC)
+                  END IF
+C
+               QUADK = ZERO
+               IF (LEVEL .GE.3 .AND. DOQUAD(IC1)) THEN
+C   ---- CALCULATE THE DOT PRODUCT OF THE QUADRUPOLE WITH K-VECTORS,
+C
+                  QUA_KX = RKVEC(1,IKVEC)*QUA(1,IC1)+
+     *                  RKVEC(2,IKVEC)*QUA(4,IC1)+
+     *                  RKVEC(3,IKVEC)*QUA(5,IC1)
+C
+                  QUA_KY = RKVEC(1,IKVEC)*QUA(4,IC1)+
+     *                  RKVEC(2,IKVEC)*QUA(2,IC1)+
+     *                  RKVEC(3,IKVEC)*QUA(6,IC1)
+C
+                  QUA_KZ = RKVEC(1,IKVEC)*QUA(5,IC1)+
+     *                  RKVEC(2,IKVEC)*QUA(6,IC1)+
+     *                  RKVEC(3,IKVEC)*QUA(3,IC1)
+C
+                  QUADK = RKVEC(1,IKVEC)*QUA_KX + RKVEC(2,IKVEC)*QUA_KY+
+     *                 RKVEC(3,IKVEC)*QUA_KZ
+C
+C   ---- QUADRUPOLE COMPONENTS OF TORQUES
+                  QKTORQ1 = QUA_KY*RKVEC(3,IKVEC)-QUA_KZ*RKVEC(2,IKVEC)
+                  QKTORQ2 = QUA_KZ*RKVEC(1,IKVEC)-QUA_KX*RKVEC(3,IKVEC)
+                  QKTORQ3 = QUA_KX*RKVEC(2,IKVEC)-QUA_KY*RKVEC(1,IKVEC)
+C
+C               QUADK = QUADK+RKVEC(1,IKVEC)*(RKVEC(1,IKVEC)*QUA(1,IC1)+
+C     *                 RKVEC(2,IKVEC)*QUA(4,IC1)+
+C     *                 RKVEC(3,IKVEC)*QUA(5,IC1))
+C               QUADK = QUADK+RKVEC(2,IKVEC)*(RKVEC(1,IKVEC)*QUA(4,IC1)+
+C     *                 RKVEC(2,IKVEC)*QUA(2,IC1)+
+C     *                 RKVEC(3,IKVEC)*QUA(6,IC1))
+C               QUADK = QUADK+RKVEC(3,IKVEC)*(RKVEC(1,IKVEC)*QUA(5,IC1)+
+C     *                 RKVEC(2,IKVEC)*QUA(6,IC1)+
+C     *                 RKVEC(3,IKVEC)*QUA(3,IC1))
+               END IF
+C
+C               OCTK = ZERO
+C               IF (HIGH_EWALD) THEN
+C   ---- CALCULATE THE DOT PRODUCT OF THE OCTOPOLE WITH K-VECTORS
+C               OCTK = OCTK + RKVEC(1,IKVEC)*RKVEC(1,IKVEC)*
+C     *                RKVEC(1,IKVEC)*OCT(1,IC1)+
+C     *                RKVEC(2,IKVEC)*RKVEC(2,IKVEC)*
+C     *                RKVEC(2,IKVEC)*OCT(2,IC1)+
+C     *                RKVEC(3,IKVEC)*RKVEC(3,IKVEC)*
+C     *                RKVEC(3,IKVEC)*OCT(3,IC1)
+C               OCTK = OCTK + THREE*(RKVEC(1,IKVEC)*RKVEC(1,IKVEC)*
+C     *                RKVEC(2,IKVEC)*OCT(4,IC1)+
+C     *                RKVEC(1,IKVEC)*RKVEC(1,IKVEC)*
+C     *                RKVEC(3,IKVEC)*OCT(5,IC1)+
+C     *                RKVEC(1,IKVEC)*RKVEC(2,IKVEC)*
+C     *                RKVEC(2,IKVEC)*OCT(6,IC1)+
+C     *                RKVEC(2,IKVEC)*RKVEC(2,IKVEC)*
+C     *                RKVEC(3,IKVEC)*OCT(7,IC1)+
+C     *                RKVEC(1,IKVEC)*RKVEC(3,IKVEC)*
+C     *                RKVEC(3,IKVEC)*OCT(8,IC1)+
+C     *                RKVEC(2,IKVEC)*RKVEC(3,IKVEC)*
+C     *                RKVEC(3,IKVEC)*OCT(9,IC1))
+C               OCTK = OCTK + SIX*(RKVEC(1,IKVEC)*RKVEC(2,IKVEC)*
+C     *                RKVEC(3,IKVEC)*OCT(10,IC1))
+C               END IF
+C
+C   ---- CALCULATE THE CONTRIBUTION TO THE ELECTROSTATIC GRADIENT.
+                DO I=1,3
+C   ---- CHARGE-CHARGE
+                  GCHCH(I)=GCHCH(I)+RKEXPEL(IKVEC)*RKVEC(I,IKVEC)*
+     *                      (COSCH(IKVEC)*SINKR-SINCH(IKVEC)*COSKR)
+                END DO
+C                  WRITE(6,*)'SINKR=',SINKR,'COSKR=',COSKR
+C   ---- CHARGE-DIPOLE & DIPOLE-DIPOLE
+               IF (LEVEL .GE. 2) THEN
+                  DO I=1,3
+                     GCHDIP(I)=GCHDIP(I)+RKEXPEL(IKVEC)*RKVEC(I,IKVEC)*
+     *                 (DK*SINCH(IKVEC)*SINKR+DK*COSCH(IKVEC)*COSKR
+     *                 -Q*COSDIP(IKVEC)*COSKR-Q*SINDIP(IKVEC)*SINKR)
+C
+                     IF (DODIPO(IC1)) THEN
+                         GDIPDIP(I)=GDIPDIP(I)+RKEXPEL(IKVEC)*
+     *                              RKVEC(I,IKVEC)*DK*(COSDIP(IKVEC)*
+     *                              SINKR-SINDIP(IKVEC)*COSKR)
+                     END IF
+                  END DO
+C
+                  IF (DODIPO(IC1)) THEN
+                     QCHDIP(1)=QCHDIP(1)+RKEXPEL(IKVEC)*DKTORQ1*
+     *                 (SINCH(IKVEC)*COSKR-COSCH(IKVEC)*SINKR)
+                     QCHDIP(2)=QCHDIP(2)+RKEXPEL(IKVEC)*DKTORQ2*
+     *                 (SINCH(IKVEC)*COSKR-COSCH(IKVEC)*SINKR)
+                     QCHDIP(3)=QCHDIP(3)+RKEXPEL(IKVEC)*DKTORQ3*
+     *                 (SINCH(IKVEC)*COSKR-COSCH(IKVEC)*SINKR)
+C
+                     QDIPDIP(1)=QDIPDIP(1)+RKEXPEL(IKVEC)*DKTORQ1*
+     *                 (COSDIP(IKVEC)*COSKR+SINDIP(IKVEC)*SINKR)
+                     QDIPDIP(2)=QDIPDIP(2)+RKEXPEL(IKVEC)*DKTORQ2*
+     *                 (COSDIP(IKVEC)*COSKR+SINDIP(IKVEC)*SINKR)
+                     QDIPDIP(3)=QDIPDIP(3)+RKEXPEL(IKVEC)*DKTORQ3*
+     *                 (COSDIP(IKVEC)*COSKR+SINDIP(IKVEC)*SINKR)
+                  END IF
+               END IF
+C
+               IF (LEVEL .GE. 3 ) THEN
+C   ---- CHARGE-QUADRUPOLE
+                  DO I=1,3
+                  GCHQUAD(I)=GCHQUAD(I)+RKEXPEL(IKVEC)*RKVEC(I,IKVEC)*
+     *              (Q*SINQUA(IKVEC)*COSKR-Q*COSQUA(IKVEC)*SINKR
+     *              +QUADK*SINCH(IKVEC)*COSKR-QUADK*COSCH(IKVEC)*SINKR)
+                  END DO
+C
+                  IF (DOQUAD(IC1)) THEN
+                     QCHQUAD(1)=QCHQUAD(1)+RKEXPEL(IKVEC)*QKTORQ1*
+     *                    (COSCH(IKVEC)*COSKR+SINCH(IKVEC)*SINKR)
+                     QCHQUAD(2)=QCHQUAD(2)+RKEXPEL(IKVEC)*QKTORQ2*
+     *                    (COSCH(IKVEC)*COSKR+SINCH(IKVEC)*SINKR)
+                     QCHQUAD(3)=QCHQUAD(3)+RKEXPEL(IKVEC)*QKTORQ3*
+     *                    (COSCH(IKVEC)*COSKR+SINCH(IKVEC)*SINKR)
+                  END IF
+               END IF
+C
+C                  IF (HIGH_EWALD) THEN
+C   ---- CHARGE-OCTOPOLE
+C                  GCHOCT(I)=GCHOCT(I)+RKEXPEL(IKVEC)*RKVEC(I,IKVEC)*
+C     *              (-Q*SINOCT(IKVEC)*SINKR-Q*COSOCT(IKVEC)*COSKR
+C     *              +OCTK*COSCH(IKVEC)*COSKR+OCTK*SINCH(IKVEC)*SINKR)
+C
+C   ---- DIPOLE-QUADRUPOLE
+C                 GDIPQUAD(I)=GDIPQUAD(I)+RKEXPEL(IKVEC)*RKVEC(I,IKVEC)*
+C     *              (-DK*SINQUA(IKVEC)*SINKR-DK*COSQUA(IKVEC)*COSKR
+C     *              +QUADK*COSDIP(IKVEC)*COSKR
+C     *              +QUADK*SINDIP(IKVEC)*SINKR)
+C
+C   ---- QUADRUPOLE-QUADRUPOLE
+C                  GQUQU(I)=GQUQU(I)+RKEXPEL(IKVEC)*RKVEC(I,IKVEC)*
+C     *                      (COSQUA(IKVEC)*SINKR-SINQUA(IKVEC)*COSKR)
+C                  END IF
+C
+  160          CONTINUE
+C
+C   ---- ADD IN THE CONTRIBUTION TO THE GRADIENT.
+             CONX=-TWO*(Q*GCHCH(1)+GCHDIP(1)+GDIPDIP(1)+
+     *            ONE/THREE*GCHQUAD(1)+ONE/15.0D+00*GCHOCT(1)+
+     *            ONE/THREE*GDIPQUAD(1)+ONE/THREE*QUADK*GQUQU(1))
+             CONY=-TWO*(Q*GCHCH(2)+GCHDIP(2)+GDIPDIP(2)+
+     *            ONE/THREE*GCHQUAD(2)+ONE/15.0D+00*GCHOCT(2)+
+     *            ONE/THREE*GDIPQUAD(2)+ONE/THREE*QUADK*GQUQU(2))
+             CONZ=-TWO*(Q*GCHCH(3)+GCHDIP(3)+GDIPDIP(3)+
+     *            ONE/THREE*GCHQUAD(3)+ONE/15.0D+00*GCHOCT(3)+
+     *            ONE/THREE*GDIPQUAD(3)+ONE/THREE*QUADK*GQUQU(3))
+C
+C   ---- TORQUES
+             TORQX = TWO*(QCHDIP(1)+QDIPDIP(1)-TWO/THREE*QCHQUAD(1))
+             TORQY = TWO*(QCHDIP(2)+QDIPDIP(2)-TWO/THREE*QCHQUAD(2))
+             TORQZ = TWO*(QCHDIP(3)+QDIPDIP(3)-TWO/THREE*QCHQUAD(3))
+C             TORQX = TWO*(QCHDIP(1)+QDIPDIP(1))
+C             TORQY = TWO*(QCHDIP(2)+QDIPDIP(2))
+C             TORQZ = TWO*(QCHDIP(3)+QDIPDIP(3))
+C
+C             CQTX= CQTX -TWO*TWO/THREE*QCHQUAD(1)
+C             CQTY= CQTY -TWO*TWO/THREE*QCHQUAD(2)
+C             CQTZ= CQTZ -TWO*TWO/THREE*QCHQUAD(3)
+C
+C
+
+            VIR(1) = VIR(1)     + CONX
+            VIR(2) = VIR(2)     + CONY
+            VIR(3) = VIR(3)     + CONZ
+C
+             DESFRG(1,IM) = DESFRG(1,IM) + CONX
+             DESFRG(2,IM) = DESFRG(2,IM) + CONY
+             DESFRG(3,IM) = DESFRG(3,IM) + CONZ
+             DESFRG(4,IM) =  DESFRG(4,IM) +
+     *                      (CONZ*(EFC(2,IC1)-EFCENT(2,IM))
+     *                      -CONY*(EFC(3,IC1)-EFCENT(3,IM)))
+     *                      + TORQX
+             DESFRG(5,IM) =  DESFRG(5,IM) +
+     *                      (CONX*(EFC(3,IC1)-EFCENT(3,IM))
+     *                      -CONZ*(EFC(1,IC1)-EFCENT(1,IM)))
+     *                      + TORQY
+             DESFRG(6,IM) = DESFRG(6,IM) +
+     *                      (CONY*(EFC(1,IC1)-EFCENT(1,IM))
+     *                      -CONX*(EFC(2,IC1)-EFCENT(2,IM)))
+     *                      + TORQZ
+  170       CONTINUE
+C         IF (IM.EQ.1) THEN
+C            WRITE(6,*)'TORQUES',CQTX,CQTY,CQTZ
+C            WRITE(6,*)'GRAD - RECIPR1-1',(GRAD(I,1), I=1,6)
+C            WRITE(6,*)'GRAD - RECIPR1-2',(GRAD(I,2), I=1,6)
+C         END IF
+  175       CONTINUE
+C
+  180    CONTINUE
+      END IF
+C
+C      END ROUTINE RECIPROCAL
+      RETURN
+      END
+C
+C*MODULE EWALD   *DECK RECIPR_FIELD
+      SUBROUTINE RECIPR_FIELD
+C
+      IMPLICIT DOUBLE PRECISION (A-H, O-Z)
+      LOGICAL IFEWLD,TNFOIL,EWLDPL
+      LOGICAL GOPARR,DSKWRK,MASWRK
+C
+      PARAMETER (MXFRG=1050, MXFGPT=12000, MXIFRQ=12,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+      PARAMETER (MAXVEC=20000)
+C
+      CHARACTER*8 POLNAM,DPOLNAM
+C
+      COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
+     *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
+     *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
+     *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ*MXFGPT),
+     *                POLSCR(MXFGPT),IPLSCR,INDSCR
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /EWALD / IFEWLD,TNFOIL,BETA,ELCNST,EPSLN,CUTOFF,CUTLST,
+     *                KMAX,NKVEC,LEVEL,EWLDPL
+      COMMON /EWALD1/ RKEXPEL(MAXVEC),RKVEC(3,MAXVEC)
+      COMMON /EWALD2/ COSDIP(MAXVEC),SINDIP(MAXVEC),COSCH(MAXVEC),
+     *                SINCH(MAXVEC),CSDIPI(MAXVEC),SNDIPI(MAXVEC),
+     *                CSDIP1(MAXVEC),SNDIP1(MAXVEC),
+     *                CSDIP2(MAXVEC),SNDIP2(MAXVEC)
+      COMMON /EWFLD / RCPFLD(3,MXFGPT),RCPIIFLD1(3,MXFGPT),
+     *                RCPIIFLD2(3,MXFGPT), TNFLD(3),
+     *                TNIIFLD1(3),TNIIFLD2(3),
+     *                SELFFLD1(3,MXFGPT),SELFFLD2(3,MXFGPT),
+     *                EXCLFLD(3,MXFGPT),
+     *                EXCLIIFLD1(3,MXFGPT),EXCLIIFLD2(3,MXFGPT)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+C   ---- LOCAL ARRAYS.
+      DIMENSION GCHDIP(3),GDIPDIP(3)
+C     * ,GDIPQUAD(3)
+C      DIMENSION QUA(6,MXFGPT)
+C
+      PARAMETER (ZERO=0.0D+00, TWO=2.0D+00)
+C      PARAMETER (ONE=1.0D+00,SIX=6.0D+00,PT5=0.5D+00,ONEPT5=1.5D+00)
+C
+      CALL VCLR(RCPFLD,1,MXFGPT*3)
+C
+      IF (LEVEL. LT. 2) RETURN
+C
+         IPCOUNT = ME -1
+         IC1 = 0
+         DO 180 IM = 1,NFRG
+            DO 170 IPX=1,NPPTS(IM)
+C
+               IC1=IC1+1
+C   ---- GO PARALLEL!
+               IF (GOPARR) THEN
+                  IPCOUNT = IPCOUNT + 1
+                  IF (MOD(IPCOUNT,NPROC).NE.0) GO TO 170
+               END IF
+C
+C   ---- INITIALIZATION.
+               DO I=1,3
+                  GCHDIP(I)=ZERO
+                  GDIPDIP(I)=ZERO
+C                  GDIPQUAD(I)=ZERO
+               END DO
+C
+C   ---- LOOP OVER THE K-VECTORS.
+               DO 160 IKVEC = 1,NKVEC
+C
+C   ---- CALCULATE DOT PRODUCT OF THE ATOM POSITION AND THE K-VECTOR.
+                  RK = DDOT(3,RKVEC(1,IKVEC),1,EFP(1,IC1),1)
+                  COSKR = COS ( RK )
+                  SINKR = SIN ( RK )
+C
+C   ---- CALCULATE THE CONTRIBUTION TO THE FIELD
+C   ---- CHARGE-DIPOLE & DIPOLE-DIPOLE
+               IF (LEVEL .GE. 2) THEN
+                  DO I=1,3
+                   GCHDIP(I)=GCHDIP(I)+RKEXPEL(IKVEC)*RKVEC(I,IKVEC)*
+     *                 (SINCH(IKVEC)*COSKR-COSCH(IKVEC)*SINKR)
+C
+                   GDIPDIP(I)=GDIPDIP(I)+RKEXPEL(IKVEC)*RKVEC(I,IKVEC)*
+     *                       (COSDIP(IKVEC)*COSKR+SINDIP(IKVEC)*SINKR)
+                  END DO
+               END IF
+C
+C                  IF (HIGH_EWALD) THEN
+C   ---- DIPOLE-QUADRUPOLE
+C                 GDIPQUAD(I)=GDIPQUAD(I)+RKEXPEL(IKVEC)*RKVEC(I,IKVEC)*
+C     *              (-DK*SINQUA(IKVEC)*SINKR-DK*COSQUA(IKVEC)*COSKR
+C     *              +QUADK*COSDIP(IKVEC)*COSKR
+C     *              +QUADK*SINDIP(IKVEC)*SINKR)
+C
+  160          CONTINUE
+C
+C   ---- ADD IN THE CONTRIBUTION TO THE FIELD
+             RCPFLD(1,IC1)=-TWO*(GCHDIP(1)+GDIPDIP(1))
+             RCPFLD(2,IC1)=-TWO*(GCHDIP(2)+GDIPDIP(2))
+             RCPFLD(3,IC1)=-TWO*(GCHDIP(3)+GDIPDIP(3))
+C
+  170       CONTINUE
+  180    CONTINUE
+C
+         IF (GOPARR) THEN
+            CALL DDI_GSUMF(901,RCPFLD,3*MXFGPT)
+         END IF
+C
+C       WRITE(6,*) 'RCPFLD',(RCPFLD(I,1),I=1,3),
+C     *       (RCPFLD(I,2),I=1,3),(RCPFLD(I,3),I=1,3)
+      RETURN
+      END
+C
+C*MODULE EWALD   *DECK RECIPR_POLGRD
+      SUBROUTINE RECIPR_POLGRAD
+C
+      IMPLICIT DOUBLE PRECISION (A-H, O-Z)
+      LOGICAL IFEWLD,TNFOIL,EWLDPL
+      LOGICAL GOPARR,DSKWRK,MASWRK
+C
+      PARAMETER (MXFRG=1050, MXFGPT=12000, MXIFRQ=12,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+      PARAMETER (MAXVEC=20000)
+C
+      CHARACTER*8 POLNAM,DPOLNAM
+C
+      COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
+     *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
+     *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
+     *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ*MXFGPT),
+     *                POLSCR(MXFGPT),IPLSCR,INDSCR
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
+     *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
+     *                ATORQ(3,MXFRG)
+      COMMON /EFPGES/ DESFRG(6,MXFRG)
+      COMMON /EWALD / IFEWLD,TNFOIL,BETA,ELCNST,EPSLN,CUTOFF,CUTLST,
+     *                KMAX,NKVEC,LEVEL,EWLDPL
+      COMMON /EWALD1/ RKEXPEL(MAXVEC),RKVEC(3,MAXVEC)
+      COMMON /EWALD2/ COSDIP(MAXVEC),SINDIP(MAXVEC),COSCH(MAXVEC),
+     *                SINCH(MAXVEC),CSDIPI(MAXVEC),SNDIPI(MAXVEC),
+     *                CSDIP1(MAXVEC),SNDIP1(MAXVEC),
+     *                CSDIP2(MAXVEC),SNDIP2(MAXVEC)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /VIRPR / VIR(3), PRXX, PRYY, PRZZ
+C
+C   ---- LOCAL ARRAYS.
+      DIMENSION GCHDIP(3),GDIPDIP(3),QCHDIP(3),QDIPDIP(3)
+C     *       ,QD(3),GD(3)
+C      DIMENSION GRAD(6,MXFRG)
+C
+      PARAMETER (ZERO=0.0D+00, TWO=2.0D+00)
+C      PARAMETER (ONE=1.0D+00,SIX=6.0D+00,PT5=0.5D+00,ONEPT5=1.5D+00)
+C
+C   ------ CALCULATES RECIPROCAL PART OF GRADIENTS ON INDUCED DIPOLES
+C   ------ DUE TO STATIC CHARGE AND DIPOLE AND INDUCED DIPOLE
+C   ------ NOTE! THERE IS A SEPARATE ROUTINE CALC_SNDIP
+C   ------ WHICH PREPARES CSDIPI AND SNDIPI
+C
+C        CALL VCLR(GRAD,1,6*MXFRG)
+C        WRITE(6,*)'RECIPR_POLGRAD_0',(DESFRG(I,1),I=1,6)
+      IF (LEVEL. LT. 2) RETURN
+C
+      CALL CALC_SNDIP
+C
+         IPCOUNT = ME -1
+         IC1 = 0
+         DO 180 IM = 1,NFRG
+            DO 170 IPX=1,NPPTS(IM)
+C
+               IC1=IC1+1
+C   ---- GO PARALLEL!
+               IF (GOPARR) THEN
+                  IPCOUNT = IPCOUNT + 1
+                  IF (MOD(IPCOUNT,NPROC).NE.0) GO TO 170
+               END IF
+C
+               DIPX = (DIND(1,IC1)+DINDD(1,IC1))/TWO
+               DIPY = (DIND(2,IC1)+DINDD(2,IC1))/TWO
+               DIPZ = (DIND(3,IC1)+DINDD(3,IC1))/TWO
+C
+C   ---- INITIALIZATION.
+               DO I=1,3
+                  GCHDIP(I)=ZERO
+                  GDIPDIP(I)=ZERO
+                  QCHDIP(I)=ZERO
+                  QDIPDIP(I)=ZERO
+C                  GD(I) = ZERO
+C                  QD(I) = ZERO
+C                  GDIPQUAD(I)=ZERO
+               END DO
+C
+C   ---- LOOP OVER THE K-VECTORS.
+               DO 160 IKVEC = 1,NKVEC
+C
+C   ---- CALCULATE DOT PRODUCT OF THE ATOM POSITION AND THE K-VECTOR.
+                  RK = DDOT(3,RKVEC(1,IKVEC),1,EFP(1,IC1),1)
+                  COSKR = COS ( RK )
+                  SINKR = SIN ( RK )
+                  DK = RKVEC(1,IKVEC)*DIPX+RKVEC(2,IKVEC)*DIPY+
+     *                  RKVEC(3,IKVEC)*DIPZ
+                  DKD = DDOT(3,RKVEC(1,IKVEC),1,DIND(1,IC1),1)
+                  DKDD = DDOT(3,RKVEC(1,IKVEC),1,DINDD(1,IC1),1)
+C
+                  DKTORQ1 = DIPY*RKVEC(3,IKVEC)-DIPZ*RKVEC(2,IKVEC)
+                  DKTORQ2 = DIPZ*RKVEC(1,IKVEC)-DIPX*RKVEC(3,IKVEC)
+                  DKTORQ3 = DIPX*RKVEC(2,IKVEC)-DIPY*RKVEC(1,IKVEC)
+C
+                  DKTD1 = DIND(2,IC1)*RKVEC(3,IKVEC)-
+     *                     DIND(3,IC1)*RKVEC(2,IKVEC)
+                  DKTD2 = DIND(3,IC1)*RKVEC(1,IKVEC)-
+     *                    DIND(1,IC1)*RKVEC(3,IKVEC)
+                  DKTD3 = DIND(1,IC1)*RKVEC(2,IKVEC)-
+     *                    DIND(2,IC1)*RKVEC(1,IKVEC)
+                  DKTDD1 = DINDD(2,IC1)*RKVEC(3,IKVEC)-
+     *                     DINDD(3,IC1)*RKVEC(2,IKVEC)
+                  DKTDD2 = DINDD(3,IC1)*RKVEC(1,IKVEC)-
+     *                    DINDD(1,IC1)*RKVEC(3,IKVEC)
+                  DKTDD3 = DINDD(1,IC1)*RKVEC(2,IKVEC)-
+     *                    DINDD(2,IC1)*RKVEC(1,IKVEC)
+C
+C   ---- CALCULATE THE CONTRIBUTION TO THE GRADIENT ON INDUCED DIPOLE
+C   ---- CHARGE-DIPOLE & DIPOLE-DIPOLE
+                  DO I=1,3
+                   GCHDIP(I)=GCHDIP(I)+RKEXPEL(IKVEC)*RKVEC(I,IKVEC)*
+     *                      DK*(SINCH(IKVEC)*SINKR+COSCH(IKVEC)*COSKR)
+
+                   GDIPDIP(I)=GDIPDIP(I)+RKEXPEL(IKVEC)*RKVEC(I,IKVEC)*
+     *                     DK*(COSDIP(IKVEC)*SINKR-SINDIP(IKVEC)*COSKR)
+C   ---- IND. DIPOLE-IND. DIPOLE
+                   GDIPDIP(I)=GDIPDIP(I)+RKEXPEL(IKVEC)*RKVEC(I,IKVEC)*
+     *                        0.5D+00*(
+     *                  DKD*(CSDIP2(IKVEC)*SINKR-SNDIP2(IKVEC)*COSKR)+
+     *                  DKDD*(CSDIP1(IKVEC)*SINKR-SNDIP1(IKVEC)*COSKR))
+C                   GD(I)=GD(I)+RKEXPEL(IKVEC)*RKVEC(I,IKVEC)*
+C     *                        0.5D+00*(
+C     *                  DKD*(CSDIP2(IKVEC)*SINKR-SNDIP2(IKVEC)*COSKR)+
+C     *                  DKDD*(CSDIP1(IKVEC)*SINKR-SNDIP1(IKVEC)*COSKR))
+C
+                  END DO
+C
+C   ---- TORQUES
+                  QCHDIP(1)=QCHDIP(1)+RKEXPEL(IKVEC)*DKTORQ1*
+     *              (SINCH(IKVEC)*COSKR-COSCH(IKVEC)*SINKR)
+                  QCHDIP(2)=QCHDIP(2)+RKEXPEL(IKVEC)*DKTORQ2*
+     *              (SINCH(IKVEC)*COSKR-COSCH(IKVEC)*SINKR)
+                  QCHDIP(3)=QCHDIP(3)+RKEXPEL(IKVEC)*DKTORQ3*
+     *              (SINCH(IKVEC)*COSKR-COSCH(IKVEC)*SINKR)
+C
+                  QDIPDIP(1)=QDIPDIP(1)+RKEXPEL(IKVEC)*DKTORQ1*
+     *              (COSDIP(IKVEC)*COSKR+SINDIP(IKVEC)*SINKR)
+                  QDIPDIP(2)=QDIPDIP(2)+RKEXPEL(IKVEC)*DKTORQ2*
+     *              (COSDIP(IKVEC)*COSKR+SINDIP(IKVEC)*SINKR)
+                  QDIPDIP(3)=QDIPDIP(3)+RKEXPEL(IKVEC)*DKTORQ3*
+     *              (COSDIP(IKVEC)*COSKR+SINDIP(IKVEC)*SINKR)
+C   ---- DUE TO INDUCED DIPOLES
+                  QDIPDIP(1)=QDIPDIP(1)+RKEXPEL(IKVEC)*0.5D+00*
+     *              (DKTD1*(CSDIP2(IKVEC)*COSKR+SNDIP2(IKVEC)*SINKR)+
+     *              DKTDD1*(CSDIP1(IKVEC)*COSKR+SNDIP1(IKVEC)*SINKR))
+                  QDIPDIP(2)=QDIPDIP(2)+RKEXPEL(IKVEC)*0.5D+00*
+     *              (DKTD2*(CSDIP2(IKVEC)*COSKR+SNDIP2(IKVEC)*SINKR)+
+     *              DKTDD2*(CSDIP1(IKVEC)*COSKR+SNDIP1(IKVEC)*SINKR))
+                  QDIPDIP(3)=QDIPDIP(3)+RKEXPEL(IKVEC)*0.5D+00*
+     *              (DKTD3*(CSDIP2(IKVEC)*COSKR+SNDIP2(IKVEC)*SINKR)+
+     *              DKTDD3*(CSDIP1(IKVEC)*COSKR+SNDIP1(IKVEC)*SINKR))
+C                  QD(1)=QD(1)+RKEXPEL(IKVEC)*0.5D+00*
+C     *              (DKTD1*(CSDIP2(IKVEC)*COSKR+SNDIP2(IKVEC)*SINKR)+
+C     *              DKTDD1*(CSDIP1(IKVEC)*COSKR+SNDIP1(IKVEC)*SINKR))
+C                  QD(2)=QD(2)+RKEXPEL(IKVEC)*0.5D+00*
+C     *              (DKTD2*(CSDIP2(IKVEC)*COSKR+SNDIP2(IKVEC)*SINKR)+
+C     *              DKTDD2*(CSDIP1(IKVEC)*COSKR+SNDIP1(IKVEC)*SINKR))
+C                  QD(3)=QD(3)+RKEXPEL(IKVEC)*0.5D+00*
+C     *              (DKTD3*(CSDIP2(IKVEC)*COSKR+SNDIP2(IKVEC)*SINKR)+
+C     *              DKTDD3*(CSDIP1(IKVEC)*COSKR+SNDIP1(IKVEC)*SINKR))
+C
+  160          CONTINUE
+C
+C   ---- ADD IN THE CONTRIBUTION TO THE GRADIENT.
+             CONX=-TWO*(GCHDIP(1)+GDIPDIP(1))
+             CONY=-TWO*(GCHDIP(2)+GDIPDIP(2))
+             CONZ=-TWO*(GCHDIP(3)+GDIPDIP(3))
+C
+C   ---- TORQUES
+             TORQX = TWO*(QCHDIP(1)+QDIPDIP(1))
+             TORQY = TWO*(QCHDIP(2)+QDIPDIP(2))
+             TORQZ = TWO*(QCHDIP(3)+QDIPDIP(3))
+C
+C             GRAD(1,IM) = GRAD(1,IM) -TWO*GD(1)
+C             GRAD(2,IM) = GRAD(2,IM) -TWO*GD(2)
+C             GRAD(3,IM) = GRAD(3,IM) -TWO*GD(3)
+C             GRAD(4,IM) =  GRAD(4,IM) + TWO*
+C     *                      (GD(3)*(EFP(2,IC1)-EFCENT(2,IM))
+C     *                      -GD(2)*(EFP(3,IC1)-EFCENT(3,IM)))
+C     *                      + TWO*QD(1)
+C             GRAD(5,IM) =  GRAD(5,IM) + TWO*
+C     *                      (GD(1)*(EFP(3,IC1)-EFCENT(3,IM))
+C     *                      -GD(3)*(EFP(1,IC1)-EFCENT(1,IM)))
+C     *                      + TWO*QD(2)
+C             GRAD(6,IM) = GRAD(6,IM) + TWO*
+C     *                      (GD(2)*(EFP(1,IC1)-EFCENT(1,IM))
+C     *                      -GD(1)*(EFP(2,IC1)-EFCENT(2,IM)))
+C     *                      + TWO*QD(3)
+C
+            VIR(1) = VIR(1)     + CONX
+            VIR(2) = VIR(2)     + CONY
+            VIR(3) = VIR(3)     + CONZ
+C
+             DESFRG(1,IM) = DESFRG(1,IM) + CONX
+             DESFRG(2,IM) = DESFRG(2,IM) + CONY
+             DESFRG(3,IM) = DESFRG(3,IM) + CONZ
+             DESFRG(4,IM) =  DESFRG(4,IM) +
+     *                      (CONZ*(EFP(2,IC1)-EFCENT(2,IM))
+     *                      -CONY*(EFP(3,IC1)-EFCENT(3,IM)))
+     *                      + TORQX
+             DESFRG(5,IM) =  DESFRG(5,IM) +
+     *                      (CONX*(EFP(3,IC1)-EFCENT(3,IM))
+     *                      -CONZ*(EFP(1,IC1)-EFCENT(1,IM)))
+     *                      + TORQY
+             DESFRG(6,IM) = DESFRG(6,IM) +
+     *                      (CONY*(EFP(1,IC1)-EFCENT(1,IM))
+     *                      -CONX*(EFP(2,IC1)-EFCENT(2,IM)))
+     *                      + TORQZ
+C
+  170       CONTINUE
+  180    CONTINUE
+C
+C        WRITE(6,*)'RECIPR_POLGRAD',(GRAD(I,1),I=1,6)
+      RETURN
+      END
+C
+C*MODULE EWALD   *DECK RECIPR_POLGRD2
+      SUBROUTINE RECIPR_POLGRAD2
+C
+      IMPLICIT DOUBLE PRECISION (A-H, O-Z)
+      LOGICAL IFEWLD,TNFOIL,EWLDPL
+      LOGICAL DOMONO,DODIPO,DOQUAD,DOOCTU
+      LOGICAL GOPARR,DSKWRK,MASWRK
+C
+      PARAMETER (MXFRG=1050, MXFGPT=12000,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+      PARAMETER (MAXVEC=20000)
+C
+      CHARACTER*8 FRGNME
+C
+      COMMON /DOMULT/ DOMONO(MXFGPT),DODIPO(MXFGPT),DOQUAD(MXFGPT),
+     *                DOOCTU(MXFGPT)
+      COMMON /EFMULT/ EFC(3,MXFGPT),EFCHG(2,MXFGPT),EFATRM(MXFGPT),
+     *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
+     *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
+     *                EFOCT(10,MXFGPT),FRGNME(MXFGPT)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /EFPGES/ DESFRG(6,MXFRG)
+      COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
+     *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
+     *                ATORQ(3,MXFRG)
+      COMMON /EWALD / IFEWLD,TNFOIL,BETA,ELCNST,EPSLN,CUTOFF,CUTLST,
+     *                KMAX,NKVEC,LEVEL,EWLDPL
+      COMMON /EWALD1/ RKEXPEL(MAXVEC),RKVEC(3,MAXVEC)
+      COMMON /EWALD2/ COSDIP(MAXVEC),SINDIP(MAXVEC),COSCH(MAXVEC),
+     *                SINCH(MAXVEC),CSDIPI(MAXVEC),SNDIPI(MAXVEC),
+     *                CSDIP1(MAXVEC),SNDIP1(MAXVEC),
+     *                CSDIP2(MAXVEC),SNDIP2(MAXVEC)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /VIRPR / VIR(3), PRXX, PRYY, PRZZ
+C
+C   ---- LOCAL ARRAYS.
+      DIMENSION GCHDIP(3),GDIPDIP(3),QDIPDIP(3)
+      DIMENSION GRAD(6,MXFRG)
+C
+      PARAMETER (ZERO=0.0D+00, TWO=2.0D+00)
+C      PARAMETER (ONE=1.0D+00,PT5=0.5D+00,ONEPT5=1.5D+00)
+C
+         CALL VCLR(GRAD,1,6*MXFRG)
+C        INITIALIZE PARALLEL
+         IPCOUNT = ME -1
+C
+         DO 180 IM = 1,NFRG
+C   ---- GO PARALLEL!
+            IF (GOPARR) THEN
+               IPCOUNT = IPCOUNT + 1
+               IF (MOD(IPCOUNT,NPROC).NE.0) GO TO 175
+            END IF
+C
+C            CQTX=ZERO
+C            CQTY=ZERO
+C            CQTZ=ZERO
+            IC1 = LSTMPTS(IM)-1
+            DO 170 IPX=1,NMPTS(IM)
+C
+               IC1=IC1+1
+               Q = EFCHG(1,IC1)+EFCHG(2,IC1)
+C
+C   ---- INITIALIZATION.
+               DO I=1,3
+                  GCHDIP(I)=ZERO
+                  GDIPDIP(I)=ZERO
+                  QDIPDIP(I) = ZERO
+               END DO
+               CONX=ZERO
+               CONY=ZERO
+               CONZ=ZERO
+C
+C   ---- LOOP OVER THE K-VECTORS.
+               DO 160 IKVEC = 1,NKVEC
+C
+C   ---- CALCULATE DOT PRODUCT OF THE ATOM POSITION AND THE K-VECTOR.
+                  RK = DDOT(3,RKVEC(1,IKVEC),1,EFC(1,IC1),1)
+                  COSKR = COS ( RK )
+                  SINKR = SIN ( RK )
+C
+C   ---- CALCULATE THE DOT PRODUCT OF THE DIPOLE AND THE K-VECTOR.
+                  DK = DDOT(3,EFDIP(1,IC1),1,RKVEC(1,IKVEC),1)
+                  DKTORQ1 = EFDIP(2,IC1)*RKVEC(3,IKVEC)-
+     *                      EFDIP(3,IC1)*RKVEC(2,IKVEC)
+                  DKTORQ2 = EFDIP(3,IC1)*RKVEC(1,IKVEC)-
+     *                      EFDIP(1,IC1)*RKVEC(3,IKVEC)
+                  DKTORQ3 = EFDIP(1,IC1)*RKVEC(2,IKVEC)-
+     *                      EFDIP(2,IC1)*RKVEC(1,IKVEC)
+C
+C   ---- CALCULATE THE CONTRIBUTION TO THE STATIC MULTIPOLES GRADIENT
+C   ---- DUE TO INDUCED DIPOLES.
+                  DO I=1,3
+                     GCHDIP(I)=GCHDIP(I)+RKEXPEL(IKVEC)*RKVEC(I,IKVEC)*
+     *                 (-Q*CSDIPI(IKVEC)*COSKR-Q*SNDIPI(IKVEC)*SINKR)
+C
+                     IF (DODIPO(IC1)) THEN
+                         GDIPDIP(I)=GDIPDIP(I)+RKEXPEL(IKVEC)*
+     *                       RKVEC(I,IKVEC)*DK*(CSDIPI(IKVEC)*
+     *                              SINKR-SNDIPI(IKVEC)*COSKR)
+                     END IF
+                  END DO
+C
+                  IF (DODIPO(IC1)) THEN
+                     QDIPDIP(1)=QDIPDIP(1)+RKEXPEL(IKVEC)*DKTORQ1*
+     *                 (CSDIPI(IKVEC)*COSKR+SNDIPI(IKVEC)*SINKR)
+                     QDIPDIP(2)=QDIPDIP(2)+RKEXPEL(IKVEC)*DKTORQ2*
+     *                 (CSDIPI(IKVEC)*COSKR+SNDIPI(IKVEC)*SINKR)
+                     QDIPDIP(3)=QDIPDIP(3)+RKEXPEL(IKVEC)*DKTORQ3*
+     *                 (CSDIPI(IKVEC)*COSKR+SNDIPI(IKVEC)*SINKR)
+                  END IF
+C
+  160          CONTINUE
+C
+C   ---- ADD IN THE CONTRIBUTION TO THE GRADIENT.
+             CONX=-TWO*(GCHDIP(1)+GDIPDIP(1))
+             CONY=-TWO*(GCHDIP(2)+GDIPDIP(2))
+             CONZ=-TWO*(GCHDIP(3)+GDIPDIP(3))
+C
+C   ---- TORQUES
+             TORQX = TWO*QDIPDIP(1)
+             TORQY = TWO*QDIPDIP(2)
+             TORQZ = TWO*QDIPDIP(3)
+C
+C             GRAD(1,IM) = GRAD(1,IM) + CONX
+C             GRAD(2,IM) = GRAD(2,IM) + CONY
+C             GRAD(3,IM) = GRAD(3,IM) + CONZ
+C             GRAD(4,IM) =  GRAD(4,IM) +
+C     *                      (CONZ*(EFC(2,IC1)-EFCENT(2,IM))
+C     *                      -CONY*(EFC(3,IC1)-EFCENT(3,IM)))
+C     *                      + TORQX
+C             GRAD(5,IM) =  GRAD(5,IM) +
+C     *                      (CONX*(EFC(3,IC1)-EFCENT(3,IM))
+C     *                      -CONZ*(EFC(1,IC1)-EFCENT(1,IM)))
+C     *                      + TORQY
+C             GRAD(6,IM) = GRAD(6,IM) +
+C     *                      (CONY*(EFC(1,IC1)-EFCENT(1,IM))
+C     *                      -CONX*(EFC(2,IC1)-EFCENT(2,IM)))
+C     *                      + TORQZ
+
+            VIR(1) = VIR(1)     + CONX
+            VIR(2) = VIR(2)     + CONY
+            VIR(3) = VIR(3)     + CONZ
+C
+             DESFRG(1,IM) = DESFRG(1,IM) + CONX
+             DESFRG(2,IM) = DESFRG(2,IM) + CONY
+             DESFRG(3,IM) = DESFRG(3,IM) + CONZ
+             DESFRG(4,IM) =  DESFRG(4,IM) +
+     *                      (CONZ*(EFC(2,IC1)-EFCENT(2,IM))
+     *                      -CONY*(EFC(3,IC1)-EFCENT(3,IM)))
+     *                      + TORQX
+             DESFRG(5,IM) =  DESFRG(5,IM) +
+     *                      (CONX*(EFC(3,IC1)-EFCENT(3,IM))
+     *                      -CONZ*(EFC(1,IC1)-EFCENT(1,IM)))
+     *                      + TORQY
+             DESFRG(6,IM) = DESFRG(6,IM) +
+     *                      (CONY*(EFC(1,IC1)-EFCENT(1,IM))
+     *                      -CONX*(EFC(2,IC1)-EFCENT(2,IM)))
+     *                      + TORQZ
+  170       CONTINUE
+C         IF (IM.EQ.1) THEN
+C            WRITE(6,*)'TORQUES',CQTX,CQTY,CQTZ
+C            WRITE(6,*)'GRAD - RECIPR1-1',(GRAD(I,1), I=1,6)
+C            WRITE(6,*)'GRAD - RECIPR1-2',(GRAD(I,2), I=1,6)
+C         END IF
+  175       CONTINUE
+  180    CONTINUE
+C
+C        WRITE(6,*)'RECIPR_POLGRAD 2',(GRAD(I,1),I=1,6)
+      RETURN
+      END
+C
+C*MODULE EWALD   *DECK RECIPR_IIFLD
+      SUBROUTINE RECIPR_IIFLD
+C
+      IMPLICIT DOUBLE PRECISION (A-H, O-Z)
+      LOGICAL IFEWLD,TNFOIL,EWLDPL
+      LOGICAL GOPARR,DSKWRK,MASWRK
+C
+      PARAMETER (MXFRG=1050, MXFGPT=12000, MXIFRQ=12,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+      PARAMETER (MAXVEC=20000)
+C
+      CHARACTER*8 POLNAM,DPOLNAM
+C
+C      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
+     *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
+     *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
+     *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ*MXFGPT),
+     *                POLSCR(MXFGPT),IPLSCR,INDSCR
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /EWALD / IFEWLD,TNFOIL,BETA,ELCNST,EPSLN,CUTOFF,CUTLST,
+     *                KMAX,NKVEC,LEVEL,EWLDPL
+      COMMON /EWALD1/ RKEXPEL(MAXVEC),RKVEC(3,MAXVEC)
+      COMMON /EWFLD / RCPFLD(3,MXFGPT),RCPIIFLD1(3,MXFGPT),
+     *                RCPIIFLD2(3,MXFGPT), TNFLD(3),
+     *                TNIIFLD1(3),TNIIFLD2(3),
+     *                SELFFLD1(3,MXFGPT),SELFFLD2(3,MXFGPT),
+     *                EXCLFLD(3,MXFGPT),
+     *                EXCLIIFLD1(3,MXFGPT),EXCLIIFLD2(3,MXFGPT)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+C   ---- LOCAL ARRAYS.
+      DIMENSION GDIPDIP1(3),GDIPDIP2(3),CSDIP1(MAXVEC),SNDIP1(MAXVEC),
+     *          CSDIP2(MAXVEC),SNDIP2(MAXVEC)
+C
+      PARAMETER (ZERO=0.0D+00,TWO=2.0D+00)
+C      PARAMETER (THREE=3.0D+00,FIVE=5.0D+00)
+C      PARAMETER (ONE=1.0D+00,SIX=6.0D+00,PT5=0.5D+00,ONEPT5=1.5D+00)
+C
+C   ---- INITIALIZATION.
+      CALL VCLR(CSDIP1,1,MAXVEC)
+      CALL VCLR(SNDIP1,1,MAXVEC)
+      CALL VCLR(CSDIP2,1,MAXVEC)
+      CALL VCLR(SNDIP2,1,MAXVEC)
+C
+C     ----- INTIALIZE PARALLEL -----
+      IPCOUNT = ME - 1
+      DO 300 IKVEC = 1,NKVEC
+C
+C   ---- GO PARALLEL!
+         IF (GOPARR) THEN
+            IPCOUNT = IPCOUNT + 1
+            IF (MOD(IPCOUNT,NPROC).NE.0) GO TO 300
+         END IF
+C
+C   ---- LOOP OVER THE ATOMS.
+         IC1 = 0
+         DO 280 IM = 1,NFRG
+            DO 270 IPX=1,NPPTS(IM)
+               IC1=IC1+1
+C
+               DK1 = DDOT(3,DIND(1,IC1),1,RKVEC(1,IKVEC),1)
+               DK2 = DDOT(3,DINDD(1,IC1),1,RKVEC(1,IKVEC),1)
+C
+C   ---- CALCULATE THE COS AND SIN.
+               RK = DDOT(3,RKVEC(1,IKVEC),1,EFP(1,IC1),1)
+               COSKR = COS ( RK )
+               SINKR = SIN ( RK )
+C
+               CSDIP1(IKVEC) = CSDIP1(IKVEC) + DK1*COSKR
+               SNDIP1(IKVEC) = SNDIP1(IKVEC) + DK1*SINKR
+               CSDIP2(IKVEC) = CSDIP2(IKVEC) + DK2*COSKR
+               SNDIP2(IKVEC) = SNDIP2(IKVEC) + DK2*SINKR
+C
+  270       CONTINUE
+  280    CONTINUE
+  300 CONTINUE
+C
+C     ----- SUM UP PARTIAL CONTRIBUTIONS IF PARALLEL -----
+      IF (GOPARR) THEN
+         CALL DDI_GSUMF(807,CSDIP1,MAXVEC)
+         CALL DDI_GSUMF(808,SNDIP1,MAXVEC)
+         CALL DDI_GSUMF(804,CSDIP2,MAXVEC)
+         CALL DDI_GSUMF(805,SNDIP2,MAXVEC)
+      END IF
+C
+      CALL VCLR(RCPIIFLD1,1,MXFGPT*3)
+      CALL VCLR(RCPIIFLD2,1,MXFGPT*3)
+C
+         IPCOUNT = ME -1
+         IC1 = 0
+         DO 180 IM = 1,NFRG
+            DO 170 IPX=1,NPPTS(IM)
+C
+               IC1=IC1+1
+C   ---- GO PARALLEL!
+               IF (GOPARR) THEN
+                  IPCOUNT = IPCOUNT + 1
+                  IF (MOD(IPCOUNT,NPROC).NE.0) GO TO 170
+               END IF
+C
+C   ---- INITIALIZATION.
+               DO I=1,3
+                  GDIPDIP1(I)=ZERO
+                  GDIPDIP2(I)=ZERO
+               END DO
+C
+C   ---- LOOP OVER THE K-VECTORS.
+               DO 160 IKVEC = 1,NKVEC
+C
+C   ---- CALCULATE DOT PRODUCT OF THE ATOM POSITION AND THE K-VECTOR.
+                  RK = DDOT(3,RKVEC(1,IKVEC),1,EFP(1,IC1),1)
+                  COSKR = COS ( RK )
+                  SINKR = SIN ( RK )
+C
+C   ---- CALCULATE THE CONTRIBUTION TO THE FIELD
+              DO I=1,3
+                 GDIPDIP1(I)=GDIPDIP1(I)+RKEXPEL(IKVEC)*RKVEC(I,IKVEC)*
+     *                     (CSDIP1(IKVEC)*COSKR+SNDIP1(IKVEC)*SINKR)
+                 GDIPDIP2(I)=GDIPDIP2(I)+RKEXPEL(IKVEC)*RKVEC(I,IKVEC)*
+     *                     (CSDIP2(IKVEC)*COSKR+SNDIP2(IKVEC)*SINKR)
+              END DO
+C
+  160          CONTINUE
+C
+C   ---- ADD IN THE CONTRIBUTION TO THE FIELD
+             RCPIIFLD1(1,IC1)=-TWO*GDIPDIP1(1)
+             RCPIIFLD1(2,IC1)=-TWO*GDIPDIP1(2)
+             RCPIIFLD1(3,IC1)=-TWO*GDIPDIP1(3)
+             RCPIIFLD2(1,IC1)=-TWO*GDIPDIP2(1)
+             RCPIIFLD2(2,IC1)=-TWO*GDIPDIP2(2)
+             RCPIIFLD2(3,IC1)=-TWO*GDIPDIP2(3)
+C
+  170       CONTINUE
+  180    CONTINUE
+C
+         IF (GOPARR) THEN
+            CALL DDI_GSUMF(801,RCPIIFLD1,3*MXFGPT)
+            CALL DDI_GSUMF(802,RCPIIFLD2,3*MXFGPT)
+         END IF
+C
+C       WRITE(6,*) 'RCPIIFLD1',(RCPIIFLD1(I,1),I=1,3),
+C     *       (RCPIIFLD1(I,2),I=1,3),(RCPIIFLD1(I,3),I=1,3)
+C       WRITE(6,*) 'RCPIIFLD2',(RCPIIFLD2(I,1),I=1,3),
+C     *       (RCPIIFLD2(I,2),I=1,3),(RCPIIFLD2(I,3),I=1,3)
+      RETURN
+      END
+C
+C*MODULE EWALD   *DECK SELFCC
+      SUBROUTINE SELFCC
+C
+      IMPLICIT DOUBLE PRECISION (A-H, O-Z)
+      LOGICAL IFEWLD,TNFOIL,EWLDPL
+      LOGICAL DOMONO,DODIPO,DOQUAD,DOOCTU
+      LOGICAL GOPARR,DSKWRK,MASWRK
+C
+      PARAMETER (MXFRG=1050, MXFGPT=12000,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      CHARACTER*8 FRGNME
+C
+      COMMON /DOMULT/ DOMONO(MXFGPT),DODIPO(MXFGPT),DOQUAD(MXFGPT),
+     *                DOOCTU(MXFGPT)
+      COMMON /EFMULT/ EFC(3,MXFGPT),EFCHG(2,MXFGPT),EFATRM(MXFGPT),
+     *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
+     *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
+     *                EFOCT(10,MXFGPT),FRGNME(MXFGPT)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /EWALD / IFEWLD,TNFOIL,BETA,ELCNST,EPSLN,CUTOFF,CUTLST,
+     *                KMAX,NKVEC,LEVEL,EWLDPL
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /SELFE / ESELFCC, ESELFDD, EEXCLCC, EEXCLCD, EEXCLDD,
+     *                EEXCLCQ
+C
+      DIMENSION QUA(6,MXFGPT)
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00, TWO=2.0D+00, THREE=3.0D+00,
+     *           ONEPT5=1.5D+00,PT5=0.5D+00 )
+      PI=4*ATAN(1.0D+00)
+C
+C   ---- CALCULATE THE ELECTROSTATIC SELF-ENERGY AND EXCLUSION ENERGY
+C   ---- DUE TO ATOM INTERCATIONS WITHIN ONE FRAGMENT.
+C   ---- SELF-ENERGY IS EXACTLY 0 FOR CHARGE-DIPOLE AND
+C   ---- DIPOLE-QUADRUPOLE TERMS DUE TO SYMMETRY RESTRICTIONS.
+C   ---- SELF-ENERGY IS EXACTLY 0 FOR CHARGE-QUADRUPOLE TERM IF
+C   ---- QUADRUPOLES ARE TRACELESS.
+C
+      ESELFCC = ZERO
+      ESELFDD = ZERO
+      EEXCLCC = ZERO
+      EEXCLCD = ZERO
+      EEXCLDD = ZERO
+      EEXCLCQ = ZERO
+      FACTOR1 = -(ELCNST/EPSLN)*(BETA/SQRT(PI))
+      FACTOR2 = ELCNST/EPSLN
+C
+      IF (LEVEL.GE.3) THEN
+C    --- THINGS FOR QUADRUPOLES
+      DO I = 1,NMTTPT
+        IF(.NOT.DOQUAD(I)) GO TO 210
+        XX = EFQAD(1,I)
+        YY = EFQAD(2,I)
+        ZZ = EFQAD(3,I)
+        XY = EFQAD(4,I)
+        XZ = EFQAD(5,I)
+        YZ = EFQAD(6,I)
+        DUM = XX + YY + ZZ
+        QUA(1,I) = PT5 * (THREE * XX - DUM)
+        QUA(2,I) = PT5 * (THREE * YY - DUM)
+        QUA(3,I) = PT5 * (THREE * ZZ - DUM)
+        QUA(4,I) = ONEPT5 * XY
+        QUA(5,I) = ONEPT5 * XZ
+        QUA(6,I) = ONEPT5 * YZ
+210     CONTINUE
+      END DO
+      END IF
+C
+      IC1=0
+C   ----  CYCLE OVER ALL POINTS
+         DO 180 IM = 1,NFRG
+            DO 170 IPX=1,NMPTS(IM)
+               IC1=IC1+1
+               Q1 = EFCHG(1,IC1)+EFCHG(2,IC1)
+               ESELFCC = ESELFCC + Q1*Q1
+               IF (LEVEL .GE. 2) THEN
+                  DIP2 = EFDIP(1,IC1)*EFDIP(1,IC1)+
+     *             EFDIP(2,IC1)*EFDIP(2,IC1)+EFDIP(3,IC1)*EFDIP(3,IC1)
+                  ESELFDD = ESELFDD + DIP2
+               END IF
+C
+C   ---- EXCLUSION CORRECTIONS
+               X1 = EFC(1,IC1)
+               Y1 = EFC(2,IC1)
+               Z1 = EFC(3,IC1)
+               DX1 = EFDIP(1,IC1)
+               DY1 = EFDIP(2,IC1)
+               DZ1 = EFDIP(3,IC1)
+C
+               IC2 = IC1
+               DO 160 JP=IPX+1,NMPTS(IM)
+                  IC2=IC2+1
+                  Q2 = EFCHG(1,IC2)+EFCHG(2,IC2)
+                  X2 = EFC(1,IC2)
+                  Y2 = EFC(2,IC2)
+                  Z2 = EFC(3,IC2)
+C
+                  X = X1 - X2
+                  Y = Y1 - Y2
+                  Z = Z1 - Z2
+                  R2 = X*X + Y*Y + Z*Z
+C
+                  DX2 = EFDIP(1,IC2)
+                  DY2 = EFDIP(2,IC2)
+                  DZ2 = EFDIP(3,IC2)
+C
+C   ---- THIS IS FOR EFP1 MODEL, WHERE TWO MULT. EXP. POINTS HAVE
+C   ---- THE SAME COORDINATES. VERY UGLY...
+C
+                 IF (R2 .LT. 1.0D-06) THEN
+                    ESELFCC = ESELFCC + TWO*Q1*Q2
+                    GOTO  160
+                 END IF
+                 R = SQRT(R2)
+                 R3 = R*R2
+C
+C       --- ERF = 1 - ERFC
+                  F0 = GMSERFC( BETA * R )
+                  EXPBR = EXP(-BETA * BETA * R2)
+                  F0_GRAD = TWO*BETA*R/SQRT(PI)*EXPBR + F0
+                  EEXCLCC = EEXCLCC - (ONE-F0)*Q1*Q2/R
+C
+                  IF (LEVEL .GE. 2) THEN
+                     F1 = F0_GRAD
+                     F2 = 4.0D+00*BETA*BETA*BETA/SQRT(PI)*EXPBR/R2
+                     RMU1 = X*EFDIP(1,IC1)+Y*EFDIP(2,IC1)+Z*EFDIP(3,IC1)
+                     RMU2 = X*EFDIP(1,IC2)+Y*EFDIP(2,IC2)+Z*EFDIP(3,IC2)
+                     CD1 = ZERO
+                     CD2 = ZERO
+                     IF(DODIPO(IC1)) CD1 = Q2*RMU1
+                     IF(DODIPO(IC2)) CD2 = Q1*RMU2
+                     EEXCLCD = EEXCLCD - (CD2 - CD1)*(ONE-F1)/R3
+C
+C              DIPOLE-DIPOLE
+                     DUMJ = RMU2*THREE/(R3*R2)
+                     DJFX = (-DX2/R3+X*DUMJ)*(ONE-F1)-X*RMU2*F2
+                     DJFY = (-DY2/R3+Y*DUMJ)*(ONE-F1)-Y*RMU2*F2
+                     DJFZ = (-DZ2/R3+Z*DUMJ)*(ONE-F1)-Z*RMU2*F2
+C
+                     EEXCLDD = EEXCLDD +(DX1*DJFX+DY1*DJFY+DZ1*DJFZ)
+                  END IF
+C
+                  IF (LEVEL .GE. 3) THEN
+                     F1 = F0_GRAD
+                     F2 = 4.0D+00*BETA*BETA*BETA/SQRT(PI)*EXPBR/R2
+                     R5=R3*R2
+C
+                     CFXX = (ONE-F1)*(THREE*X*X-R2)/R5 - F2*X*X
+                     CFYY = (ONE-F1)*(THREE*Y*Y-R2)/R5 - F2*Y*Y
+                     CFZZ = (ONE-F1)*(THREE*Z*Z-R2)/R5 - F2*Z*Z
+                     CFXY = (ONE-F1)*THREE*X*Y/R5 - F2*X*Y
+                     CFXZ = (ONE-F1)*THREE*X*Z/R5 - F2*X*Z
+                     CFYZ = (ONE-F1)*THREE*Y*Z/R5 - F2*Y*Z
+C
+                     CQ1 = ZERO
+                     CQ2 = ZERO
+C
+                     IF(DOQUAD(IC1)) THEN
+                         CQ1 = (QUA(1,IC1)*CFXX + QUA(2,IC1)*CFYY +
+     *                         QUA(3,IC1)*CFZZ + TWO*(QUA(4,IC1)*CFXY+
+     *                         QUA(5,IC1)*CFXZ + QUA(6,IC1)*CFYZ))*Q2
+                     END IF
+                     IF(DOQUAD(IC2)) THEN
+                         CQ2 = (QUA(1,IC2)*CFXX + QUA(2,IC2)*CFYY +
+     *                         QUA(3,IC2)*CFZZ + TWO*(QUA(4,IC2)*CFXY+
+     *                         QUA(5,IC2)*CFXZ + QUA(6,IC2)*CFYZ))*Q1
+                     END IF
+                     EEXCLCQ = EEXCLCQ - (CQ1 + CQ2)/3.0D+00
+                  END IF
+C
+  160          CONTINUE
+  170       CONTINUE
+  180    CONTINUE
+C
+       ESELFCC = FACTOR1*ESELFCC
+       ESELFDD = FACTOR1*TWO/THREE*BETA*BETA*ESELFDD
+       EEXCLCC = FACTOR2*EEXCLCC
+       EEXCLCD = FACTOR2*EEXCLCD
+       EEXCLDD = FACTOR2*EEXCLDD
+       EEXCLCQ = FACTOR2*EEXCLCQ
+C
+       IF(MASWRK) WRITE(6,987) ESELFCC,ESELFDD,EEXCLCC,EEXCLCD,
+     *                         EEXCLDD,EEXCLCQ
+  987 FORMAT(/1X,'ESELFCC = ',F18.14/
+     *        1X,'ESELFDD = ',F18.14/
+     *        1X,'EEXCLCC = ',F18.14/
+     *        1X,'EEXCLCD = ',F18.14/
+     *        1X,'EEXCLDD = ',F18.14/
+     *        1X,'EEXCLCQ = ',F18.14)
+C
+       RETURN
+       END
+C
+C*MODULE EWALD   *DECK SELF_FIELD
+      SUBROUTINE SELF_FIELD
+C
+      IMPLICIT DOUBLE PRECISION (A-H, O-Z)
+      LOGICAL IFEWLD,TNFOIL,EWLDPL
+C
+      PARAMETER (MXFRG=1050, MXFGPT=12000, MXIFRQ=12,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      CHARACTER*8 POLNAM,DPOLNAM
+C
+      COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
+     *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
+     *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
+     *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ*MXFGPT),
+     *                POLSCR(MXFGPT),IPLSCR,INDSCR
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /EWALD / IFEWLD,TNFOIL,BETA,ELCNST,EPSLN,CUTOFF,CUTLST,
+     *                KMAX,NKVEC,LEVEL,EWLDPL
+      COMMON /EWFLD / RCPFLD(3,MXFGPT),RCPIIFLD1(3,MXFGPT),
+     *                RCPIIFLD2(3,MXFGPT), TNFLD(3),
+     *                TNIIFLD1(3),TNIIFLD2(3),
+     *                SELFFLD1(3,MXFGPT),SELFFLD2(3,MXFGPT),
+     *                EXCLFLD(3,MXFGPT),
+     *                EXCLIIFLD1(3,MXFGPT),EXCLIIFLD2(3,MXFGPT)
+C
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00, TWO=2.0D+00, THREE=3.0D+00)
+      PI=4*ATAN(1.0D+00)
+C
+C   ---- CALCULATE FILEDS FROM SELF-ENERGY AND EXCLUSION ENERGY DUE
+C   ---- TO OTHER INDUCED DIPOLES WITHIN ONE FRAGMENT (FOR POLARIZATION)
+C
+      CALL VCLR(SELFFLD1,1,MXFGPT*3)
+      CALL VCLR(SELFFLD2,1,MXFGPT*3)
+      CALL VCLR(EXCLIIFLD1,1,MXFGPT*3)
+      CALL VCLR(EXCLIIFLD2,1,MXFGPT*3)
+C
+      IF (LEVEL .LT. 2) RETURN
+C
+      FACTOR1 = (ELCNST/EPSLN)*(BETA*BETA*BETA/SQRT(PI))*4.0D+00/THREE
+C
+      IC1=0
+      INDEX = 0
+C   ----  CYCLE OVER ALL POINTS
+         DO 180 IM = 1,NFRG
+            DO 170 IPX=1,NPPTS(IM)
+               IC1=IC1+1
+C
+               DO K=1,3
+                  SELFFLD1(K, IC1) = FACTOR1*DIND(K,IC1)
+                  SELFFLD2(K, IC1) = FACTOR1*DINDD(K,IC1)
+               END DO
+C
+C   ---- EXCLUSION CORRECTIONS
+               X1 = EFP(1,IC1)
+               Y1 = EFP(2,IC1)
+               Z1 = EFP(3,IC1)
+C
+               EFX1 = ZERO
+               EFY1 = ZERO
+               EFZ1 = ZERO
+               EFX2 = ZERO
+               EFY2 = ZERO
+               EFZ2 = ZERO
+C
+               IC3 = INDEX
+C               DO 150 KP=IPX+1,NPPTS(IM)
+               DO 150 KP=1,NPPTS(IM)
+                  IC3=IC3+1
+                  IF (KP .EQ. IPX) GOTO 150
+                  X2 = EFP(1,IC3)
+                  Y2 = EFP(2,IC3)
+                  Z2 = EFP(3,IC3)
+                  DX2 = DIND(1,IC3)
+                  DY2 = DIND(2,IC3)
+                  DZ2 = DIND(3,IC3)
+                  DX3 = DINDD(1,IC3)
+                  DY3 = DINDD(2,IC3)
+                  DZ3 = DINDD(3,IC3)
+C
+                  X = X1 - X2
+                  Y = Y1 - Y2
+                  Z = Z1 - Z2
+                  R2 = X*X + Y*Y + Z*Z
+                  R = SQRT(R2)
+                  R3 = R*R2
+C
+C       --- ERF = 1 - ERFC
+                  F0 = GMSERFC( BETA * R )
+                  EXPBR = EXP(-BETA * BETA * R2)
+                  F1 = TWO*BETA*R/SQRT(PI)*EXPBR + F0
+                  F2 = 4.0D+00*BETA*BETA*BETA/SQRT(PI)*EXPBR/R2
+
+                  RMU2 = X*DX2+Y*DY2+Z*DZ2
+                  RMU3 = X*DX3+Y*DY3+Z*DZ3
+                  DUMJ = RMU2*THREE/(R3*R2)
+                  DUMK = RMU3*THREE/(R3*R2)
+                  EFX1 = EFX1 + (-DX2/R3+X*DUMJ)*(F1-ONE)+X*RMU2*F2
+                  EFY1 = EFY1 + (-DY2/R3+Y*DUMJ)*(F1-ONE)+Y*RMU2*F2
+                  EFZ1 = EFZ1 + (-DZ2/R3+Z*DUMJ)*(F1-ONE)+Z*RMU2*F2
+                  EFX2 = EFX2 + (-DX3/R3+X*DUMK)*(F1-ONE)+X*RMU3*F2
+                  EFY2 = EFY2 + (-DY3/R3+Y*DUMK)*(F1-ONE)+Y*RMU3*F2
+                  EFZ2 = EFZ2 + (-DZ3/R3+Z*DUMK)*(F1-ONE)+Z*RMU3*F2
+C
+  150          CONTINUE
+               EXCLIIFLD1(1,IC1) = EFX1
+               EXCLIIFLD1(2,IC1) = EFY1
+               EXCLIIFLD1(3,IC1) = EFZ1
+               EXCLIIFLD2(1,IC1) = EFX2
+               EXCLIIFLD2(2,IC1) = EFY2
+               EXCLIIFLD2(3,IC1) = EFZ2
+C
+  170       CONTINUE
+            INDEX = INDEX + NPPTS(IM)
+  180    CONTINUE
+C
+C       WRITE(6,*) 'SELFFLD1',(SELFFLD1(I,1),I=1,3),
+C     *       (SELFFLD1(I,2),I=1,3),(SELFFLD1(I,3),I=1,3)
+C       WRITE(6,*) 'EXCLIIFLD1',(EXCLIIFLD1(I,1),I=1,3),
+C     *       (EXCLIIFLD1(I,2),I=1,3),(EXCLIIFLD1(I,3),I=1,3)
+C       WRITE(6,*) 'EXCLIIFLD2',(EXCLIIFLD2(I,1),I=1,3),
+C     *       (EXCLIIFLD2(I,2),I=1,3),(EXCLIIFLD2(I,3),I=1,3)
+       RETURN
+       END
+C
+C
+C*MODULE EWALD   *DECK EXCL_ST_POLGRD
+      SUBROUTINE EXCL_ST_POLGRAD
+C
+      IMPLICIT DOUBLE PRECISION (A-H, O-Z)
+      LOGICAL IFEWLD,TNFOIL,EWLDPL
+C
+      PARAMETER (MXFRG=1050, MXFGPT=12000, MXIFRQ=12,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      CHARACTER*8 POLNAM,DPOLNAM
+C
+      COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
+     *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
+     *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
+     *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ*MXFGPT),
+     *                POLSCR(MXFGPT),IPLSCR,INDSCR
+      COMMON /EFPGES/ DESFRG(6,MXFRG)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /EWALD / IFEWLD,TNFOIL,BETA,ELCNST,EPSLN,CUTOFF,CUTLST,
+     *                KMAX,NKVEC,LEVEL,EWLDPL
+      COMMON /EWFLD / RCPFLD(3,MXFGPT),RCPIIFLD1(3,MXFGPT),
+     *                RCPIIFLD2(3,MXFGPT), TNFLD(3),
+     *                TNIIFLD1(3),TNIIFLD2(3),
+     *                SELFFLD1(3,MXFGPT),SELFFLD2(3,MXFGPT),
+     *                EXCLFLD(3,MXFGPT),
+     *                EXCLIIFLD1(3,MXFGPT),EXCLIIFLD2(3,MXFGPT)
+C
+C      DIMENSION GRAD(6,MXFRG),GRAD1(6,MXFRG),GRAD2(6,MXFRG),
+C     *          GRAD3(6,MXFRG)
+      PARAMETER (TWO=2.0D+00)
+C      PARAMETER (FIVE = 5.0D+00, PT5=0.5D+00,ZERO=0.0D+00,
+C      *         ONE=1.0D+00, THREE=3.0D+00)
+C      PI=4*ATAN(1.0D+00)
+C
+C   ---- CALCULATE GRADIENTS FROM EXCLUSION ENERGY DUE
+C   ---- TO STATIC FIELD (FOR POLARIZATION)
+C   ---- STATIC SELF-FIELD IS 0
+C
+      IF (LEVEL .LT. 2) RETURN
+C
+      IC1=0
+C   ----  CYCLE OVER ALL POINTS
+         DO 180 IM = 1,NFRG
+            DO 170 IPX=1,NPPTS(IM)
+               IC1=IC1+1
+C
+               DX1 = (DIND(1,IC1)+DINDD(1,IC1))/TWO
+               DY1 = (DIND(2,IC1)+DINDD(2,IC1))/TWO
+               DZ1 = (DIND(3,IC1)+DINDD(3,IC1))/TWO
+C
+C   ---- EXCLUSION CORRECTIONS
+               TORQX = DY1*EXCLFLD(3,IC1)-DZ1*EXCLFLD(2,IC1)
+               TORQY = DZ1*EXCLFLD(1,IC1)-DX1*EXCLFLD(3,IC1)
+               TORQZ = DX1*EXCLFLD(2,IC1)-DY1*EXCLFLD(1,IC1)
+C
+              DESFRG(4,IM) = DESFRG(4,IM) - TORQX
+              DESFRG(5,IM) = DESFRG(5,IM) - TORQY
+              DESFRG(6,IM) = DESFRG(6,IM) - TORQZ
+C
+  170       CONTINUE
+  180    CONTINUE
+C
+        RETURN
+        END
+C-XXX-C
+C-XXX-C*MODULE EWALD   *DECK EXCL_IND_POLGRD
+C-XXX-      SUBROUTINE EXCL_IND_POLGRAD
+C-XXX-C
+C-XXX-      IMPLICIT DOUBLE PRECISION (A-H, O-Z)
+C-XXX-      LOGICAL IFEWLD,TNFOIL,EWLDPL
+C-XXX-C
+C-XXX-      PARAMETER (MXFRG=1050, MXFGPT=12000, MXIFRQ=12,
+C-XXX-     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C-XXX-C
+C-XXX-      CHARACTER*8 POLNAM,DPOLNAM
+C-XXX-C
+C-XXX-      COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
+C-XXX-     *                EFDP(3,MXIFRQ*MXFGPT),
+C-XXX-     *                EFDPOL(9,MXIFRQ*MXFGPT),
+C-XXX-     *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
+C-XXX-     *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ*MXFGPT),
+C-XXX-     *                POLSCR(MXFGPT),IPLSCR,INDSCR
+C-XXX-C      COMMON /EFPGES/ DESFRG(6,MXFRG)
+C-XXX-      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+C-XXX-     *                NPPTS(MXFRG),NPTTPT,IEFP,
+C-XXX-     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+C-XXX-     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+C-XXX-      COMMON /EWALD / IFEWLD,TNFOIL,BETA,ELCNST,EPSLN,CUTOFF,
+C-XXX-     *                CUTLST,KMAX,NKVEC,LEVEL,EWLDPL
+C-XXX-      COMMON /EWFLD / RCPFLD(3,MXFGPT),RCPIIFLD1(3,MXFGPT),
+C-XXX-     *                RCPIIFLD2(3,MXFGPT), TNFLD(3),
+C-XXX-     *                TNIIFLD1(3),TNIIFLD2(3),
+C-XXX-     *                SELFFLD1(3,MXFGPT),SELFFLD2(3,MXFGPT),
+C-XXX-     *                EXCLFLD(3,MXFGPT),
+C-XXX-     *                EXCLIIFLD1(3,MXFGPT),EXCLIIFLD2(3,MXFGPT)
+C-XXX-C
+C-XXX-      DIMENSION GRAD(6,MXFRG),GRAD1(6,MXFRG)
+C-XXX-C     *         ,GRAD2(6,MXFRG),GRAD3(6,MXFRG)
+C-XXX-      PARAMETER ( ONE=1.0D+00, TWO=2.0D+00, THREE=3.0D+00)
+C-XXX-C      PARAMETER (ZERO=0.0D+00)
+C-XXX-      PARAMETER (FIVE = 5.0D+00, PT5=0.5D+00)
+C-XXX-      PI=4*ATAN(1.0D+00)
+C-XXX-C
+C-XXX-C   ---- CALCULATE GRADIENTS FROM EXCLUSION ENERGY DUE
+C-XXX-C   ---- TO STATIC FIELD (FOR POLARIZATION)
+C-XXX-C   ---- STATIC SELF-FIELD IS 0
+C-XXX-C
+C-XXX-      IF (LEVEL .LT. 2) RETURN
+C-XXX-C
+C-XXX-      CALL VCLR (GRAD,1,6*MXFRG)
+C-XXX-      CALL VCLR (GRAD1,1,6*MXFRG)
+C-XXX-      IC1=0
+C-XXX-C   ----  CYCLE OVER ALL POINTS
+C-XXX-         DO 180 IM = 1,NFRG
+C-XXX-            DO 170 IPX=1,NPPTS(IM)
+C-XXX-               IC1=IC1+1
+C-XXX-C
+C-XXX-               X1 = EFP(1,IC1)
+C-XXX-               Y1 = EFP(2,IC1)
+C-XXX-               Z1 = EFP(3,IC1)
+C-XXX-C
+C-XXX-               DX1 = DIND(1,IC1)
+C-XXX-               DY1 = DIND(2,IC1)
+C-XXX-               DZ1 = DIND(3,IC1)
+C-XXX-C
+C-XXX-               DX2 = DINDD(1,IC1)
+C-XXX-               DY2 = DINDD(2,IC1)
+C-XXX-               DZ2 = DINDD(3,IC1)
+C-XXX-C
+C-XXX-C   ---- EXCLUSION CORRECTIONS
+C-XXX-               TORQX1= DY1*EXCLIIFLD2(3,IC1)-DZ1*EXCLIIFLD2(2,IC1)
+C-XXX-               TORQY1= DZ1*EXCLIIFLD2(1,IC1)-DX1*EXCLIIFLD2(3,IC1)
+C-XXX-               TORQZ1= DX1*EXCLIIFLD2(2,IC1)-DY1*EXCLIIFLD2(1,IC1)
+C-XXX-C
+C-XXX-               TORQX2= DY2*EXCLIIFLD1(3,IC1)-DZ2*EXCLIIFLD1(2,IC1)
+C-XXX-               TORQY2= DZ2*EXCLIIFLD1(1,IC1)-DX2*EXCLIIFLD1(3,IC1)
+C-XXX-               TORQZ2= DX2*EXCLIIFLD1(2,IC1)-DY2*EXCLIIFLD1(1,IC1)
+C-XXX-C
+C-XXX-C              DESFRG(4,IM) = DESFRG(4,IM) - (TORQX1 + TORQX2)/TWO
+C-XXX-C              DESFRG(5,IM) = DESFRG(5,IM) - (TORQY1 + TORQY2)/TWO
+C-XXX-C              DESFRG(6,IM) = DESFRG(6,IM) - (TORQZ1 + TORQZ2)/TWO
+C-XXX-C
+C-XXX-              GRAD(4,IM) = GRAD(4,IM) - (TORQX1 + TORQX2)/TWO
+C-XXX-              GRAD(5,IM) = GRAD(5,IM) - (TORQY1 + TORQY2)/TWO
+C-XXX-              GRAD(6,IM) = GRAD(6,IM) - (TORQZ1 + TORQZ2)/TWO
+C-XXX-C
+C-XXX-               IC2 = IC1
+C-XXX-               DO 150 KP=IPX+1,NPPTS(IM)
+C-XXX-                  IC2=IC2+1
+C-XXX-                  X2 = EFP(1,IC2)
+C-XXX-                  Y2 = EFP(2,IC2)
+C-XXX-                  Z2 = EFP(3,IC2)
+C-XXX-C
+C-XXX-                  DX3 = DIND(1,IC2)
+C-XXX-                  DY3 = DIND(2,IC2)
+C-XXX-                  DZ3 = DIND(3,IC2)
+C-XXX-C
+C-XXX-                  DX4 = DINDD(1,IC2)
+C-XXX-                  DY4 = DINDD(2,IC2)
+C-XXX-                  DZ4 = DINDD(3,IC2)
+C-XXX-C
+C-XXX-                  X = X1 - X2
+C-XXX-                  Y = Y1 - Y2
+C-XXX-                  Z = Z1 - Z2
+C-XXX-                  R2 = X*X + Y*Y + Z*Z
+C-XXX-                  R = SQRT(R2)
+C-XXX-                  R3 = R*R2
+C-XXX-                  R5 = R3*R2
+C-XXX-                  R7 = R5*R2
+C-XXX-C
+C-XXX-C       --- ERF = 1 - ERFC
+C-XXX-                  F0 = GMSERFC( BETA * R )
+C-XXX-                  EXPBR = EXP(-BETA * BETA * R2)
+C-XXX-                  F1 = TWO*BETA*R/SQRT(PI)*EXPBR + F0
+C-XXX-                  F2 = 4.0D+00*BETA*BETA*BETA/SQRT(PI)*EXPBR/R2
+C-XXX-                  F3 = R3*F2
+C-XXX-                  F4 = 8.0D+00*BETA*BETA*BETA/SQRT(PI)*EXPBR*
+C-XXX-     *                     (BETA*BETA*R2+ONE)/(R2*R2)
+C-XXX-C
+C-XXX-C   ----  T_AB TENSOR
+C-XXX-               TXX = (THREE*X*X-R2)/R5
+C-XXX-               TYY = (THREE*Y*Y-R2)/R5
+C-XXX-               TZZ = (THREE*Z*Z-R2)/R5
+C-XXX-               TXY = THREE*X*Y/R5
+C-XXX-               TXZ = THREE*X*Z/R5
+C-XXX-               TYZ = THREE*Y*Z/R5
+C-XXX-C
+C-XXX-               F1FACT  = (F1-ONE)*THREE
+C-XXX-               DDDXX = F1FACT*(-FIVE*X*X+R2)/R7-F3*TXX-F4*X*X
+C-XXX-               DDDYY = F1FACT*(-FIVE*Y*Y+R2)/R7-F3*TYY-F4*Y*Y
+C-XXX-               DDDZZ = F1FACT*(-FIVE*Z*Z+R2)/R7-F3*TZZ-F4*Z*Z
+C-XXX-               DDDXY = F1FACT*(-FIVE*X*Y)/R7-F3*TXY-F4*X*Y
+C-XXX-               DDDXZ = F1FACT*(-FIVE*X*Z)/R7-F3*TXZ-F4*X*Z
+C-XXX-               DDDYZ = F1FACT*(-FIVE*Y*Z)/R7-F3*TYZ-F4*Y*Z
+C-XXX-C
+C-XXX-               CHPDDE = TWO*((F1-ONE)*THREE/R5+F2)
+C-XXX-C
+C-XXX-               DMX1 = CHPDDE*(DX1*DX4*X+PT5*(DX1*DY4+
+C-XXX-     *                 DY1*DX4)*Y+PT5*(DX1*DZ4+DZ1*DX4)*Z)
+C-XXX-               DMY1 = CHPDDE*(DY1*DY4*Y+PT5*(DX1*DY4+
+C-XXX-     *                 DY1*DX4)*X+PT5*(DY1*DZ4+DZ1*DY4)*Z)
+C-XXX-               DMZ1 = CHPDDE*(DZ1*DZ4*Z+PT5*(DX1*DZ4+
+C-XXX-     *                 DZ1*DX4)*X+PT5*(DY1*DZ4+DZ1*DY4)*Y)
+C-XXX-C
+C-XXX-               DDD1 = DX1*DX4*DDDXX + DY1*DY4*DDDYY+
+C-XXX-     *                DZ1*DZ4*DDDZZ +
+C-XXX-     *               (DX1*DY4+DY1*DX4)*DDDXY +
+C-XXX-     *               (DX1*DZ4+DZ1*DX4)*DDDXZ +
+C-XXX-     *               (DY1*DZ4+DZ1*DY4)*DDDYZ
+C-XXX-C
+C-XXX-               CONX1 = (DMX1 + DDD1*X)
+C-XXX-               CONY1 = (DMY1 + DDD1*Y)
+C-XXX-               CONZ1 = (DMZ1 + DDD1*Z)
+C-XXX-C
+C-XXX-               DMX2 = CHPDDE*(DX2*DX3*X+PT5*(DX2*DY3+
+C-XXX-     *                 DY2*DX3)*Y+PT5*(DX2*DZ3+DZ2*DX3)*Z)
+C-XXX-               DMY2 = CHPDDE*(DY2*DY3*Y+PT5*(DX2*DY3+
+C-XXX-     *                 DY2*DX3)*X+PT5*(DY2*DZ3+DZ2*DY3)*Z)
+C-XXX-               DMZ2 = CHPDDE*(DZ2*DZ3*Z+PT5*(DX2*DZ3+
+C-XXX-     *                 DZ2*DX3)*X+PT5*(DY2*DZ3+DZ2*DY3)*Y)
+C-XXX-C
+C-XXX-               DDD2 = DX2*DX3*DDDXX + DY2*DY3*DDDYY+
+C-XXX-     *                DZ2*DZ3*DDDZZ +
+C-XXX-     *               (DX2*DY3+DY2*DX3)*DDDXY +
+C-XXX-     *               (DX2*DZ3+DZ2*DX3)*DDDXZ +
+C-XXX-     *               (DY2*DZ3+DZ2*DY3)*DDDYZ
+C-XXX-C
+C-XXX-               CONX2 = (DMX2 + DDD2*X)
+C-XXX-               CONY2 = (DMY2 + DDD2*Y)
+C-XXX-               CONZ2 = (DMZ2 + DDD2*Z)
+C-XXX-C
+C-XXX-C               CONX = (CONX1+CONX2)/TWO
+C-XXX-C               CONY = (CONY1+CONY2)/TWO
+C-XXX-C               CONZ = (CONZ1+CONZ2)/TWO
+C-XXX-C
+C-XXX-              GRAD(1,IM) = GRAD(1,IM) - CONX1
+C-XXX-              GRAD(2,IM) = GRAD(2,IM) - CONY1
+C-XXX-              GRAD(3,IM) = GRAD(3,IM) - CONZ1
+C-XXX-              GRAD1(1,IM) = GRAD1(1,IM) - CONX2
+C-XXX-              GRAD1(2,IM) = GRAD1(2,IM) - CONY2
+C-XXX-              GRAD1(3,IM) = GRAD1(3,IM) - CONZ2
+C-XXX-C             DESFRG(1,IM) = DESFRG(1,IM) - CONX
+C-XXX-C             DESFRG(2,IM) = DESFRG(2,IM) - CONY
+C-XXX-C             DESFRG(3,IM) = DESFRG(3,IM) - CONZ
+C-XXX-C
+C-XXX-C             GRAD1(4,IM) = GRAD1(4,IM) -
+C-XXX-C     *                      (CONZ*(EFP(2,IC2)-EFCENT(2,IM))
+C-XXX-C     *                      -CONY*(EFP(3,IC2)-EFCENT(3,IM)))
+C-XXX-C             GRAD1(5,IM) = GRAD1(5,IM) -
+C-XXX-C     *                      (CONX*(EFP(3,IC2)-EFCENT(3,IM))
+C-XXX-C     *                      -CONZ*(EFP(1,IC2)-EFCENT(1,IM)))
+C-XXX-C             GRAD1(6,IM) = GRAD1(6,IM) -
+C-XXX-C     *                      (CONY*(EFP(1,IC2)-EFCENT(1,IM))
+C-XXX-C     *                      -CONX*(EFP(2,IC2)-EFCENT(2,IM)))
+C-XXX-C             DESFRG(4,IM) = DESFRG(4,IM) -
+C-XXX-C     *                      (CONZ*(EFP(2,IC2)-EFCENT(2,IM))
+C-XXX-C     *                      -CONY*(EFP(3,IC2)-EFCENT(3,IM)))
+C-XXX-C             DESFRG(5,IM) = DESFRG(5,IM) -
+C-XXX-C     *                      (CONX*(EFP(3,IC2)-EFCENT(3,IM))
+C-XXX-C     *                      -CONZ*(EFP(1,IC2)-EFCENT(1,IM)))
+C-XXX-C             DESFRG(6,IM) = DESFRG(6,IM) -
+C-XXX-C     *                      (CONY*(EFP(1,IC2)-EFCENT(1,IM))
+C-XXX-C     *                      -CONX*(EFP(2,IC2)-EFCENT(2,IM)))
+C-XXX-C
+C-XXX-  150       CONTINUE
+C-XXX-C
+C-XXX-  170       CONTINUE
+C-XXX-  180    CONTINUE
+C-XXX-C
+C-XXX-C        WRITE(6,*)'IND-EXCL',(GRAD(I,1),I=4,6)
+C-XXX-C        WRITE(6,*)'IND-EXCL CONX1',(GRAD(I,1),I=1,3)
+C-XXX-C        WRITE(6,*)'IND-EXCL CONX2',(GRAD1(I,1),I=1,3)
+C-XXX-        RETURN
+C-XXX-        END
+C
+C*MODULE EWALD   *DECK EXCL_FIELD
+      SUBROUTINE EXCL_FIELD
+C
+      IMPLICIT DOUBLE PRECISION (A-H, O-Z)
+      LOGICAL IFEWLD,TNFOIL,EWLDPL
+      LOGICAL DOMONO,DODIPO,DOQUAD,DOOCTU
+C
+      PARAMETER (MXFRG=1050, MXFGPT=12000, MXIFRQ=12,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      CHARACTER*8 POLNAM,DPOLNAM,FRGNME
+C
+      COMMON /DOMULT/ DOMONO(MXFGPT),DODIPO(MXFGPT),DOQUAD(MXFGPT),
+     *                DOOCTU(MXFGPT)
+      COMMON /EFMULT/ EFC(3,MXFGPT),EFCHG(2,MXFGPT),EFATRM(MXFGPT),
+     *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
+     *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
+     *                EFOCT(10,MXFGPT),FRGNME(MXFGPT)
+      COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
+     *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
+     *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
+     *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ*MXFGPT),
+     *                POLSCR(MXFGPT),IPLSCR,INDSCR
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /EWALD / IFEWLD,TNFOIL,BETA,ELCNST,EPSLN,CUTOFF,CUTLST,
+     *                KMAX,NKVEC,LEVEL,EWLDPL
+      COMMON /EWFLD / RCPFLD(3,MXFGPT),RCPIIFLD1(3,MXFGPT),
+     *                RCPIIFLD2(3,MXFGPT), TNFLD(3),
+     *                TNIIFLD1(3),TNIIFLD2(3),
+     *                SELFFLD1(3,MXFGPT),SELFFLD2(3,MXFGPT),
+     *                EXCLFLD(3,MXFGPT),
+     *                EXCLIIFLD1(3,MXFGPT),EXCLIIFLD2(3,MXFGPT)
+C
+C      DIMENSION QUA(6,MXFRG)
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00, TWO=2.0D+00, THREE=3.0D+00)
+      PI=4*ATAN(1.0D+00)
+C
+C   ---- CALCULATE FILEDS FROM EXCLUSION ENERGY DUE
+C   ---- TO STATIC MULTIPOLES (INTERACTIONS WITHIN ONE FRAGMENT)
+C   ---- NEEDED FOR FOR POLARIZATION
+C   ---- SELF-ENERGY-FIELD DUE TO STATUIC MULTIPOLES IS 0
+C
+      CALL VCLR(EXCLFLD,1,MXFGPT*3)
+      IF (LEVEL .LT. 2) RETURN
+C
+C
+C      IF (LEVEL.GE.3) THEN
+C    --- THINGS FOR QUADRUPOLES
+C      DO I = 1,NMTTPT
+C        IF(.NOT.DOQUAD(I)) GO TO 210
+C        XX = EFQAD(1,I)
+C        YY = EFQAD(2,I)
+C        ZZ = EFQAD(3,I)
+C        XY = EFQAD(4,I)
+C        XZ = EFQAD(5,I)
+C        YZ = EFQAD(6,I)
+C        DUM = XX + YY + ZZ
+C        QUA(1,I) = PT5 * (THREE * XX - DUM)
+C        QUA(2,I) = PT5 * (THREE * YY - DUM)
+C        QUA(3,I) = PT5 * (THREE * ZZ - DUM)
+C        QUA(4,I) = ONEPT5 * XY
+C        QUA(5,I) = ONEPT5 * XZ
+C        QUA(6,I) = ONEPT5 * YZ
+C210     CONTINUE
+C      END DO
+C      END IF
+C
+      IC1=0
+C   ----  CYCLE OVER ALL POINTS
+         DO 180 IM = 1,NFRG
+            DO 170 IPX=1,NPPTS(IM)
+               IC1=IC1+1
+C
+C   ---- EXCLUSION CORRECTIONS
+               X1 = EFP(1,IC1)
+               Y1 = EFP(2,IC1)
+               Z1 = EFP(3,IC1)
+C
+               EFX = ZERO
+               EFY = ZERO
+               EFZ = ZERO
+C
+               IC2 = LSTMPTS(IM)-1
+               DO 160 JP=1,NMPTS(IM)
+                  IC2=IC2+1
+                  Q2 = EFCHG(1,IC2)+EFCHG(2,IC2)
+                  X2 = EFC(1,IC2)
+                  Y2 = EFC(2,IC2)
+                  Z2 = EFC(3,IC2)
+                  DX2 = EFDIP(1,IC2)
+                  DY2 = EFDIP(2,IC2)
+                  DZ2 = EFDIP(3,IC2)
+C
+                  X = X1 - X2
+                  Y = Y1 - Y2
+                  Z = Z1 - Z2
+                  R2 = X*X + Y*Y + Z*Z
+                  R = SQRT(R2)
+                  R3 = R*R2
+C
+C       --- ERF = 1 - ERFC
+                  F0 = GMSERFC( BETA * R )
+                  EXPBR = EXP(-BETA * BETA * R2)
+                  F1 = TWO*BETA*R/SQRT(PI)*EXPBR + F0
+                  F2 = 4.0D+00*BETA*BETA*BETA/SQRT(PI)*EXPBR/R2
+
+                  IF (DOMONO(IC2)) THEN
+                     EFX = EFX + Q2*(F1-ONE)*X/R3
+                     EFY = EFY + Q2*(F1-ONE)*Y/R3
+                     EFZ = EFZ + Q2*(F1-ONE)*Z/R3
+                  END IF
+C
+                  IF (DODIPO(IC2)) THEN
+                     RMU2 = X*DX2+Y*DY2+Z*DZ2
+                     DUMJ = RMU2*THREE/(R3*R2)
+                     EFX = EFX + (-DX2/R3+X*DUMJ)*(F1-ONE)+X*RMU2*F2
+                     EFY = EFY + (-DY2/R3+Y*DUMJ)*(F1-ONE)+Y*RMU2*F2
+                     EFZ = EFZ + (-DZ2/R3+Z*DUMJ)*(F1-ONE)+Z*RMU2*F2
+                  END IF
+C
+  160          CONTINUE
+               EXCLFLD(1,IC1) = EFX
+               EXCLFLD(2,IC1) = EFY
+               EXCLFLD(3,IC1) = EFZ
+C
+  170       CONTINUE
+  180    CONTINUE
+C
+C       WRITE(6,*) 'EXCLFLD',(EXCLFLD(I,1),I=1,3),
+C     *       (EXCLFLD(I,2),I=1,3),(EXCLFLD(I,3),I=1,3)
+       RETURN
+       END
+C-XXX-C
+C-XXX-C*MODULE EWALD   *DECK SELF_POLGRAD
+C-XXX-      SUBROUTINE SELF_POLGRAD
+C-XXX-C
+C-XXX-      IMPLICIT DOUBLE PRECISION (A-H, O-Z)
+C-XXX-      LOGICAL IFEWLD,TNFOIL,EWLDPL
+C-XXX-C
+C-XXX-      PARAMETER (MXFRG=1050, MXFGPT=12000, MXIFRQ=12,
+C-XXX-     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C-XXX-C
+C-XXX-      CHARACTER*8 POLNAM,DPOLNAM
+C-XXX-C
+C-XXX-      COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
+C-XXX-     *                EFDP(3,MXIFRQ*MXFGPT),
+C-XXX-     *                EFDPOL(9,MXIFRQ*MXFGPT),
+C-XXX-     *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
+C-XXX-     *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ*MXFGPT),
+C-XXX-     *                POLSCR(MXFGPT),IPLSCR,INDSCR
+C-XXX-C      COMMON /EFPGES/ DESFRG(6,MXFRG)
+C-XXX-      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+C-XXX-     *                NPPTS(MXFRG),NPTTPT,IEFP,
+C-XXX-     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+C-XXX-     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+C-XXX-      COMMON /EWALD / IFEWLD,TNFOIL,BETA,ELCNST,EPSLN,CUTOFF,
+C-XXX-     *                CUTLST,KMAX,NKVEC,LEVEL,EWLDPL
+C-XXX-C
+C-XXX-      DIMENSION GRAD(6,MXFGPT)
+C-XXX-C     *           ,GRAD1(6,MXFRG),GRAD2(6,MXFRG),GRAD3(6,MXFRG)
+C-XXX-C      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00, TWO=2.0D+00,
+C-XXX-C     *           THREE=3.0D+00)
+C-XXX-C      PARAMETER (FIVE = 5.0D+00, PT5=0.5D+00)
+C-XXX-      PI=4*ATAN(1.0D+00)
+C-XXX-C
+C-XXX-C   ---- CALCULATE GRADIENTS FROM EXCLUSION ENERGY DUE
+C-XXX-C   ---- TO OTHER INDUCED DIPOLES WITHIN ONE FRAGMENT
+C-XXX-C   ---- (FOR POLARIZATION)
+C-XXX-C
+C-XXX-      IF (LEVEL .LT. 2) RETURN
+C-XXX-C
+C-XXX-      CALL VCLR (GRAD,1,6*MXFRG)
+C-XXX-      FACTOR1=(ELCNST/EPSLN)*(BETA*BETA*BETA/SQRT(PI))*4.0D+00/
+C-XXX-     *         3.0D+00
+C-XXX-C
+C-XXX-      IC1=0
+C-XXX-C   ----  CYCLE OVER ALL POINTS
+C-XXX-         DO 180 IM = 1,NFRG
+C-XXX-            DO 170 IPX=1,NPPTS(IM)
+C-XXX-               IC1=IC1+1
+C-XXX-C
+C-XXX-C   ---- SELF-CORRECTION TORQUES:
+C-XXX-               TORQX = FACTOR1*(DIND(2,IC1)*DINDD(3,IC1)-
+C-XXX-     *                 DIND(3,IC1)*DINDD(2,IC1))
+C-XXX-               TORQY = FACTOR1*(DIND(3,IC1)*DINDD(1,IC1)-
+C-XXX-     *                 DIND(1,IC1)*DINDD(3,IC1))
+C-XXX-               TORQZ = FACTOR1*(DIND(1,IC1)*DINDD(2,IC1)-
+C-XXX-     *                 DIND(2,IC1)*DINDD(1,IC1))
+C-XXX-C
+C-XXX-C
+C-XXX-              GRAD(4,IM) = GRAD(4,IM) - TORQX
+C-XXX-              GRAD(5,IM) = GRAD(5,IM) - TORQY
+C-XXX-              GRAD(6,IM) = GRAD(6,IM) - TORQZ
+C-XXX-  170       CONTINUE
+C-XXX-  180     CONTINUE
+C-XXX-        WRITE(6,*)'SELF',(GRAD(I,1),I=4,6)
+C-XXX-        RETURN
+C-XXX-        END
+C
+C*MODULE EWALD   *DECK TINFOIL
+      SUBROUTINE TINFOIL(ETFCC,ETFCD,ETFDD, QGRAD)
+C
+      IMPLICIT DOUBLE PRECISION (A-H, O-Z)
+      LOGICAL QGRAD,IFEWLD,TNFOIL,EWLDPL
+      LOGICAL GOPARR,DSKWRK,MASWRK
+C
+      PARAMETER (MXFRG=1050, MXFGPT=12000,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      CHARACTER*8 FRGNME
+C
+      COMMON /EFMULT/ EFC(3,MXFGPT),EFCHG(2,MXFGPT),EFATRM(MXFGPT),
+     *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
+     *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
+     *                EFOCT(10,MXFGPT),FRGNME(MXFGPT)
+      COMMON /EFPGES/ DESFRG(6,MXFRG)
+      COMMON /EFPPBC/ XBOX,YBOX,ZBOX,XCUT,YCUT,ZCUT,RCUT
+     *                ,SWR1,SWR2,ISWF
+      COMMON /EWALD / IFEWLD,TNFOIL,BETA,ELCNST,EPSLN,CUTOFF,CUTLST,
+     *                KMAX,NKVEC,LEVEL,EWLDPL
+      COMMON /EWFLD / RCPFLD(3,MXFGPT),RCPIIFLD1(3,MXFGPT),
+     *                RCPIIFLD2(3,MXFGPT), TNFLD(3),
+     *                TNIIFLD1(3),TNIIFLD2(3),
+     *                SELFFLD1(3,MXFGPT),SELFFLD2(3,MXFGPT),
+     *                EXCLFLD(3,MXFGPT),
+     *                EXCLIIFLD1(3,MXFGPT),EXCLIIFLD2(3,MXFGPT)
+      COMMON /EWTINF/ QR(3),DIP(3),DIPIND(3),DIPINDD(3),DIPIND2(3)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
+     *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
+     *                ATORQ(3,MXFRG)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /VIRPR / VIR(3), PRXX, PRYY, PRZZ
+C
+      PARAMETER (ZERO=0.0D+00,TWO=2.0D+00)
+      PI=4*ATAN(1.0D+00)
+C
+      ETFCC = ZERO
+      ETFCD = ZERO
+      ETFDD = ZERO
+      CALL VCLR(QR,1,3)
+      CALL VCLR(DIP,1,3)
+      CALL VCLR(TNFLD,1,3)
+C
+C   ---- THERE ARE NO CORRECTIONS FOR TINFOIL BOUNDARY CONDITIONS.
+      IF ( TNFOIL ) RETURN
+C
+C   ---- CALCULATE THE TOTAL DIPOLE FOR THE CELL.
+      IC1=0
+C   ----  CYCLE OVER ALL POINTS
+         DO IFRG = 1,NFRG
+            DO IM=1,NMPTS(IFRG)
+               IC1=IC1+1
+                X = EFC(1,IC1)
+                Y = EFC(2,IC1)
+                Z = EFC(3,IC1)
+C
+                QR(1) = QR(1)+(EFCHG(1,IC1)+EFCHG(2,IC1))*X
+                QR(2) = QR(2)+(EFCHG(1,IC1)+EFCHG(2,IC1))*Y
+                QR(3) = QR(3)+(EFCHG(1,IC1)+EFCHG(2,IC1))*Z
+                IF (LEVEL .GE. 2) THEN
+                DIP(1) = DIP(1) +  EFDIP(1,IC1)
+                DIP(2) = DIP(2) +  EFDIP(2,IC1)
+                DIP(3) = DIP(3) +  EFDIP(3,IC1)
+                END IF
+             END DO
+          END DO
+C
+C   ---- CALCULATE SOME INTERMEDIATE CONSTANTS.
+      PREFAC=(ELCNST/EPSLN)*(TWO*PI/(3.0D+00*XBOX*YBOX*ZBOX))
+C
+C   ---- CALCULATE THE ELECTROSTATIC CORRECTION (ASSUME A SPHERE).
+      ETFCC=PREFAC*DDOT(3,QR,1,QR,1)
+      IF (LEVEL .GE. 2) THEN
+         ETFCD=TWO*PREFAC*DDOT(3,QR,1,DIP,1)
+         ETFDD=PREFAC*DDOT(3,DIP,1,DIP,1)
+      END IF
+C
+C   ---- FIELD DUE TO STATIC MULTIPOLES
+      DO I=1,3
+         TNFLD(I) = -TWO*PREFAC*(QR(I)+DIP(I))
+      END DO
+C
+C   ---- CALCULATE THE CORRECTION TO THE GRADIENTS.
+      IF ( QGRAD ) THEN
+         IPCOUNT = ME -1
+C   ----  CYCLE OVER ALL POINTS
+         DO IM = 1,NFRG
+C
+C   ---- GO PARALLEL!
+            IF (GOPARR) THEN
+               IPCOUNT = IPCOUNT + 1
+               IF (MOD(IPCOUNT,NPROC).NE.0) GO TO 101
+            END IF
+            IC1 = LSTMPTS(IM)-1
+            DO JP=1,NMPTS(IM)
+               IC1=IC1+1
+               Q = EFCHG(1,IC1)+EFCHG(2,IC1)
+C
+              CONX = TWO*PREFAC*Q*QR(1)
+              CONY = TWO*PREFAC*Q*QR(2)
+              CONZ = TWO*PREFAC*Q*QR(3)
+C
+              IF (LEVEL .GE. 2) THEN
+              TORQX = TWO*PREFAC*(EFDIP(2,IC1)*QR(3)-
+     *                         EFDIP(3,IC1)*QR(2))
+              TORQY = TWO*PREFAC*(EFDIP(3,IC1)*QR(1)-
+     *                         EFDIP(1,IC1)*QR(3))
+              TORQZ = TWO*PREFAC*(EFDIP(1,IC1)*QR(2)-
+     *                         EFDIP(2,IC1)*QR(1))
+C
+              CONX = CONX + TWO*PREFAC*Q*DIP(1)
+              CONY = CONY + TWO*PREFAC*Q*DIP(2)
+              CONZ = CONZ + TWO*PREFAC*Q*DIP(3)
+C
+              TORQX = TORQX + TWO*PREFAC*(EFDIP(2,IC1)*DIP(3)-
+     *                         EFDIP(3,IC1)*DIP(2))
+              TORQY = TORQY + TWO*PREFAC*(EFDIP(3,IC1)*DIP(1)-
+     *                         EFDIP(1,IC1)*DIP(3))
+              TORQZ = TORQZ + TWO*PREFAC*(EFDIP(1,IC1)*DIP(2)-
+     *                         EFDIP(2,IC1)*DIP(1))
+              END IF
+C
+            VIR(1) = VIR(1)     + CONX
+            VIR(2) = VIR(2)     + CONY
+            VIR(3) = VIR(3)     + CONZ
+C
+             DESFRG(1,IM) = DESFRG(1,IM) + CONX
+             DESFRG(2,IM) = DESFRG(2,IM) + CONY
+             DESFRG(3,IM) = DESFRG(3,IM) + CONZ
+             DESFRG(4,IM) = DESFRG(4,IM) +
+     *                      (CONZ*(EFC(2,IC1)-EFCENT(2,IM))
+     *                      -CONY*(EFC(3,IC1)-EFCENT(3,IM)))
+     *                      + TORQX
+             DESFRG(5,IM) = DESFRG(5,IM) +
+     *                      (CONX*(EFC(3,IC1)-EFCENT(3,IM))
+     *                      -CONZ*(EFC(1,IC1)-EFCENT(1,IM)))
+     *                      + TORQY
+             DESFRG(6,IM) = DESFRG(6,IM) +
+     *                      (CONY*(EFC(1,IC1)-EFCENT(1,IM))
+     *                      -CONX*(EFC(2,IC1)-EFCENT(2,IM)))
+     *                      + TORQZ
+            END DO
+C
+  101      CONTINUE
+         END DO
+      END IF
+C
+      RETURN
+      END
+C
+C*MODULE EWALD   *DECK TINFOIL_FIELD
+      SUBROUTINE TINFOIL_FIELD
+C
+      IMPLICIT DOUBLE PRECISION (A-H, O-Z)
+      LOGICAL IFEWLD,TNFOIL,EWLDPL
+C
+      PARAMETER (MXFRG=1050, MXFGPT=12000, MXIFRQ=12,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      CHARACTER*8 POLNAM,DPOLNAM
+C
+      COMMON /EFPPBC/ XBOX,YBOX,ZBOX,XCUT,YCUT,ZCUT,RCUT
+     *                ,SWR1,SWR2,ISWF
+      COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
+     *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
+     *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
+     *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ*MXFGPT),
+     *                POLSCR(MXFGPT),IPLSCR,INDSCR
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /EWALD / IFEWLD,TNFOIL,BETA,ELCNST,EPSLN,CUTOFF,CUTLST,
+     *                KMAX,NKVEC,LEVEL,EWLDPL
+      COMMON /EWFLD / RCPFLD(3,MXFGPT),RCPIIFLD1(3,MXFGPT),
+     *                RCPIIFLD2(3,MXFGPT), TNFLD(3),
+     *                TNIIFLD1(3),TNIIFLD2(3),
+     *                SELFFLD1(3,MXFGPT),SELFFLD2(3,MXFGPT),
+     *                EXCLFLD(3,MXFGPT),
+     *                EXCLIIFLD1(3,MXFGPT),EXCLIIFLD2(3,MXFGPT)
+C      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /EWTINF/ QR(3),DIP(3),DIPIND(3),DIPINDD(3),DIPIND2(3)
+C
+      PARAMETER (TWO=2.0D+00)
+      PI=4*ATAN(1.0D+00)
+C
+      CALL VCLR(DIPIND,1,3)
+      CALL VCLR(DIPINDD,1,3)
+      CALL VCLR(TNIIFLD1,1,3)
+      CALL VCLR(TNIIFLD2,1,3)
+C
+C   ---- THERE ARE NO CORRECTIONS FOR TINFOIL BOUNDARY CONDITIONS.
+      IF ( TNFOIL ) RETURN
+C
+C   ---- CALCULATE THE TOTAL DIPOLE FOR THE CELL.
+      IC1=0
+C   ----  CYCLE OVER ALL POINTS
+         DO IFRG = 1,NFRG
+            DO IM=1,NPPTS(IFRG)
+               IC1=IC1+1
+C
+                DIPIND(1) = DIPIND(1) +  DIND(1,IC1)
+                DIPIND(2) = DIPIND(2) +  DIND(2,IC1)
+                DIPIND(3) = DIPIND(3) +  DIND(3,IC1)
+C
+                DIPINDD(1) = DIPINDD(1) +  DINDD(1,IC1)
+                DIPINDD(2) = DIPINDD(2) +  DINDD(2,IC1)
+                DIPINDD(3) = DIPINDD(3) +  DINDD(3,IC1)
+C
+             END DO
+          END DO
+C
+C   ---- CALCULATE SOME INTERMEDIATE CONSTANTS.
+      PREFAC=(ELCNST/EPSLN)*(TWO*PI/(3.0D+00*XBOX*YBOX*ZBOX))
+C
+C   ---- FIELD DUE TO INDUCED DIPOLES
+      DO I=1,3
+         TNIIFLD1(I) = -TWO*PREFAC*DIPIND(I)
+         TNIIFLD2(I) = -TWO*PREFAC*DIPINDD(I)
+      END DO
+C
+C      WRITE(6,*)'TIN_FIELD 1',(TNIIFLD1(I),I=1,3)
+C      WRITE(6,*)'TIN_FIELD 2',(TNIIFLD2(I),I=1,3)
+      RETURN
+      END
+C
+C*MODULE EWALD   *DECK TINFOIL_POLGRAD
+      SUBROUTINE TINFOIL_POLGRAD
+C
+      IMPLICIT DOUBLE PRECISION (A-H, O-Z)
+      LOGICAL IFEWLD,TNFOIL,EWLDPL
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      LOGICAL DOMONO,DODIPO,DOQUAD,DOOCTU
+C
+      PARAMETER (MXFRG=1050, MXFGPT=12000, MXIFRQ=12,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      CHARACTER*8 POLNAM,DPOLNAM,FRGNME
+C
+      COMMON /DOMULT/ DOMONO(MXFGPT),DODIPO(MXFGPT),DOQUAD(MXFGPT),
+     *                DOOCTU(MXFGPT)
+      COMMON /EFPGES/ DESFRG(6,MXFRG)
+      COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
+     *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
+     *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
+     *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ*MXFGPT),
+     *                POLSCR(MXFGPT),IPLSCR,INDSCR
+      COMMON /EFPPBC/ XBOX,YBOX,ZBOX,XCUT,YCUT,ZCUT,RCUT
+     *                ,SWR1,SWR2,ISWF
+      COMMON /EFMULT/ EFC(3,MXFGPT),EFCHG(2,MXFGPT),EFATRM(MXFGPT),
+     *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
+     *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
+     *                EFOCT(10,MXFGPT),FRGNME(MXFGPT)
+      COMMON /EWALD / IFEWLD,TNFOIL,BETA,ELCNST,EPSLN,CUTOFF,CUTLST,
+     *                KMAX,NKVEC,LEVEL,EWLDPL
+      COMMON /EWTINF/ QR(3),DIP(3),DIPIND(3),DIPINDD(3),DIPIND2(3)
+      COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
+     *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
+     *                ATORQ(3,MXFRG)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /VIRPR / VIR(3), PRXX, PRYY, PRZZ
+C
+      PARAMETER (TWO=2.0D+00,ZERO=0.0D+00)
+      PI=4*ATAN(1.0D+00)
+C
+      CALL VCLR(DIPIND2,1,3)
+C
+C   ---- THERE ARE NO CORRECTIONS FOR TINFOIL BOUNDARY CONDITIONS.
+      IF ( TNFOIL ) RETURN
+C
+C   ---- CALCULATE THE TOTAL DIPOLE FOR THE CELL.
+      IC1=0
+C   ----  CYCLE OVER ALL POINTS
+         DO IFRG = 1,NFRG
+            DO IM=1,NPPTS(IFRG)
+               IC1=IC1+1
+C
+                DIPIND2(1) = DIPIND2(1)+(DIND(1,IC1)+DINDD(1,IC1))/TWO
+                DIPIND2(2) = DIPIND2(2)+(DIND(2,IC1)+DINDD(2,IC1))/TWO
+                DIPIND2(3) = DIPIND2(3)+(DIND(3,IC1)+DINDD(3,IC1))/TWO
+C
+             END DO
+          END DO
+C
+C   ---- CALCULATE SOME INTERMEDIATE CONSTANTS.
+      PREFAC=(ELCNST/EPSLN)*(TWO*PI/(3.0D+00*XBOX*YBOX*ZBOX))
+C
+         CALL VCLR (GRAD, 1,3*NFRG)
+         IPCOUNT = ME -1
+         INDEX = 0
+         IC2 = 0
+C   ----  CYCLE OVER ALL POINTS
+         DO IM = 1,NFRG
+C
+C   ---- GO PARALLEL!
+            IF (GOPARR) THEN
+               IPCOUNT = IPCOUNT + 1
+               IF (MOD(IPCOUNT,NPROC).NE.0) GO TO 101
+            END IF
+C
+C   ---- CALCULATE THE CORRECTION TO THE GRADIENTS ON STATIC
+C   ---- MULTIPOLES DUE TO  INDUCED DIPOLES
+            IC1 = LSTMPTS(IM)-1
+            DO JP=1,NMPTS(IM)
+               IC1=IC1+1
+               Q = EFCHG(1,IC1)+EFCHG(2,IC1)
+C
+              CONX = ZERO
+              CONY = ZERO
+              CONZ = ZERO
+C
+              TORQX = ZERO
+              TORQY = ZERO
+              TORQZ = ZERO
+C
+              IF (DOMONO(IC1)) THEN
+              CONX = TWO*PREFAC*Q*DIPIND2(1)
+              CONY = TWO*PREFAC*Q*DIPIND2(2)
+              CONZ = TWO*PREFAC*Q*DIPIND2(3)
+              END IF
+              IF (DODIPO(IC1)) THEN
+              TORQX = TWO*PREFAC*(EFDIP(2,IC1)*DIPIND2(3)-
+     *                         EFDIP(3,IC1)*DIPIND2(2))
+              TORQY = TWO*PREFAC*(EFDIP(3,IC1)*DIPIND2(1)-
+     *                         EFDIP(1,IC1)*DIPIND2(3))
+              TORQZ = TWO*PREFAC*(EFDIP(1,IC1)*DIPIND2(2)-
+     *                         EFDIP(2,IC1)*DIPIND2(1))
+              END IF
+C
+
+            VIR(1) = VIR(1)     + CONX
+            VIR(2) = VIR(2)     + CONY
+            VIR(3) = VIR(3)     + CONZ
+C
+             DESFRG(1,IM) = DESFRG(1,IM) + CONX
+             DESFRG(2,IM) = DESFRG(2,IM) + CONY
+             DESFRG(3,IM) = DESFRG(3,IM) + CONZ
+             DESFRG(4,IM) = DESFRG(4,IM) +
+     *                      (CONZ*(EFC(2,IC1)-EFCENT(2,IM))
+     *                      -CONY*(EFC(3,IC1)-EFCENT(3,IM)))
+     *                      + TORQX
+             DESFRG(5,IM) = DESFRG(5,IM) +
+     *                      (CONX*(EFC(3,IC1)-EFCENT(3,IM))
+     *                      -CONZ*(EFC(1,IC1)-EFCENT(1,IM)))
+     *                      + TORQY
+             DESFRG(6,IM) = DESFRG(6,IM) +
+     *                      (CONY*(EFC(1,IC1)-EFCENT(1,IM))
+     *                      -CONX*(EFC(2,IC1)-EFCENT(2,IM)))
+     *                      + TORQZ
+            END DO
+C
+C   ---- CALCULATE THE CORRECTION TO THE GRADIENTS ON
+C   ---- INDUCED DIPOLES DUE TO STATIC MULTIPOLES AND
+C   ---- OTHER INDUCED DIPOLES
+C
+            IC2 = INDEX
+            DO IPX=1,NPPTS(IM)
+               IC2=IC2+1
+C
+              TORQX = ZERO
+              TORQY = ZERO
+              TORQZ = ZERO
+C
+              DPX1 = DIND(1,IC2)
+              DPY1 = DIND(2,IC2)
+              DPZ1 = DIND(3,IC2)
+              DPX2 = DINDD(1,IC2)
+              DPY2 = DINDD(2,IC2)
+              DPZ2 = DINDD(3,IC2)
+              DPX = (DIND(1,IC2)+DINDD(1,IC2))/TWO
+              DPY = (DIND(2,IC2)+DINDD(2,IC2))/TWO
+              DPZ = (DIND(3,IC2)+DINDD(3,IC2))/TWO
+C
+C   ----  IND.DIP X QR
+              TORQX = TWO*PREFAC*(DPY*QR(3)-DPZ*QR(2))
+              TORQY = TWO*PREFAC*(DPZ*QR(1)-DPX*QR(3))
+              TORQZ = TWO*PREFAC*(DPX*QR(2)-DPY*QR(1))
+C
+C   ----  IND.DIP X DIP
+              TORQX = TORQX + TWO*PREFAC*(DPY*DIP(3)-DPZ*DIP(2))
+              TORQY = TORQY + TWO*PREFAC*(DPZ*DIP(1)-DPX*DIP(3))
+              TORQZ = TORQZ + TWO*PREFAC*(DPX*DIP(2)-DPY*DIP(1))
+C
+C   ----  IND.DIP X DIPIND2 (SUM_INDUCED_DIPOLES)
+              TORQX = TORQX +PREFAC*(DPY1*DIPINDD(3)-DPZ1*DIPINDD(2)+
+     *                DPY2*DIPIND(3)-DPZ2*DIPIND(2))
+              TORQY = TORQY +PREFAC*(DPZ1*DIPINDD(1)-DPX1*DIPINDD(3)+
+     *                DPZ2*DIPIND(1)-DPX2*DIPIND(3))
+              TORQZ = TORQZ +PREFAC*(DPX1*DIPINDD(2)-DPY1*DIPINDD(1)+
+     *                DPX2*DIPIND(2)-DPY2*DIPIND(1))
+C
+              DESFRG(4,IM) = DESFRG(4,IM) + TORQX
+              DESFRG(5,IM) = DESFRG(5,IM) + TORQY
+              DESFRG(6,IM) = DESFRG(6,IM) + TORQZ
+            END DO
+C
+  101      CONTINUE
+           INDEX = INDEX + NPPTS(IM)
+         END DO
+C
+      RETURN
+      END
+C
+C*MODULE EWALD   *DECK CALC_SNDIP
+      SUBROUTINE CALC_SNDIP
+C
+      IMPLICIT DOUBLE PRECISION (A-H, O-Z)
+      LOGICAL IFEWLD,TNFOIL,EWLDPL
+      LOGICAL GOPARR,DSKWRK,MASWRK
+C
+      PARAMETER (MXFRG=1050, MXFGPT=12000, MXIFRQ=12,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+      PARAMETER (MAXVEC=20000)
+C
+      CHARACTER*8 POLNAM,DPOLNAM
+C
+      COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
+     *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
+     *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
+     *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ*MXFGPT),
+     *                POLSCR(MXFGPT),IPLSCR,INDSCR
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /EWALD / IFEWLD,TNFOIL,BETA,ELCNST,EPSLN,CUTOFF,CUTLST,
+     *                KMAX,NKVEC,LEVEL,EWLDPL
+      COMMON /EWALD1/ RKEXPEL(MAXVEC),RKVEC(3,MAXVEC)
+      COMMON /EWALD2/ COSDIP(MAXVEC),SINDIP(MAXVEC),COSCH(MAXVEC),
+     *                SINCH(MAXVEC),CSDIPI(MAXVEC),SNDIPI(MAXVEC),
+     *                CSDIP1(MAXVEC),SNDIP1(MAXVEC),
+     *                CSDIP2(MAXVEC),SNDIP2(MAXVEC)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+      PARAMETER (TWO=2.0D+00)
+C   ------ CALCULATES COSDIP AND SINDIP
+C
+C   ---- INITIALIZATION.
+      CALL VCLR(CSDIPI,1,MAXVEC)
+      CALL VCLR(SNDIPI,1,MAXVEC)
+      CALL VCLR(CSDIP1,1,MAXVEC)
+      CALL VCLR(SNDIP1,1,MAXVEC)
+      CALL VCLR(CSDIP2,1,MAXVEC)
+      CALL VCLR(SNDIP2,1,MAXVEC)
+C
+C     ----- INTIALIZE PARALLEL -----
+      IPCOUNT = ME - 1
+      DO 300 IKVEC = 1,NKVEC
+C
+C   ---- GO PARALLEL!
+         IF (GOPARR) THEN
+            IPCOUNT = IPCOUNT + 1
+            IF (MOD(IPCOUNT,NPROC).NE.0) GO TO 300
+         END IF
+C
+C   ---- LOOP OVER THE ATOMS.
+         IC1 = 0
+         DO 280 IM = 1,NFRG
+            DO 270 IPX=1,NPPTS(IM)
+               IC1=IC1+1
+C
+               DIPX = (DIND(1,IC1)+DINDD(1,IC1))/TWO
+               DIPY = (DIND(2,IC1)+DINDD(2,IC1))/TWO
+               DIPZ = (DIND(3,IC1)+DINDD(3,IC1))/TWO
+               DK1 = DDOT(3,DIND(1,IC1),1,RKVEC(1,IKVEC),1)
+               DK2 = DDOT(3,DINDD(1,IC1),1,RKVEC(1,IKVEC),1)
+               DK = RKVEC(1,IKVEC)*DIPX+RKVEC(2,IKVEC)*DIPY+
+     *                  RKVEC(3,IKVEC)*DIPZ
+C
+C   ---- CALCULATE THE COS AND SIN.
+               RK = DDOT(3,RKVEC(1,IKVEC),1,EFP(1,IC1),1)
+               COSKR = COS ( RK )
+               SINKR = SIN ( RK )
+C
+               CSDIPI(IKVEC) = CSDIPI(IKVEC) + DK*COSKR
+               SNDIPI(IKVEC) = SNDIPI(IKVEC) + DK*SINKR
+               CSDIP1(IKVEC) = CSDIP1(IKVEC) + DK1*COSKR
+               SNDIP1(IKVEC) = SNDIP1(IKVEC) + DK1*SINKR
+               CSDIP2(IKVEC) = CSDIP2(IKVEC) + DK2*COSKR
+               SNDIP2(IKVEC) = SNDIP2(IKVEC) + DK2*SINKR
+C
+  270       CONTINUE
+  280    CONTINUE
+  300 CONTINUE
+C
+C     ----- SUM UP PARTIAL CONTRIBUTIONS IF PARALLEL -----
+      IF (GOPARR) THEN
+         CALL DDI_GSUMF(807,CSDIPI,MAXVEC)
+         CALL DDI_GSUMF(808,SNDIPI,MAXVEC)
+      END IF
+C
+      RETURN
+      END
+C
+C*MODULE EWALD   *DECK DIRECTSUM
+      SUBROUTINE DIRECTSUM
+C
+      IMPLICIT DOUBLE PRECISION (A-H, O-Z)
+      LOGICAL IFEWLD,TNFOIL,EWLDPL
+      LOGICAL GOPARR,DSKWRK,MASWRK
+C
+      PARAMETER (MXFRG=1050, MXFGPT=12000,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      CHARACTER*8 FRGNME
+C
+      COMMON /EFPPBC/ XBOX,YBOX,ZBOX,XCUT,YCUT,ZCUT,RCUT
+     *                ,SWR1,SWR2,ISWF
+      COMMON /EFMULT/ EFC(3,MXFGPT),EFCHG(2,MXFGPT),EFATRM(MXFGPT),
+     *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
+     *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
+     *                EFOCT(10,MXFGPT),FRGNME(MXFGPT)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
+     *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
+     *                ATORQ(3,MXFRG)
+      COMMON /EWALD / IFEWLD,TNFOIL,BETA,ELCNST,EPSLN,CUTOFF,CUTLST,
+     *                KMAX,NKVEC,LEVEL,EWLDPL
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+      DIMENSION GRAD(6,MXFRG),ECCAR(200)
+      PARAMETER (ZERO=0.0D+00, TWO=2.0D+00, PT5=0.5D+00,
+     *           THREE=3.0D+00, FIVE=5.0D+00)
+C
+C   ---- CALCULATE ELECTROSTATIC ENERGY BY USING DIRECT SUMMATION:
+C   ---- TO BE COMPARED WITH TOTAL EWALD ENERGY WITH VACUUM
+C   ---- SURFACE CONDITION
+C
+        MCUT = 40
+        ECC = ZERO
+        ECD = ZERO
+        EDD = ZERO
+        CALL VCLR(GRAD, 1, 6*MXFRG)
+        CALL VCLR(ECCAR,1,200)
+C
+        CONCQX = ZERO
+        CONCQY = ZERO
+        CONCQZ = ZERO
+        TIMCQX = ZERO
+        TIMCQY  = ZERO
+        TIMCQZ  = ZERO
+        TJMCQX  = ZERO
+        TJMCQY  = ZERO
+        TJMCQZ  = ZERO
+C
+C   ----  CYCLE OVER ALL POINTS
+         DO 180 IM = 1,NFRG
+            DO 170 JM = 1,NFRG
+C
+            IC1 = LSTMPTS(IM)-1
+            DO 160 IPX=1,NMPTS(IM)
+               IC1=IC1+1
+               Q1 = EFCHG(1,IC1)+EFCHG(2,IC1)
+               X1 = EFC(1,IC1)
+               Y1 = EFC(2,IC1)
+               Z1 = EFC(3,IC1)
+               D1X = EFDIP(1,IC1)
+               D1Y = EFDIP(2,IC1)
+               D1Z = EFDIP(3,IC1)
+C
+               IC2 = LSTMPTS(JM)-1
+               DO 150 JP=1,NMPTS(JM)
+                  IC2=IC2+1
+                  Q2 = EFCHG(1,IC2)+EFCHG(2,IC2)
+                  X2 = EFC(1,IC2)
+                  Y2 = EFC(2,IC2)
+                  Z2 = EFC(3,IC2)
+                  D2X = EFDIP(1,IC2)
+                  D2Y = EFDIP(2,IC2)
+                  D2Z = EFDIP(3,IC2)
+C
+                  X = X1 - X2
+                  Y = Y1 - Y2
+                  Z = Z1 - Z2
+C
+                  CONX = ZERO
+                  CONY = ZERO
+                  CONZ = ZERO
+                  TIMX = ZERO
+                  TIMY = ZERO
+                  TIMZ = ZERO
+                  TJMX = ZERO
+                  TJMY = ZERO
+                  TJMZ = ZERO
+C
+             DO MX = -MCUT, MCUT
+                DO MY = -MCUT, MCUT
+                   DO MZ = -MCUT, MCUT
+C
+                     CONCCX =ZERO
+                     CONCDX =ZERO
+                     CONCQX =ZERO
+                     CONDDX = ZERO
+                     CONCCY =ZERO
+                     CONCDY =ZERO
+                     CONCQY =ZERO
+                     CONDDY = ZERO
+                     CONCCZ =ZERO
+                     CONCDZ =ZERO
+                     CONCQZ =ZERO
+                     CONDDZ = ZERO
+
+                      RX = X + MX*XBOX
+                      RY = Y + MY*YBOX
+                      RZ = Z + MZ*ZBOX
+C
+                      R2 = (RX*RX + RY*RY + RZ*RZ)
+                      R = SQRT(R2)
+                      IF (IM.EQ.JM .AND. (MX.EQ.0.AND.MY.EQ.0
+     *                    .AND.MZ.EQ.0)) GOTO 333
+C
+C                         IF (Q1*Q1*Q2*Q2 .GT. 1.0D-05) THEN
+                         IF (IM.EQ.JM) THEN
+                            ECCPAIR = Q1*Q2/R
+                         ELSE
+                            ECCPAIR = Q1*Q2/R/TWO
+                         END IF
+C
+                         INDEX = 1+INT(R/10)
+                         ECCAR(INDEX) = ECCAR(INDEX) +ECCPAIR
+C
+                         R3 = R*R2
+                         IF (LEVEL. GE. 2) THEN
+                         RMU1 = D1X*RX + D1Y*RY + D1Z*RZ
+                         RMU2 = D2X*RX + D2Y*RY + D2Z*RZ
+                         ECD = ECD + (Q1*RMU2-Q2*RMU1)/R3
+C
+                         DUMJ = RMU2*THREE/(R3*R2)
+                         DJFX = (-D2X/R3+RX*DUMJ)
+                         DJFY = (-D2Y/R3+RY*DUMJ)
+                         DJFZ = (-D2Z/R3+RZ*DUMJ)
+                         EDD = EDD-(D1X*DJFX+D1Y*DJFY+D1Z*DJFZ)
+                         END IF
+C
+C   -----  GRADIENTS
+                         CONCC=Q1*Q2/R3
+                         CONCCX=CONCC*RX
+                         CONCCY=CONCC*RY
+                         CONCCZ=CONCC*RZ
+C
+                         IF (LEVEL. GE. 2) THEN
+C   ---- CHARGE-DIPOLE
+                     CFR1 = Q2/R3
+                     CN1 = RMU1*Q2*THREE/(R3*R2)
+                     CFR2 = Q1/R3
+                     CN2 = RMU2*Q1*THREE/(R3*R2)
+                     CONCDX = D1X*CFR1 - D2X*CFR2 -RX*(CN1-CN2)
+                     CONCDY = D1Y*CFR1 - D2Y*CFR2 -RY*(CN1-CN2)
+                     CONCDZ = D1Z*CFR1 - D2Z*CFR2 -RZ*(CN1-CN2)
+C
+C   ---- THIS IS FOR TORQUE
+                  TIMCDX= CFR1*(D1Y*RZ-D1Z*RY)
+                  TIMCDY= CFR1*(D1Z*RX-D1X*RZ)
+                  TIMCDZ= CFR1*(D1X*RY-D1Y*RX)
+C
+                  TJMCDX= CFR2*(D2Y*RZ-D2Z*RY)
+                  TJMCDY= CFR2*(D2Z*RX-D2X*RZ)
+                  TJMCDZ= CFR2*(D2X*RY-D2Y*RX)
+C
+C   ---- DIPOLE-DIPOLE GRADIENTS
+C
+                      XX = RX*RX
+                      YY = RY*RY
+                      ZZ = RZ*RZ
+                      XY = RX*RY
+                      XZ = RX*RZ
+                      YZ = RY*RZ
+                      R7 = R2*R2*R3
+C
+                      DXX = THREE*(-FIVE*XX+R2)/R7
+                      DYY = THREE*(-FIVE*YY+R2)/R7
+                      DZZ = THREE*(-FIVE*ZZ+R2)/R7
+                      DXY = THREE*(-FIVE*XY)/R7
+                      DXZ = THREE*(-FIVE*XZ)/R7
+                      DYZ = THREE*(-FIVE*YZ)/R7
+C
+                  FACTDD = TWO*THREE/(R2*R3)
+                  DMX = FACTDD * (D1X*D2X*RX+PT5*(D1X*D2Y+
+     *                    D1Y*D2X)*RY+PT5*(D1X*D2Z+D1Z*D2X)*RZ)
+                  DMY = FACTDD * (D1Y*D2Y*RY+PT5*(D1X*D2Y+
+     *                    D1Y*D2X)*RX+PT5*(D1Y*D2Z+D1Z*D2Y)*RZ)
+                  DMZ = FACTDD * (D1Z*D2Z*RZ+PT5*(D1X*D2Z+
+     *                    D1Z*D2X)*RX+PT5*(D1Y*D2Z+D1Z*D2Y)*RY)
+C
+                  DDD = D1X*D2X*DXX + D1Y*D2Y*DYY +
+     *                   D1Z*D2Z*DZZ +
+     *                  (D1X*D2Y+D1Y*D2X)*DXY +
+     *                  (D1X*D2Z+D1Z*D2X)*DXZ +
+     *                  (D1Y*D2Z+D1Z*D2Y)*DYZ
+C
+C                  WRITE(6,*)'DMX=',DMX,'DDD=',DDD
+                  CONDDX =  (DMX + DDD*RX)
+                  CONDDY =  (DMY + DDD*RY)
+                  CONDDZ =  (DMZ + DDD*RZ)
+C
+C  --- THIS IS MU_1 PART, ANALOGUES TO DJFX DIPOLE-DIPOLE ENERGY TERMS
+                DUMI = RMU1*THREE/(R2*R3)
+                DIFX = (-D1X/R3+RX*DUMI)
+                DIFY = (-D1Y/R3+RY*DUMI)
+                DIFZ = (-D1Z/R3+RZ*DUMI)
+C
+C  ---- TORQUES
+                  TJMDDX=D2Y*DIFZ-D2Z*DIFY
+                  TJMDDY=D2Z*DIFX-D2X*DIFZ
+                  TJMDDZ=D2X*DIFY-D2Y*DIFX
+                  TIMDDX=D1Y*DJFZ-D1Z*DJFY
+                  TIMDDY=D1Z*DJFX-D1X*DJFZ
+                  TIMDDZ=D1X*DJFY-D1Y*DJFX
+                  END IF
+C
+C
+               CONX = CONX + (CONCCX + CONCDX + CONCQX + CONDDX)/TWO
+               CONY = CONY + (CONCCY + CONCDY + CONCQY + CONDDY)/TWO
+               CONZ = CONZ + (CONCCZ + CONCDZ + CONCQZ + CONDDZ)/TWO
+               IF (LEVEL .GE. 2) THEN
+               TIMX = TIMX + (TIMCDX + TIMCQX + TIMDDX )/TWO
+               TIMY = TIMY + (TIMCDY + TIMCQY + TIMDDY )/TWO
+               TIMZ = TIMZ + (TIMCDZ + TIMCQZ + TIMDDZ )/TWO
+               TJMX = TJMX + (TJMCDX - TJMCQX - TJMDDX )/TWO
+               TJMY = TJMY + (TJMCDY - TJMCQY - TJMDDY )/TWO
+               TJMZ = TJMZ + (TJMCDZ - TJMCQZ - TJMDDZ )/TWO
+               END IF
+C
+  333         CONTINUE
+                    END DO
+                 END DO
+              END DO
+C
+C                  WRITE(6,*)'IM=',IM,'JM=',JM,
+C     *                      'IPX=',IPX,'JP=',JP
+C                  WRITE(6,*)'CONCCX=',CONCCX,'CONCDX=',CONCDX,
+C     *                      'CONDDX=',CONDDX
+C                  CONX = CONCCX + CONCDX + CONCQX + CONDDX
+C                  CONY = CONCCY + CONCDY + CONCQY + CONDDY
+C                  CONZ = CONCCZ + CONCDZ + CONCQZ + CONDDZ
+C
+                GRAD(1,JM) = GRAD(1,JM) + CONX
+                GRAD(2,JM) = GRAD(2,JM) + CONY
+                GRAD(3,JM) = GRAD(3,JM) + CONZ
+                GRAD(4,JM) = GRAD(4,JM) +
+     *                       (CONZ*(EFC(2,IC2)-EFCENT(2,JM))
+     *                      -CONY*(EFC(3,IC2)-EFCENT(3,JM))
+     *                      +TJMX )
+                GRAD(5,JM) = GRAD(5,JM) +
+     *                      (CONX*(EFC(3,IC2)-EFCENT(3,JM))
+     *                      -CONZ*(EFC(1,IC2)-EFCENT(1,JM))
+     *                      +TJMY )
+                GRAD(6,JM) = GRAD(6,JM) +
+     *                      (CONY*(EFC(1,IC2)-EFCENT(1,JM))
+     *                      -CONX*(EFC(2,IC2)-EFCENT(2,JM))
+     *                      +TJMZ )
+C
+                GRAD(1,IM) = GRAD(1,IM) - CONX
+                GRAD(2,IM) = GRAD(2,IM) - CONY
+                GRAD(3,IM) = GRAD(3,IM) - CONZ
+                GRAD(4,IM) = GRAD(4,IM) -
+     *                       (CONZ*(EFC(2,IC1)-EFCENT(2,IM))
+     *                      -CONY*(EFC(3,IC1)-EFCENT(3,IM))
+     *                      +TIMX)
+                GRAD(5,IM) = GRAD(5,IM) -
+     *                       (CONX*(EFC(3,IC1)-EFCENT(3,IM))
+     *                      -CONZ*(EFC(1,IC1)-EFCENT(1,IM))
+     *                      +TIMY)
+                GRAD(6,IM) = GRAD(6,IM) -
+     *                          (CONY*(EFC(1,IC1)-EFCENT(1,IM))
+     *                         -CONX*(EFC(2,IC1)-EFCENT(2,IM))
+     *                         +TIMZ)
+C
+  150      CONTINUE
+  160     CONTINUE
+  170     CONTINUE
+  180     CONTINUE
+C
+      DO I=200,1,-1
+         ECC = ECC + ECCAR(I)
+      END DO
+      ECD = ECD*PT5
+      EDD = EDD*PT5
+      ETOTAL = ECC+ECD+EDD
+C
+      IF(MASWRK) THEN
+         WRITE(6,*)'ECC DIRECT:',ECC
+         WRITE(6,*)'ECD DIRECT:',ECD
+         WRITE(6,*)'EDD DIRECT:',EDD
+         WRITE(6,*)'TOTAL DIRECT:',ETOTAL
+         WRITE(6,*)'DIRECT GRADIENT 1: ',(GRAD(I,1), I=1,6)
+         WRITE(6,*)'DIRECT GRADIENT 2: ',(GRAD(I,2), I=1,6)
+      END IF
+      RETURN
+      END
+C
+C*MODULE EWALD   *DECK DIRECTSUM_POL
+      SUBROUTINE DIRECTSUM_POL
+C
+      IMPLICIT DOUBLE PRECISION (A-H, O-Z)
+      LOGICAL IFEWLD,TNFOIL,EWLDPL
+      LOGICAL GOPARR,DSKWRK,MASWRK
+C
+      PARAMETER (MXFRG=1050, MXFGPT=12000, MXIFRQ=12,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      CHARACTER*8 POLNAM,DPOLNAM,FRGNME
+C
+      COMMON /EFPPBC/ XBOX,YBOX,ZBOX,XCUT,YCUT,ZCUT,RCUT
+     *                ,SWR1,SWR2,ISWF
+      COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
+     *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
+     *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
+     *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ*MXFGPT),
+     *                POLSCR(MXFGPT),IPLSCR,INDSCR
+      COMMON /EFMULT/ EFC(3,MXFGPT),EFCHG(2,MXFGPT),EFATRM(MXFGPT),
+     *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
+     *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
+     *                EFOCT(10,MXFGPT),FRGNME(MXFGPT)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /EWALD / IFEWLD,TNFOIL,BETA,ELCNST,EPSLN,CUTOFF,CUTLST,
+     *                KMAX,NKVEC,LEVEL,EWLDPL
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+      DIMENSION DFLD(3,MXFGPT)
+      PARAMETER (ZERO=0.0D+00, THREE=3.0D+00)
+C     *           TWO=2.0D+00, PT5=0.5D+00,FIVE=5.0D+00)
+C
+C   ---- CALCULATE ELECTROSTATIC FIELD BY USING DIRECT SUMMATION:
+C   ---- TO BE COMPARED WITH TOTAL STATIC FIELD WITH VACUUM
+C   ---- SURFACE CONDITION
+C
+        MCUT = 40
+        CALL VCLR(DFLD,1,3*MXFGPT)
+C
+         IC1 = 0
+C   ----  CYCLE OVER ALL POINTS
+         DO 180 IM = 1,NFRG
+            DO 170 IPX=1,NPPTS(IM)
+               IC1=IC1+1
+               X1 = EFP(1,IC1)
+               Y1 = EFP(2,IC1)
+               Z1 = EFP(3,IC1)
+C
+               EFX = ZERO
+               EFY = ZERO
+               EFZ = ZERO
+C
+            DO 160 JM = 1,NFRG
+               IC2 = LSTMPTS(JM)-1
+               DO 150 JP=1,NMPTS(JM)
+                  IC2=IC2+1
+                  Q2 = EFCHG(1,IC2)+EFCHG(2,IC2)
+                  X2 = EFC(1,IC2)
+                  Y2 = EFC(2,IC2)
+                  Z2 = EFC(3,IC2)
+                  D2X = EFDIP(1,IC2)
+                  D2Y = EFDIP(2,IC2)
+                  D2Z = EFDIP(3,IC2)
+C
+                  X = X1 - X2
+                  Y = Y1 - Y2
+                  Z = Z1 - Z2
+C
+C
+             DO MX = -MCUT, MCUT
+                DO MY = -MCUT, MCUT
+                   DO MZ = -MCUT, MCUT
+C
+                      RX = X + MX*XBOX
+                      RY = Y + MY*YBOX
+                      RZ = Z + MZ*ZBOX
+C
+                      R2 = (RX*RX + RY*RY + RZ*RZ)
+                      R = SQRT(R2)
+                      R3 = R*R2
+C
+                      IF (IM.EQ.JM .AND. (MX.EQ.0.AND.MY.EQ.0
+     *                    .AND.MZ.EQ.0)) GOTO 333
+C
+                      IF (LEVEL. GE. 1) THEN
+                         EFX = EFX + Q2*RX/R3
+                         EFY = EFY + Q2*RY/R3
+                         EFZ = EFZ + Q2*RZ/R3
+                      END IF
+C
+                      IF (LEVEL. GE. 2) THEN
+                         RMU2 = D2X*RX + D2Y*RY + D2Z*RZ
+                         DUMJ = RMU2*THREE/(R3*R2)
+C
+                         EFX = EFX + (-D2X/R3+RX*DUMJ)
+                         EFY = EFY + (-D2Y/R3+RY*DUMJ)
+                         EFZ = EFZ + (-D2Z/R3+RZ*DUMJ)
+                      END IF
+C
+  333                 CONTINUE
+                    END DO
+                 END DO
+              END DO
+C
+  150      CONTINUE
+  160     CONTINUE
+          DFLD(1,IC1) = EFX
+          DFLD(2,IC1) = EFY
+          DFLD(3,IC1) = EFZ
+  170     CONTINUE
+  180     CONTINUE
+C
+         IF(MASWRK) THEN
+         WRITE(6,*)'DIRECT FIELD',(DFLD(I,1),I=1,3),(DFLD(I,2),I=1,3),
+     *              (DFLD(I,3),I=1,3)
+         END IF
+C
+         RETURN
+         END
+C
+C*MODULE EWALD   *DECK DIRECTSUM_IND
+      SUBROUTINE DIRECTSUM_IND
+C
+      IMPLICIT DOUBLE PRECISION (A-H, O-Z)
+      LOGICAL IFEWLD,TNFOIL,EWLDPL
+      LOGICAL GOPARR,DSKWRK,MASWRK
+C
+      PARAMETER (MXFRG=1050, MXFGPT=12000, MXIFRQ=12,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      CHARACTER*8 POLNAM,DPOLNAM
+C
+      COMMON /EFPPBC/ XBOX,YBOX,ZBOX,XCUT,YCUT,ZCUT,RCUT
+     *                ,SWR1,SWR2,ISWF
+      COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
+     *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
+     *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
+     *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ*MXFGPT),
+     *                POLSCR(MXFGPT),IPLSCR,INDSCR
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /EWALD / IFEWLD,TNFOIL,BETA,ELCNST,EPSLN,CUTOFF,CUTLST,
+     *                KMAX,NKVEC,LEVEL,EWLDPL
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+      DIMENSION DFLD1(3,MXFGPT),DFLD2(3,MXFGPT)
+      PARAMETER (ZERO=0.0D+00, THREE=3.0D+00)
+C     *           TWO=2.0D+00, PT5=0.5D+00,FIVE=5.0D+00)
+C
+C   ---- CALCULATE ELECTROSTATIC FIELD BY USING DIRECT SUMMATION:
+C   ---- TO BE COMPARED WITH TOTAL STATIC FIELD WITH VACUUM
+C   ---- SURFACE CONDITION
+C
+        MCUT = 40
+        CALL VCLR(DFLD1,1,3*MXFGPT)
+        CALL VCLR(DFLD2,1,3*MXFGPT)
+C
+         IC1 = 0
+C   ----  CYCLE OVER ALL POINTS
+         DO 180 IM = 1,NFRG
+            DO 170 IPX=1,NPPTS(IM)
+               IC1=IC1+1
+               X1 = EFP(1,IC1)
+               Y1 = EFP(2,IC1)
+               Z1 = EFP(3,IC1)
+C
+               EFX = ZERO
+               EFY = ZERO
+               EFZ = ZERO
+               EFX1 = ZERO
+               EFY1 = ZERO
+               EFZ1 = ZERO
+C
+            IC2 = 0
+            DO 160 JM = 1,NFRG
+               DO 150 JP=1,NPPTS(JM)
+                  IC2=IC2+1
+                  X2 = EFP(1,IC2)
+                  Y2 = EFP(2,IC2)
+                  Z2 = EFP(3,IC2)
+                  D2X = DIND(1,IC2)
+                  D2Y = DIND(2,IC2)
+                  D2Z = DIND(3,IC2)
+                  D3X = DINDD(1,IC2)
+                  D3Y = DINDD(2,IC2)
+                  D3Z = DINDD(3,IC2)
+C
+                  X = X1 - X2
+                  Y = Y1 - Y2
+                  Z = Z1 - Z2
+C
+C
+             DO MX = -MCUT, MCUT
+                DO MY = -MCUT, MCUT
+                   DO MZ = -MCUT, MCUT
+C
+                      RX = X + MX*XBOX
+                      RY = Y + MY*YBOX
+                      RZ = Z + MZ*ZBOX
+C
+                      R2 = (RX*RX + RY*RY + RZ*RZ)
+                      R = SQRT(R2)
+                      R3 = R*R2
+C
+                      IF (IM.EQ.JM .AND. (MX.EQ.0.AND.MY.EQ.0
+     *                    .AND.MZ.EQ.0)) GOTO 333
+C
+                      IF (LEVEL. GE. 2) THEN
+                         RMU2 = D2X*RX + D2Y*RY + D2Z*RZ
+                         DUMJ = RMU2*THREE/(R3*R2)
+C
+                         EFX = EFX + (-D2X/R3+RX*DUMJ)
+                         EFY = EFY + (-D2Y/R3+RY*DUMJ)
+                         EFZ = EFZ + (-D2Z/R3+RZ*DUMJ)
+C
+                         RMU3 = D3X*RX + D3Y*RY + D3Z*RZ
+                         DUMK = RMU3*THREE/(R3*R2)
+C
+                         EFX1 = EFX1 + (-D3X/R3+RX*DUMK)
+                         EFY1 = EFY1 + (-D3Y/R3+RY*DUMK)
+                         EFZ1 = EFZ1 + (-D3Z/R3+RZ*DUMK)
+                      END IF
+C
+  333                 CONTINUE
+                    END DO
+                 END DO
+              END DO
+C
+  150      CONTINUE
+  160     CONTINUE
+          DFLD1(1,IC1) = EFX
+          DFLD1(2,IC1) = EFY
+          DFLD1(3,IC1) = EFZ
+          DFLD2(1,IC1) = EFX1
+          DFLD2(2,IC1) = EFY1
+          DFLD2(3,IC1) = EFZ1
+  170     CONTINUE
+  180     CONTINUE
+C
+         IF(MASWRK) THEN
+         WRITE(6,*)'DIRECT INDUCED FIELD 1',(DFLD1(I,1),I=1,3),
+     *              (DFLD1(I,2),I=1,3),(DFLD1(I,3),I=1,3)
+         WRITE(6,*)'DIRECT INDUCED FIELD 2',(DFLD2(I,1),I=1,3),
+     *              (DFLD2(I,2),I=1,3),(DFLD2(I,3),I=1,3)
+         END IF
+C
+         RETURN
+         END

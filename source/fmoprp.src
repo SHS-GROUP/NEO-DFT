@@ -1,0 +1,3036 @@
+C  1 Oct 10 - CS  - ADDED EFMO CHANGES
+C 11 Aug 10 - DGF,TN - changes for FMO 4.0 
+C 25 Mar 10 - HL  - turn on FMO-TDDFT-PCM gradients
+C 14 Oct 09 - DGF - changes for FMO 3.3
+C 22 May 09 - DGF - FMO0 should print MP2 free state energies
+C  1 May 09 - DGF - FMOCHECK: fix FMO/PCM gradient check
+C 12 Jan 09 - DGF - various changes for FMO 3.2
+C 15 Dec 08 - DGF,TN - various changes for FMO 3.2 release
+C  7 Dec 07 - DGF - FMOCHECK: add a few PIEDA checks
+C 20 Aug 07 - DGF - various changes for FMO 3.1 release
+C 20 Aug 07 - TN  - FMOCHECK: allow MCP (but not ECP) to proceed
+C 22 Dec 06 - TN  - GLOBOP interfaced with FMO 
+C  8 Nov 06 - DGF - various changes for FMO 3.0 release
+C  6 Nov 06 - MWS - adjust wavefunction and GDDI common block
+c 17 Jan 06 - DGF - FMOCHECK - alter FMO/PCM test
+C 21 Nov 05 - DGF - various changes for FMO 2.1 release
+C 19 Sep 05 - MWS - add true nuclear charge array to INFOA common
+C  5 Jul 05 - MWS - SELECT NEW ATOM,BASIS,EFP,PCM,DAF DIMENSIONS
+C  1 Jun 05 - DGF - fixes for the 2nd release
+c 31 Jan 05 - DGF,KK - add property module for the FMO method
+c
+C*MODULE fmoprp  *DECK mongrid
+      SUBROUTINE mongrid(NGm,ORIGM,UXM,UYM,UZM,vdwr,pad)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      parameter (MXATM=2000)
+      logical GOPARR,DSKWRK,MASWRK
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      dimension NGm(3),ORIGM(3),UXM(3),UYM(3),UZM(3),vdwr(*),Cmin(3),
+     *          Cmax(3)
+c
+c     Generate grid automatically. 
+c     At present a rectangular grid is constructed surrounding the molecule
+c     and leaving an extra margin of pad vdW radii from all sides.
+c
+      if(NGm(1).le.1.or.NGm(2).le.1.or.NGm(3).le.1) call abrt
+c
+      call dacopy(3, 1.0D+20,Cmin,1)
+      call dacopy(3,-1.0D+20,Cmax,1)
+      do i=1,nat
+        rr=vdwr(ian(i))*pad 
+        do j=1,3
+          Cmin(j)=min(Cmin(j),C(j,i)-rr)
+          Cmax(j)=max(Cmax(j),C(j,i)+rr)
+        enddo
+      enddo
+      call vclr(UXM,1,3) 
+      call vclr(UYM,1,3) 
+      call vclr(UZM,1,3) 
+      call dcopy(3,Cmin,1,ORIGM,1)
+      UXM(1)=(Cmax(1)-Cmin(1))/(NGm(1)-1)
+      UYM(2)=(Cmax(2)-Cmin(2))/(NGm(2)-1)
+      UZM(3)=(Cmax(3)-Cmin(3))/(NGm(3)-1)
+      if(maswrk) write(iw,9000) Cmin(1),Cmin(2),Cmin(3),
+     *                          Cmax(1),Cmax(2),Cmax(3)
+      return
+ 9000 format(/1x,'Grid is from',3F10.4,' to ',3F10.4)
+      end
+c
+C*MODULE fmoprp  *DECK grdbox
+      SUBROUTINE grdbox(ixmin,ixmax,iymin,iymax,izmin,izmax,vdwr,pad)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      parameter (MXATM=2000)
+      logical GOPARR,DSKWRK,MASWRK
+      COMMON /GRDPAR/ ORIGIN(3),XVEC(3),YVEC(3),ZVEC(3),UX(3),UY(3),
+     *                UZ(3),GRDSIZ,NGRID,IGUNIT,NXG,NYG,NZG,modgrid
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      dimension vdwr(*),Cmin(3),Cmax(3)
+c
+c     Generate a box surrounding the current n-mer for the purpose of
+c     computing electron density on grid. 
+c     At present a rectangular grid is constructed surrounding the molecule
+c     and leaving an extra margin of pad vdW radii from all sides.
+c
+      uxl=sqrt(ddot(3,ux,1,ux,1))
+      uyl=sqrt(ddot(3,uy,1,uy,1))
+      uzl=sqrt(ddot(3,uz,1,uz,1))
+      uxo=ddot(3,origin,1,ux,1)/uxl 
+      uyo=ddot(3,origin,1,uy,1)/uyl
+      uzo=ddot(3,origin,1,uz,1)/uzl 
+c
+      call dacopy(3, 1.0D+20,Cmin,1)
+      call dacopy(3,-1.0D+20,Cmax,1)
+c     Find the smallest and the largest projections of the molecule upon the 
+c     grid axes. The extra space due to vdW radii is taken slightly over,
+c     by surrounding the projection unto axes rather than formally drawing a 
+c     sphere and finding the maximum and minimum projection of a sphere.
+      do i=1,nat
+        rr=vdwr(ian(i))*pad
+        uxp=(C(1,i)*ux(1)+C(2,i)*ux(2)+C(3,i)*ux(3))/uxl
+        uyp=(C(1,i)*uy(1)+C(2,i)*uy(2)+C(3,i)*uy(3))/uyl
+        uzp=(C(1,i)*uz(1)+C(2,i)*uz(2)+C(3,i)*uz(3))/uzl
+        Cmin(1)=min(Cmin(1),uxp-rr)
+        Cmax(1)=max(Cmax(1),uxp+rr)
+        Cmin(2)=min(Cmin(2),uyp-rr)
+        Cmax(2)=max(Cmax(2),uyp+rr)
+        Cmin(3)=min(Cmin(3),uzp-rr)
+        Cmax(3)=max(Cmax(3),uzp+rr)
+      enddo
+      ixmin=max(int((Cmin(1)-uxo)/uxl)+1,1)
+      ixmax=min(int((Cmax(1)-uxo)/uxl)+2,NXG)
+      iymin=max(int((Cmin(2)-uyo)/uyl)+1,1)
+      iymax=min(int((Cmax(2)-uyo)/uyl)+2,NYG)
+      izmin=max(int((Cmin(3)-uzo)/uzl)+1,1)
+      izmax=min(int((Cmax(3)-uzo)/uzl)+2,NZG)
+c
+c     guard against "negative boxes", that arise if some fragments have
+c     nothing in the total molecular box (with manual box given in $GRID).
+c     A way to recover is to use the (1,0) window in that dimension, which
+c     gives 0 points (imax-imin+1). Note that memory allocation will be correct
+c     based on 0 points in a grid window and everything else is supposed to
+c     function properly.
+c
+      iempty=0
+      if(ixmin.le.0.or.ixmax.le.0.or.ixmin.gt.ixmax) then
+        ixmin=1
+        ixmax=0
+        iempty=1
+      endif
+      if(iymin.le.0.or.iymax.le.0.or.iymin.gt.iymax) then
+        iymin=1
+        iymax=0
+        iempty=2
+      endif
+      if(izmin.le.0.or.izmax.le.0.or.izmin.gt.izmax) then
+        izmin=1
+        izmax=0
+        iempty=3
+      endif
+      if(maswrk) then
+        if(iempty.eq.0) then
+          write(iw,9000) ixmin,ixmax,iymin,iymax,izmin,izmax 
+        else
+          write(iw,9010) ixmin,ixmax,iymin,iymax,izmin,izmax 
+        endif
+      endif
+      return
+ 9000 format(1x,'Reduced grid to',6I5)
+ 9010 format(1x,'Reduced grid to',6I5,' : empty box!')
+      end
+c
+C*MODULE fmoprp  *DECK totgrid
+      SUBROUTINE totgrid(fmozan,fmoc,vdwr,pad)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      logical GOPARR,DSKWRK,MASWRK
+      COMMON /GRDPAR/ ORIGIN(3),XVEC(3),YVEC(3),ZVEC(3),UX(3),UY(3),
+     *                UZ(3),GRDSIZ,NGRID,IGUNIT,NXG,NYG,NZG,modgrid
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
+      dimension fmozan(*),fmoc(3,*),vdwr(*),Cmin(3),Cmax(3)
+c
+c     Generate grid automatically.
+c     At present a rectangular grid is constructed surrounding the molecule
+c     and leaving an extra margin of pad vdW radii from all sides.
+c
+      call dacopy(3, 1.0D+20,Cmin,1)
+      call dacopy(3,-1.0D+20,Cmax,1)
+      do i=1,natfmo
+        iz=int(fmozan(i)+0.1D+00)
+        rr=vdwr(iz)*pad
+        do j=1,3
+          Cmin(j)=min(Cmin(j),fmoc(j,i)-rr)
+          Cmax(j)=max(Cmax(j),fmoC(j,i)+rr)
+        enddo
+      enddo
+      call vclr(UX,1,3)
+      call vclr(UY,1,3)
+      call vclr(UZ,1,3)
+      call dcopy(3,Cmin,1,ORIGIN,1)
+c     if(GRDSIZ.ne.0.0D+00) then
+        UX(1)=GRDSIZ
+        UY(2)=GRDSIZ
+        UZ(3)=GRDSIZ
+        NXG=int((Cmax(1)-Cmin(1))/GRDSIZ+0.5D+00)
+        NYG=int((Cmax(2)-Cmin(2))/GRDSIZ+0.5D+00)
+        NZG=int((Cmax(3)-Cmin(3))/GRDSIZ+0.5D+00)
+        if(maswrk) write(iw,9010) GRDSIZ,NXG,NYG,NZG
+c     else
+c       if(NXG.le.1.or.NYG.le.1.or.NZG.le.1) call abrt
+c       UX(1)=(Cmax(1)-Cmin(1))/(NXG-1)
+c       UY(2)=(Cmax(2)-Cmin(2))/(NYG-1)
+c       UZ(3)=(Cmax(3)-Cmin(3))/(NZG-1)
+c     endif
+      if(maswrk) write(iw,9000) Cmin(1),Cmin(2),Cmin(3),
+     *                          Cmax(1),Cmax(2),Cmax(3)
+      return
+ 9000 format(/1x,'Grid is from',3F16.8,
+     *       /10x,        'to ',3F16.8,' (bohr)',/)
+ 9010 format(/1x,'SIZE=',F10.4,' bohr, ',I5,' by ',I5,' by ',I5,
+     *           ' grid points.') 
+      end
+c
+C*MODULE fmoprp  *DECK makecube
+      SUBROUTINE makecube(iset,ifg,ibody,natf,fmozan,fmoc,dgrid,
+     *                    NXG,NYG,NZG,ORIGIN,UX,UY,UZ) 
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      character*8 type
+      parameter (tiny=1.0d-06)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+c     Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
+      DIMENSION fmozan(*),fmoc(3,*),dgrid(NZG,NYG,NXG),
+     *          ORIGIN(3),UX(3),UY(3),UZ(3)
+c
+c     Create Gaussian-style cube file with numeric properties on a grid.
+c
+      type='DENSITY'
+      if(iset.eq.2) type='MEP'
+      if(ifg.eq.0) then
+        write(ip,9000) ibody,type
+      else
+        write(ip,9005) ibody,type,ifg
+      endif
+c
+c     the sign of iflag means: +1 density, -1 MOs 
+c
+      iflag=natf
+c
+      write(ip,9010) iflag,(ORIGIN(i),i=1,3)
+      write(ip,9010) NXG,(UX(i),i=1,3)
+      write(ip,9010) NYG,(UY(i),i=1,3)
+      write(ip,9010) NZG,(UZ(i),i=1,3)
+      do i=1,natf
+        write(ip,9010) int(fmozan(i)+tiny),fmozan(i),(fmoc(j,i),j=1,3)
+      enddo
+      do ix=1,NXG
+        do iy=1,NYG
+          write(ip,9020) (dgrid(iz,iy,ix),iz=1,NZG)
+        enddo 
+      enddo 
+      write(ip,9100)
+      return
+ 9000 format(1x,'$CUBE',I1,
+     *      /1x,A7,': full system, created by GAMESS (FMO).',/)
+ 9005 format(1x,'$CUBE',I1,
+     *      /1x,A7,': fragment',I5,', created by GAMESS (FMO).',/)
+ 9010 format(i5,4f12.6)
+ 9020 format(6e13.5)
+ 9100 format(1x,'$END')
+      end
+c
+C*MODULE fmoprp  *DECK makescube
+      SUBROUTINE makescube(iset,mode,ifgfmo0,ibody,layfrg,indat,fmozan,
+     *                     fmoc,dgrid,noffg,indgrd,maxg)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      CHARACTER*30 fmtstr
+      character*8 type
+      parameter (tiny=1.0d-06)
+      COMMON /GRDPAR/ ORIGIN(3),XVEC(3),YVEC(3),ZVEC(3),UX(3),UY(3),
+     *                UZ(3),GRDSIZ,NGRID,IGUNIT,NXG,NYG,NZG,modgrid
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
+      DIMENSION layfrg(*),indat(*),fmozan(*),fmoc(3,*),dgrid(*),noffg(*)
+     *         ,indgrd(6,*),maxg(3)
+c
+c     Create sparse cube file with numeric properties on a grid.
+c     mode=0 only header
+c     mode=1 header+data
+c
+c     the sign of iflag means: +1 density, -1 MOs 
+c
+      iflag=natfmo
+      type='DENSITY'
+      if(iset.eq.2) type='MEP'
+c
+      if(ifgfmo0.eq.0) then
+        write(ip,9000) ibody,type
+      else
+        if(mode.eq.0) then
+          igrp=0
+          nfingers=1
+        else
+          igrp=ifgfmo0
+          fgrp=igrp
+          nfingers=int(log10(fgrp))+1
+        endif
+        if(ifgfmo0.eq.1.or.mode.ne.0) then 
+          WRITE(UNIT=fmtstr,FMT='(12H(1x,''$SCM'',I,I1,1H))') nfingers
+          WRITE(ip,FMT=fmtstr) igrp
+        endif 
+        if(ifgfmo0.eq.1.and.mode.eq.0) write(ip,9007) type
+      endif
+      if(ifgfmo0.eq.0.or.(ifgfmo0.eq.1.and.mode.eq.0)) then
+        write(ip,9010) nfg,iflag,(ORIGIN(i),i=1,3)
+        write(ip,9010) maxg(1),NXG,(UX(i),i=1,3)
+        write(ip,9010) maxg(2),NYG,(UY(i),i=1,3)
+        write(ip,9010) maxg(3),NZG,(UZ(i),i=1,3)
+        do i=1,natfmo
+          write(ip,9010) indat(i),int(fmozan(i)+tiny),
+     *                   fmozan(i),(fmoc(j,i),j=1,3)
+        enddo
+      endif
+c
+      if(mode.ne.0) then
+      nfg0=nfg
+      if(ifgfmo0.ne.0) nfg0=1
+      do ifg=1,nfg0
+        ioff=noffg(ifg)
+        ixmin=indgrd(1,ifg)
+        ixmax=indgrd(2,ifg)
+        iymin=indgrd(3,ifg)
+        iymax=indgrd(4,ifg)
+        izmin=indgrd(5,ifg)
+        izmax=indgrd(6,ifg)
+        NXGi=ixmax-ixmin+1
+        NYGi=iymax-iymin+1
+        NZGi=izmax-izmin+1
+        write(ip,9040) ifg,layfrg(ifg),ixmin,ixmax,iymin,iymax,
+     *                 izmin,izmax
+        do ix=1,NXGi
+          do iy=1,NYGi
+            write(ip,9050) (dgrid(ioff+iz-1),iz=1,NZGi)
+            ioff=ioff+NZGi
+          enddo 
+        enddo 
+      enddo 
+      endif 
+      write(ip,9100)
+c
+      return
+ 9000 format(1x,'$SCUBE',I1,/1x,A7,': sparse, full system, ',
+     *          'created by GAMESS (FMO).',/)
+ 9007 format(1x,A7,': sparse, free monomer, created by GAMESS (FMO).',/)
+ 9010 format(2i6,4f12.6)
+ 9040 format(8i6)
+ 9050 format(6e13.5)
+ 9100 format(1x,'$END')
+      end
+c
+C*MODULE fmoprp  *DECK proindt
+      SUBROUTINE proindt(nfg2,nfg3,ilay,loadhf,layfrg,numfrg,molfrg,
+     *                   nmtfrg,ndtfrg,iwrk,loadt,net,netc,gcorrel)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      logical nxt,isgddi,parout,INITGDDI,goparrm,trimc,gcorrel
+      COMMON /GDDI/   ISCOPE,NGROUPS,MYGROUP,MEGLOB,npglob,nnglob,JBTYP,
+     *                ISGDDI,PAROUT,INITGDDI
+      common /fmodim/ maxbnd,maxknd,maxcbs,maxcao,maxvec,maxl1,maxnat,
+     *                maxabd,maxbas,maxbbd,maxlmo,maxslo,maxabd2
+      Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
+      common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
+     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
+     *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
+     *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
+     *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
+     *                modlmo,nopden,mofock
+      dimension layfrg(*),numfrg(*),molfrg(*),nmtfrg(nfg,2),
+     *          ndtfrg(nfg2,2),iwrk(*),loadt(*)
+c
+c     This subroutine fills multiplicative constant arrays used to compute
+c     properties for trimers. This subroutine should be called after global
+c     summing the distances so that they are available.
+c     Note that at present only masters call this subroutine and it is a 
+c     rare example of load balancing done within the master scope.
+c     This subroutine ignores reordering of monomers (size load balancing).
+c     The results are summed above (where this subroutine is called).
+c     Dynamic load balancing is ignored as well because it does not work
+c     in the master scope?
+c     Note that this subroutine counts trimc assuming correlation. If none
+c     is there netc should be zeroed out elsewhere.
+c
+      call viclr(nmtfrg,1,nfg*2)
+      call viclr(ndtfrg,1,nfg2*2)
+      rmin=0
+      rmax=0
+      rrij=0
+      rrik=0
+      rrjk=0
+      ishift=maxl1*3
+c     NXT = IBTYP.EQ.1
+      NXT = .false.
+      NEXT  = -1
+      kount = -1
+      nprocm=ngroups
+      goparrm=nprocm.gt.1
+      mem=mygroup 
+c     write(6,*) NPROC,goparr,me
+c     neither of nproc, goparr, me is set properly for the master scope.
+      if(loadhf.ne.0) call viclr(iwrk,1,nfg3)
+      ijk=0
+      do 100 ifg=1,nfg
+        kount=kount+1
+        if(goparrm) then
+          n2skip=(ifg-1)*(ifg-2)
+          IF(NXT) THEN
+            IF(kount.GT.NEXT) CALL DDI_DLBNEXT(NEXT)
+            if(NEXT.ne.kount) then
+              ijk=ijk+n2skip/2
+              goto 100
+            endif
+          else
+            if(MOD(kount,NPROCm).NE.mem) then
+              ijk=ijk+n2skip/2
+              goto 100
+            endif
+          endif
+        endif
+        ifglay=layfrg(ifg)
+        do jfg=1,ifg-1
+          jfglay=layfrg(jfg)
+          ijfg=(ifg*ifg-3*ifg)/2+jfg+1
+          if(resdim.ne.0) rrij=fmodist(ifg,0,0,jfg)
+          do kfg=1,jfg-1
+            kfglay=layfrg(kfg)
+            ijk=ijk+1
+            l1ijk=iand(numfrg(ifg),65535)+iand(numfrg(jfg),65535)+
+     *            iand(numfrg(kfg),65535)
+            loo=l1ijk
+            if((ifglay.eq.ilay.or.jfglay.eq.ilay.or.kfglay.eq.ilay).and.
+     *        ifglay.ge.ilay.and.jfglay.ge.ilay.and.kfglay.ge.ilay) then
+              if(restri(1).ne.0) call fmodist3(ifg,jfg,kfg,rmin,rmax)
+              if(((rmin.le.restri(1).or.rmax.le.restri(2)).and.(rmax.le.
+     *            restri(3).or.restri(3).eq.0)).or.restri(1).eq.0) then
+                if(resdim.ne.0) then
+                  rrik=fmodist(ifg,0,0,kfg)
+                  rrjk=fmodist(jfg,0,0,kfg)
+                endif
+                ires=molfrg(ifg)+molfrg(jfg)+molfrg(kfg)
+c               no change yet for exclmol
+                trimc=(rmax.le.restri(4).or.restri(4).eq.0).and.
+     *                (ires.lt.0.or.ires.eq.1).and.gcorrel 
+                if(rrij.le.resdim.or.resdim.eq.0) then
+                  ndtfrg(ijfg,1)=ndtfrg(ijfg,1)+1
+                  nmtfrg(ifg,1)=nmtfrg(ifg,1)+1
+                  nmtfrg(jfg,1)=nmtfrg(jfg,1)+1
+                  ires=molfrg(ifg)+molfrg(jfg)
+                  if(trimc.and.(rrij.le.rcorsd.or.rcorsd.eq.0).and.
+     *               ires.ne.0.and.ires.ne.2) then
+                    ndtfrg(ijfg,2)=ndtfrg(ijfg,2)+1
+                    nmtfrg(ifg,2)=nmtfrg(ifg,2)+1
+                    nmtfrg(jfg,2)=nmtfrg(jfg,2)+1
+                  endif
+                endif
+                if(rrik.le.resdim.or.resdim.eq.0) then
+                  ikfg=(ifg*ifg-3*ifg)/2+kfg+1
+                  ndtfrg(ikfg,1)=ndtfrg(ikfg,1)+1
+                  nmtfrg(ifg,1)=nmtfrg(ifg,1)+1
+                  nmtfrg(kfg,1)=nmtfrg(kfg,1)+1
+                  ires=molfrg(ifg)+molfrg(kfg)
+                  if(trimc.and.(rrik.le.rcorsd.or.rcorsd.eq.0).and.
+     *               ires.ne.0.and.ires.ne.2) then
+                    ndtfrg(ikfg,2)=ndtfrg(ikfg,2)+1
+                    nmtfrg(ifg,2)=nmtfrg(ifg,2)+1
+                    nmtfrg(kfg,2)=nmtfrg(kfg,2)+1
+                  endif
+                endif
+                if(rrjk.le.resdim.or.resdim.eq.0) then
+                  jkfg=(jfg*jfg-3*jfg)/2+kfg+1
+                  ndtfrg(jkfg,1)=ndtfrg(jkfg,1)+1
+                  nmtfrg(jfg,1)=nmtfrg(jfg,1)+1
+                  nmtfrg(kfg,1)=nmtfrg(kfg,1)+1
+                  ires=molfrg(jfg)+molfrg(kfg)
+                  if(trimc.and.(rrjk.le.rcorsd.or.rcorsd.eq.0).and.
+     *               ires.ne.0.and.ires.ne.2) then
+                    ndtfrg(jkfg,2)=ndtfrg(jkfg,2)+1
+                    nmtfrg(jfg,2)=nmtfrg(jfg,2)+1
+                    nmtfrg(kfg,2)=nmtfrg(kfg,2)+1
+                  endif
+                endif
+                do i=1,2
+                  if(i.eq.1.or.trimc) then
+                    nmtfrg(ifg,i)=nmtfrg(ifg,i)-1
+                    nmtfrg(jfg,i)=nmtfrg(jfg,i)-1
+                    nmtfrg(kfg,i)=nmtfrg(kfg,i)-1
+                  endif
+                enddo
+                net=net+1
+                loo=loo+ishift
+                if(trimc) then
+                  netc=netc+1
+                  loo=loo+ishift
+                endif
+              endif 
+            endif
+            if(loadhf.ne.0) iwrk(ijk)=loo
+          enddo
+        enddo
+  100 continue
+      if(goparrm.and.nxt) CALL DDI_DLBRESET
+      if(loadhf.ne.0) then
+        call ddi_gsumi(2421,iwrk,nfg3)
+        call indsort(nfg3,iwrk,loadt)
+      endif
+      RETURN
+      END
+c
+C*MODULE fmoprp  *DECK fmodeg
+      subroutine fmodeg(ida,fmode,fmopg,iaglob)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      dimension fmode(3,*),fmopg(3,*),iaglob(*)
+      Parameter (MXATM=2000)
+      common /GRAD  / DE(3,MXATM)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /PCMPAR/ IPCM,NFT26,NFT27,IRPPCM,IEF,IP_F,nfmopcm
+      Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
+      common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
+     *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
+     *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
+     *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
+     *                iddcur,nddleft,ivmfmo
+c
+c     gather FMO gradient contributions coming from the analytic gradient of a
+c     monomer/dimer.
+c
+c     write(6,*) 'Grad accs',ida
+      if(ida.eq.0) return
+c     CALL EGOUT(DE,NAT)
+      da=ida
+      do i=1,nat
+        ig=iaglob(i)
+        do j=1,3
+          fmode(j,ig)=fmode(j,ig)+da*de(j,i)
+        enddo
+      enddo
+c     No FMO/PCM contribution for separated dimers.
+      if(nfmopcm.gt.0.and.ifmostp.ne.6.and.ifmostp.ne.7
+     *   .and.IESDPPC.eq.0) call daxpy(natfmo*3,da,fmopg,1,fmode,1)
+      return
+      end
+c
+C*MODULE fmoprp  *DECK monor
+      subroutine monor(trig,ifg,indat,fmozan,fmoc,iabdfg,jabdfg,rij,
+     *                 rwrk,vdwr,prdist,units)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      dimension indat(*),fmozan(*),fmoc(3,*),iabdfg(*),
+     *          jabdfg(*),vdwr(*),rij(*),rwrk(*)
+      PARAMETER (MXATM=2000,zero=0.0D+00,ten=1.0D+01)
+      LOGICAL trig,GOPARR,DSKWRK,MASWRK,nxt,prdist
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
+      common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
+     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
+     *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
+     *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
+     *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
+     *                modlmo,nopden,mofock
+c
+c     fill in interfragment distances relative to van der Walls radii, that is,
+c     rIJ=min(i(I),j(J)) {rij/(Ri+Rj)}, where R are van der Waals radii. 
+c     trig is true if triagonal distance matrix is needed
+c     (for lattice intercell distances it is square). 
+c
+      nifg=ifg-1
+      if(.not.trig) nifg=nfg
+c     initialise with very large numbers 
+      call dacopy(nifg,1.0D+30,rij,1)
+      call dacopy(nifg,1.0D+30,rwrk,1)
+c
+c     set distances to zero for connected dimers 
+c     (for lattice runs intercell pairs are assumed never to be connected).
+c
+      if(.not.trig.or.iand(nguess,131072).ne.0) goto 600
+c
+      do 500 ibdg=1,nbdfg
+        ibda=iabdfg(ibdg)
+        jbda=jabdfg(ibdg)
+        ibfg=indat(abs(ibda)) 
+        jbfg=indat(abs(jbda)) 
+        if(jbda.lt.0.and.jbfg.eq.ifg) then
+          rij(ibfg)=zero
+          write(6,*) 'should never come here; check ibdfg and jbdfg'
+c         that means the user has given a noncanonical bond cleavage
+          call abrt
+        endif
+        if(jbfg.ge.ifg.or.rij(jbfg).eq.zero) goto 500
+        if(ibda.lt.0.and.ibfg.eq.ifg) then
+          rij(jbfg)=zero
+          rwrk(jbfg)=zero
+          goto 500
+        endif
+c       assume canonical ordering and process ghost atoms
+c       Every atom can belong to several fragments. The "main" N-1 fragment
+c       is processed in the 200 loop below and here the shattered ghost atoms
+c       are treated. This is why coordinates are from the N-1 side (ibda)
+c       and it is assigned to the ghost side (jbfg). 
+c       if(jbfg.eq.ifg) goto 500
+c       Skip ghost atoms within monomer ifg. 
+        j=abs(ibda) 
+        rj=vdwr(int(fmozan(j)+1.0D-03))
+        rr12=1.0D+30
+        rr12a=1.0D+30
+        xj=fmoc(1,j)
+        yj=fmoc(2,j)
+        zj=fmoc(3,j)
+        do i=1,nat
+c         ri=vdwr(int(zan(i)+1.0D-03))
+          ri=vdwr(IAN(i))
+          r12a=sqrt((c(1,i)-xj)**2+(c(2,i)-yj)**2+(c(3,i)-zj)**2)
+          r12=r12a/(ri+rj)
+          if(r12.lt.rr12) rr12=r12
+          if(r12a.lt.rr12a) rr12a=r12a
+        enddo
+        rij(jbfg)=min(rij(jbfg),rr12)
+        rwrk(jbfg)=min(rwrk(jbfg),rr12a)
+c       rij(jbfg)=min(rij(jbfg),rr12*UNITS)
+  500 continue 
+  600 continue 
+c
+      NXT = IBTYP.EQ.1
+      NEXT  = -1
+      kount = -1
+      nratch=3
+      if(.not.goparr.or..not.nxt) nratch=1
+      nchsiz=(natfmo-1)/(nproc*nratch)+1
+c     nratch is a DLB parallelisation ratio. The work is divided so that each 
+c     node does NRATCH chunks on the average.  
+c     Now the initial value of nratch is hardwired. The value can be
+c     reconsidered if a massive number of nodes per group is available
+c     (or if nodes of different type are mixed).
+c     Static work division is not good because 7 is divided as 3, 3 and 1. 
+c
+c     divide natfmo into chunks 
+c 
+      do 200 j1=1,natfmo,nchsiz
+        kount=kount+1
+        if(goparr) then
+          IF(NXT) THEN
+            IF(kount.GT.NEXT) CALL DDI_DLBNEXT(NEXT)
+            if(NEXT.ne.kount) goto 200
+          else
+            if(MOD(kount,NPROC).NE.me) goto 200
+          endif
+        endif
+        j2max=min(nchsiz-1,natfmo-j1)
+c       note that j2 starts at 0. 
+        do 100 j2=0,j2max
+          j=j1+j2
+          jfg=indat(j)
+          if((jfg.ge.ifg.and.trig).or.rij(jfg).eq.zero) goto 100
+          rj=vdwr(int(fmozan(j)+1.0D-03))
+          xj=fmoc(1,j)
+          yj=fmoc(2,j)
+          zj=fmoc(3,j)
+          rr12=1.0D+30
+          rr12a=1.0D+30
+          do i=1,nat
+c           ri=vdwr(int(zan(i)+1.0D-03))
+            ri=vdwr(IAN(i))
+            r12a=sqrt((c(1,i)-xj)**2+(c(2,i)-yj)**2+(c(3,i)-zj)**2)
+            r12=r12a/(ri+rj)
+            if(r12.lt.rr12) rr12=r12
+            if(r12a.lt.rr12a) rr12a=r12a
+c           if(r12a.lt.7.5)  write(iw,9000) i,j,r12a*units
+          enddo
+          rij(jfg)=min(rij(jfg),rr12) 
+          rwrk(jfg)=min(rwrk(jfg),rr12a) 
+c         rij(jfg)=min(rij(jfg),rr12*UNITS) 
+  100   continue 
+  200 continue 
+      if(goparr) then
+        IF(NXT) CALL DDI_DLBRESET
+c       DDI_GSUMF will not work, we need DDI_GMINF!
+c       find maximum over all nodes.
+        do 300 my=0,nproc-1
+          if(me.eq.my) call dcopy(nifg,rij,1,rwrk,1)
+          CALL DDI_BCAST(2422,'F',rwrk,nifg,my)
+          if(me.ne.my) then
+            do i=1,nifg
+              rij(i)=min(rij(i),rwrk(i))
+            enddo
+          endif
+  300   continue
+      else
+c       printing interatomic distances is not parallelised yet.
+        if(prdist.and.maswrk) then
+          do jfg=1,nifg
+            write(iw,9000) ifg,jfg,rij(jfg),rwrk(jfg)*units
+          enddo
+        endif
+      endif 
+      if(iand(nfmopal,1).ne.0) then
+        do i=1,nifg
+c         irij=int(rij(i)*ten+5.0D-01)
+          irij=int(rij(i)*ten)
+          rij(i)=irij/ten
+        enddo
+      endif
+      return
+ 9000 format(1x,'RIJ(',I4,',',I4,')=',F10.4,' unitless or ',F10.4,' A')
+      end
+C*MODULE fmoprp  *DECK mulpop
+      subroutine mulpop(l1,d,s,popmul)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      dimension d(*),s(*),popmul(*)
+      PARAMETER (zero=0.0D+00)
+c
+c     compute Mulliken orbital populations
+c
+c     call prtril(d,l1)
+c     call prtril(s,l1)
+      loop=0
+      do i=1,l1
+        sum=zero
+        do j=1,i-1
+          loop=loop+1
+          a=d(loop)*s(loop) 
+          popmul(j)=popmul(j)+a
+          sum=sum+a
+        enddo
+        loop=loop+1
+        popmul(i)=sum+d(loop)*s(loop)
+      enddo
+      return
+      end
+C*MODULE fmoprp  *DECK mulpopa
+      subroutine mulpopa(popmul,popmat)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (MXATM=2000,MXSH=5000,MXGTOT=20000,zero=0.0D+00)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),ch(mxgtot),ci(mxgtot),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      common /fmodim/ maxbnd,maxknd,maxcbs,maxcao,maxvec,maxl1,maxnat,
+     *                maxabd,maxbas,maxbbd,maxlmo,maxslo,maxabd2
+      dimension popmul(*),popmat(*)
+c
+cnb   fix that
+c     due to dmexch difficulties, clear out all
+c     call vclr(popmat,1,nat)
+      call vclr(popmat,1,max(maxnat,nat))
+      do ii=1,NSHELL
+        iat=katom(ii)
+        mini=kmin(ii)
+        maxi=kmax(ii)
+        loci=kloc(ii)-mini
+        sum=zero
+        do i=mini,maxi
+          sum=sum+popmul(loci+i)
+        enddo
+        popmat(iat)=popmat(iat)+sum 
+      enddo
+      return
+      end
+C*MODULE fmoprp  *DECK addprop
+      subroutine addprop(ibody,primulm,primul,idam,idad,idat,iaglob,
+     *                   popmat,nfmoelm,fmoelm,fmoelmd,fmoelmt,atmulq,
+     *                   atmulqd,atmulqt)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      logical primulm,primul,GOPARR,DSKWRK,MASWRK
+      dimension fmoelm(*),fmoelmd(*),fmoelmt(*),iaglob(*),popmat(*),
+     *          atmulq(*),atmulqd(*),atmulqt(*)
+      Parameter (MXATM=2000)
+      COMMON /ELPROP/ ELDLOC,ELMLOC,ELPLOC,ELFLOC,
+     *                IEDEN,IEMOM,IEPOT,IEFLD,MODENS,
+     *                IEDOUT,IEMOUT,IEPOUT,IEFOUT,
+     *                IEDINT,IEMINT,IEPINT,IEFINT
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PSILVL/ IPSI,ISKPRP
+      COMMON /XYZPRP/ XP,YP,ZP,
+     *                DMX,DMY,DMZ,
+     *                QXX,QYY,QZZ,QXY,QXZ,QYZ,
+     *                QMXX,QMYY,QMZZ,QMXY,QMXZ,QMYZ,
+     *                OXXX,OXXY,OXXZ,OXYY,OYYY,OYYZ,
+     *                OXZZ,OYZZ,OZZZ,OXYZ,
+     *                OMXXX,OMXXY,OMXXZ,OMXYY,OMYYY,
+     *                OMYYZ,OMXZZ,OMYZZ,OMZZZ,OMXYZ
+      Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
+      common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
+     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
+     *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
+     *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
+     *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
+     *                modlmo,nopden,mofock
+c
+c     Accumulate monomer properties, that is, electrostatic moments,
+c     and Mulliken charges.
+      dad=idad
+      dat=idat
+c
+c     Compute electrostatic moments. Only the masters do that to avoid double
+c      counting in global sums.
+c
+      if(nfmoelm.ne.0) then
+        if(nprint.eq.-5.or.ISKPRP.ne.0) then
+c       Then SCF ignored properties!!
+          nprints=nprint
+          if(iand(nprfmo,3).le.1) nprint=0
+          call ELMOMC
+          nprint=nprints
+        endif
+        if(.not.maswrk) return
+        if(iemom.ge.1) then
+          fmoelm(1)= fmoelm(1)+DMX
+          fmoelm(2)= fmoelm(2)+DMY
+          fmoelm(3)= fmoelm(3)+DMZ
+        endif
+        if(iemom.ge.2) then
+          fmoelm(4)= fmoelm(4)+QXX
+          fmoelm(5)= fmoelm(5)+QYY
+          fmoelm(6)= fmoelm(6)+QZZ
+          fmoelm(7)= fmoelm(7)+QXY
+          fmoelm(8)= fmoelm(8)+QXZ
+          fmoelm(9)= fmoelm(9)+QYZ
+        endif
+        if(iemom.ge.3) then
+          fmoelm(10)=fmoelm(10)+OXXX
+          fmoelm(11)=fmoelm(11)+OXXY
+          fmoelm(12)=fmoelm(12)+OXXZ
+          fmoelm(13)=fmoelm(13)+OXYY
+          fmoelm(14)=fmoelm(14)+OYYY
+          fmoelm(15)=fmoelm(15)+OYYZ
+          fmoelm(16)=fmoelm(16)+OXZZ
+          fmoelm(17)=fmoelm(17)+OYZZ
+          fmoelm(18)=fmoelm(18)+OZZZ
+          fmoelm(19)=fmoelm(19)+OXYZ
+        endif
+        if(ibody.eq.1.and.nbody.gt.1.or.ibody.eq.2.and.nbody.gt.2)
+     *    call daxpy(nfmoelm,dad,fmoelm,1,fmoelmd,1)
+        if(ibody.eq.1.and.nbody.gt.2)
+     *    call daxpy(nfmoelm,dat,fmoelm,1,fmoelmt,1)
+      endif
+      if(.not.maswrk) return
+c
+c     compute Mulliken populations 
+c
+      if(primul) then
+        if(primulm.and.idam.ne.0) then
+          do iat=1,nat
+            iatg=iaglob(iat)
+            atmulq(iatg)=atmulq(iatg)+popmat(iat)
+          enddo
+        endif
+        if(maswrk.and.(nprint.eq.-5.or.ISKPRP.ne.0)) then 
+          write(iw,9400)
+          do iat=1,nat
+            write(iw,9410) iat,zan(iat),popmat(iat)
+          enddo
+        endif
+        if(ibody.lt.nbody.and.nbody.gt.1) then 
+          do iat=1,nat
+            iatg=iaglob(iat)
+            atmulqd(iatg)=atmulqd(iatg)+dad*popmat(iat)
+          enddo
+          if(ibody.eq.1.and.nbody.gt.2) then
+            do iat=1,nat
+              iatg=iaglob(iat)
+              atmulqt(iatg)=atmulqt(iatg)+dat*popmat(iat)
+            enddo
+          endif
+        endif
+      endif
+      return
+ 9400 format(/1x,'Atomic populations',/5x,'I',4x,'Z',6x,'Q')
+ 9410 format(1x,I5,F6.1,F12.7)
+      END
+c
+C*MODULE fmoprp  *DECK fmocheck
+      subroutine fmocheck(nder,mulfg,scffrg,fmoscf,fmoci,fmodft,fmocc,
+     *                    mpnfmo,fmotd,lcorrel,domp,dotd,doci,urohf)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      logical GOPARR,DSKWRK,MASWRK,domcscf,doci,dodft,docc,domp,dotd,
+     *        legalmul,doafo,urohf
+      COMMON /INTOPT/ ISCHWZ,IECP,NECP,IEXTFLD
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMPAR/ IPCM,NFT26,NFT27,IRPPCM,IEF,IP_F,nfmopcm
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+      COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
+     *                MPLEVL,MPCTYP
+      Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
+      common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
+     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
+     *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
+     *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
+     *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
+     *                modlmo,nopden,mofock
+      DIMENSION mulfg(*),scffrg(*),fmoscf(*),fmoci(*),fmodft(*),fmocc(*)
+     *         ,mpnfmo(*),fmotd(*),lcorrel(*)
+      data rhf/8HRHF     /,rnone/8HNONE    /,none/4HNONE    /,
+     *     OPTMIZ /8HOPTIMIZE/,energy/8HENERGY  /,GRAD/8HGRADIENT/,
+     *     OPTFMO/8HOPTFMO  /,rmc/8HMCSCF   /,globop/8HGLOBOP  /,
+     *     hess/8HHESSIAN /,rohf/8HROHF    /,cis/8HCIS     /
+c
+      if(nder.gt.1) then
+        if(maswrk) write(iw,8000)
+        call abrt
+      endif
+      domcscf=.false.
+      doci=.false.
+      dodft=.false.
+      docc=.false.
+      domp=.false.
+      dotd=.false.
+      legalmul=.true.
+      urohf=.false.
+      call viclr(lcorrel,1,nlayer)
+      doafo=rflmo(1).ne.0
+c 
+      do ilay=1,nlayer
+        if(fmoscf(ilay).eq.rmc) then
+          domcscf=.true.
+        else if(fmoscf(ilay).eq.rohf) then
+          urohf=.true.
+        else if(fmoscf(ilay).ne.rhf) then
+          if(maswrk) write(iw,9020) fmoscf(ilay)
+          call abrt
+        endif
+        if(fmoci(ilay).ne.rnone) then
+          doci=.true.
+          if(fmoci(ilay).ne.cis) then
+            if(maswrk) write(iw,9030)
+            call abrt
+          endif 
+        endif
+        if(fmodft(ilay).ne.rnone) dodft=.true.
+        if(fmocc(ilay).ne.rnone) docc=.true.
+        if(mpnfmo(ilay).ne.0) domp=.true.
+        if(fmotd(ilay).ne.rnone) dotd=.true.
+        if(fmoci(ilay).ne.rnone.or.fmocc(ilay).ne.rnone.or.
+     *     mpnfmo(ilay).ne.0.or.fmotd(ilay).ne.rnone) 
+     *     lcorrel(ilay)=lcorrel(ilay)+1
+        if(fmoscf(ilay).eq.rmc) lcorrel(ilay)=lcorrel(ilay)+2
+      enddo
+      nmc=0
+      nur=0
+      do ifg=1,nfg
+        if(scffrg(ifg).eq.rmc) nmc=nmc+1
+        if(scffrg(ifg).eq.rohf) nur=nur+1
+        if(mulfg(ifg).ne.1.and.scffrg(ifg).eq.rhf) legalmul=.false. 
+      enddo
+      if(nmc.gt.1) then
+         if(maswrk) write(iw,9021)
+         call abrt
+      endif
+      if(domcscf.and.nmc.le.0) then
+         if(maswrk) write(iw,9022)
+         call abrt
+      endif
+      if(.not.domcscf.and.nmc.gt.0) then
+         if(maswrk) write(iw,9023)
+         call abrt
+      endif
+      if(urohf.and.nur.le.0) then
+         if(maswrk) write(iw,9024)
+         call abrt
+      endif
+      if(.not.urohf.and.nur.gt.0) then
+         if(maswrk) write(iw,9025)
+         call abrt
+      endif
+      if(nur.gt.1.or.nmc.gt.1) then
+         if(maswrk) write(iw,9026)
+         call abrt
+      endif
+      if(domcscf.and.nbody.gt.2) then
+        if(maswrk) write(iw,9010)
+        call abrt
+      endif
+      if(urohf.and.(nder.gt.0.or.dodft.or.nfmopcm.ne.0)) then
+        if(maswrk) write(iw,9027)
+        call abrt
+      endif
+      if(doci.and.(nbody.gt.1.or.nder.gt.0)) then
+        if(maswrk) write(iw,9030)
+        call abrt
+      endif
+      if(dodft.and.nbody.gt.3) then
+        if(maswrk) write(iw,9040)
+        call abrt
+      endif
+      if(docc.and.nbody.gt.3) then
+        if(maswrk) write(iw,9050)
+        call abrt
+      endif
+      if(domp.and.nbody.gt.3) then
+        if(maswrk) write(iw,9060)
+        call abrt
+      endif
+      if(dotd.and.nbody.gt.2) then
+        if(maswrk) write(iw,9070)
+        call abrt
+      endif
+      if(runtyp.ne.energy.and.runtyp.ne.GRAD.and.runtyp.ne.OPTMIZ.and.
+     *   runtyp.ne.OPTFMO.and.runtyp.ne.globop.and.runtyp.ne.hess) then
+        if(maswrk) write(iw,9075)
+        call abrt
+      endif
+      if(MPCTYP.ne.none) then
+        if(maswrk) write(iw,9080)
+        call abrt
+      endif
+      if(.not.legalmul) then
+        if(maswrk) write(iw,9090)
+        call abrt
+      endif
+      if(IECP.ne.0.and.(iecp.ne.5.or.nder.gt.1)) then
+        if(maswrk) write(iw,9100)
+        call abrt
+      endif
+      if(nfmopcm.gt.nbody) then
+        write(iw,9200)
+        call abrt
+      endif
+      if(dotd.and.nfmopcm.ne.0.and.nder.gt.0) then
+        write(iw,9210)
+        call abrt
+      endif
+      if(ipieda.ne.0.and.
+     *   (nder.gt.0.or.iand(modorb,1).eq.0.or.nbody.ne.2.or.nlayer.ne.1
+     *    .or.dodft.or.domcscf.or.urohf.or.doci.or.dotd.or.doafo
+     *    .or.nfmopcm.gt.0)) then
+        write(iw,9220)
+        call abrt
+      endif
+      if(domp.and.nfmopcm.gt.0.and.nder.gt.0) then
+        write(iw,9230)
+        call abrt
+      endif
+c     if((domcscf.or.urohf).and.nder.gt.0.and.iand(modgrd,2).ne.0) then
+      if(domcscf.and.nder.gt.0.and.iand(modgrd,2).ne.0) then
+        write(iw,9240)
+        call abrt
+      endif
+      if((domcscf.or.urohf).and.modorb.ne.3) then
+        write(iw,9250)
+        call abrt
+      endif
+c
+      return 
+ 8000 format(/1x,'FMO Hessian is not available.')
+ 9010 format(/1x,'FMO3-MCSCF is not implemented.',/)
+ 9020 format(/1x,'Unsupported SFTTYP in $FMO',A8)
+ 9021 format(/1x,'More than one MCSCF fragment was specified.')
+ 9022 format(/1x,'No MCSCF fragment was specified.')
+ 9023 format(/1x,'MCSCF is set in SCFFRG but not in $FMO SCFTYP.')
+ 9024 format(/1x,'No ROHF fragment was specified.')
+ 9025 format(/1x,'ROHF is set in SCFFRG but not in $FMO SCFTYP.')
+ 9026 format(/1x,'Only one open-shell fragment is allowed.')
+ 9027 format(/1x,'FMO-ROHF gradient and ROHF/PCM are unavailable.')
+ 9030 format(/1x,'This FMO-CI is not implemented.',/)
+ 9040 format(/1x,'FMO4-DFT is not implemented.',/)
+ 9050 format(/1x,'FMO4-CC is not implemented.',/)
+ 9060 format(/1x,'FMO4-MP2 is not implemented.',/)
+ 9070 format(/1x,'FMO3-TDDFT is not implemented.',/)
+ 9075 format(/1x,'Only RUNTYP=ENERGY,GRAD,OPTIMIZE,OPTFMO or GLOBOP is',
+     *           ' permitted.',/)
+ 9080 format(/1x,'Semiempirical runs not supported with FMO.',/)
+ 9090 format(/1x,'Only the MCSCF fragment may be non-singlet.',/) 
+ 9100 format(/1x,'Core potentials may only be MCP.')
+ 9200 format(/1x,'IFMO in $PCM should not be exceed NBODY in $FMO.',/)
+ 9210 format(/1x,'FMO-TDDFT/PCM gradient is not available.',/)
+ 9220 format(/1x,'PIEDA has to be run as gas phase RUNTYP=ENERGY,',
+     *       /1x,'nbody=2 and MODORB may be 1 or 3. No PCM, no AFO. ',
+     *           'RHF, MP2 or CC only.',/)                       
+ 9230 format(/1x,'FMO-MP2/PCM gradient is not available.',/)
+ 9240 format(/1x,'FMO-MCSCF requires no MODGRD=2.')
+ 9250 format(/1x,'FMO-ROHF or MCSCF requires MODORB=3.')
+      END
+C*MODULE fmoprp   *DECK fmo0x
+      SUBROUTINE fmo0x
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      Integer ddi_world,ddi_group
+      Parameter(ddi_world=0,ddi_group=1)
+      parameter(MXATM=2000,mxrt=100,maxelm=3,zero=0.0D+00,one=1.0D+00)
+      logical isgddi,parout,INITGDDI,GOPARR,DSKWRK,MASWRK,myjob,orbxch,
+     *        enexch,docas,atonce,savdsk,densfmo0,dosap,dospc,mepgrid,
+     *        gcorrel,dodistr
+      COMMON /ELPROP/ ELDLOC,ELMLOC,ELPLOC,ELFLOC,
+     *                IEDEN,IEMOM,IEPOT,IEFLD,MODENS,
+     *                IEDOUT,IEMOUT,IEPOUT,IEFOUT,
+     *                IEDINT,IEMINT,IEPINT,IEFINT
+      COMMON /ENRGYS/ ENUCR,EELCT,ETOT,SZ,SZZ,ECORE,ESCF,EERD,E1,E2,
+     *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2),EDISP
+      COMMON /FMCOM / X(1)
+      COMMON /GDDI/   ISCOPE,NGROUPS,MYGROUP,MEGLOB,npglob,nnglob,JBTYP,
+     *                ISGDDI,PAROUT,INITGDDI
+      COMMON /GRDPAR/ ORIGIN(3),XVEC(3),YVEC(3),ZVEC(3),UX(3),UY(3),
+     *                UZ(3),GRDSIZ,NGRID,IGUNIT,NXG,NYG,NZG,modgrid
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /MACHIN/ NWDVAR,MAXFM,MAXSM,LIMFM,LIMSM
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /XYZPRP/ XP,YP,ZP,
+     *                DMX,DMY,DMZ,
+     *                QXX,QYY,QZZ,QXY,QXZ,QYZ,
+     *                QMXX,QMYY,QMZZ,QMXY,QMXZ,QMYZ,
+     *                OXXX,OXXY,OXXZ,OXYY,OYYY,OYYZ,
+     *                OXZZ,OYZZ,OZZZ,OXYZ,
+     *                OMXXX,OMXXY,OMXXZ,OMXYY,OMYYY,
+     *                OMYYZ,OMXZZ,OMYZZ,OMZZZ,OMXYZ
+      COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
+     *                MPLEVL,MPCTYP
+      Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
+      common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
+     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
+     *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
+     *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
+     *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
+     *                modlmo,nopden,mofock
+      common /fmopnt/ lichfg,lmulfg,lidmrec,lfrgnam,llayfrg,lindat,
+     *                lnCBS,lfmozan,lfmoc,lfmomas,lizbas,liaglob,libdgh,
+     *                liabdfg,ljabdfg,lnCAO,lidxCAO,liaprjo,ljaprjo,
+     *                lCoreAO,lOccCor,lshiftb,liodfmo,lfmoda,lfmodb,
+     *                lfmoespa,lfmoespb,llocfmo,lscffrg,lfmoscf,lrij,
+     *                lpopmul,lpopmat,lialoc,lindbd,liatfrg,lindfrg,
+     *                lindgfrg,lnatfrg,lnat0frg,lianfrg,lzanfrg,lcfrg,
+     *                llibish,llibnsh,llibng,lindatg,lfmobuf(3),lfmode,
+     *                lnumfrg,lloctat,liaoglob,lloadm,lfmoge,ldgrid,
+     *                liodcfmo,ljob2grp,lfmopg,lemocdr,luntxyz,luntrot,
+     *                lstonep,lmapsu,lfrgmul,lclmo,lialmo,lindlmo,
+     *                latclmo,llmobdf,lfgflmo,lnfglmo,llfglmo,lpfglmo,
+     *                LPOPDMAT,lidmpnt,liddpnt,livmpnt
+      common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
+     *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
+     *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
+     *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
+     *                iddcur,nddleft,ivmfmo
+      dimension nelm(0:maxelm)
+      data nelm/0,3,9,19/
+c
+c     Generate the proper 0-body FMO wavefunction.
+c     0-body means free monomers. If fractioned bonds are present, this 
+c     means the monomer state while capped with methyls.
+c     In other words, for molecule F1-F2-F3 the 0-body state is got as:
+c     F1'+F2'+F3', where
+c     F1' is in F1'-Me 
+c     F2' is in Me-F2'-Me 
+c     F3' is in    F3'-Me 
+c     Me means methyl, so the fractioned bonds are C-C. 
+c     The code is general for other bonds, just more library data should be
+c     entered. For example, if C-N bond is fractioned, the cap is NH2.
+c
+c     The calculation proceeds by calling the FMO driver for each monomer.
+c     Capping has to be done in FMOX where all information is stored.
+c
+      if(maswrk) write(iw,9000) 
+c
+c     Call fmox to read in most options.
+c
+      call fmox(0)
+c
+      nfmoelm=0
+c
+c     Allocate memory for non-sparse grid. It should be processed here to
+c     minimise the overhead. 
+c
+      mepgrid=iand(modprp,32).ne.0
+      nxyzg=0
+      if(iand(modprp,4).ne.0) nxyzg=nzg*nyg*nxg
+      nsetgrid=1
+      if(mepgrid) nsetgrid=2
+      nfmoelm=nelm(iemom)
+      nprocg=nproc
+      ngrmax=nprocg
+      orbxch=mod(modorb,2).ne.0
+      enexch=mod(modorb/2,2).ne.0
+      atonce=iand(modpar,4).ne.0
+      dodistr=iand(modpar,512).ne.0
+c     It is really a bad idea to have DODISTR=.t. in FMO0. 
+      densfmo0=maxl1c.ne.0
+      dosap=respap(1).ne.zero.or.respap(2).ne.zero
+      dospc=resppc(1).ne.zero.or.resppc(2).ne.zero
+      mp2run=0
+c
+cnb   This is a despicable way to set DOCAS.
+c
+      docas=orbxch.and.enexch
+c
+      maxl2c=(maxl1c*maxl1c+maxl1c)/2
+      maxl3c=maxl1c*maxl1c
+      n30ex=5+nlayer
+      LDAR30c=maxl2c
+      if(orbxch) LDAR30c=maxl3c
+      if(docas)  LDAR30c=maxl2c+maxl3c
+      if(enexch) LDAR30c=LDAR30c+maxl1c
+      NDAR30c=1+nfg*2*2
+      NDAR30ci=(NDAR30c+n30ex-1)/nwdvar+1
+      LDAR30c=max(LDAR30c,NDAR30ci)
+      IDAcFMO=30
+c
+      maxm2d=LDAR30c
+      if(dosap) maxm2d=maxm2d+maxl1c
+      if(dospc) maxm2d=maxm2d+maxl1c
+c
+      CALL VALFM(LOADFM)
+      memon=LOADFM+1
+      mfmoelm=memon+nfg*4
+      mfrgnam=mfmoelm+nfmoelm*(nfg+1)
+      mlayfrg=mfrgnam+nfg
+      ldgrid=mlayfrg+(nfg-1)/nwdvar+1
+      mjobgrp=ldgrid+nxyzg*nsetgrid
+      mnumfrg=mjobgrp+(nfg+1-1)/nwdvar+1
+      mnatfrg=mnumfrg+(nfg-1)/nwdvar+1
+      mscffrg=mnatfrg+(nfg-1)/nwdvar+1
+      liodcfmo=mscffrg+nfg
+      mmaxl30=liodcfmo+NDAR30ci
+      mmastid=mmaxl30+(nfg-1)/nwdvar+1
+      mfrgscf=mmastid+(nprocg-1)/nwdvar+1
+      last=mfrgscf+nfg
+      mfmoda=last
+      mifgbuf=last
+      if(atonce) then
+        mnfgbuf=mifgbuf+(2*nfg*ngrmax-1)/nwdvar+1
+        last=mnfgbuf+(2*ngrmax-1)/nwdvar+1
+      else
+        mnfgbuf=last
+        last=mfmoda+maxm2d
+c       lfmoda is surreptitiosly used in dmexch (if not atonce).
+c       Note that lfmoda is reset in FMOX, so it has to be set after
+c       calling it.
+      endif
+c
+      if(nxyzg.ne.0) then
+c       It is possible to save some memory in FMOX if the arrays are allocated 
+c       below. 
+        mfmozan=last
+        mfmoc=mfmozan+natfmo
+        mizbas=mfmoc+3*(natfmo+1)
+        last=mizbas+(natfmo-1)/nwdvar+1
+      endif
+      NEED = LAST- LOADFM -1
+      CALL GETFM(NEED)
+      if(maswrk) write(iw,9010) NEED
+      call vclr(x(memon),1,nfg*4)
+      call vclr(x(mfmoelm),1,nfmoelm*(nfg+1))
+      call viclr(x(mlayfrg),1,nfg)
+      call vclr(x(mfrgnam),1,nfg)
+      if(nxyzg.ne.0) call vclr(x(ldgrid),1,nxyzg*nsetgrid)
+      call viclr(x(mjobgrp),1,nfg)
+      call viclr(x(mnumfrg),1,nfg)
+      call viclr(x(mnatfrg),1,nfg)
+      call vclr(x(mscffrg),1,nfg)
+      call viclr(x(mmaxl30),1,nfg)
+c
+      savdsk=DSKWRK
+      if(densfmo0) then
+        call viclr(x(liodcfmo),1,NDAR30c+n30ex)
+        DSKWRK=.true.
+        call RAOPEN2(IDAcFMO,x(liodcfmo),0,NDAR30c,LDAR30c,0,NPRINT)
+c       It is vital to reserve the first record on IDAcFMO for indexing.
+        call rawrites(IDAcFMO,x(liodcfmo),x(liodcfmo),NDAR30ci,NDAR30ci,
+     *                1,0)
+        DSKWRK=savdsk
+      endif
+c
+      if(isgddi) then
+        call gddi_scope(ddi_group)
+        call gddi_mastid(x(mmastid))
+        call GDDICOUNT(-1,lgroup,myjob)
+      else
+        call ixstor(x(mmastid),1,master)
+c       mastid(0)=master
+      endif
+c
+      do 200 ifg=1,nfg
+        if(isgddi) then
+          call GDDICOUNT(0,lgroup,myjob)
+          if(.not.myjob) goto 200
+        endif
+        call fmox(ifg)
+        call ixstor(x(mjobgrp),ifg,mygroup)
+        if(maswrk) then
+          x(memon+ifg-1  )=ETOT 
+          x(memon+ifg-1+nfg)=ESCF
+          if(nfmoelm.ne.0) 
+     *      call dcopy(nfmoelm,DMX,1,x(mfmoelm+(ifg-1)*nfmoelm),1)
+          call ixstor(x(mlayfrg),ifg,icurlay)
+          call ixstor(x(mnumfrg),ifg,num)
+          call ixstor(x(mnatfrg),ifg,nat)
+          call ixstor(x(mmaxl30),ifg,nat1e)
+          x(mfrgnam+ifg-1)=espscf
+          x(mfrgscf+ifg-1)=scftyp
+        endif
+  200 continue
+c
+      if(isgddi) then
+        call GDDICOUNT( 1,lgroup,myjob)
+        call gddi_scope(ddi_world)
+c
+c       The results are harvested from all GDDI masters (in the world scope).
+c
+        if(nfmoelm.gt.0) call ddi_gsumf(2419,x(mfmoelm),nfmoelm*nfg)
+        call ddi_gsumi(2419,x(mlayfrg),nfg)
+        call ddi_gsumi(2419,x(mnumfrg),nfg)
+        call ddi_gsumi(2419,x(mnatfrg),nfg)
+        call ddi_gsumi(2419,x(mmaxl30),nfg)
+        call ddi_gsumi(2419,mp2run,1)
+c
+c       The operation below is potentially dangerous, since we are collecting 
+c       Hollerith characters in real precision. But the probability of 
+c       hitting something like NAN is nearly zero (yet the wise say that a cow
+c       drowned where it was knee-deep on the average).
+c
+        call ddi_gsumf(2419,x(mfrgnam),nfg)
+        call ddi_gsumf(2419,x(mfrgscf),nfg)
+c
+c     Exchange the density file
+c
+        if(densfmo0) then
+          call gddi_scope(ddi_group)
+c         Some thought is needed to see if this will work in the multilayer
+c         case. nconv is set to -1 to prevent summing of mglocon, there being
+c         no space allocated for it).
+c         dmexch needs to be called in the group scope after indexing
+c         arrays have been summed in the world scope above. 
+          ilay=1
+          nfge=nfg*2
+          nconv=-1
+          irec0=1
+          lfmoda=mfmoda
+          call dmexch(ilay,nfge,x(mjobgrp),x(mlayfrg),x(mnumfrg),
+     *                x(mnatfrg),x(mscffrg),IDAcFMO,x(liodcfmo),
+     *                x(mmaxl30),x(memon),dum,nconv,irec0,.false.,
+     *                .false.,orbxch,enexch,atonce,dodistr,x(mmastid),
+     *                dum,dum,x(mifgbuf),x(mnfgbuf))
+c         dum's are mglocon and orb+at populations that need not be exchanged. 
+          call gddi_scope(ddi_world)
+        else
+c         In this case memon has not been summed in dmexch.
+          call ddi_gsumf(2419,x(memon),nfg*4)
+        endif
+      endif
+      gcorrel=mp2run.gt.0
+c     mp2run is set during FMOX(0) 
+c
+c     Output the results (cloned from fmoprop).
+c
+      if(maswrk) then  
+        write(iw,9114)
+        nenm=1
+        if(gcorrel) nenm=2
+        if(nenm.gt.1) write(iw,9115)
+        if(nenm.le.1.and.iemom.ge.1) write(iw,9116)
+        emontot=zero
+        emontotu=zero
+        mfmoelmt=mfmoelm+nfg*nfmoelm-1
+        do ifg=1,nfg
+          nelm1=nelm(1)
+          if(iemom.lt.1) nelm1=0
+          eifg= x(memon+ifg-1  )
+          eifgu=x(memon+ifg-1+nfg)
+          ilay=ixftch(x(mlayfrg),ifg)
+          frgnami=x(mfrgnam+ifg-1)
+          mfmoelmi=mfmoelm+(ifg-1)*nfmoelm-1
+          call daxpy(nfmoelm,one,x(mfmoelmi+1),1,x(mfmoelmt+1),1)
+          if(nenm.eq.2) then
+            write(iw,9118) ifg,frgnami,ilay,eifg,eifgu,
+     *                     (x(mfmoelmi+ielm),ielm=nelm(0)+1,nelm1)
+          else
+            write(iw,9120) ifg,frgnami,ilay,eifg,
+     *                    (x(mfmoelmi+ielm),ielm=nelm(0)+1,nelm1) 
+          endif
+          if(iemom.ge.2)
+     *      write(iw,8122) (x(mfmoelmi+ielm),ielm=nelm(1)+1,nelm(2))
+          if(iemom.ge.3)
+     *      write(iw,8123) (x(mfmoelmi+ielm),ielm=nelm(2)+1,nelm(3))
+          emontot=emontot+eifg
+          emontotu=emontotu+eifgu
+        enddo
+        if(nenm.ge.2) then
+          write(iw,9200) '  corr',0,emontot
+          write(iw,9200) 'uncorr',0,emontotu
+          write(iw,9200) 'delta ',0,emontot-emontotu
+        else
+          write(iw,9200) 'uncorr',0,emontot
+        endif
+        if(iemom.ge.1)
+     *    write(iw,9230) 0,(x(mfmoelmt+ielm),ielm=nelm(0)+1,nelm(1)),
+     *                   DNRM2(3,x(mfmoelmt+1),1)
+        if(iemom.ge.2) 
+     *    write(iw,9231) (x(mfmoelmt+ielm),ielm=nelm(1)+1,nelm(2))
+        if(iemom.ge.3) 
+     *    write(iw,9232) (x(mfmoelmt+ielm),ielm=nelm(2)+1,nelm(3))
+c
+        etot=emontot
+        write(iw,9900) 
+c
+        write(ip,9300)
+        write(ip,9310) (x(memon+ifg-1),ifg=1,nfg*nenm)
+        write(ip,9320)
+      endif
+c
+c     Write up a nice restart data group
+c
+      if(nlayer.eq.1) then
+        ilay=1
+        call eminout(1,ilay,0,x(mlayfrg),x(memon),.false.) 
+      endif
+c
+      if(densfmo0) then
+c       l1fmo should really be computed in FMO0 but until then just reset to 0.
+        idum=0
+        l1fmo=0
+        l1fmoc=0
+        irstlay=1
+        DSKWRK=.true.
+        call bconvrec(dum,idum,idum,NDAR30c,x(liodcfmo),l1fmo,l1fmoc,
+     *                IDAcFMO,idum,.false.)
+        call rawrites(IDAcFMO,x(liodcfmo),x(liodcfmo),NDAR30ci,NDAR30ci,
+     *                1,0)
+        CALL RACLOS(IDAcFMO,'KEEP')
+        DSKWRK=savdsk
+      endif
+c
+c     Finally finish off by writing the grid data (if any).
+c
+      if(nxyzg.ne.0) then
+c       grid density has to be summed for both GDDI and regular DDI.
+        call ddi_gsumf(2416,x(ldgrid),nxyzg*nsetgrid)
+c       Since FMOX destroys coordinates+charges, they have to be rearead.
+        call fmoxyz(' $FMOXYZ',0,natfmo,x(mfmozan),x(mfmoc),x(mizbas))
+        if(maswrk) then
+          do iset=1,nsetgrid
+            call makecube(iset,0,0,natfmo,x(mfmozan),x(mfmoc),
+     *                    x(ldgrid+(iset-1)*nxyzg),
+     *                    NXG,NYG,NZG,ORIGIN,UX,UY,UZ)
+          enddo
+        endif
+      endif
+      CALL RETFM(need)
+      call timit(1)
+      return
+ 9000 format(/1x,76(1H=),
+     *       /31x,'Zero-body FMO driver.',
+     *       /17x,'The purpose is to obtain free monomer properties.'
+     *       /1x,'For covalently bonded fragments free monomers ',
+     *           'are obtained by adding capping',
+     *       /10x,'fragments (such as methyl) at the fractioned bonds.',
+     *       /1x,76(1H=)/)
+ 9010 format(/1x,'Using',I10,' words of memory.',/)
+ 9114 format(/1x,'Zero-body FMO properties.',/1x,25(1H=)/)
+ 9115 format(26x,'Ecorr',11x,'Euncorr',7x,'DX',7x,'DY',7x,'DZ')
+ 9116 format(28x,'E',11x,'DX',7x,'DY',7x,'DZ')
+ 9118 format(1x,I4,'(',A8,',L',I1,')',2F17.9,3F9.5)
+ 9120 format(1x,I4,'(',A8,',L',I1,')', F17.9,3F9.5)
+ 8122 format(8x,'Q=',6F10.5)
+ 8123 format(8x,'O=',5F10.5,/8x,2x,5F10.5)
+ 9200 format(/1x,'Total energy of the molecule: E',A6,'(',I1,')=',F19.9)
+ 9230 format(1x,'Dipole moment D(xyz),DA(',I1,')=',4F13.7)
+ 9231 format(1x,'Quadrupole moment Q(XX,YY,ZZ)=',3F12.7/,
+     *       1x,'                   (XY,XZ,YZ)=',3F12.7)
+ 9232 format(1x,'Octopole moment O(XXX,XXY,XXZ,XYY)=',4F11.6/,
+     *       1x,'                 (YYY,YYZ,XZZ,YZZ)=',4F11.6/,
+     *       1x,'                         (ZZZ,XYZ)=',2F11.6)
+ 9300 format(1x,'$fmoprp',/1x,'efmo0(1)=')
+ 9310 format(4F19.10)
+ 9320 format(1x,'$end')
+ 9900 format(/)
+      end
+c
+C*MODULE fmoprp  *DECK fmototd 
+      SUBROUTINE fmototd(ida,l2,da,totd,iaoglob)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      DIMENSION da(*),totd(*),iaoglob(*)
+      logical GOPARR,DSKWRK,MASWRK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+c
+c     Accumulate the electron density for the total system in AO basis.
+c     parstat: GroupFull (statically).
+c
+      if(ida.eq.0) return
+c
+      nsize=(l2-1)/nproc+1
+      myst=me*nsize+1
+      myfi=min(myst+nsize-1,l2)
+      call tribrk(myst,-1,i,j)
+      i=i-1
+      fda=ida
+c
+      do ij=myst,myfi
+        ig=iaoglob(i) 
+        jg=iaoglob(j)
+c       write(6,*) 'wwwij',ij,i,j,ig,jg
+        if(jg.lt.ig) then
+          ijg=(ig*ig-ig)/2+jg
+        else
+          ijg=(jg*jg-jg)/2+ig
+        endif
+        totd(ijg)=totd(ijg)+fda*da(ij)
+        j=j+1
+        if(j.gt.i) then
+          j=1
+          i=i+1
+        endif
+      enddo
+c
+      return
+      end
+c
+C*MODULE fmoprp  *DECK addecc
+      subroutine addecc(ibody,ida1,ida2,ida3,extracc,nextracc)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      LOGICAL CNVR,QDR,QDCR
+      COMMON /CCENGY/ ENRG,EREF,EMP2,eccn,ETOT(6),ECORR(6),
+     *                DIAGS(3),AMPMX(5,2),IAMPMX(5,4,2),XO1,XO2,
+     *                DIFMAX,DIFFENG,ITER,CNVR
+      COMMON/QUADRUPLE/QDR,QDCR
+      COMMON/T4TOT/ETT2,ETS2,EQ1A,EQ1B,EQ2A,EQ2B,EQ3A,EQ3B,EQ4A,
+     *EQ4B,O4A,O4B,ECORQ(8),ETOTQ(8)
+      COMMON /EOMTRP/ DI1(10),DI2(10),DI3(10),DI4(10),DI5(10),DI6(10),
+     *                ENESD(10),XNUM(10),XDENOM(10),R0(10),
+     *                XM1(10),XM2(10),XM3(10),XD1(10),XD2(10),XD3(10),
+     *                YD1(10),YD2(10),YD3(10),YD4(10),XNC3(10),DC3(10),
+     *                XGRCORR,XGRCORR1,XGRCORR2,XGRCORR3,XGRCORR4,
+     *                XGRCORR5,XGRCORR6,XGRCORR7,CI3GCORR
+      COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
+     *                MPLEVL,MPCTYP
+      Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
+      dimension extracc(nextracc,*),fda(3)
+      data CRCCL/8HCR-CCL  /
+c
+c     Accumulate extra CC properties.
+c
+      fda(1)=ida1
+      fda(2)=ida1+ida2
+      fda(3)=ida1+ida2+ida3
+      iil=2
+c     IIL is a mysterious index from CC.
+      do ii=ibody,nbody
+        fdai=fda(ii)
+        if(fdai.ne.0.0D+00) then
+          extracc(1,ii)=extracc(1,ii)+fdai*emp2
+          extracc(2,ii)=extracc(2,ii)+fdai*eccn
+          call daxpy(6,fdai,ecorr,1,extracc(3,ii),1)
+          if(QDR) call daxpy(7,fdai,ECORQ(2),1,extracc(9,ii),1)
+          if(CCTYP.EQ.CRCCL) then
+c           Most EOM-CC properties do not overlap with others like CCSD(T),
+c           but we leave such CCSD(T) space open (e.g., CC-CRL uses only
+c           1,2,16,17 elements of extracc). 
+            extracc(16,ii)=extracc(16,ii)+fdai*XM1(iil)
+            extracc(17,ii)=extracc(17,ii)+fdai*XNUM(iil)
+          endif
+        endif
+      enddo
+c
+      return
+      END
+c
+C*MODULE fmoprp  *DECK addemp
+      subroutine addemp(ibody,ida1,ida2,ida3,extracc,nextracc)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      parameter(mxrt=100)
+      COMMON /ENRGMP/ EMP2,EMP3,EMP4,EMP2a
+      COMMON /ENRGYS/ ENUC,EELEC,ETOT,SZ,SZZ,ECORE,ESCF,EERD,E1,E2,
+     *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2),EDISP
+      Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
+      dimension extracc(nextracc,*),fda(3)
+c
+c     Accumulate extra CC properties.
+c
+      fda(1)=ida1
+      fda(2)=ida1+ida2
+      fda(3)=ida1+ida2+ida3
+      eamp2=EMP2a-ESCF
+      do ii=ibody,nbody
+        fdai=fda(ii)
+        if(fdai.ne.0.0D+00.and.EMP2a.ne.0) then
+          extracc(1,ii)=extracc(1,ii)+fdai*eamp2
+        endif
+      enddo
+c
+      return
+      END
+c
+C*MODULE fmoprp  *DECK pcmnup
+      SUBROUTINE pcmnup(ida,vnuc)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      logical GOPARR,DSKWRK,MASWRK
+      PARAMETER (MXATM=2000,zero=0.0D+00)
+      dimension vnuc(*)
+C
+      COMMON /FMCOM / X(1)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMCHG/ PB,PX,PC,UNZ,QNUC,FN,FE,UNZOR,PORT
+      COMMON /PCMDIM/ mxsp,mxts,mempcm1,mempcm2,NTS
+      COMMON /PCMPNT/ LXYZRE,LSSFE,LLIST,LALPCM,LRINPCM,LINAPCM,LINFPCM,
+     *                LINIPCM,LMEPCM,LAXYZCT,LXYZCT2,LNVERT,LQSN,LQSE,
+     *                LQFS,LQIND,LISPHE,LVAD,LQOR,LVECMUL,LAIPRJ,LFIPRJ,
+     *                LPEL,LPCMCDR,LDAI,LIDDAI,LQSND,LQSED
+C
+C     Compute nuclear potential due to induced charges in the FMO-PCM.
+C
+c     if(ida.eq.0) return
+      da=ida
+c     write(6,*) 'wwwnup',ida
+C
+C     THE NUCLEAR POTENTIAL GOES TO VNUC
+c     PC will contain nuclear potential contribution to the n-mer energy.
+c     VNUC accumulates potential for the whole system, thus it has the DA
+c     prefactor, whereas PC is computed for the n-mer only, no prefactor.
+c     VNUC is not globally summed here, but PC is.
+c
+cnb   The present scheme is extravagant. The right way is to compute PCs and
+c     VNUC for monomers only, since dimer values are additive of monomers! 
+C
+      PC=zero
+      DO 100 ITS=1,NTS
+        if(goparr.and.MOD(ITS,NPROC).NE.me) goto 100
+        VITS=zero
+        xctsi=x(LAXYZCT+ITS-1)
+        yctsi=x(LAXYZCT+MXTS+ITS-1)
+        zctsi=x(LAXYZCT+MXTS*2+ITS-1)
+        DO IAT=1,NAT
+          VITS=VITS+ZAN(IAT)/SQRT((XCTSI-C(1,IAT))**2+
+     *                       (YCTSI-C(2,IAT))**2+(ZCTSI-C(3,IAT))**2)
+        ENDDO
+        if(ida.ne.0) VNUC(ITS)=VNUC(ITS)+da*VITS
+        PC=PC+VITS*x(lQSE+ITS-1)
+  100 continue
+      if(goparr) call ddi_gsumf(2416,PC,1)
+      RETURN
+      END
+C*MODULE fmoprp  *DECK calcasc
+      SUBROUTINE calcasc(itermscf,ntspar,ichfmo,nefmo,lfmasc,needasc,
+     *                   lesolv,nesolv,lpel,lvnuc,LTMP0,qini,ihaveq0)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+c
+      logical GOPARR,DSKWRK,MASWRK,PACK2E,pcmrst
+      dimension qini(*)
+c 
+      PARAMETER (ONE=1.0D+00,TOANGS=0.52917724924D+00,ANTOAU=one/TOANGS)
+      PARAMETER (MXATM=2000)
+c
+      COMMON /FMCOM / X(1)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      common /INT2IC/ NINTIC,iNINTIC,nxxic,lbufpic,lixic,labsix,nintix
+      COMMON /INTFIL/ NINTMX,NHEX,NTUPL,PACK2E,INTTYP,IGRDTYP
+      COMMON /PCKLAB/ LABSIZ
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCMCHG/ PB,PX,PC,UNZ,QNUC,FN,FE,UNZOR,PORT
+      COMMON /PCMDIM/ mxsp,mxts,mempcm1,mempcm2,NTS
+      COMMON /PCMEPS/ EPSHET(MXATM),IHET
+      COMMON /PCMITR/ RCUT(2),THRES,IPCMIT,IMUL,MXDIIS,NREG,MXITR1,
+     *                MXITR2,MODPAP
+      COMMON /PCMOPT/ RABI,RASC,REFPOL,THRSLS,DENSLS,WB,WA,ETA2,GD,EVAC,
+     *                RHOW,PM,AREATL,AREAKP,BONDRY,OMEGA,RET,FRO,EPSINF,
+     *                EPS,DR,RSOLV,VMOL,TCE,STEN,DSTEN,CMF,TABS,IDIRCT,
+     *                IPCDER,IDP,ICOMP,IFIELD,ICAV,IDISP,IPRINT,IRETCAV,
+     *                ICENT,IFAST,NEVAL,IEFPOL,KEEPSM,IMGABI,IMGASC,NADD
+      COMMON /PCMPAR/ IPCM,NFT26,NFT27,IRPPCM,IEF,IP_F,nfmopcm
+      COMMON /PCMPLY/ STOT,VOL,CCX,CCY,CCZ,RDIF,NESF,NESFP,NESFF,I_NESF,
+     *                L_AST
+      COMMON /PCMPNT/ LXYZRE,LSSFE,LLIST,LALPCM,LRINPCM,LINAPCM,LINFPCM,
+     *                LINIPCM,LMEPCM,LAXYZCT,LXYZCT2,LNVERT,LQSN,LQSE,
+     *                LQFS,LQIND,LISPHE,LVAD,LQOR,LVECMUL,LAIPRJ,LFIPRJ,
+     *                mPEL,lpcmcdr,LDAI,LIDDAI,LQSND,LQSED
+c
+c     Compute apparent surface charges (ASC). 
+c     itermscf=0 estimate memory need 
+c     itermscf=1 do the work 
+c     No memory is allocated inside.
+c
+C     -- MEMORY FOR SALVATION
+C
+      pcmrst=iand(MODPAP,4).ne.0
+      MXDII1 = MXDIIS + 1
+c
+      LCHG   = lfmasc + 1
+      LQPOT  = LCHG   + NTS
+      LQ0    = LQPOT  + NTS
+      LQ1    = LQ0    + NTS
+      LQ2    = LQ1    + NTS
+      LQ3    = LQ2    + NTS
+      LD0    = LQ3    + NTS
+      LQA    = LD0    + NTS
+      LDIMAT = LQA    + NTS
+      LTMP0  = LDIMAT + MXDII1*MXDII1
+      LTMP1  = LTMP0  + NTS*3
+      LTMP2  = LTMP1  + MXDII1
+      LIPVT  = LTMP2  + MXDII1*MXDII1
+      LRMUL  = LIPVT  + MXDII1
+      lesolv = LRMUL  + MXSP*10
+      lpel   = lesolv + nesolv
+      lvnuc  = lpel   + NTS
+      last   = lvnuc  + NTS
+c
+c     Allocate the largest PCM array.
+c     Try borrowing integral memory, if available.
+c     Note that OPTFMOX also uses it. 
+c     We can use the integral buffer here since QREP is used in ASCIT
+c     after SCF is all done and the integrals are no longer needed. 
+c     Try allocating all PCM in integrals?
+c
+      nqrep=NTSPAR*MXDII1*2
+      iuse2e=0
+      if(NINTIC.gt.0) then
+        LABSIZ2=2/LABSIZ
+        n2ebuf=NINTMX+NINTIC+(NINTMX+NINTIC-1)/LABSIZ2+1
+c       write(6,*) 'Buffer',n2ebuf,nhblock
+        if(n2ebuf.ge.nqrep) then
+          LQREP=LBUFPIC
+          iuse2e=1
+        endif
+      endif
+      if(iuse2e.eq.0) then
+        LQREP = last 
+        last  = LQREP  + nqrep
+      endif
+c
+      NEEDasc = LAST -lfmasc -1
+      if(itermscf.eq.0) return
+c
+      if(maswrk) then
+        write(iw,9000) NEEDasc
+        if(iuse2e.ne.0) write(iw,9010) nqrep
+      endif
+c
+c     Add electron and nuclear potentials and normalise.
+c
+c     write(6,*) 'wwwpcm-elpot'
+c     call prsqa(x(lPEL),NTS,1,1)
+c     call abrt
+c
+c     For charge compensation, solve PCM equations first for nuclear
+c     potential/charge only, then full equations.
+      ihaveq=ihaveq0
+c
+c     qini structure is:
+c          ICOMP=0             ICOMP=2
+c     (1,*) scaled plain Qe+Qn total renormalised Qe+Qn (for SCF)
+c     (2,*)                    renormalised Qn (for SCF)
+c     (3,*)                    plain Qe (for the initial guess in ASCIT)
+c     (4,*)                    plain Qn (for the initial guess in ASCIT)
+c
+      if(icomp.ne.0.and.itermscf.eq.1) then
+c       Nuclear charges are got only once in case of charge compensation.
+c       Try to give more iterations to ensure convergence.
+        call dcopy(NTS,x(lVNUC),1,X(LQPOT),1)
+        call dscal(NTS,-one,X(LQPOT),1)
+        MXIsav1=MXITR1
+        MXIsav2=MXITR2
+        MXITR1=max(mxitr1,2000)
+        MXITR2=max(mxitr2,2000)
+        if(ihaveq0.ne.0) then
+          call dcopy(nts,qini(1+nts*3),1,X(LQ0),1)
+c         write(6,*) 'wwwNTS2',(X(LQ0-1+i),i=1,nts)
+        endif
+        CALL ASCIT(itermscf,ihaveq,X(LQPOT),X(LQ0),X(LQ1),X(LQ2),X(LQ3),
+     *             X(LD0),X(LQA),X(LDIMAT),X(LQREP),X(LTMP0),X(LTMP1),
+     *             X(LTMP2),X(LIPVT),X(LRMUL),MXDII1,ntspar,x(LAXYZCT),
+     *             x(LAXYZCT+MXTS),x(LAXYZCT+MXTS*2),x(LAXYZCT+MXTS*3),
+     *             x(LQSE),x(LXYZRE),x(LXYZRE+MXSP),x(LXYZRE+MXSP*2),
+     *             x(LXYZRE+MXSP*3),x(LISPHE),x(LLIST))
+c         write(6,*) 'wwwNTS2a',(x(LQSE-1+i),i=1,nts)
+        MXITR1=MXIsav1
+        MXITR2=MXIsav2
+        if(pcmrst) call dcopy(NTS,x(LQSE),1,qini(1+nts*3),1)
+        IF(IEF.EQ.10) call dscal(NTS,(EPS-ONE)/EPS,x(LQSE),1)
+        call dcopy(NTS,x(LQSE),1,x(LQSN),1)
+        call timit(1)
+        if(maswrk) write(iw,9050)
+      endif
+      if(icomp.ne.0) then 
+c       Store just the electron potential in QPOT for the next call to ASCIT.
+        call dcopy(NTS,x(lPEL),1,X(LQPOT),1)
+        call dscal(NTS,-one,X(LQPOT),1)
+      else 
+c       Store the total potential in QPOT for the next call to ASCIT.
+        call vadd(x(lpel),1,x(lVNUC),1,X(LQPOT),1,NTS)
+        call dscal(NTS,-one,X(LQPOT),1)
+      endif
+c
+c     write(6,*) 'wwwpcm-nucpot unnorm'
+c     call prsqa(x(lVNUC),NTS,1,1)
+c     write(6,7777) (X(LQPOT+i),i=0,NTS-1)
+c7777 format(1x,5F18.15)
+c     call prsqa(X(LQPOT),NTS,1,1)
+C
+      indqe=0
+      if(icomp.ne.0) indqe=2
+c
+      if(ihaveq0.gt.0) then
+        call dcopy(nts,qini(1+nts*indqe),1,X(LQ0),1)
+        IF(IEF.EQ.10.and.EPS.ne.0.and.icomp.eq.0)
+     *    call dscal(NTS,EPS/(EPS-ONE),x(LQ0),1)
+c       For ICOMP=0 qini has charges scaled by (EPS-ONE)/EPS (for SCF),
+c       unscale them now for the initial guess in ASCIT. 
+        ihaveq0=0
+c       write(6,*) 'wwwNTS1',(X(LQ0-1+i),i=1,nts)
+      endif
+      CALL ASCIT(itermscf,ihaveq,X(LQPOT),X(LQ0),X(LQ1),X(LQ2),X(LQ3),
+     *           X(LD0),X(LQA),X(LDIMAT),X(LQREP),X(LTMP0),X(LTMP1),
+     *           X(LTMP2),X(LIPVT),X(LRMUL),MXDII1,ntspar,x(LAXYZCT),
+     *           x(LAXYZCT+MXTS),x(LAXYZCT+MXTS*2),x(LAXYZCT+MXTS*3),
+     *           x(LQSE),x(LXYZRE),x(LXYZRE+MXSP),x(LXYZRE+MXSP*2),
+     *           x(LXYZRE+MXSP*3),x(LISPHE),x(LLIST))
+c       write(6,*) 'wwwNTS1a',(x(LQSE-1+i),i=1,nts)
+C
+C  SCALE C-PCM CHARGES BY (EPS-1)/EPS
+C
+      if(pcmrst) call dcopy(NTS,x(LQSE),1,qini(1+nts*indqe),1)
+      IF(IEF.EQ.10) call dscal(NTS,(EPS-ONE)/EPS,x(LQSE),1) 
+c     - QSED IS REQUIRED EVERYWHERE EVEN IF IHET=0 -
+c     - QSED = QSE WHEN IHET=0
+      IF(IHET.EQ.0) call dcopy(NTS,x(LQSE),1,x(LQSED),1)
+      IF(IHET.NE.0) THEN
+         if(maswrk) write(iw,*)
+     *         ' only homogeneous PCM can be used for FMO-PCM'
+         call abrt
+      END IF
+c
+c     write(6,*) 'wwwpcm-asc'
+c     call prsqa(QSE,NTS,1,1)
+c     ENPCM=-ddot(NTS,X(LQPOT),1,QSE,1)
+c     px=ddot(NTS,x(lPEL),1,QSE,1)
+C     PB = INTERACTION ELECTRONS-NUCLEAR INDUCED CHARGES
+C     PC = INTERACTION NUCLEI-ELECTRONIC INDUCED CHARGES
+C     PX = INTERACTION ELECTRONS-ELECTRONIC INDUCED CHARGES
+c     PB=zero
+c     PC=-px
+c     PX=ENPCM - PX
+c
+c     FMO-PCM differs from the ab initio PCM in putting ASC-electron integrals.
+c     In ab initio they go to the Fock matrix directly.
+c     In FMO-PCM they are added to one-electron integrals (and thus to
+c     the Fock matrix).
+c     The Fock matrices are the same but the 1e integrals differ. Thefore, the
+c     energy correction term differs (subtracting 1/2*Tr(D*Vel)=1/2*(Pel*Qse)).
+c     P.S. The reason for the different behaviour is that in FMO-PCM the ASCs
+c     are constant in SCF iterations.
+C
+C     --- NORMALIZATION ---
+C
+C  4) NORMALIZZAZIONE DELLE CARICHE VIRTUALI ELEMENTARI ELETTRONICHE.
+C     PER ICOMP=1 LA CORREZIONE E' DISTRIBUITA IN PROPORZIONE
+C     ALL'AREA DELLA TESSERA.
+C     PER ICOMP=2 LA CORREZIONE E' EFFETTUATA CON FATTORI COSTANTI.
+C
+      if(icomp.ne.0) then
+        QN=-(nefmo+ichfmo)*(EPS-ONE)/EPS
+        QE=nefmo*(EPS-ONE)/EPS
+        QTE=ddot(NTS,x(LQSE),1,one,0)
+        QTN=ddot(NTS,x(LQSN),1,one,0)
+c       QSE=Qe, QSN=Qn 
+c       write(6,*) 'wwwCC',QE,QTE,QN,QTN
+        IF(ICOMP.EQ.1) THEN
+c       charge renormalisation is:
+c       Qt=Qt+Fe*S+Fn*S=Qe+Qn+(Fn+Fe)*S
+          SUPTOT=STOT*ANTOAU*ANTOAU
+          FE=(QE-QTE)/SUPTOT
+          FN=(QN-QTN)/SUPTOT
+          call daxpy(NTS,ONE,x(LQSN),1,x(LQSE),1)
+c         x(LAXYZCT+MXTS*3) is AS
+          call daxpy(NTS,FN+FE,x(LAXYZCT+MXTS*3),1,x(LQSE),1)
+        ELSE IF(ICOMP.EQ.2) THEN
+c       charge renormalisation is:
+c       Qt=Qe*Fe+Qn*Fn
+          FE=QE/QTE
+          FN=QN/QTN
+          call dscal(NTS,FE,x(LQSE),1)
+          call daxpy(NTS,FN,x(LQSN),1,x(LQSE),1)
+        END IF
+        QETN=ddot(NTS,x(LQSE),1,one,0)
+        if(maswrk) WRITE(IW,9200) QTE+QTN,QETN,FN,FE
+c       Note that FE and FN have very different meanings in ICOMP=1 and 2.  
+        if(pcmrst) call dcopy(NTS,x(LQSN),1,qini(1+nts),1)
+      else
+c       Without charge compensation, QSE contains Qe+Qn already. 
+        QET=ddot(NTS,x(LQSE),1,one,0)
+        TCH=-ichfmo*(EPS-ONE)/EPS
+        if(maswrk) WRITE(IW,9100) QET,TCH
+      END IF
+      if(pcmrst) call dcopy(NTS,x(LQSE),1,qini,1)
+c     This overwrites unscaled qini for ICOMP=0 by scaled values. 
+c
+c     We must be in world scope now, so broadcast charges to ensure
+c     no SCF deadlocks. 
+c
+c     if(goparr) CALL DDI_BCAST(2422,'F',QSE,NTS,0)
+c
+      call timit(1)
+c
+      RETURN
+ 9000 format(/1x,'Calculating apparent surface charges...',
+     *       /5x,'Using',I12,' words of memory.')
+ 9010 format(1x,I12,' words are borrowed from the integral buffer.')
+ 9050 format(1x,'Calculated nuclear charges, now doing electronic...')
+ 9100 format(1x,'PCM ASC=',F18.10,' theoretical=  ',F18.10,/)
+ 9200 format(1x,'PCM ASC=',F18.10,' normalised to=',F18.10,/
+     *      1x,'Nuclear factor=',F15.10,', electronic factor=',F15.10,/)
+      END
+C*MODULE fmoprp  *DECK ctpair
+      function ctpair(ifg,jfg,popmatij,popmat,indat,iaglob,ialoc,indbd,
+     *                ischeme)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (MXATM=2000,zero=0.0D+00,half=0.5D+00,one=1.0D+00,
+     *           small=1.0D-03)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      common /fmodim/ maxbnd,maxknd,maxcbs,maxcao,maxvec,maxl1,maxnat,
+     *                maxabd,maxbas,maxbbd,maxlmo,maxslo,maxabd2
+      Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
+      dimension popmatij(*),popmat(maxnat,nfg),indat(*),iaglob(*),
+     *          ialoc(*),indbd(maxabd,*)
+c
+c     compute charge transfer between fragments
+c
+c     scheme applies to BDAs only. 
+c     0: symmetric 1/2*(Zij-Zi-Zj) 
+c     1: monomer proportional Qi/(Qi+Qj)*(Zij-Zi-Zj)
+c     2: dimer proportional (Qij-Qi)/(Qij-Qi+Qij-Qj)*(Zij-Zi-Zj)
+c     3: abs dimer proportional |Qij-Qi|/(|Qij-Qi|+|Qij-Qj|)*(Zij-Zi-Zj) 
+      deltaq=zero
+      do iat=1,nat
+        iatg=iaglob(iat)
+        iatfg=indat(iatg)
+        iatloc=iand(ialoc(iatg),65535)
+c       First see if iat atom is involved in a fractioned bond.
+c       The algorithm is not smart enough to handle more than one bond
+c       fractioned at the same atom. In this case give up and return zero.
+        if(nbdfg.ne.0.and.indbd(2,iatg).ne.0) then
+          write(6,*) 'Warning: CT algorithm confused.' 
+          ctpair=zero
+          return
+        endif
+        if(nbdfg.eq.0) then
+          if(iatfg.eq.ifg) then
+            deltaq=deltaq+popmatij(iat)-popmat(iatloc,iatfg)
+c           write(6,*) 'wwwcase1',iat,deltaq
+          endif
+c       Otherwise three distint cases exist:
+c       1. atom is not involved in a fractioned bond.
+        else
+          ibdfg=indbd(1,iatg) 
+          jatfg=ishft(ialoc(natfmo+ibdfg),-16)
+          jatloc=iand(ialoc(natfmo+ibdfg),65535)
+c         2. The fractioned bond is inside the dimer.
+c            Assign half of population change to each monomer 
+          if(ibdfg.ne.0.and.(iatfg.eq.ifg.and.jatfg.eq.jfg.or.
+     *                       iatfg.eq.jfg.and.jatfg.eq.ifg)) then
+            Zi=popmat(iatloc,iatfg)  
+            Zj=popmat(jatloc,jatfg)
+            Zij=popmatij(iat)
+            dZij=Zij-Zi-Zj
+            Qi=-Zi+zan(iat)-one
+            Qj=-Zj+one
+            Qij=-Zij+zan(iat)
+c           Note that Qij-Qi-Qj=-(Zij-Zi-Zj) (strictly).
+            Qmy=Qi
+            if(iatfg.eq.jfg) Qmy=Qj
+            if(ischeme.eq.0) then
+              deltaq=deltaq+half*dZij
+            else if(ischeme.eq.1) then
+              if(Qi+Qj.lt.small) write(iw,*) 'Warning1 in CT:',Qi+Qj
+              deltaq=deltaq+Qmy/(Qi+Qj)*dZij
+c             write(6,*) 'wwwcase2a',iat,Qmy/(Qi+Qj)*dZij,Qi,Qj,dZij
+            else if(ischeme.eq.2) then
+              denom=abs(Qi)+abs(Qj)
+              if(denom.lt.small) write(iw,*) 'Warning2 in CT:',denom
+              deltaq=deltaq+abs(Qmy)/denom*dZij
+c             write(6,*) 'wwwcase2a',iat,Qmy/(Qi+Qj)*dZij,Qi,Qj,dZij
+            else if(ischeme.eq.3) then 
+              denom=Qij-Qi+Qij-Qj
+              if(abs(denom).lt.small) write(iw,*) 'Warning in CT:',denom
+              deltaq=deltaq+(Qij-Qmy)/denom*dZij
+c             write(6,*) 'wwwcase2b',iat,(Qij-Qmy)/denom*dZij,Qi,Qj,dZij
+            else if(ischeme.eq.4) then
+              denom=abs(Qij-Qi)+abs(Qij-Qj)
+              if(denom.lt.small) write(iw,*) 'Warning3 in CT:',denom
+              deltaq=deltaq+abs(Qij-Qmy)/denom*dZij
+c             write(6,*) 'wwwcase2c',iat,abs(Qij-Qmy)/denom*dZij,Qi,Qj,
+c    *                   dZij
+            else
+              write(iw,*) 'unknown scheme in CT',ischeme
+              call abrt
+            endif 
+c         3. iat is not a ghost in ifg
+          else if(iatfg.eq.ifg) then
+             deltaq=deltaq+popmatij(iat)-popmat(iatloc,iatfg)
+c           write(6,*) 'wwwcase3',iat,popmatij(iat),popmat(iatloc,iatfg)
+c         4. iat is a ghost atom in ifg
+          else if(ibdfg.ne.0.and.jatfg.eq.ifg) then
+             deltaq=deltaq+popmatij(iat)-popmat(jatloc,jatfg)
+c           write(6,*) 'wwwcase4',iat,popmatij(iat),popmat(jatloc,jatfg)
+          endif
+        endif
+      enddo
+c
+c     deltaq contains the number of electrons lost by ifg. 
+c     Converting to charge gives one "minus" and then here we compute
+c     I(IJ)-I(I), so in terms of transfer from I to J that is another minus
+c     (that is, what I lost, J gained with a minus, this is the transfer amount.
+c 
+      ctpair=deltaq
+      RETURN
+      END
+c
+C*MODULE fmoprp  *DECK envene
+      function envene(L1,D)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      DIMENSION D(*)
+      COMMON /FMCOM / X(1)
+      common /fmopnt/ lichfg,lmulfg,lidmrec,lfrgnam,llayfrg,lindat,
+     *                lnCBS,lfmozan,lfmoc,lfmomas,lizbas,liaglob,libdgh,
+     *                liabdfg,ljabdfg,lnCAO,lidxCAO,liaprjo,ljaprjo,
+     *                lCoreAO,lOccCor,lshiftb,liodfmo,lfmoda,lfmodb,
+     *                lfmoespa,lfmoespb,llocfmo,lscffrg,lfmoscf,lrij,
+     *                lpopmul,lpopmat,lialoc,lindbd,liatfrg,lindfrg,
+     *                lindgfrg,lnatfrg,lnat0frg,lianfrg,lzanfrg,lcfrg,
+     *                llibish,llibnsh,llibng,lindatg,lfmobuf(3),lfmode,
+     *                lnumfrg,lloctat,liaoglob,lloadm,lfmoge,ldgrid,
+     *                liodcfmo,ljob2grp,lfmopg,lemocdr,luntxyz,luntrot,
+     *                lstonep,lmapsu,lfrgmul,lclmo,lialmo,lindlmo,
+     *                latclmo,llmobdf,lfgflmo,lnfglmo,llfglmo,lpfglmo,
+     *                LPOPDMAT,lidmpnt,liddpnt,livmpnt
+c
+c     Given density D, compute interaction with environment
+c     TR(D*V), where V is the potential stashed away by FMO. 
+c
+      envene=TRACEP(d,x(lfmoespa),l1)
+c
+      RETURN
+      END
+c
+C*MODULE fmoprp  *DECK bdaxyz
+      subroutine bdaxyz(R,indat,fmoc)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      DIMENSION indat(*),fmoc(3,*)
+      parameter (small=1.0D-06)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
+c
+c     check if atoms 1,2 are along z-axis.
+c
+c     write(6,6666) ((fmoc(jj,kk),jj=1,3),kk=1,natfmo)
+c6666 format(100(3F12.5,/))
+      if(abs(fmoc(1,1))+abs(fmoc(2,1))+abs(fmoc(1,2))+abs(fmoc(2,2))
+     *   .gt.small*4) then
+        write(iw,*) 'Atoms 1,2 are not along z-axis'
+        call abrt
+      endif
+      if(nfg.ne.2.or.indat(1).eq.indat(2)) then
+        write(iw,*) 'Atoms 1,2 belong to the same fragment or nfg>2.'
+        call abrt
+      endif
+      R0=abs(fmoc(3,2)-fmoc(3,1)) 
+      deltaR=(R-R0)/2
+      if(fmoc(3,1).lt.0) deltaR=-deltaR
+      do iat=1,natfmo
+        if(indat(iat).eq.1) then
+          RR=deltaR
+        else if(indat(iat).eq.2) then
+          RR=-deltaR  
+        else
+          write(iw,*) 'Illegal L0BDA',iat,indat(iat)
+          call abrt
+        endif
+        fmoc(3,iat)=fmoc(3,iat)+RR
+      enddo
+c     write(6,6666) ((fmoc(jj,kk),jj=1,3),kk=1,natfmo)
+      RETURN
+      END
+c
+C*MODULE fmoprp  *DECK bdaeout
+      subroutine bdaeout(n0bda,e0bda)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      DIMENSION e0bda(4,*)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+c
+      write(ip,9000)
+      do i=1,n0bda
+        write(ip,9010) (e0bda(j,i),j=1,4)
+      enddo
+      write(ip,9020)
+      RETURN
+ 9000 format(1x,'$fmoprp',/1x,'e0bda(1)=')
+ 9010 format(4F16.10)
+ 9020 format(1x,'$end')
+      END
+c
+C*MODULE fmoprp  *DECK bdapun
+      subroutine bdapun(units,fmoc,iabdfg,jabdfg,testr,r0bda)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      logical testr,GOPARR,DSKWRK,MASWRK
+      parameter(small=1.0D-06)
+      DIMENSION fmoc(3,*),iabdfg(*),jabdfg(*),r0bda(*)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
+c
+      if(maswrk) then
+        write(ip,9000) nbdfg
+        write(ip,9010) (sqrt((fmoc(1,abs(iabdfg(ibdfg)))
+     *                       -fmoc(1,abs(jabdfg(ibdfg))))**2
+     *                      +(fmoc(2,abs(iabdfg(ibdfg)))
+     *                       -fmoc(2,abs(jabdfg(ibdfg))))**2
+     *                      +(fmoc(3,abs(iabdfg(ibdfg)))
+     *                       -fmoc(3,abs(jabdfg(ibdfg))))**2)*units,
+     *                 ibdfg=1,nbdfg)
+        write(ip,9020)
+      endif
+      if(testr) then
+        do ibdfg=1,nbdfg
+          ia=abs(iabdfg(ibdfg))
+          ja=abs(jabdfg(ibdfg))
+          if(abs(r0bda(ibdfg)/units-sqrt((fmoc(1,ia)-fmoc(1,ja))**2+
+     *       (fmoc(2,ia)-fmoc(2,ja))**2+(fmoc(3,ia)-fmoc(3,ja))**2))
+     *       .gt.small) then
+            if(maswrk)
+     *        write(6,*) 'r0bda/e0bda do not match your molecule',ibdfg
+c           call abrt
+          endif
+        enddo
+      endif
+      RETURN
+ 9000 format(1x,'$fmoprp',/1x,'n0bda=',I5,' r0bda(1)=')
+ 9010 format(7F11.8)
+ 9020 format(1x,'$end')
+      END
+C*MODULE fmoprp  *DECK bdasub
+      subroutine bdasub(ifg,jfg,correl,deltaeij,detot,detotu,edimes,
+     *                  edimex,edimct,edimdi,e0mon,e0monu,indat,iabdfg,
+     *                  jabdfg,e0bda,ires)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      logical correl
+      DIMENSION indat(*),iabdfg(*),jabdfg(*),e0bda(4,*)
+      Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
+c
+      ires=0
+      do ibdfg=1,nbdfg
+        iafrg=indat(abs(iabdfg(ibdfg)))
+        jafrg=indat(abs(jabdfg(ibdfg)))
+        if(iafrg.eq.ifg.and.jafrg.eq.jfg.or.
+     *     iafrg.eq.jfg.and.jafrg.eq.ifg) then
+          edimes=edimes-e0bda(1,ibdfg)
+          edimex=edimex-e0bda(2,ibdfg)
+          edimct=edimct-e0bda(3,ibdfg)
+          if(correl) edimdi=edimdi-e0bda(4,ibdfg)
+          e0sumu=e0bda(1,ibdfg)+e0bda(2,ibdfg)+e0bda(3,ibdfg)
+          e0sum=e0sumu
+          if(correl) e0sum=e0sum+e0bda(4,ibdfg)
+          deltaeij=deltaeij-e0sum
+          detot=detot-e0sum
+          detotu=detotu-e0sumu
+          e0mon=e0mon+e0sum
+          e0monu=e0monu+e0sumu
+c         write(6,*) 'wwwfound',ibdfg,e0sum,edimes,edimex,edimct
+          ires=1
+        endif
+      enddo
+      RETURN
+      END
+c
+C*MODULE fmoprp  *DECK eplout
+      subroutine eplout(epl0ds,eint0)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
+      DIMENSION epl0ds(nfg*3),eint0(4)
+c
+      write(ip,9000)
+      write(ip,9010) (epl0ds(i),i=1,nfg*3)
+      write(ip,9020) (eint0(i),i=1,4)
+      write(ip,9030)
+      RETURN
+ 9000 format(1x,'$fmoprp',/1x,'epl0ds(1)=')
+ 9010 format(4F16.10)
+ 9020 format(1x,'eint0(1)=',4F17.10)
+ 9030 format(1x,'$end')
+      END
+c
+C*MODULE FMOPRP  *DECK I0COPY
+      SUBROUTINE I0COPY(N,IX,I0,IY,J0)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      DIMENSION IX(N),IY(N)
+C
+C     A mutant of ICOPY.
+C
+      DO 100 I=1,N
+         IY(I+J0) = IX(I+I0)
+  100 CONTINUE
+      RETURN
+      END
+C*MODULE FMOPRP  *DECK adjprp
+      SUBROUTINE adjprp(ilay,layfrg,nmmfrg,nddfrg)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      logical GOPARR,DSKWRK,MASWRK
+      Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      DIMENSION layfrg(nfg,2),nmmfrg(*),nddfrg(*) 
+c
+c     This code assumes:
+c     resdim=0, nbody(1)=3,2, layer 1: no correlation, layer 2: correlated.
+c
+      nfg2=(nfg*nfg-nfg)/2
+      call viclr(nmmfrg,1,nfg)
+      loop=0
+      do ifg=1,nfg
+        do jfg=1,ifg-1
+          loop=loop+1
+          ijlay=min(layfrg(ifg,2),layfrg(jfg,2))
+          if(ijlay.ge.ilay) then
+            nddfrg(loop)=-1
+            nmmfrg(ifg)=nmmfrg(ifg)+1
+            nmmfrg(jfg)=nmmfrg(jfg)+1
+          else
+            nddfrg(loop)=0
+          endif 
+        enddo
+      enddo
+      if(maswrk) then
+        write(6,*) 'nmmfrg1:',(nmmfrg(i),i=1,nfg)
+        write(6,*) 'nddfrg1:',(nddfrg(i),i=1,nfg2)
+      endif 
+c
+      RETURN
+      END
+C*MODULE FMOPRP  *DECK epcmscr
+      SUBROUTINE epcmscr(da,vij,ilay,ifg,jfg,l1i,l1j,orbxch,iodexch,
+     *                   jodexch,iodfmo,irec0,indat,
+     *                   XYZCTS,QSE,ISPHE,qij)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      parameter (MXATM=2000,half=0.5D+00,zero=0.0D+00)
+      logical orbxch,iodexch,jodexch
+      COMMON /PCMDIM/ mxsp,mxts,mempcm1,mempcm2,NTS
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      dimension da(*),vij(*),iodfmo(*),indat(*),XYZCTS(mxts,3),QSE(*),
+     *          ISPHE(*),qij(*)
+c
+      a=627.51D+00
+      a2=627.51D+00*half
+      l2i=(l1i*l1i+l1i)/2
+      l2j=(l1j*l1j+l1j)/2
+      call dcopy(nts,QSE,1,qij,1)  
+c
+c     Compute DI*VI(J)+VnucI(J)
+c
+      call makemol(ifg,0,0,ilay,0,0,0,0,0,0,0,.false.)
+      EenIJ=zero
+      do its=1,nts
+        if(indat(isphe(its)).ne.jfg) then 
+          qse(its)=0
+        else  
+          VITS=zero
+          xctsi=XYZCTS(ITS,1)
+          yctsi=XYZCTS(ITS,2)
+          zctsi=XYZCTS(ITS,3)
+          DO IAT=1,NAT
+            VITS=VITS+ZAN(IAT)/SQRT((XCTSI-C(1,IAT))**2+
+     *                         (YCTSI-C(2,IAT))**2+(ZCTSI-C(3,IAT))**2)
+          ENDDO
+          EenIJ=EenIJ+VITS*QSE(ITS)
+        endif  
+      enddo
+      call PCMPOT(vij,vij,nts,QSE,XYZCTS,L2i,1)
+      call readmond(da,orbxch,iodexch,na,nb,l1i,iodfmo,ifg+irec0)
+      EelIJ=TRACEP(da,vij,L1i)
+c     call prsq(qse,nts,1,1) 
+      call dcopy(nts,qij,1,qse,1)
+      if(ifg.ne.jfg) then
+c
+c     Compute DJ*VJ(I)+VnucJ(I)
+c
+      call makemol(jfg,0,0,ilay,0,0,0,0,0,0,0,.false.)
+      EenJI=zero
+      do its=1,nts
+        if(indat(isphe(its)).ne.ifg) then
+          qse(its)=0
+        else
+          VITS=zero
+          xctsi=XYZCTS(ITS,1)
+          yctsi=XYZCTS(ITS,2)
+          zctsi=XYZCTS(ITS,3)
+          DO IAT=1,NAT
+            VITS=VITS+ZAN(IAT)/SQRT((XCTSI-C(1,IAT))**2+
+     *                         (YCTSI-C(2,IAT))**2+(ZCTSI-C(3,IAT))**2)
+          ENDDO
+          EenJI=EenJI+VITS*QSE(ITS)
+        endif
+      enddo
+      call PCMPOT(vij,vij,nts,QSE,XYZCTS,L2j,1)
+      call readmond(da,orbxch,jodexch,na,nb,l1j,iodfmo,jfg+irec0)
+      EelJI=TRACEP(da,vij,L1j)
+      call dcopy(nts,qij,1,qse,1)
+c     call prtri(da,l1j)
+c     call prtri(vij,l1j)
+c     write(iw,*) 'VJ=',EelJI
+c
+      VscrIJ=(EelIJ+EenIJ+EelJI+EenJI)*half
+      write(iw,9000) ifg,jfg,EelIJ*a2,EenIJ*a2,EelJI*a2,EenJI*a2,
+     *               VscrIJ*a
+      else
+      VscrIJ=(EelIJ+EenIJ)*half
+      write(iw,9000) ifg,ifg,EelIJ*a2,EenIJ*a2,VscrIJ*a
+      endif
+c
+      RETURN
+ 9000 format(1x,2I3,'Vres=',5F6.1) 
+      END
+c
+C*MODULE fmoprp  *DECK setatch
+      SUBROUTINE setatch(ibdfg,fmozan,fmoc,iaglob,atclmo,atchrg)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (MXATM=2000)
+      logical bonded,normch,GOPARR,DSKWRK,MASWRK
+      dimension fmozan(*),fmoc(3,*),iaglob(*),atclmo(*),atchrg(*)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
+      common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
+     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
+     *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
+     *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
+     *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
+     *                modlmo,nopden,mofock
+c
+      normch=.true.
+c     normch=.false.
+      call vclr(atchrg,1,natfmo) 
+c     call dcopy(natfmo,atclmo,1,atchrg,1)
+c     do iat=1,nat
+c       atchrg(iaglob(iat))=ZAN(iat)
+c       write(6,*) 'wwwZ',iat,iaglob(iat),atchrg(iaglob(iat))
+c     enddo
+c     3.5 bohr for initial tests 
+c     rval=rflmo(3)
+c     rval2=rval*rval
+c     Note the trap: added caps are slightly displaced from the original atoms
+c     (because the bond length is scaled to H).
+c     By using iaglob we explicitly remove charges from the model system.
+      natkept=0 
+      chlost=0 
+      do i=1,natfmo
+c       x=fmoc(1,i) 
+c       y=fmoc(2,i) 
+c       z=fmoc(3,i)
+        iani=int(fmozan(i)+0.1D+00)
+        do j=1,nat
+c         if(iaglob(j).eq.i.or.
+c    *      (c(1,j)-x)**2+(c(2,j)-y)**2+(c(3,j)-z)**2.le.rval2) goto 100
+          jg=iaglob(j) 
+          if(jg.eq.i) goto 100
+          ianj=int(fmozan(jg)+0.1D+00)
+c         Use the original atom type instead of H for caps in
+c         determining which atoms are close.
+          call pairbond(fmoc(1,jg),fmoc(1,i),ianj,iani,rflmo(3),bonded)
+c         call pairbond(c(1,j),fmoc(1,i),ianj,iani,rflmo(3),bonded)
+          if(bonded) goto 100
+        enddo
+        atchrg(i)=atclmo(i)
+        natkept=natkept+1
+  100   continue
+        if(atchrg(i).eq.0) chlost=chlost+atclmo(i) 
+        if(atchrg(i).eq.0) write(6,9010) 'a',i,atclmo(i)
+      enddo
+      if(normch) then
+        addch=chlost/natkept
+        if(maswrk) write(iw,9000) ibdfg,chlost,natfmo-natkept
+        do i=1,natfmo
+          if(atchrg(i).ne.0) atchrg(i)=atchrg(i)+addch
+c         write(6,9000) 'n',i,atchrg(i)
+        enddo
+      endif
+      RETURN
+ 9000 format(/1x,'Bond=',I4,' has the extra charge of',
+     *        F13.8,' from',I5,' atoms.',/)
+ 9010 format(1x,'wwwch',A1,I6,F15.10)
+      END
+C*MODULE fmoprp  *DECK vlmoden
+      SUBROUTINE vlmoden(ifg,jfg,lfg,kfg,l1,nfglmo,fgflmo,lfglmo,nak,da)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      COMMON /FMCOM / X(1)
+      common /fmodim/ maxbnd,maxknd,maxcbs,maxcao,maxvec,maxl1,maxnat,
+     *                maxabd,maxbas,maxbbd,maxlmo,maxslo,maxabd2
+      dimension nfglmo(*),fgflmo(maxl1,maxslo,*),lfglmo(maxslo,*),da(*)
+c
+      nlmo=nfglmo(kfg)
+      CALL VALFM(LOADFM)
+      lv=LOADFM+1
+      last=lv+l1*nlmo
+      NEED = LAST- LOADFM -1
+      CALL GETFM(NEED)
+      nak=0
+      do i=1,nlmo
+        mfg=lfglmo(i,kfg)
+        write(6,*) 'www4',ifg,jfg,lfg,mfg
+        if(mfg.eq.ifg.or.mfg.eq.jfg.or.mfg.eq.lfg) then
+c         If the left end of a fractioned bond from the external monomer is
+c         in the current n-mer (for which ESP is computed). 
+          nak=nak+1
+          call dcopy(l1,fgflmo(1,i,kfg),1,x(lv+(nak-1)*l1),1)
+        endif
+      enddo
+      if(nak.ne.0) call prsq(x(lv),nak,l1,l1)
+      if(nak.ne.0) call DMTX2(da,x(lv),nak,l1,l1,nak)
+c     This call is probably incorrect for UROHF.
+      CALL RETFM(NEED)
+      RETURN
+      END
+C*MODULE fmoprp  *DECK addlmoch
+      SUBROUTINE addlmoch(aa,natfrg,nfglmo,lfglmo,pfglmo,popmat)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      common /fmodim/ maxbnd,maxknd,maxcbs,maxcao,maxvec,maxl1,maxnat,
+     *                maxabd,maxbas,maxbbd,maxlmo,maxslo,maxabd2
+      Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
+      common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
+     *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
+     *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
+     *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
+     *                iddcur,nddleft,ivmfmo
+      dimension natfrg(*),nfglmo(*),lfglmo(maxslo,*),
+     *          pfglmo(maxnat,maxslo,*),popmat(maxnat,nfg,2)
+c
+c     if(resppc(1).eq.0) call abrt
+      resppci=0.1D+00
+      ifg=icurfg
+      jfg=jcurfg
+      lfg=kcurfg
+c     write(6,*) 'wwwcharges before'
+c     do 10 i=1,nfg 
+c10     call prsq(popmat(1,i,icurpop),natfrg(i),1,1)
+      do 100 kfg=1,nfg
+        rk=fmodist(ifg,jfg,lfg,kfg)
+        if(ifg.eq.kfg.or.jfg.eq.kfg.or.lfg.eq.kfg.or.rk.gt.resppci)
+     *    goto 100
+c       call vlmoden(ifg,jfg,lfg,kfg,l1,nfglmo,fgflmo,lfglmo,nak,da)
+c
+        natk=natfrg(kfg)
+        nlmo=nfglmo(kfg)
+        do i=1,nlmo
+          mfg=lfglmo(i,kfg)
+          write(6,*) 'www4',ifg,jfg,lfg,mfg
+          if(mfg.eq.ifg.or.mfg.eq.jfg.or.mfg.eq.lfg) then
+c          If the left end of a fractioned bond from the external monomer is
+c          in the current n-mer (for which ESP is computed).
+           call daxpy(natk,aa,pfglmo(1,i,kfg),1,popmat(1,kfg,icurpop),1)
+          endif
+        enddo
+  100 continue
+c     write(6,*) 'wwwcharges after'
+c     do 20 i=1,nfg 
+c20     call prsq(popmat(1,i,icurpop),natfrg(i),1,1)
+      RETURN
+      END
+C*MODULE fmoprp  *DECK mp1ene
+      SUBROUTINE mp1ene(f,orbe,nocc,nmo,emp2)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      COMMON /MP2PAR/ OSPT,CODEMP,SCSPT,TOL,METHOD,NWDMP2,MEMPRI,MPPROP,
+     *                NACORE,NBCORE,NOA,NOB,NORB,NBF,NOMIT,MOCPHF,MAXITC
+      dimension f(*),orbe(*)
+c
+      emp2=0
+c     do i=1,nocc 
+      do i=nacore+1,nocc
+        do j=nocc+1,nmo
+c         ind=(j*j-j)/2+i
+c         emp2=emp2+f(ind)**2/(orbe(i)-orbe(j))
+          emp2=emp2+f((j*j-j)/2+i)**2/(orbe(i)-orbe(j))
+        enddo
+      enddo
+      emp2=emp2*2
+      RETURN
+      END
+C*MODULE fmoprp  *DECK elepotc
+      SUBROUTINE elepotc(iwhere)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      parameter (MXATM=2000,MXPTPT=100)
+      logical GOPARR,DSKWRK,MASWRK
+      common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
+     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
+     *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
+     *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
+     *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
+     *                modlmo,nopden,mofock
+      common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
+     *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
+     *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
+     *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
+     *                iddcur,nddleft,ivmfmo
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PDCPAR/ CENTER(3),DPOLE(3),QPOLE(6),RMAX,DELR,CONSTR,
+     *                PTSEL,VDWSCL,PTDENS,VDWINC,NFREQ,LAYER,NPDC,ilayh
+      COMMON /POINTS/ NPOINT,IPUNIT,XPOINT(MXPTPT),YPOINT(MXPTPT),
+     *                ZPOINT(MXPTPT)
+      COMMON /PSILVL/ IPSI,ISKPRP
+      dimension rm(MXATM)
+      DATA DIPOLE /8HDIPOLE  /,QUPOLE /8HQUPOLE  /
+c
+c     Calculate electrostatic moments for the FMO initial guess
+c      (Huckel or read)!
+c     This is needed for PDC and DIPOLE/QUPOLE.  
+c
+      if(nprint.gt.-5.and.ISKPRP.eq.0.and.ifmostp.ge.2) then
+        if(CONSTR.EQ.DIPOLE.OR.CONSTR.EQ.QUPOLE) then
+          if(maswrk) write(6,*) 'Change nprint to -5 or ISKPRP to 0...'
+          call abrt
+        endif
+        return
+      endif
+c
+      xsave=XPOINT(npoint)
+      ysave=YPOINT(npoint)
+      zsave=ZPOINT(npoint)
+      if(CONSTR.EQ.DIPOLE.OR.CONSTR.EQ.QUPOLE) then 
+c
+c     PDC equations with constrained multipoles are unstable if the 
+c     multipole centre is not close to the fragment centre.
+c
+        nprints=nprint
+        if(iand(nprfmo,3).le.1) nprint=0
+        if(iwhere.eq.0) CALL RAMS(RM,0)
+        call fndcntr(nat,zan,c,rm,iwhere,XPOINT(npoint),YPOINT(npoint),
+     *               ZPOINT(npoint))
+        call ELMOMC
+        nprint=nprints
+      endif
+      call elpotc
+      XPOINT(npoint)=xsave
+      YPOINT(npoint)=ysave
+      ZPOINT(npoint)=zsave
+      RETURN
+      END
+C*MODULE fmoprp  *DECK fmoorbs
+      SUBROUTINE fmoorbs(VV,SS,EE,QQ,SCR,IWRK,L0,L1,L2,L3)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      LOGICAL GOPARR,DSKWRK,MASWRK,MFRZ,urohf
+      PARAMETER (MXATM=2000, MXAO=8192)
+      dimension VV(l1,L1),SS(L2),EE(L1),QQ(L1,L1),SCR(L1*8),IWRK(L1)
+      COMMON /FMCOM / XX(1)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /MFRPAR/ MFRZ,NUMFRZ,NORFRZ,IFRZ(MXAO)
+      COMMON /MP2PAR/ OSPT,CODEMP,SCSPT,TOL,METMP2,NWDMP2,MEMPRI,MPPROP,
+     *                NACORE,NBCORE,NOA,NOB,NORB,NBF,NOMIT,MOCPHF,MAXITC
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
+     *                MPLEVL,MPCTYP
+      common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
+     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
+     *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
+     *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
+     *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
+     *                modlmo,nopden,mofock
+      common /fmopnt/ lichfg,lmulfg,lidmrec,lfrgnam,llayfrg,lindat,
+     *                lnCBS,lfmozan,lfmoc,lfmomas,lizbas,liaglob,libdgh,
+     *                liabdfg,ljabdfg,lnCAO,lidxCAO,liaprjo,ljaprjo,
+     *                lCoreAO,lOccCor,lshiftb,liodfmo,lfmoda,lfmodb,
+     *                lfmoespa,lfmoespb,llocfmo,lscffrg,lfmoscf,lrij,
+     *                lpopmul,lpopmat,lialoc,lindbd,liatfrg,lindfrg,
+     *                lindgfrg,lnatfrg,lnat0frg,lianfrg,lzanfrg,lcfrg,
+     *                llibish,llibnsh,llibng,lindatg,lfmobuf(3),lfmode,
+     *                lnumfrg,lloctat,liaoglob,lloadm,lfmoge,ldgrid,
+     *                liodcfmo,ljob2grp,lfmopg,lemocdr,luntxyz,luntrot,
+     *                lstonep,lmapsu,lfrgmul,lclmo,lialmo,lindlmo,
+     *                latclmo,llmobdf,lfgflmo,lnfglmo,llfglmo,lpfglmo,
+     *                LPOPDMAT,lidmpnt,liddpnt,livmpnt
+      common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
+     *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
+     *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
+     *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
+     *                iddcur,nddleft,ivmfmo
+      DATA RMC/8HMCSCF   /,UHF,rohf/8HUHF     ,8HROHF    /
+c
+c     Process FMO initial orbitals for ORTHDN
+c
+      urohf=scftyp.eq.uhf.or.scftyp.eq.rohf
+      if(urohf) then
+c     rec 16 has the total density. Overwrite 16&20 to contain a&b densities.
+c       write(6,*) 'Processing the densities...'
+        CALL DAREAD(IDAF,IODA,VV,L3,15,0)
+        call DMTX2(SS,VV,na,l1,l1,0)
+c       call dscal(l2,half,SS,1)
+c       call prtril(SS,l1)
+        CALL dawrit(IDAF,IODA,SS,L2,16,0)
+        call DMTX2(SS,VV,nb,l1,l1,0)
+c       call dscal(l2,half,SS,1)
+c       call prtril(SS,l1)
+        CALL dawrit(IDAF,IODA,SS,L2,20,0)
+        CALL DAREAD(IDAF,IODA,SS,L2,12,0)
+        CALL DAREAD(IDAF,IODA,EE,L1,17,0)
+        CALL DAwrit(IDAF,IODA,EE,L1,21,0)
+      endif
+      IF(IFMOSTP.EQ.4.AND.SCFTYP.EQ.RMC) THEN
+        IF(iand(NGUESS,262144).NE.0) THEN
+          CALL DAREAD(IDAF,IODA,VV,L3,15,0)
+          CALL PROJGUES(L1,L2,VV,EE,QQ,SS)
+          CALL DAWRIT(IDAF,IODA,VV,L3,15,0)
+        END IF
+      END IF
+C     IF(IFMOSTP.EQ.2.AND.NBDFG.NE.0.AND.IAND(NGUESS,64).NE.0)
+C    *  CALL PROJGUES(L1,L2,VV,EE,QQ,SS)
+      if(rflmo(1).ne.0) then
+        call flmovec(xx(lindat),xx(liaglob),xx(liabdfg),xx(ljabdfg),
+     *               xx(lclmo),xx(lialmo),xx(lindlmo),l1,VV,
+     *               SS,EE,IWRK,SCR,NUMFRZ,norfrz,
+     *               xx(llmobdf))
+c       call prsq(VV,norfrz,l1,l1)
+c       LV holds the LMOS, now orthonormalise them and compute the complement
+        CALL DAREAD(IDAF,IODA,SS,L2,12,0)
+        CALL ORTHO(QQ,SS,VV,SCR,norfrz,L0,L1,L2,L1)
+        CALL TFSQB(VV,QQ,SCR,L0,L1,L1)
+c
+        if(NUMFRZ.ne.0.and.iand(modlmo,262144).ne.0) then
+           if(maswrk) write(iw,*) 'removing the frozen LMOs.',norfrz
+           call prsql(VV,norfrz,l1,l1)
+           do i=1,norfrz-NUMFRZ
+c            call dcopy(l1,XX(LV+l1*(i+NUMFRZ-1)),1,XX(LV+l1*(i-1)),1)
+             call dcopy(l1,vv(1,i+NUMFRZ),1,vv(1,i),1)
+           enddo
+           norfrz=norfrz-NUMFRZ
+           NUMFRZ=0
+           if(maswrk) write(iw,*) 'removed the frozen LMOs.',norfrz
+           call prsql(VV,norfrz,l1,l1)
+        endif
+        CALL DAWRIT(IDAF,IODA,VV,L3,318,0)
+c       call prsql(VV,norfrz,l1,l1)
+c       CALL DAWRIT(IDAF,IODA,EE,L1,19,0)
+c       call prsq(EE,l1,1,1)
+c       call dcopy(l1,EE,1,efrz,1)
+c
+c       Overwrite the metric!
+c
+c       CALL DAREAD(IDAF,IODA,SS,L2,12,0)
+c       CALL TFTRI(QQ,SS,VV,SCR,L0,L1,L1)
+c       norfrzs=norfrz
+c       norfrz=numfrz
+c       CALL FRFOCK(QQ,L1)
+c       norfrz=norfrzs
+c       call prtri(QQ,l1)
+c       CALL TFTRIB(xX(Ls+l2),QQ,SS,VV,xX(lv+l3),
+c    *              SCR,L0,L1,L2,L3)
+c       CALL DAWRIT(IDAF,IODA,XX(LS+l2),L2,12,0)
+c
+c       CALL QMTSYM(XX(LS+l2),VV,QQ,EE,SCR,IWRK,
+c    *              L0,L1,L2,L3,.FALSE.)
+c       CALL DAWRIT(IDAF,IODA,QQ,L3,45,0)
+
+c       At present the generated orbital energies are discarded.
+c       Orbitals are written to rec 15 so that OVLSEL code would use
+c       NUMFRZ of them during the restriction of orbital interchange.
+c       Note that density is not (and should NOT be) computed from them.
+c       CALL DAWRIT(IDAF,IODA,VV,L3,15,0)
+c       call prsq(VV,norfrz,l1,l1)
+c       if(mplevl.ne.0) then
+c       write(6,*) 'wwwwcore',nacore,NUMFRZ 
+        IF(iand(modlmo,4).ne.0) THEN
+          nacore=nacore+NUMFRZ
+          nbcore=nbcore+NUMFRZ
+        endif
+c       write(6,*) 'wwwwcore2',nacore,NUMFRZ 
+        norbproj=norfrz-NUMFRZ
+        if(maswrk.and.norfrz.ne.0) write(iw,9000) NUMFRZ,norbproj
+      END IF
+      RETURN
+ 9000 format(1x,'There are',I5,' occupied and',I5,
+     *          ' virtual frozen LMOs.')
+      END
+C*MODULE fmoprp  *DECK fmoafoc
+      SUBROUTINE fmoafoc(NDAF,ABINIT,MINMEM,VV,FF,SS,QQ,DD,FXC,IWRK,WRK,
+     *                  WRK1,WRK2,EIG,OCC,SCR,L0,L1,L2,L3,etot,ehf,EHF1)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      LOGICAL DIRSCF,FDIFF,ABINIT,MINMEM,SG1
+      PARAMETER (MXATM=2000,MXGRID=10)
+      dimension VV(l1,L1),FF(L2),SS(L2),QQ(L1,L1),DD(L2),FXC(L2),IWRK(*)
+     *         ,WRK(*),WRK1(*),WRK2(*),EIG(L1),OCC(L1),SCR(L1*8)
+      COMMON /DFGRID/ DFTTHR,DFTGTHR,SWOFF,SW0,BSLRD(137),NDFTFG,
+     *                NRAD,NTHE,NPHI,NRAD0,NTHE0,NPHI0,
+     *                NANGPT(MXGRID),NANGPT0(MXGRID),SG1,JANS
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /OPTSCF/ DIRSCF,FDIFF
+      common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
+     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
+     *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
+     *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
+     *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
+     *                modlmo,nopden,mofock
+      common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
+     *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
+     *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
+     *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
+     *                iddcur,nddleft,ivmfmo
+      PARAMETER (TWO=2.0D+00)
+c
+c     Canonicalise orbitals for FMO/AFO
+c
+c     First, project out virtual AFOs.
+      CALL DAREAD(IDAF,IODA,VV,L3,318,0)
+      CALL DAread(IDAF,IODA,FF,L2,317,0)
+      CALL TFTRI(WRK1,FF,VV,WRK,L0,L1,L1)
+      CALL FRFOCK2(WRK1,L1)
+      IF(MINMEM) CALL DAREAD(IDAF,IODA,SS,L2,12,0)
+      CALL TFTRIB(FF,WRK1,SS,VV,WRK2,IWRK,L0,L1,L2,L3)
+      CALL DAwrit(IDAF,IODA,FF,L2,317,0)
+      if(idoprop.gt.0.and.iand(modlmo,8192).ne.0) then
+        IF(MINMEM) CALL DAREAD(IDAF,IODA,QQ,L3,45,0)
+        CALL TFTRI(WRK1,FF,QQ,WRK,L0,L1,L1)
+        CALL SYMDIA(WRK1,VV,EIG,SCR,IWRK,L0,L2,L1)
+        CALL TFSQB(VV,QQ,WRK,L0,L1,L1)
+        CALL DMTX(DD,VV,OCC,NA,L1,L1)
+        EHF1c = TRACEP(DD,FF,L1)
+        if(NDFTFG.EQ.1.AND.ABINIT.AND.DIRSCF.AND.FDIFF)
+     *    EHF1c=EHF1c-TRACEP(DD,FXC,L1)
+        ehf0=ehf
+c       etot0=etot 
+        EHF=ehf+(EHF1c-EHF1)/two
+        etot=etot+EHF-ehf0
+c       write(6,*) 'E corrs',ehf1,EHF1c,';',EHF,ehf0,';',
+c    *                       etot,etot0
+        CALL SCFSAV(VV,DD,EIG,NDAF,L1,L2,L3)
+      else 
+c       Next, zero out core-virtual rotations
+        CALL DAREAD(IDAF,IODA,VV,L3,15,0)
+        CALL TFTRI(WRK1,FF,VV,WRK,L0,L1,L1)
+        CALL FRFOCK3(WRK1,L1,na)
+        IF(MINMEM) CALL DAREAD(IDAF,IODA,SS,L2,12,0)
+        CALL TFTRIB(FF,WRK1,SS,VV,WRK2,IWRK,L0,L1,L2,L3)
+c       Diagonalise
+        IF(MINMEM) CALL DAREAD(IDAF,IODA,QQ,L3,45,0)
+        CALL TFTRI(WRK1,FF,QQ,WRK,L0,L1,L1)
+        CALL SYMDIA(WRK1,VV,EIG,SCR,IWRK,L0,L2,L1)
+        CALL TFSQB(VV,QQ,WRK,L0,L1,L1)
+        CALL DAwrit(IDAF,IODA,VV,L3,15,0)
+        CALL DAwrit(IDAF,IODA,EIG,L1,17,0)
+c       Get the MP2 singles term from the matrix saved above.
+c       IREST=5 is RHF preceding MP2 for FMO-MP2 gradient 
+c       if((mplevl.gt.0.or.irest.eq.5).and.idoprop.gt.0.and.
+        if(idoprop.gt.0.and.iand(modlmo,524288).ne.0) then
+           CALL DAread(IDAF,IODA,FF,L2,317,0)
+           CALL TFTRI(WRK1,FF,VV,WRK,L0,L1,L1)
+           call mp1ene(WRK1,EIG,na,l0-norbproj,emp2s)
+c          write(iw,*) 'nowwwEMP2='
+c          write(iw,*) 'wwwEMP2=',emp2s
+c          etot=etot+emp2s
+        endif
+      endif
+c     We do not save the changed Fock matrix to record 14, perhaps we should?!
+      RETURN
+      END
+C*MODULE fmoprp  *DECK dumpfock
+      SUBROUTINE dumpfock(totfock,ff,l1,l2,ifac,da,e1e,ekin)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      LOGICAL GOPARR,DSKWRK,MASWRK,totfock,dumpth
+      integer EFMODIM
+      dimension ff(*),da(*)
+      parameter(MXATM=2000,one=1.0D+00)
+      COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,IEFMORUN,
+     *                IEFMORT,IEFMOCFRG,IEFMONFRG,EFMODIM(2)
+      COMMON /FMCOM / X(1)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /MCPFMO/ IMCPFMO,LFZCOR,LIFMPTYP,LIFMPTYP2,LMCPSW,
+     *                LIZCOR2,imp0,jmp0,icorsh0,igtf0
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
+      common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
+     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
+     *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
+     *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
+     *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
+     *                modlmo,nopden,mofock
+      common /fmopnt/ lichfg,lmulfg,lidmrec,lfrgnam,llayfrg,lindat,
+     *                lnCBS,lfmozan,lfmoc,lfmomas,lizbas,liaglob,libdgh,
+     *                liabdfg,ljabdfg,lnCAO,lidxCAO,liaprjo,ljaprjo,
+     *                lCoreAO,lOccCor,lshiftb,liodfmo,lfmoda,lfmodb,
+     *                lfmoespa,lfmoespb,llocfmo,lscffrg,lfmoscf,lrij,
+     *                lpopmul,lpopmat,lialoc,lindbd,liatfrg,lindfrg,
+     *                lindgfrg,lnatfrg,lnat0frg,lianfrg,lzanfrg,lcfrg,
+     *                llibish,llibnsh,llibng,lindatg,lfmobuf(3),lfmode,
+     *                lnumfrg,lloctat,liaoglob,lloadm,lfmoge,ldgrid,
+     *                liodcfmo,ljob2grp,lfmopg,lemocdr,luntxyz,luntrot,
+     *                lstonep,lmapsu,lfrgmul,lclmo,lialmo,lindlmo,
+     *                latclmo,llmobdf,lfgflmo,lnfglmo,llfglmo,lpfglmo,
+     *                LPOPDMAT,lidmpnt,liddpnt,livmpnt
+      common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
+     *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
+     *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
+     *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
+     *                iddcur,nddleft,ivmfmo
+c
+c     if(iand(modprp,64).ne.0.and.idoprop.gt.0) then
+c     write(6,*) 'wwwESP ini'
+c     call prtri(x(lfmoespa),l1)
+      dumpth=iand(mofock,4).ne.0
+      if(totfock) then
+        CALL DAREAD(IDAF,IODA,ff,L2,12,0)
+        if(maswrk) then  
+          write(ip,9010)
+          write(ip,9000) icurlay,icurfg,jcurfg,kcurfg,l1,ifac
+c         call PUSQI(x(liaoglob),1,l1,l1)
+          i=0
+          write(ip,9020) (ixftch(x(liaoglob),i),i=1,l1)
+          if(jcurfg.eq.0.and.kcurfg.eq.0) call pubasl(x(liaglob))
+c         call PUSQL(ff,1,l1,l1)
+c         Punch overlaps 
+          write(ip,9030) (ff(i),i=1,l2) 
+        endif
+      endif
+      if(ifac.ne.0) then
+c       get the kinetic energy first
+        CALL DAREAD(IDAF,IODA,ff,L2,13,0)
+        if(maswrk.and.dumpth) write(ip,9030) (ff(i),i=1,l2)
+        if(maswrk) ekin=ekin+ifac*TRACEP(da,ff,l1)
+c       Now Punch 1e Hamiltonian (has to be computed!)
+c       For RESPPC=-1 or 0 need not.
+        CALL DAREAD(IDAF,IODA,ff,L2,11,0)
+c       write(6,*) 'orig h',TRACEP(da,ff,l1)
+c       call prtril(ff,l1)
+c       subtract ESP, obtain h without ESP
+        call daxpy(l2,-one,x(lfmoespa),1,ff,1)
+        CALL VALFM(LOADFM)
+        lq=LOADFM+1
+        ldd=lq+natfmo
+        last=ldd+l2*4
+        NEED = LAST- LOADFM -1
+        CALL GETFM(NEED)
+c       Save original ESP
+        CALL dcopy(l2,x(lfmoespa),1,x(ldd+l2*3),1)
+c
+        if(resppc(1).ne.0) then
+          call dcopy(natfmo,x(lfmozan),1,x(lq),1)
+c         Subtract this fragment's charges to avoid double counting:
+c         those are already included into h.
+          do i=1,nat
+            lqi=lq+ixftch(x(liaglob),i)-1
+            x(lqi)=x(lqi)-zan(i)
+          enddo
+          IF(IMCPFMO.EQ.1) call daxpy(natfmo,-one,x(lfzcor),1,x(lq),1) 
+c        
+          if(maswrk) write(iw,*) 'Redoing 1e ESP: ',-1
+          CALL PCMPOT(dum,x(lfmoespb),natfmo,x(lq),x(lfmoc),L2,2)
+c         write(iw,*) 'wwwESP1ea' 
+c         call prtri(x(lfmoespb),l1)
+        else
+          CALL daread(IDAF,IODA,x(lfmoespb),L2,311,0)
+c         write(iw,*) 'wwwESP1eb' 
+c         call prtri(x(lfmoespb),l1)
+        endif
+c       Obtain 1e Hamiltonian (h) plus 1e ESP
+        call daxpy(l2,one,x(lfmoespb),1,ff,1)
+        if(maswrk) e1e=e1e+ifac*TRACEP(da,ff,l1)
+c       write(6,*) 'wwwaa',icurfg,jcurfg,kcurfg,TRACEP(da,ff,l1)
+c       call prtril(ff,l1)
+c
+        if(totfock) then
+          if(maswrk.and.dumpth) write(ip,9030) (ff(i),i=1,l2)
+          CALL DAREAD(IDAF,IODA,ff,L2,14,0)
+          modesps=modesp
+          resppcs=resppc(1)
+          if(iand(mofock,8).eq.0.and.resppc(1).ne.0) then
+c           write(6,*) 'wwwFock orig'
+c           call prtri(ff,l1)
+            CALL daread(IDAF,IODA,x(lfmoespb),L2,311,0)
+c           write(6,*) 'wwwESP1e small'
+c           call prtri(x(lfmoespb),l1)
+c           write(6,*) 'F',ff(2),x(lfmoespa+1)
+            call daxpy(l2,-one,x(lfmoespb),1,ff,1)
+            call daxpy(l2,-one,x(lfmoespb),1,x(lfmoespa),1)
+c           subtract the orignal (small RESPPC) 1e part
+c           write(6,*) 'F-u',ff(2),x(lfmoespa+1)
+            if(resppc(1).gt.0) resppc(1)=resppc(1)+2
+            if(resppc(1).lt.0) resppc(1)=4
+c           resppc(1)=resppc(1)+1.0D-12
+c           2 is hard-wired, simply increase by 2.
+            if(maswrk) write(iw,*) 'Redoing 1e ESP: ',resppc(1)
+            call HSANDT(x(ldd+l2*2),x(ldd+l2),x(ldd),dum,x(lfmoespb),
+     *                  x(ldd),dum,L2,
+     *                  .false.,.false.,.false.,.true.,.false.,.false.)
+            call daxpy(l2,one,x(lfmoespb),1,ff,1)
+            call daxpy(l2,one,x(lfmoespb),1,x(lfmoespa),1)
+c           write(6,*) 'F-u+u1',ff(2),x(lfmoespa+1)
+c           add the computed (large RESPPC) 1e part
+c           write(6,*) 'wwwESP1e large'
+c           call prtri(x(lfmoespb),l1)
+          endif
+c         Redo the 2e part if redid the 1e part above.
+          if(iand(mofock,2).ne.0.or.resppcs.ne.resppc(1)) then
+c           write(6,*) 'wwwFock'
+c           call prtri(ff,l1)
+c           Subtract current ESP from Fock 
+c           write(6,*) 'wwwESP'
+c           call prtri(x(lfmoespa),l1)
+c           Save 1e Ham on rec 11
+            CALL daread(IDAF,IODA,x(ldd+l2*2),L2,11,0)
+            call daxpy(l2,-one,x(lfmoespa),1,ff,1)
+c           write(6,*) 'F-V',ff(2),x(lfmoespa+1)
+c           Compute ESPX
+            CALL daread(IDAF,IODA,x(lfmoespb),L2,311,0)
+            if(iand(mofock,2).ne.0) modesp=ior(modesp,32)
+c           FMOESP overwrites DA!
+            call dcopy(l2,da,1,x(ldd),1)
+            if(maswrk) write(iw,*) 'Redoing 2e ESP: ',resppc(1),modesp
+           call FMOESP(L1,L2,x(ldd+l2),X(LLAYFRG),X(LSCFFRG),X(LIDMREC))
+            call timit(1)
+            call dcopy(l2,x(ldd),1,da,1)
+c           call prtri(x(lfmoespa),l1)
+c           Add ESPX to Fock 
+            call daxpy(l2,one,x(lfmoespa),1,ff,1)
+            CALL dawrit(IDAF,IODA,x(ldd+l2*2),L2,11,0)
+c           write(6,*) 'F-V+V1',ff(2),x(lfmoespa+1)
+          endif
+          modesp=modesps
+          resppc(1)=resppcs
+          if(maswrk) write(ip,9030) (ff(i),i=1,l2)
+c           write(6,*) 'Final Fock'
+c           call prtri(ff,l1)
+        else
+c         no need to do this for EFMO
+          IF(IEFMORUN.EQ.0) CALL daread(IDAF,IODA,x(lfmoespb),L2,311,0)
+c         restore the original 1e ESP (probably, no need).
+        endif
+c       clean up: restore ESP to fmoespa (needed for other places in FMO)
+        CALL dcopy(l2,x(ldd+l2*3),1,x(lfmoespa),1)
+        CALL RETFM(NEED)
+      endif
+      if(totfock.and.maswrk) write(ip,9010)
+c     write(6,*) 'wwwESP fini'
+c     call prtri(x(lfmoespa),l1)
+      RETURN
+ 9000 format(1x,'FRAGMENT FOCK MATRIX',I4,3I6,2I6)
+ 9010 format(1x,79(1H-))
+ 9020 FORMAT(10I8)
+ 9030 FORMAT(4E20.13)
+      END
+C*MODULE fmoprp  *DECK fockhead
+      SUBROUTINE fockhead(ichfmo,nefmo,mulfmo,l0fmo,l1fmo)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      common /fmodim/ maxbnd,maxknd,maxcbs,maxcao,maxvec,maxl1,maxnat,
+     *                maxabd,maxbas,maxbbd,maxlmo,maxslo,maxabd2
+      Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
+      common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
+     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
+     *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
+     *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
+     *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
+     *                modlmo,nopden,mofock
+c
+      write(ip,9000) natfmo,ichfmo,nefmo,mulfmo,l0fmo,l1fmo,
+     *               nbody,nlayer,nfg,maxl1,mofock
+      RETURN
+ 9000 format(1x,'TOTAL FOCK MATRIX',I8,I4,I9,I3,2I9,I2,I2,I6,I6,I3)
+      END
+C*MODULE fmoprp  *DECK pubasl
+      SUBROUTINE pubasl(iaglob)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (MXATM=2000,MXSH=5000,MXGTOT=20000,MXAO=8192)
+      dimension iaglob(*),lval(MXAO)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),ch(mxgtot),ci(mxgtot),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+c
+c     Print spherical momentum l for each AO
+c
+      do ii=1,NSHELL
+        mini=kmin(ii)
+        maxi=kmax(ii)
+        loci=kloc(ii)-mini
+        LIT = KTYPE(II)
+        do i=mini,maxi
+          lval(loci+i)=lit-1
+c         L-shells
+          if(mini.eq.1.and.lit.eq.2.and.i.eq.1) lval(loci+i)=0
+        enddo
+      enddo
+      write(ip,9000) (lval(i),i=1,num)
+c
+c     Print atom IAT for each AO
+c
+      do ii=1,NSHELL
+        mini=kmin(ii)
+        maxi=kmax(ii)
+        loci=kloc(ii)-mini
+        iat=iaglob(katom(ii))
+        do i=mini,maxi
+          lval(loci+i)=iat
+        enddo
+      enddo
+      write(ip,9100) (lval(i),i=1,num)
+c
+      RETURN
+ 9000 FORMAT(40I2)
+ 9100 format(10I8)
+      END
+C*MODULE fmoprp  *DECK filleig
+      SUBROUTINE filleig(ifg,numfrg,eigfmo,l0,l1) 
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      dimension numfrg(*),eigfmo(*)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
+      common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
+     *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
+     *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
+     *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
+     *                iddcur,nddleft,ivmfmo
+c
+c     Read fragment eigenvalues
+c     This subroutine cannot handle MFMO (numfrg is not set for higher layers).
+c
+      if(nlayer.gt.1) return
+      ind=1
+      do i=1,ifg-1
+        ind=ind+iand(numfrg(i),65535)
+      enddo
+      CALL daread(IDAF,IODA,eigfmo(ind),L1,17,0)
+      if(maswrk) then
+        izero=l0-norbproj
+        nzero=l1-l0+norbproj
+c       take care of linear dependencies, sphericals and projected virtuals. 
+c     Projected out virtuals 
+      else
+        izero=0
+        nzero=l1
+c       to avoid double counting
+      endif
+      if(nzero.ne.0) call vclr(eigfmo(ind+izero),1,nzero)
+      RETURN
+      END

@@ -1,0 +1,1199 @@
+C 15 DEC 08 - GG,RKC - CORE SYMMETRIES, ENABLE USE OF DETERMINANT MRMP
+C 18 JUL 08 - KRG - IVOTWOE: ZERO INTEGRAL ARRAYS OUT
+C 11 APR 08 - RKC - IVODRV: FIX ORDER OF INPUT DATA, AUTO DEGEN CHECK
+C 20 AUG 07 - RKC - NEW MODULE FOR IVO-CASCI ENERGY
+C
+C*MODULE IVOCAS  *DECK IVOCASCI
+      SUBROUTINE IVOCASCI(NMOFZC,NMODOC,NMOACT)
+C=======================================================================
+C====                                                              =====
+C====              THIS ROUTINE WAS CODED BY R. K. CHAUDHURI       =====
+C====                                                              =====
+C====                 INDIAN INSTITUTE OF ASTROPHYSICS             =====
+C====                     BANGALORE-560034, INDIA                  =====
+C====                   E-MAIL: RKCHAUDH@IIAP.RES.IN               =====
+C====                                                              =====
+C=======================================================================
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      LOGICAL HVRUN
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      DOUBLE PRECISION RUNTYP,EXETYP,CHECK
+      COMMON /FMCOM / XX(1)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /IOFILE/ IR,IW,IP,IJK,IPK,IDAF,NAV,IODA(950)
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+      DATA CHECK/8HCHECK   /
+C
+      IF (MASWRK) WRITE(IW,9100)
+C
+      CALL VALFM(LOADFM)
+      LICSYM = LOADFM + 1
+      LICIND = LICSYM + NMOFZC
+      LAST   = LICIND + NMOFZC
+      NEED = LAST - LOADFM - 1
+      CALL GETFM(NEED)
+C
+C         NOTE THAT THIS IMPLENTATION OF EXETYP=CHECK DOES NOT
+C         DESCEND INTO THE REAL PROGRAM, AND THUS IT CANNOT
+C         PROVIDE ANY CHECK ON THE REAL MEMORY ALLOCATIONS.
+C
+      IF(EXETYP.EQ.CHECK) THEN
+         IF(MASWRK) WRITE(IW,9150)
+         GO TO 100
+      END IF
+C
+      CALL ORBINF(NMOFZC,NMODOC,NMOACT)
+      HVRUN=.FALSE.
+      CALL IVOMRPT2(HVRUN,NMOFZC,XX(LICSYM),XX(LICIND))
+C
+  100 CONTINUE
+      CALL RETFM(NEED)
+      IF (MASWRK) WRITE(IW,9200)
+      RETURN
+C
+ 9100 FORMAT(/10X,51(1H-)/
+     1        10X,'HV-MBPT (MR-MP2)',
+     2         2X,'PROGRAM WRITTEN BY R.K.CHAUDHURI'/
+     3        10X,51(1H-)/)
+ 9150 FORMAT(///1X,'IVOCAS DOES NOT HAVE A PROPER EXETYP=CHECK',
+     *            ' IMPLEMENTED'/
+     *         1X,'NEITHER THE IVOCAS INPUT, NOR THE IVOCAS MEMORY',
+     *            ' IS CHECKED'/
+     *         1X,'ONLY THE NON-IVOCAS PARTS OF THIS RUN ARE CHECKED'//)
+ 9200 FORMAT(//,' ...... END OF HV-MBPT  CALCULATION ......',/)
+      END
+C*MODULE IVOCAS  *DECK IVODRV
+C=======================================================================
+C====                                                              =====
+C====              THIS ROUTINE WAS CODED BY R. K. CHAUDHURI       =====
+C====                                                              =====
+C====                 INDIAN INSTITUTE OF ASTROPHYSICS             =====
+C====                     BANGALORE-560034, INDIA                  =====
+C====                   E-MAIL: RKCHAUDH@IIAP.RES.IN               =====
+C====                                                              =====
+C=======================================================================
+C
+C**GG ADDED DETMP OPTION TO CASCI GROUP TO ENABLE OPTION
+C**GG FOR DETERMINANT BASED PT
+C       MWS: DETMP DELETED FROM /MROPT/ SINCE IT ISN'T USED ANYWHERE
+C
+      SUBROUTINE IVODRV
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      LOGICAL MOLIST,PRINT,IVOCAS,DEGENR,DETMP,IVOOPT
+      COMMON /IOFILE/ IR,IW,IP,IJK,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /IVOIN / NDOUB,NSING,IVO,NCL,NEX,NIVO
+      COMMON /IVOCTL/ IOPT(12)
+      COMMON /IVOLST/ MOLIST
+      COMMON /OPTM /  IVOOPT
+      COMMON /MROPT / IVOCAS
+C
+      PARAMETER (NNAM=9)
+      DIMENSION QNAM(NNAM),KQNAM(NNAM)
+      DATA CASCI /8HCASCI   /
+      DATA QNAM/   8HNDOUB   ,8HNSING   ,8HIVO     ,8HPRINT   ,
+     *             8HMOLIST  ,8HDEGENR  ,8HIVOCAS  ,8HDETMP   ,
+     *             8HIVOOPT  /
+      DATA KQNAM/3*1,6*0/
+C======================================================================
+C                        NAMELIST INSTRUCTIONS
+C
+C        THESE THREE PARAMETERS ARE PICKED UP IN $MCQDPT:
+C   NDOUB   = NUMBER OF DOUBLY OCCUPIED VALENCE ORBITALS
+C   NSING   = NUMBER OF SINGLY OCCUPIED VALENCE ORBITALS
+C   IVO     = NUMBER OF UNOCCUPIED VALENCE ORBITALS
+C        THIS IS SET AUTOMATICALLY BASED ON CLOSE EIGENVALUES
+C   DEGENR  = DEGENERATE HIGHEST OCCUPIED MOLECULAR ORBITALS
+C        SO THESE ARE THE RELEVANT INPUTS:
+C   IVOCAS  = INITIATE IVO-CASCI (IF TRUE)
+C   MOLIST  = READ ORBITAL LIST FROM $IVOORB
+C   PRINT   = DEBUG PRINTING
+C
+C----------------------------------------------------------------------
+C
+      NIVO  =0
+C                SET DEFAULTS FOR INPUT PARAMETERS
+      NDOUB =0         ! READ BUT NOT USED
+      NSING =0         ! READ BUT NOT USED
+      IVO   =0         ! READ BUT NOT USED
+      PRINT =.FALSE.   ! READ BUT NOT USED
+      MOLIST=.FALSE.
+      IVOCAS=.FALSE.
+      DEGENR=.FALSE.
+      DETMP =.FALSE.   ! READ BUT NOT USED
+      IVOOPT=.FALSE.
+C
+C**** READ NAMELIST ****************************************************
+      JRET = 0
+      CALL NAMEIO(IR,JRET,CASCI,NNAM,QNAM,KQNAM,
+     *            NDOUB,NSING,IVO,PRINT,MOLIST,DEGENR,IVOCAS,DETMP,
+     *            IVOOPT,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+     *     0,0,0,0,0,  0,0,0,0,0,   0,0,0,0,0,  0,0,0,0,0,
+     *     0,0,0,0,0,  0,0,0,0,0,   0,0,0,0,0,  0,0,0,0,0)
+C**** READ NAMELIST ****************************************************
+C
+      IF(JRET.EQ.2) THEN
+      IF (MASWRK) WRITE (IW,9005) CASCI
+      CALL ABRT
+      END IF
+C
+      IF(.NOT.IVOCAS) RETURN
+C
+                 IOPT(6)=0
+      IF(DEGENR) IOPT(6)=1
+C
+C---  IF(PRINT) NPRINT=0
+C
+C**** WRITE PARAMETERS  ***********************************************
+      WRITE(IW,*)
+      WRITE(IW,'(''    ----------------------------'')')
+      WRITE(IW,'('' IVO-CAS MRMP/MCQDPT INPUT PARAMETERS'')')
+      WRITE(IW,'(''    ----------------------------'')')
+C--   WRITE(IW,'('' # DOUBLY OCCUPIED VALENCE ORBITALS ='',I6)')  NDOUB
+C--   WRITE(IW,'('' # SINGLY OCCUPIED VALENCE ORBITALS ='',I6)')  NSING
+C--   WRITE(IW,'('' # UNOCCPUIED      VALENCE ORBITALS ='',I6)')    IVO
+C--   WRITE(IW,'('' # DEBUG PRINTING                   ='', L6)') PRINT
+      WRITE(IW,'('' # DEGENERATE HOMO                  ='', L6)')DEGENR
+      WRITE(IW,'('' # READ ORBITAL LIST FROM $IVOORB   ='', L6)')MOLIST
+      WRITE(IW,'('' # EXECUTE IVO-CASCI CALCULATION    ='', L6)')IVOCAS
+C--   WRITE(IW,'('' # EXECUTE DETERMINANT BASED PT     ='', L6)')DETMP
+C**********************************************************************
+C
+9005  FORMAT(1X,'TYPING ERROR IN $',A8,', JOB IS KILLED')
+      RETURN
+      END
+C*MODULE IVOCAS  *DECK ORBINF
+C=======================================================================
+C====                                                              =====
+C====              THIS ROUTINE WAS CODED BY R. K. CHAUDHURI       =====
+C====                                                              =====
+C====                 INDIAN INSTITUTE OF ASTROPHYSICS             =====
+C====                     BANGALORE-560034, INDIA                  =====
+C====                   E-MAIL: RKCHAUDH@IIAP.RES.IN               =====
+C====                                                              =====
+C=======================================================================
+      SUBROUTINE ORBINF(NMOFZC,NMODOC,NMOACT)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (MXATM=2000, MXAO=8192, NIREP=8, MXGRP=48)
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /IOFILE/ IR,IW,IP,IJK,IPK,IDAF,NAV,IODA(950)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IVOIN / NDOUB,NSING,IVO,NCL,NEX,NIVO
+      COMMON /SOSYM / EULANG(4,MXGRP),GAM(MXGRP,48),IRMON(MXAO)
+      CHARACTER*7 STRSUB
+C
+      DIMENSION NBAS(NIREP)
+      DIMENSION NCORE(NIREP),NOV(NIREP),NSI(NIREP),NUV(NIREP),
+     :          NEXC(NIREP)
+C
+      STRSUB='ORBINF'
+      IF(MASWRK) WRITE(IW,9999) STRSUB
+      DO 400 I=1,NIREP
+      NCORE(I)=0
+      NOV(I)=0
+      NSI(I)=0
+      NUV(I)=0
+      NEXC(I)=0
+      NBAS(I)=0
+  400 CONTINUE
+C
+      DO 10 ISYM=1,NIREP
+      LL=0
+      DO 20 J=1,NQMT
+      IF(IRMON(J).NE.ISYM)GO TO 20
+      LL=LL+1
+  20  CONTINUE
+      NBAS(ISYM)=LL
+  10  CONTINUE
+C
+      ICORE=NMOFZC+NMODOC
+      IF(ICORE.NE.0)THEN
+      DO 50 ISYM=1,NIREP
+      LL=0
+      DO 60 J=1,ICORE
+      IF(IRMON(J).NE.ISYM)GO TO 60
+      LL=LL+1
+  60  CONTINUE
+      NCORE(ISYM)=LL
+  50  CONTINUE
+      END IF
+C
+      NDOUB=NB-ICORE
+      IF(NDOUB.NE.0)THEN
+      DO 70 ISYM=1,NIREP
+      LL=0
+      DO 80 J=1,NDOUB
+      IF(IRMON(J+ICORE).NE.ISYM)GO TO 80
+      LL=LL+1
+  80  CONTINUE
+      NOV(ISYM)=LL
+  70  CONTINUE
+      END IF
+C
+      IVO=NMOACT-NDOUB
+      IF(IVO.NE.0)THEN
+      DO 90 ISYM=1,NIREP
+      LL=0
+      DO 100 J=1,IVO
+      IF(IRMON(J+NB).NE.ISYM)GO TO 100
+      LL=LL+1
+ 100  CONTINUE
+      NUV(ISYM)=LL
+  90  CONTINUE
+      END IF
+C
+      NEX=NQMT-(NMOFZC+NMODOC+NMOACT)
+      IF(NEX.NE.0)THEN
+      DO 110 ISYM=1,NIREP
+      LL=0
+      DO 120 J=1,NEX
+      IF(IRMON(J+NMOFZC+NMODOC+NMOACT).NE.ISYM)GO TO 120
+      LL=LL+1
+ 120  CONTINUE
+      NEXC(ISYM)=LL
+ 110  CONTINUE
+      END IF
+C
+      NSING=NA-NB
+      IF(NSING.NE.0)THEN
+      DO 130 ISYM=1,NIREP
+      LL=0
+      DO 140 J=1,NSING
+      IF(IRMON(J+NB).NE.ISYM)GO TO 140
+      LL=LL+1
+ 140  CONTINUE
+      NSI(ISYM)=LL
+ 130  CONTINUE
+      END IF
+C
+      NCL=NA-NDOUB-NSING
+      NIVO=NDOUB+NSING+IVO
+C
+      WRITE(IW,9998)
+      DO 150 ISYM=1,NIREP
+      WRITE(IW,9997)ISYM,NBAS(ISYM),NCORE(ISYM),NOV(ISYM),
+     :              NUV(ISYM),NEXC(ISYM),NSI(ISYM)
+ 150  CONTINUE
+      WRITE(IW,9996)
+C
+ 9999 FORMAT(1X,30(1H*),' ROUTINE ',A7,' ',30(1H*))
+ 9998 FORMAT(/,1X,'SYMMETRY',2X,'NO. OF ORBITALS',2X,'CORE',
+     :         2X,'OCC-VAL',2X,'UNO-VAL',2X,'EXCITED',
+     :         2X,'SING-VAL'/)
+ 9997 FORMAT(1X,I5,16X,I4,2X,I4,5X,I4,5X,I4,5X,I4,5X,I4)
+ 9996 FORMAT(1X,70(1H*),/)
+      RETURN
+      END
+C*MODULE IVOCAS  *DECK IVOMRPT2
+C=======================================================================
+C====                                                              =====
+C====              THIS ROUTINE WAS CODED BY R. K. CHAUDHURI       =====
+C====                                                              =====
+C====                 INDIAN INSTITUTE OF ASTROPHYSICS             =====
+C====                     BANGALORE-560034, INDIA                  =====
+C====                   E-MAIL: RKCHAUDH@IIAP.RES.IN               =====
+C====                                                              =====
+C=======================================================================
+      SUBROUTINE IVOMRPT2(HVRUN,NMOFZC,ICSYM,ICIND)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      PARAMETER (MXAO=8192, NIREP=8, MXGRP=48, MXATM=2000)
+C
+      LOGICAL HVRUN,MOLIST,PACK2E
+C
+      DIMENSION ICSYM(NMOFZC),ICIND(NMOFZC)
+C
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /SOSYM / EULANG(4,MXGRP),GAM(MXGRP,48),IRMON(MXAO)
+      COMMON /IOFILE/ IR,IW,IP,IJK,IPK,IDAF,NAV,IODA(950)
+      COMMON /IVOIN / NDOUB,NSING,IVO,NCL,NEX,NIVO
+      COMMON /IVOCTL/ IOPT(12)
+      COMMON /FMCOM / X(1)
+      COMMON /SORT1I/ NORBSM(MXAO),IORBSM(MXAO)
+      COMMON /SORT2I/ ISORT(MXAO),JSORT(MXAO),NSORT(MXAO)
+      COMMON /IVOSKP/ NBAS(8),NSKIP(8)
+      COMMON /IVOEN / W(MXAO),EIG(MXAO)
+      COMMON /IVOLST/ MOLIST
+      COMMON /INTFIL/ NINTMX,NHEX,NTUPL,PACK2E,INTTYP,IGRDTYP
+C
+C=======================================================================
+C SWITCH FOR TWO-ELECTRON INTEGRAL STORAGE WHEN ISWTCH=0 IT USES PK2E
+C AND IGET2 WHERE ORBITALS ARE SORTED ACCORDING TO  SYMMETRY.
+C
+C               COMMON BLOCK COMMON /SWITCH /ISWTCH
+C
+C IS PASSED TO TRFMCX WHERE TWO-ELECTRON INTEGRALS ARE STORED.
+C
+C FOR OPEN-SHELL DOUBLET NA-NB=1 THAT IS NA IS THE NUMBER OF ALPHA
+C ORBITALS AND NB IS THE NUMBER OF BETA ORBITALS AND FOR DOUBLET
+C NA-NB=1. SO NB IS NUMBER OF DOUBLY OCCUPIED ORBITALS.
+C=======================================================================
+C
+      L0 = NQMT
+      L1 = NUM
+      L2 = (L1*L1+L1)/2
+      L3 = L1*L1
+      L02= (L0*L0+L0)/2
+      NINTG=NINTMX
+      NO=NB+NSING
+      NU=NQMT
+C
+      CALL VALFM(LOADFM)
+      LEIG=LOADFM+1
+      LSCR=LEIG+L1
+      LH=LSCR+8*L1
+      LFMO=LH+L2
+      LVEC=LFMO+L2
+      LWRK=LVEC+L3
+      LIWRK=LWRK+L3
+      LISCR=LIWRK+L1
+      LXX=LISCR+L3
+      LIX=LXX+NINTG
+      LPPHH=LIX+NINTG
+      LHPPH=LPPHH+NO*NO*NU*NU
+      LAST=LHPPH+NO*NO*NU*NU
+      NEED=LAST-LOADFM-1
+      CALL GETFM(NEED)
+C=======================================================================
+C ROUTINE "SYMOUT" PRINTS OUT THE NUMBER OF ORBITALS IN EACH SYMMETRY
+C BLOCK AND THE NUMBER OF CORE ORBITALS IN EACH SYMMETRY BLOCK. ROUTINE
+C "SYMMORB" SORTS OUT THE UNOCCUPIED ORBITALS SYMMETRYWISE FOR IVO
+C CALCULATIONS.
+C=======================================================================
+C
+      CALL SYMOUT (NQMT,NB+NSING)
+      CALL SYMMORB(NQMT,NB+NSING)
+C
+C=======================================================================
+C     COPY SORT INDEX
+C=======================================================================
+      CALL ICOPY (NQMT,JSORT,1,ISORT,1)
+      CALL DAREAD(IDAF,IODA,W,L1,17,0)
+      CALL DAREAD(IDAF,IODA,X(LVEC),L3,15,0)
+      CALL REORDR(X(LVEC),ISORT,L0,L1)
+      CALL DAWRIT(IDAF,IODA,X(LVEC),L3,15,0)
+C
+C     CHECK DEGENERACY OF HOMO AND SET IOPT(6)
+C     SINCE KEYWORD DEGENR MAY HAVE ALREADY SET IOPT(6) NONZERO,
+C     DON'T INITIALIZE, UNLESS EIGENVALUES APPEAR DEGENERATE.
+C
+      IF(ABS(W(NB)-W(NB-1)).LE.1.0D-06) THEN
+         WRITE(IW,*) 'DEGENERATE HOMO FOUND, FORCING DEGENR=.TRUE.'
+         IOPT(6)=1
+      END IF
+C
+C**GG      IF(NPT.NE.0)THEN
+      WRITE(IW,9004)
+      WRITE(IW,9003)(W(I),I=1,NQMT)
+C**GG      ENDIF
+C
+      CALL ICOPY (NQMT,JSORT,1,ISORT,1)
+C
+      NPRINT=IOPT(7)
+      ICORBS=0
+      IORBS =NB+IVO+NSING
+      IORB  =NQMT
+      CALL TRFMCX(NPRINT,ICORBS,IORBS,IORB,.FALSE.,.FALSE.,
+     *            .FALSE.,.FALSE.,.FALSE.,.FALSE.,.FALSE.,.FALSE.,
+     *            .FALSE.,.FALSE.)
+      NFT=9
+      CALL SEQREW(NFT)
+      CALL SQREAD(NFT,X(LH),L02)
+      NC=NB+NSING
+      CALL IVOTWOE(NC,NO,NU,NINTG,NFT,X(LPPHH),X(LHPPH),X(LXX),X(LIX))
+C
+      FACTJJ=-1
+      FACTKK=0
+C
+C=======================================================================
+C     CONSTRUCT AND DIAGONALIZE THE FOCK OPEARTOR ACCORDING TO SYMMETRY
+C     BLOCK FOR NBASIS-NOCC BLOCK
+C=======================================================================
+C
+      DO ISYM=1,NIREP
+      NN=0
+      DO IBAS=NB+NSING+1,NQMT
+      IF(IRMON(IBAS).EQ.ISYM)THEN
+      NN=NN+1
+      ENDIF
+      ENDDO
+      NBAS(ISYM)=NN
+      ENDDO
+C
+      NSKIP(1)=0
+      DO ISYM=2,NIREP
+      NSKIP(ISYM)=NSKIP(ISYM-1)+NBAS(ISYM-1)
+      ENDDO
+C
+      KORB=1
+      NDIM=NQMT-(NB+NSING)
+      NSB12=NB+NSING
+      CALL OPFOCK(KORB,NDIM,NB,NSING,NSB12,IOPT(6),FACTJJ,FACTKK,
+     *            L1,L2,L3,X(LH),X(LFMO),X(LWRK),X(LVEC),X(LSCR),
+     *            X(LEIG),X(LIWRK),X(LISCR),X(LPPHH),X(LHPPH),NO,NU)
+C
+C**GG      IF(NPT.NE.0)THEN
+      WRITE(IW,9005)
+      WRITE(IW,9003)(W(I),I=1,NQMT)
+C**GG      ENDIF
+C
+      IF(.NOT.HVRUN)THEN
+      IF(.NOT.MOLIST)THEN
+      CALL RETFM(NEED)
+      RETURN
+      END IF
+      END IF
+C=======================================================================
+C  READ INFO REGARDING CORE, VALENCE ORBITAL NUMBER AND THEIR SYMMETRIES
+C=======================================================================
+C
+C**GG ADDED THIS TO SAVE THE ORBITAL SYMMETRIES OF ORBITALS OCCUPIED
+C     IN THE REFERENCE
+      DO I=1,NMOFZC
+        ICSYM(I)=IORBSM(I)
+      END DO
+      CALL ORBREAD(NQMT,IOPT(9),ICSYM,ICIND,NMOFZC)
+C
+C=======================================================================
+C     READ VECTOR AND SORT SYMMETRY WISE
+C=======================================================================
+C
+      CALL ICOPY (NQMT,JSORT,1,ISORT,1)
+      CALL DAREAD(IDAF,IODA,X(LVEC),L3,15,0)
+      CALL REORDR(X(LVEC),ISORT,L0,L1)
+      CALL DAWRIT(IDAF,IODA,X(LVEC),L3,15,0)
+      CALL ICOPY (NQMT,NSORT,1,ISORT,1)
+C
+C
+C=======================================================================
+C READ VECTOR AND SORT SYMMETRY WISE
+C=======================================================================
+C
+      CALL DAREAD(IDAF,IODA,X(LVEC),L3,15,0)
+      CALL REORDR(X(LVEC),ISORT,L0,L1)
+      CALL DAWRIT(IDAF,IODA,X(LVEC),L3,15,0)
+      CALL ICOPY (NQMT,JSORT,1,ISORT,1)
+      CALL DAREAD(IDAF,IODA,W,L1,17,0)
+      DO I=1,NQMT
+      II=ISORT(I)
+      EIG(I)=W(II)
+      ENDDO
+C
+      DO I=1,NQMT
+      II=NSORT(I)
+      W(I)=EIG(II)
+      ENDDO
+C
+C=====================================================================
+C REASSIGN THE TWO-ELECTRON INTEGRAL INDEX AS THE ORBITAL AND THEIR
+C SYMMETY ARE NOW DIFFERENT.
+C=====================================================================
+C
+      NPRINT=IOPT(7)
+      ICORBS=0
+      IORBS =NB+IVO+NSING
+      IORB  =NQMT
+      CALL TRFMCX(NPRINT,ICORBS,IORBS,IORB,.FALSE.,.FALSE.,
+     *            .FALSE.,.FALSE.,.FALSE.,.FALSE.,.FALSE.,.FALSE.,
+     *            .FALSE.,.FALSE.)
+      NFT=9
+      CALL SEQREW(NFT)
+      CALL SQREAD(NFT,X(LH),L02)
+      NC=NB+NSING
+      CALL IVOTWOE(NC,NO,NU,NINTG,NFT,X(LPPHH),X(LHPPH),X(LXX),X(LIX))
+C
+C=======================================================================
+C                             EXCITED BLOCK
+C  CONSTRUCT + DIAGONALIZE THE FOCK OPEARTOR ACCORDING TO SYMMETRY BLOCK
+C=======================================================================
+C
+      DO ISYM=1,NIREP
+      NN=0
+      DO IBAS=NB+IVO+NSING+1,NQMT
+      IF(IORBSM(IBAS).EQ.ISYM)THEN
+      NN=NN+1
+      ENDIF
+      ENDDO
+      NBAS(ISYM)=NN
+      ENDDO
+C
+      NSKIP(1)=0
+      DO ISYM=2,NIREP
+      NSKIP(ISYM)=NSKIP(ISYM-1)+NBAS(ISYM-1)
+      ENDDO
+C
+      KORB=2
+      NDIM=NQMT-(NB+NSING+IVO)
+      NSB12=NB+NSING+IVO
+      CALL OPFOCK(KORB,NDIM,NB,NSING,NSB12,IOPT(6),FACTJJ,FACTKK,
+     *            L1,L2,L3,X(LH),X(LFMO),X(LWRK),X(LVEC),X(LSCR),
+     *            X(LEIG),X(LIWRK),X(LISCR),X(LPPHH),X(LHPPH),NO,NU)
+C
+C**GG      IF(NPT.NE.0)THEN
+      WRITE(IW,9006)
+      WRITE(IW,9003)(W(I),I=1,NQMT)
+C**GG      ENDIF
+C
+      CALL RETFM(NEED)
+C
+ 9003 FORMAT(4F20.11)
+ 9004 FORMAT(//,1X,'HF ORBITAL ENERGY',/,1X,17(1H-))
+ 9005 FORMAT(//,1X,'IVO+EXCITED ORBITAL ENERGY',/,1X,26(1H-))
+ 9006 FORMAT(//,1X,'EXCITED ORBITAL ENERGY ',/,1X,22(1H-))
+      RETURN
+      END
+C
+C*MODULE IVOCAS  *DECK SYMMORB
+C=======================================================================
+C====                                                              =====
+C====              THIS ROUTINE WAS CODED BY R. K. CHAUDHURI       =====
+C====                                                              =====
+C====                 INDIAN INSTITUTE OF ASTROPHYSICS             =====
+C====                     BANGALORE-560034, INDIA                  =====
+C====                   E-MAIL: RKCHAUDH@IIAP.RES.IN               =====
+C====                                                              =====
+C=======================================================================
+      SUBROUTINE SYMMORB(NUM,NA)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      PARAMETER (MXAO=8192, NIREP=8, MXGRP=48)
+      COMMON /SOSYM / EULANG(4,MXGRP),GAM(MXGRP,48),IRMON(MXAO)
+      COMMON /SORT1I/ NORBSM(MXAO),IORBSM(MXAO)
+      COMMON /SORT2I/ ISORT(MXAO),JSORT(MXAO),NSORT(MXAO)
+C
+C     SKIP THE OCCUPIED ORBITALS UNCHANGED
+      IF(NA.NE.0)THEN
+      DO I=1,NA
+      JSORT(I)=I
+      IORBSM(I)=IRMON(I)
+      ENDDO
+      ENDIF
+C     REORDER THE VIRTUALS
+      IEND=NA
+      KK=0
+      DO 160 ISYM=1,NIREP
+      DO 170 J=IEND+1,NUM
+      IF(IRMON(J).NE.ISYM)GO TO 170
+      KK=KK+1
+      JSORT(KK+IEND)=J
+ 170  CONTINUE
+ 160  CONTINUE
+      DO I=1,NUM
+      II=JSORT(I)
+      IORBSM(I)=IRMON(II)
+      ENDDO
+      RETURN
+      END
+C*MODULE IVOCAS  *DECK OPFOCK
+C=======================================================================
+C====                                                              =====
+C====              THIS ROUTINE WAS CODED BY R. K. CHAUDHURI       =====
+C====                                                              =====
+C====                 INDIAN INSTITUTE OF ASTROPHYSICS             =====
+C====                     BANGALORE-560034, INDIA                  =====
+C====                   E-MAIL: RKCHAUDH@IIAP.RES.IN               =====
+C====                                                              =====
+C=======================================================================
+      SUBROUTINE OPFOCK(KORB,KDIM,NA,NSING,NSB12,IOPT,FACTJJ,
+     *                  FACTKK,L1,L2,L3,H,F,WRK,VEC,SCR,EIG,
+     *                  IWRK,CTEMP,VPPHH,VHPPH,NC,NU)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C     CHARACTER*1 JOBZ,UPLO
+      PARAMETER (MXAO=8192)
+      PARAMETER (NIREP=8)
+C
+      COMMON /IOFILE/ IR,IW,IPUN,IJK,IPK,IDAF,NAV,IODA(950)
+      COMMON /MACHSW/ KDIAG,ICORFL,IXDR
+      COMMON /IVOSKP/ NBAS(8),NSKIP(8)
+      COMMON /SORT1I/ NORBSM(MXAO),IORBSM(MXAO)
+      COMMON /SORT2I/ ISORT(MXAO),JSORT(MXAO),NSORT(MXAO)
+      COMMON /IVOEN / W(MXAO),E(MXAO)
+C
+      DIMENSION F(L2),H(L2),WRK(L1,L1),VEC(L1,L1),IWRK(L1)
+      DIMENSION SCR(L1,8),EIG(L1),CTEMP(L3)
+      DIMENSION KSORT(MXAO)
+      DIMENSION VPPHH(NU,NU,NC,NC),VHPPH(NC,NU,NU,NC)
+C
+      DATA SMALL,ZERO,TWO/1.0D-09,0.0D0,2.0D0/
+C
+      DO I=1,L1
+      DO J=1,L1
+      VEC(I,J)=ZERO
+      ENDDO
+      ENDDO
+C
+      DO ISYM=1,NIREP
+      IF(NBAS(ISYM).NE.0)THEN
+      DO 620 I=1,NBAS(ISYM)
+      IP=I+NSB12+NSKIP(ISYM)
+      II=I+NSKIP(ISYM)
+      IPSYM=IORBSM(IP)
+      DO 610 J=1,I
+      JP=J+NSB12+NSKIP(ISYM)
+      JPSYM=IORBSM(JP)
+      JJ=J+NSKIP(ISYM)
+      ASUM=0.0D0
+      BSUM=0.0D0
+      CSUM=0.0D0
+      DSUM=0.0D0
+      IF(IPSYM.EQ.JPSYM)THEN
+      NCOL=IP*(IP-1)/2+JP
+      ASUM=H(NCOL)
+      DO 600 K=1,NA
+      RA=VPPHH(IP,JP,K,K)
+      RB=VHPPH(K,IP,JP,K)
+      ASUM=ASUM+TWO*RA-RB
+      DSUM=DSUM+TWO*RA-RB
+ 600  CONTINUE
+C
+      IF(KORB.EQ.1)THEN
+      IF(IOPT.EQ.0)THEN
+      RA=VPPHH(IP,JP,NA,NA)
+      RB=VHPPH(NA,IP,JP,NA)
+      CSUM=CSUM+FACTJJ*RA+FACTKK*RB
+      ELSE
+      RA=VPPHH(IP,JP,NA,NA)
+      RB=VHPPH(NA,IP,JP,NA)
+      CSUM=CSUM+FACTJJ*RA/TWO
+      RA=VPPHH(IP,JP,NA-1,NA-1)
+      RB=VHPPH(NA-1,IP,JP,NA-1)
+      CSUM=CSUM+FACTJJ*RA/TWO
+      ENDIF
+      ENDIF
+C
+      IF(NSING.NE.0)THEN
+      RA=VPPHH(IP,JP,NA+NSING,NA+NSING)
+      RB=VHPPH(NA+NSING,IP,JP,NA+NSING)
+      BSUM=BSUM+RA-RB/TWO
+      ENDIF
+C
+      IF(KORB.NE.1)THEN
+      ASUM=ASUM+BSUM
+      ENDIF
+C
+      IF(KORB.EQ.1)THEN
+      IF(NSING.EQ.0)THEN
+      ASUM=ASUM+CSUM
+      ENDIF
+      ENDIF
+C
+      ENDIF
+      IJ=I*(I-1)/2+J
+      F(IJ)=ASUM
+      IF(ABS(F(IJ)).LT.SMALL)F(IJ)=ZERO
+ 610  CONTINUE
+ 620  CONTINUE
+C
+      DO I=1,L1
+      EIG(I)=ZERO
+      DO J=1,L1
+      WRK(I,J)=ZERO
+      ENDDO
+      ENDDO
+C
+      NDIM=NBAS(ISYM)
+      IGERR=0
+      KDSAVE=KDIAG
+      KDIAG=3
+      CALL GLDIAG(L1,NDIM,NDIM,F,SCR,EIG,WRK,IGERR,IWRK)
+      KDIAG=KDSAVE
+      IF(IGERR.GT.0)CALL ABRT
+      DO I=1,NDIM
+      W(I+NSB12+NSKIP(ISYM))=EIG(I)
+      ENDDO
+C
+      DO I=1,NBAS(ISYM)
+      DO J=1,NBAS(ISYM)
+      II=I+NSKIP(ISYM)
+      JJ=J+NSKIP(ISYM)
+      VEC(II,JJ)=WRK(I,J)
+      ENDDO
+      ENDDO
+C
+      ENDIF
+      ENDDO
+C
+      IVIR=0
+      DO I=1,NIREP
+      IF(NBAS(I).NE.0)THEN
+      IVIR=IVIR+NBAS(I)
+      ENDIF
+      ENDDO
+C
+      IF(IVIR.NE.KDIM)THEN
+      WRITE(*,*)'IN CONSISTENT NO. OF VIRTUALS',IVIR,KDIM
+      CALL ABRT
+      ENDIF
+C
+      CALL DAREAD(IDAF,IODA,WRK,L3,15,0)
+C
+      IJ=0
+      DO I=1,KDIM
+      DO J=1,KDIM
+      IJ=IJ+1
+      CTEMP(IJ)=VEC(J,I)
+      ENDDO
+      ENDDO
+      DO I=1,L1
+      DO J=1,L1
+      VEC(I,J)=0
+      ENDDO
+      ENDDO
+C
+      DO I=1,KDIM
+      IP=I+NSB12
+      IPSYM=IORBSM(IP)
+      DO J=1,KDIM
+      JP=J+NSB12
+      JPSYM=IORBSM(JP)
+      IJ=(J-1)*KDIM+I
+      CON=CTEMP(IJ)
+      IF(IPSYM.EQ.JPSYM)THEN
+      DO K=1,L1
+      VEC(K,JP)=VEC(K,JP)+CON*WRK(K,IP)
+      END DO
+      END IF
+      END DO
+      END DO
+C
+      DO J=NSB12+1,L1
+      DO I=1,L1
+      WRK(I,J)=VEC(I,J)
+      END DO
+      END DO
+C
+      IF(KORB.EQ.1)THEN
+C     SORT EIGENVECTOR
+      DO I=1,L1
+      DO J=1,L1
+      VEC(I,J)=ZERO
+      VEC(I,J)=WRK(I,J)
+      WRK(I,J)=ZERO
+      ENDDO
+      ENDDO
+      DO I=1,L1
+      ISORT(I)=JSORT(I)
+      II=ISORT(I)
+      KSORT(I)=JSORT(II)
+      KK=KSORT(I)
+      DO J=1,L1
+      WRK(J,KK)=VEC(J,II)
+      ENDDO
+      ENDDO
+      DO I=1,L1
+      DO J=1,L1
+      VEC(I,J)=ZERO
+      VEC(I,J)=WRK(I,J)
+      ENDDO
+      ENDDO
+C
+C     SORT EIGENVALUE
+C
+      DO I=1,L1
+      ISORT(I)=JSORT(I)
+      II=ISORT(I)
+      KSORT(I)=JSORT(II)
+      KK=KSORT(I)
+      EIG(KK)=W(II)
+      ENDDO
+      DO I=1,L1
+      W(I)=EIG(I)
+      ENDDO
+C
+      CALL DAWRIT(IDAF,IODA,VEC,L3,15,0)
+      CALL DAWRIT(IDAF,IODA,W,L1,17,0)
+      ELSE
+      CALL DAWRIT(IDAF,IODA,WRK,L3,15,0)
+      CALL DAWRIT(IDAF,IODA,W,L1,17,0)
+      ENDIF
+      RETURN
+      END
+C*MODULE IVOCAS  *DECK SYMOUT
+C=======================================================================
+C====                                                              =====
+C====              THIS ROUTINE WAS CODED BY R. K. CHAUDHURI       =====
+C====                                                              =====
+C====                 INDIAN INSTITUTE OF ASTROPHYSICS             =====
+C====                     BANGALORE-560034, INDIA                  =====
+C====                   E-MAIL: RKCHAUDH@IIAP.RES.IN               =====
+C====                                                              =====
+C=======================================================================
+      SUBROUTINE SYMOUT(NUM,NA)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      PARAMETER (MXAO=8192, NIREP=8, MXGRP=48)
+      COMMON /SOSYM / EULANG(4,MXGRP),GAM(MXGRP,48),IRMON(MXAO)
+      COMMON /IOFILE/ IR,IW,IP,IJK,IPK,IDAF,NAV,IODA(950)
+      DIMENSION NOCC(NIREP),NBAS(NIREP)
+C
+C     NO OF ORBITALS AND CORE ORBITALS IN EACH SYMMETRY
+C
+      WRITE(IW,9000)
+      WRITE(IW,9001)
+      WRITE(IW,9002)
+C
+      DO 120 ISYM=1,NIREP
+      LL=0
+      DO 130 J=1,NA
+      IF(IRMON(J).NE.ISYM)GO TO 130
+      LL=LL+1
+ 130  CONTINUE
+      NOCC(ISYM)=LL
+ 120  CONTINUE
+C
+      DO 160 ISYM=1,NIREP
+      LL=0
+      DO 170 J=1,NUM
+      IF(IRMON(J).NE.ISYM)GO TO 170
+      LL=LL+1
+ 170  CONTINUE
+      NBAS(ISYM)=LL
+ 160  CONTINUE
+C
+      NSYM=0
+      DO 180 ISYM=1,NIREP
+      IF(NBAS(ISYM).EQ.0)GO TO 180
+      NSYM=NSYM+1
+ 180  CONTINUE
+C
+      DO 190 ISYM=1,NSYM
+      WRITE(IW,9003)ISYM,NBAS(ISYM),NOCC(ISYM)
+ 190  CONTINUE
+C
+      WRITE(IW,9001)
+C
+ 9000 FORMAT(/,10X,'NO OF ORBITALS AND CORE ORBITALS IN EACH',
+     :        ' SYMMETRY',/)
+ 9001 FORMAT(1X,31(1H-))
+ 9002 FORMAT(1X,'SYMMETRY',2X,'  # OF ORBITALS',2X,'CORE',/,1X,31(1H-))
+ 9003 FORMAT(1X,I5,10X,I4,8X,I4)
+      RETURN
+      END
+C*MODULE IVOCAS  *DECK ORBREAD
+C=======================================================================
+C====                                                              =====
+C====              THIS ROUTINE WAS CODED BY R. K. CHAUDHURI       =====
+C====                                                              =====
+C====                 INDIAN INSTITUTE OF ASTROPHYSICS             =====
+C====                     BANGALORE-560034, INDIA                  =====
+C====                   E-MAIL: RKCHAUDH@IIAP.RES.IN               =====
+C====                                                              =====
+C=======================================================================
+      SUBROUTINE ORBREAD(NUM,IOPT,ICSYM,ICIND,NMOFZC)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      PARAMETER (MXSYM=8, MXGRP=48, MXAO=8192)
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /IOFILE/ IR,IW,IP,IJK,IPK,IDAF,NAV,IODA(950)
+      COMMON /SOSYM / EULANG(4,MXGRP),GAM(MXGRP,48),IRMON(MXAO)
+      COMMON /SORT1I/ NORBSM(MXAO),IORBSM(MXAO)
+      COMMON /SORT2I/ ISORT(MXAO),JSORT(MXAO),NSORT(MXAO)
+C
+      DIMENSION ICSYM(NMOFZC),ICIND(NMOFZC)
+C           LOCAL DIMENSION
+      DIMENSION NBAS(MXSYM),NCV(MXSYM),NCORE(MXSYM)
+      DIMENSION NUV(MXSYM),NEXC(MXSYM)
+      DIMENSION NSI(MXSYM)
+      DIMENSION ICDIM(8),ISKIP(8)
+C
+      CHARACTER*7 STRSUB
+      CHARACTER*9 GLIST
+C
+      STRSUB='ORBREAD'
+      IF(MASWRK) WRITE(IW,9992) STRSUB
+C
+C        $IVOORB IS THE DOCUMENTED INPUT GROUP NAME, AND FOLLOWS
+C                THE CONVENTION THAT INPUT GROUPS ARE NEVER MORE
+C                THAN SIX LETTERS LONG.
+C
+      GLIST = ' $IVOORB '
+C     GLIST = ' $ORBLIST'
+      CALL SEQREW(IR)
+      CALL FNDGRP(IR,GLIST,IEOF)
+      IF (IEOF.NE.0) THEN
+         WRITE(IW,9991)
+         CALL ABRT
+      END IF
+C
+      READ(IR,*,END=300,ERR=300) NIRREP
+      IF(NIRREP.LE.0)THEN
+         WRITE(IW,*)'WRONG SYMMETRY IRREP=0'
+         CALL ABRT
+      ENDIF
+      IF(NIRREP.GT.8)THEN
+         WRITE(IW,*)'WRONG SYMMETRY IRREP=8'
+         CALL ABRT
+      ENDIF
+C
+      NV=0
+      NE=0
+      NF=0
+      NC=0
+      NS=0
+      DO 10 ISYM=1,NIRREP
+      READ(IR,*,END=300,ERR=300)IBAS,ICORE,ICV,IUV,ISI
+      IEXC=IBAS-(ICORE+ICV+IUV+ISI)
+      NBAS(ISYM)=IBAS
+      NCORE(ISYM)=ICORE
+      NCV(ISYM)=ICV
+      NUV(ISYM)=IUV
+      NSI(ISYM)=ISI
+      NEXC(ISYM)=IEXC
+      NF=NF+ICORE
+      NC=NC+ICV
+      NV=NV+IUV
+      NS=NS+ISI
+      NE=NE+IEXC
+ 10   CONTINUE
+C
+ 300  CONTINUE
+C
+      WRITE(IW,9999)
+      DO 20 ISYM=1,NIRREP
+      WRITE(IW,9998)ISYM,NBAS(ISYM),NCORE(ISYM),NCV(ISYM),
+     :              NUV(ISYM),NEXC(ISYM),NSI(ISYM)
+ 20   CONTINUE
+C
+      WRITE(IW,9990)
+C
+C     NUMBER OF CORE
+      ICORE=0
+      DO 30 ISYM=1,NIRREP
+      DO 30 JORB=1,NCORE(ISYM)
+      ICORE=ICORE+1
+      IORBSM(ICORE)=ISYM
+  30  CONTINUE
+C     NUMBER OF OCCUPIED VALENCE
+      DO 40 ISYM=1,NIRREP
+      DO 40 JORB=1,NCV(ISYM)
+      ICORE=ICORE+1
+      IORBSM(ICORE)=ISYM
+  40  CONTINUE
+C     NUMBER OF SINGLE-OCCUPIED VALENCE
+      DO 45 ISYM=1,NIRREP
+      DO 45 JORB=1,NSI(ISYM)
+      ICORE=ICORE+1
+      IORBSM(ICORE)=ISYM
+  45  CONTINUE
+C     NUMBER OF UNOCCUPIED VALENCE
+      DO 50 ISYM=1,NIRREP
+      DO 50 JORB=1,NUV(ISYM)
+      ICORE=ICORE+1
+      IORBSM(ICORE)=ISYM
+  50  CONTINUE
+C     NUMBER OF EXCITED ORBITALS
+      DO 60 ISYM=1,NIRREP
+      DO 60 JORB=1,NEXC(ISYM)
+      ICORE=ICORE+1
+      IORBSM(ICORE)=ISYM
+  60  CONTINUE
+C
+      KK=0
+      DO 100 ISYM=1,NIRREP
+      DO 110 J=1,NUM
+      IF(IRMON(J).NE.ISYM)GO TO 110
+      KK=KK+1
+      JSORT(KK)=J
+      NORBSM(KK)=ISYM
+ 110  CONTINUE
+ 100  CONTINUE
+C
+      DO I=1,NUM
+      NSORT(I)=I
+      ENDDO
+C
+      IF(IOPT.NE.0)THEN
+      WRITE(IW,9997)
+      WRITE(IW,'(20I4)')(IRMON(I),I=1,NUM)
+      WRITE(IW,9996)
+      WRITE(IW,'(20I4)')(NORBSM(I),I=1,NUM)
+      WRITE(IW,9995)
+      WRITE(IW,'(20I4)')(JSORT(I),I=1,NUM)
+      ENDIF
+C
+      KK=0
+      DO 120 ISYM=1,NIRREP
+      DO 130 J=1,NUM
+      IF(IORBSM(J).NE.ISYM)GO TO 130
+      KK=KK+1
+      NSORT(J)=KK
+ 130  CONTINUE
+ 120  CONTINUE
+C
+C
+C**GG ADDED TO KEEP TRACK OF CORE SYMMETRIES
+C
+      ISKIP(1)=0
+      DO I=2,NIRREP
+        ISKIP(I)=NBAS(I-1)+ISKIP(I-1)
+      END DO
+      DO I=1,NIRREP
+        ICDIM(I)=0
+      END DO
+      DO I=1,NMOFZC
+        ISYM=ICSYM(I)
+        ICDIM(ISYM)=ICDIM(ISYM)+1
+        ICIND(I)=ICDIM(ISYM)+ISKIP(ISYM)
+      END DO
+      DO I=1,NMOFZC
+        IIND=ICIND(I)
+        IJ=NSORT(I)
+        IISYM=ICSYM(I)
+        DO J=1,NUM
+          IF (IIND.EQ.NSORT(J)) THEN
+            NSORT(I)=IIND
+            NSORT(J)=IJ
+            IJSYM=IORBSM(I)
+            IORBSM(I)=IISYM
+            IORBSM(J)=IJSYM
+            GOTO 666
+          END IF
+        END DO
+ 666    CONTINUE
+      END DO
+C
+C**GG END ADDITION
+C
+      IF(IOPT.NE.0)THEN
+      WRITE(IW,9994)
+      WRITE(IW,'(20I4)')(IORBSM(I),I=1,NUM)
+      WRITE(IW,9993)
+      WRITE(IW,'(20I4)')(NSORT(I),I=1,NUM)
+      ENDIF
+C
+ 9999 FORMAT(/,1X,'SYMMETRY',2X,'NO. OF ORBITALS',2X,'CORE',
+     :         2X,'OCC-VAL',2X,'UNO-VAL',2X,'EXCITED',
+     :         2X,'SING-VAL'/)
+ 9998 FORMAT(1X,I5,16X,I4,2X,I4,5X,I4,5X,I4,5X,I4,5X,I4)
+ 9997 FORMAT(/,1X,'ORBITAL SYMMETRY ACCORDING TO ENERGY')
+ 9996 FORMAT(/,1X,'ORBITAL SYMMETRY (SORTED) ')
+ 9995 FORMAT(/,1X,'SORTED INDEX (FROM ENERGY--SYMMETRY) ')
+ 9994 FORMAT(/,1X,'RESORTED SYMMETRY ')
+ 9993 FORMAT(/,1X,'RESORTED INDEX ')
+ 9992 FORMAT(/,1X,30(1H*),' ROUTINE ',A7,' ',30(1H*))
+ 9991 FORMAT(/1X,'*** ERROR *** NO $IVOORB INPUT FOUND - STOP')
+ 9990 FORMAT(1X,70(1H*),/)
+      RETURN
+      END
+C
+C*MODULE IVOCAS *DECK IVOTOWE
+      SUBROUTINE IVOTWOE(NO,NC,NU,NINTG,NFT,VPPHH,VHPPH,XX,IX)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      PARAMETER (MXAO=8192)
+      LOGICAL PACK2E
+      LOGICAL GOPARR,DSKWRK,MASWRK
+C
+      DIMENSION VPPHH(NU,NU,NC,NC),VHPPH(NC,NU,NU,NC)
+      DIMENSION XX(NINTG),IX(NINTG)
+      DIMENSION MULT(8,8)
+C
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /SORT1I/ NORBSM(MXAO),IORBSM(MXAO)
+      COMMON /PCKLAB/ LABSIZ
+      COMMON /INTFIL/ NINTMX,NHEX,NTUPL,PACK2E,INTTYP,IGRDTYP
+C
+      DATA MULT
+     &          /1,2,3,4,5,6,7,8,
+     &           2,1,4,3,6,5,8,7,
+     &           3,4,1,2,7,8,5,6,
+     &           4,3,2,1,8,7,6,5,
+     &           5,6,7,8,1,2,3,4,
+     &           6,5,8,7,2,1,4,3,
+     &           7,8,5,6,3,4,1,2,
+     &           8,7,6,5,4,3,2,1/
+C
+      CALL VCLR(VPPHH,1,NU*NU*NC*NC)
+      CALL VCLR(VHPPH,1,NC*NU*NU*NC)
+C
+  150 CONTINUE
+      CALL PREAD(NFT,XX,IX,NX,NINTMX)
+      IF (NX.EQ.0) GO TO 300
+      MX = ABS(NX)
+      IF (MX.GT.NINTMX) THEN
+         IF(MASWRK) WRITE(6,*) 'CONFUSION WITH INTEGRALS IN -SRTING-'
+         CALL ABRT
+      END IF
+C
+      DO 220 M = 1,MX
+      VALL = XX(M)
+C
+      NPACK = M
+      IF (LABSIZ .EQ. 2) THEN
+*I32     LABEL1 = IX( 2*NPACK - 1 )
+*I32     LABEL2 = IX( 2*NPACK     )
+*I32     IPACK = ISHFT( LABEL1, -16 )
+*I32     JPACK = IAND( LABEL1, 65535 )
+*I32     KPACK = ISHFT( LABEL2, -16 )
+*I32     LPACK = IAND( LABEL2, 65535 )
+*I64     LABEL = IX(NPACK)
+*I64     IPACK =       ISHFT( LABEL, -48 )
+*I64     JPACK = IAND( ISHFT( LABEL, -32 ), 65535 )
+*I64     KPACK = IAND( ISHFT( LABEL, -16 ), 65535 )
+*I64     LPACK = IAND(        LABEL,        65535 )
+      ELSE IF (LABSIZ .EQ. 1) THEN
+*I32     LABEL = IX(NPACK)
+*I32     IPACK = ISHFT( LABEL, -24 )
+*I32     JPACK = IAND( ISHFT( LABEL, -16 ), 255 )
+*I32     KPACK = IAND( ISHFT( LABEL,  -8 ), 255 )
+*I32     LPACK = IAND( LABEL, 255 )
+*I64     IF ( MOD(NPACK,2) .EQ. 0 ) THEN
+*I64        LABEL = IX( NPACK/2 )
+*I64        IPACK = IAND( ISHFT( LABEL, -24 ), 255 )
+*I64        JPACK = IAND( ISHFT( LABEL, -16 ), 255 )
+*I64        KPACK = IAND( ISHFT( LABEL,  -8 ), 255 )
+*I64        LPACK = IAND( LABEL, 255 )
+*I64     ELSE
+*I64        LABEL = IX( (NPACK/2)+1 )
+*I64        IPACK = ISHFT( LABEL, -56 )
+*I64        JPACK = IAND( ISHFT( LABEL, -48 ), 255 )
+*I64        KPACK = IAND( ISHFT( LABEL, -40 ), 255 )
+*I64        LPACK = IAND( ISHFT( LABEL, -32 ), 255 )
+*I64     END IF
+      END IF
+C
+C        SWITCH INDICES TO USUAL TRIANGULAR CANONICAL ORDER
+C        WHICH IS OF COURSE, I>=J, K>=L, IJ>=KL
+C
+      K = IPACK
+      L = JPACK
+      I = KPACK
+      J = LPACK
+C
+      KLSYM=MULT(IORBSM(K),IORBSM(L))
+      IJSYM=MULT(IORBSM(I),IORBSM(J))
+      IF(KLSYM.NE.IJSYM)GO TO 220
+C
+      IF(I.LE.NO)             GO TO 2
+C
+      IF(K.GT.NO) GO TO 467
+      IF(J.LE.NO.AND.L.LE.NO) GO TO 3
+                              GO TO 5
+C
+  467 IF(J.GT.NO.AND.L.GT.NO) GO TO 7
+      IF(J.LE.NO.AND.L.LE.NO) GO TO 4
+                              GO TO 6
+C
+ 2    CONTINUE
+      GO TO 220
+ 3    CONTINUE
+      GO TO 220
+ 4    CONTINUE
+      VHPPH(J,I,K,L)=VALL
+      VHPPH(L,I,K,J)=VALL
+      VHPPH(L,K,I,J)=VALL
+      VHPPH(J,K,I,L)=VALL
+      GO TO 220
+ 5    CONTINUE
+      VPPHH(I,J,K,L)=VALL
+      VPPHH(J,I,K,L)=VALL
+      VPPHH(I,J,L,K)=VALL
+      VPPHH(J,I,L,K)=VALL
+      GO TO 220
+  6   CONTINUE
+  7   CONTINUE
+  220 CONTINUE
+      IF(NX.GT.0) GO TO 150
+  300 CONTINUE
+      RETURN
+      END

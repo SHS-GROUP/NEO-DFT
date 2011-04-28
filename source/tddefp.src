@@ -1,0 +1,712 @@
+C 12 DEC 10 - HL  - ADD CALLS TO ENUCP,INDCHG,INDDPL,INDQUA,INDIND
+C                   FIX A PARALLEL PROBLEM
+C  1 OCT 10 - NM  - TDEFP_MULTI: USE DISTRIBRUTED ELECTRIC FIELD INTS
+C 11 AUG 10 - NM  - IMPLEMENT NUCLEAR GRADIENT FOR EFP1 WITH TD-DFT,
+C                   TDEFP,TDEFP_MULTI,TDEFP_DIPIT: ADD INTER-EFP1 TERMS
+C 23 OCT 08 - NM  - TDEFP: CHANGE SIGN AND DOUBLE POLARIZATION TERM
+C 21 APR 08 - SHY - GENERATE ELECTRIC FIELD INTEGRALS
+C  4 MAR 08 - SHY - FINALIZE INITIAL IMPLEMENTATION OF EFP WITH TD-DFT
+C 28 AUG 07 - SHY - NEW MODULE FOR INCLUDING EFP WITH TD-DFT
+C
+C*MODULE TDDEFP  *DECK TDEFPINIT
+      SUBROUTINE TDEFPINIT
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C        RECENTLY THERE IS NO SPECIAL INITIALIZATION FOR EFP/TDDFT
+      RETURN
+      END
+C*MODULE TDDEFP  *DECK TDEFP
+      SUBROUTINE TDEFP (PA,F,XEFI,YEFI,ZEFI,L2,L1,NV)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      PARAMETER (MXFRG=1050,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      COMMON /FMCOM / X(1)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+C
+      DIMENSION PA(L1,L1,NV)
+      DIMENSION F(L2,NV)
+      DIMENSION XEFI(L2), YEFI(L2), ZEFI(L2)
+C
+      IF(IEFP.NE.1) RETURN
+
+      CALL VALFM(LOADFM)
+      LEFLD   = LOADFM  + 1
+      LDINDC  = LEFLD   + 3*NPTTPT*NV
+      LDINDDC = LDINDC  + 3*NPTTPT
+      LDIND_W = LDINDDC + 3*NPTTPT
+      LDIND_C = LDIND_W + 6*NPTTPT
+      LDIPNEW = LDIND_C + 6*NPTTPT
+      LDIPNWD = LDIPNEW + NFRG
+      LWORK   = LDIPNWD + NFRG
+      LDUMMY  = LWORK   + 6*NPTTPT
+      LAST    = LDUMMY  + 3*NPTTPT
+      NEED    = LAST - LOADFM - 1
+      CALL GETFM(NEED)
+      CALL TDEFP_MULTI(PA,F,XEFI,YEFI,ZEFI,L2,L1,NV,
+     *                 X(LEFLD),X(LEFLD),X(LDINDC),X(LDINDDC),
+     *                 X(LDIND_W),X(LDIND_C),NPTTPT,X(LDIPNEW),
+     *                 X(LDIPNWD),X(LWORK),X(LDUMMY))
+      CALL RETFM(NEED)
+      RETURN
+      END
+C*MODULE TDDEFP  *DECK TDEFP_MULTI
+      SUBROUTINE TDEFP_MULTI(PA,F,XEFI,YEFI,ZEFI,L2,L1,NV,
+     *                       EFLD,DINTMP,DINDC,DINDDC,DIND_W,DIND_C,N,
+     *                       DIPNEW,DIPNWD,WORK,DUMMY)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      CHARACTER*8     POLNAM,DPOLNAM
+C
+      LOGICAL SVDSKW,GOPARR,MASWRK,DSKWRK
+C
+      PARAMETER (HALF=0.5D+00, ONE=1.0D+00)
+      PARAMETER (MXFRG=1050, MXFGPT=12000,MXIFRQ=12,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12, MXAO=8192)
+C
+      COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
+     *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
+     *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
+     *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ*MXFGPT),
+     *                POLSCR(MXFGPT),IPLSCR,INDSCR
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /IJPAIR/ IA(MXAO)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+      DIMENSION PA(L1,L1,NV)
+      DIMENSION F(L2,NV)
+      DIMENSION XEFI(L2), YEFI(L2), ZEFI(L2)
+C N ... NPTTPT
+      DIMENSION EFLD(3,N,NV),DINTMP(3,N,NV)
+C EFLD AND DINTMP HAVE THE SAME ADDRESS.
+      DIMENSION WORK(6,N),
+     *          DINDC(*),DINDDC(*),DIND_W(*),DIND_C(*),
+     *          DIPNEW(*),DIPNWD(*),DUMMY(*)
+C
+C     ----- INITIALIZE PARALLEL -----
+C
+      IPCOUNT = ME - 1
+      IF(GOPARR) CALL VCLR(EFLD,1,3*N*NV)
+C
+C        THE ELECTRIC FIELD INTEGRAL IS TO BE A DISTRIBUTED FILE
+C
+      SVDSKW = DSKWRK
+      DSKWRK = .TRUE.
+      NFT25 = 25
+      CALL SEQREW (NFT25)
+C
+      DO IFP=1,NPTTPT
+C
+C     ----- GO PARALLEL! -----
+C
+         IF (GOPARR) THEN
+            IPCOUNT = IPCOUNT + 1
+            IF(MOD(IPCOUNT,NPROC).NE.0) GO TO 100
+         END IF
+C
+C     ----- ELECTRIC FIELD INTEGRALS -----
+C
+         CALL SQREAD(NFT25,XEFI,L2)
+         CALL SQREAD(NFT25,YEFI,L2)
+         CALL SQREAD(NFT25,ZEFI,L2)
+C
+         DO IMO=1,NV
+            ABFLDX = 0.0D+00
+            ABFLDY = 0.0D+00
+            ABFLDZ = 0.0D+00
+            DO I=1,L1
+               DO J=1,I
+                  DIJ = PA(I,J,IMO) + PA(J,I,IMO)
+                  DIJ = DIJ*2.0D+00
+                  IF (I.EQ.J) THEN
+                     DIJ = HALF*DIJ
+                  END IF
+                  NIJ=IA(I)+J
+                  XI = XEFI(NIJ)
+                  YI = YEFI(NIJ)
+                  ZI = ZEFI(NIJ)
+                  ABFLDX = ABFLDX + XI * DIJ
+                  ABFLDY = ABFLDY + YI * DIJ
+                  ABFLDZ = ABFLDZ + ZI * DIJ
+               END DO
+            END DO
+C "ELECTRIC FIELD" ... TRACE[EFI*BVEC]
+            EFLD(1,IFP,IMO) = ABFLDX
+            EFLD(2,IFP,IMO) = ABFLDY
+            EFLD(3,IFP,IMO) = ABFLDZ
+         END DO ! IMO
+ 100     CONTINUE
+      END DO ! IFP
+C
+      IF (GOPARR) CALL DDI_GSUMF(668,EFLD,3*NPTTPT*NV)
+C
+C     ----- SAVE DIND AND DINDD -----
+C
+      DO IFP=1,NPTTPT
+         DO IXYZ=1,3
+            WORK(IXYZ  ,IFP) =  DIND(IXYZ,IFP)
+            WORK(IXYZ+3,IFP) = DINDD(IXYZ,IFP)
+         END DO
+      END DO
+C
+C     ----- "INDUCED DIPOLE MOMENT" -----
+C
+C           D^{-1}*TRACE[EFI*BVEC] AND
+C TRANSPOSE D^{-1}*TRACE[EFI*BVEC]
+C
+C ...ITERATIVE METHOD IS USED.
+C
+      DO IMO=1,NV
+         DO IFP=1,NPTTPT
+C
+C INITIAL GUESS:
+C           D^{-1} ... ALPHA           AND
+C TRANSPOSE D^{-1} ... TRANSPOSE ALPHA
+C
+            POLXX = EFPOL(1,IFP)
+            POLYY = EFPOL(2,IFP)
+            POLZZ = EFPOL(3,IFP)
+            POLXY = EFPOL(4,IFP)
+            POLXZ = EFPOL(5,IFP)
+            POLYZ = EFPOL(6,IFP)
+            POLYX = EFPOL(7,IFP)
+            POLZX = EFPOL(8,IFP)
+            POLZY = EFPOL(9,IFP)
+C
+            ABFLDX = EFLD(1,IFP,IMO)
+            ABFLDY = EFLD(2,IFP,IMO)
+            ABFLDZ = EFLD(3,IFP,IMO)
+C
+             DIND(1,IFP) =  POLXX*ABFLDX + POLXY*ABFLDY + POLXZ*ABFLDZ
+             DIND(2,IFP) =  POLYX*ABFLDX + POLYY*ABFLDY + POLYZ*ABFLDZ
+             DIND(3,IFP) =  POLZX*ABFLDX + POLZY*ABFLDY + POLZZ*ABFLDZ
+            DINDD(1,IFP) =  POLXX*ABFLDX + POLYX*ABFLDY + POLZX*ABFLDZ
+            DINDD(2,IFP) =  POLXY*ABFLDX + POLYY*ABFLDY + POLZY*ABFLDZ
+            DINDD(3,IFP) =  POLXZ*ABFLDX + POLYZ*ABFLDY + POLZZ*ABFLDZ
+         END DO
+C
+C GET "INDUCED DIPOLES" BY ITERATIVE METHOD
+C
+         CALL DIPIT(EFLD(1,1,IMO),DUMMY,DINDC,DINDDC,
+     *              DIND_W,DIND_C,NPTTPT,
+     *              DIPNEW,DIPNWD,DUMMY,DUMMY,NFRG)
+C
+C   DIND:           D^{-1}*TRACE[EFI*BVEC]
+C  DINDD: TRANSPOSE D^{-1}*TRACE[EFI*BVEC]
+C
+         DO IFP=1,NPTTPT
+            DO IXYZ=1,3
+               DINTMP(IXYZ,IFP,IMO) = DIND(IXYZ,IFP) + DINDD(IXYZ,IFP)
+            END DO
+         END DO
+      END DO ! IMO
+C
+C     ----- RECOVER DIND AND DINDD -----
+C
+      DO IFP=1,NPTTPT
+         DO IXYZ=1,3
+             DIND(IXYZ,IFP) = WORK(IXYZ  ,IFP)
+            DINDD(IXYZ,IFP) = WORK(IXYZ+3,IFP)
+         END DO
+      END DO
+C
+C     ----- FORM DOT PRODUCT -----
+C
+      CALL SEQREW(NFT25)
+C
+C IF PARALLEL, SCALE F
+C
+      IPCOUNT = ME - 1
+      IF(GOPARR) CALL DSCAL(L2*NV,ONE/NPROC,F,1)
+C
+      DO IFP=1,NPTTPT
+C
+C     ----- GO PARALLEL! -----
+C
+         IF (GOPARR) THEN
+            IPCOUNT = IPCOUNT + 1
+            IF(MOD(IPCOUNT,NPROC).NE.0) GO TO 200
+         END IF
+C
+C     ----- ELECTRIC FIELD INTEGRALS -----
+C
+         CALL SQREAD(NFT25,XEFI,L2)
+         CALL SQREAD(NFT25,YEFI,L2)
+         CALL SQREAD(NFT25,ZEFI,L2)
+C
+         DO IMO=1,NV
+            PMUX = DINTMP(1,IFP,IMO)
+            PMUY = DINTMP(2,IFP,IMO)
+            PMUZ = DINTMP(3,IFP,IMO)
+            DO K=1,L1
+               DO L=1,K
+                  NKL = IA(K) + L
+                  XK = XEFI(NKL)
+                  YK = YEFI(NKL)
+                  ZK = ZEFI(NKL)
+C
+                  DUM = PMUX*XK + PMUY*YK + PMUZ*ZK
+                  F(NKL,IMO) = F(NKL,IMO) - DUM
+               END DO
+            END DO
+         END DO ! IMO
+ 200     CONTINUE
+      END DO ! IFP
+C
+C     ----- SUM UP PARTIAL FOCK-LIKE MATRIX -----
+C
+      IF (GOPARR) CALL DDI_GSUMF(2313,F,L2*NV)
+C
+      CALL SEQREW(NFT25)
+      DSKWRK = SVDSKW
+C
+      RETURN
+      END
+C*MODULE TDDEFP  *DECK TDEFP_DNUCP
+      SUBROUTINE TDEFP_DNUCP(DE,EF3,WORK)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      CHARACTER*8 POLNAM,DPOLNAM
+C
+      PARAMETER (MXDFG=5, MXFRG=1050, MXFGPT=12000,
+     *           MXIFRQ=12, MXDPPT=MXFRG*MXDFG*12)
+C
+      COMMON /DEIDIP/ PMIND(3,MXFGPT),PMINDD(3,MXFGPT),
+     *                XYIND(3,MXFGPT),XYINDD(3,MXFGPT)
+      COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
+     *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
+     *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
+     *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ,MXFGPT),
+     *                POLSCR(MXFGPT),IPLSCR,INDSCR
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+C
+      DIMENSION DE(3,*),EF3(3,*),WORK(6,*)
+C
+C     ----- SAVE DIND AND DINDD -----
+C
+      DO LEFP=1,NPTTPT
+         WORK(1,LEFP) =  DIND(1,LEFP)
+         WORK(2,LEFP) =  DIND(2,LEFP)
+         WORK(3,LEFP) =  DIND(3,LEFP)
+         WORK(4,LEFP) = DINDD(1,LEFP)
+         WORK(5,LEFP) = DINDD(2,LEFP)
+         WORK(6,LEFP) = DINDD(3,LEFP)
+      END DO
+C
+C     CORRECTION TO -DNUCP-
+C         -(1/2)*[M +  ( M~)]*DE(NUC)/DX
+C     ADD
+C     (A) -(1/2)*[DM + (DM~)]*DE(NUC)/DX
+C
+C****          *********************************************************
+C**** TERM (A) *********************************************************
+C****          *********************************************************
+      CALL DCOPY(3*NPTTPT,PMIND ,1,DIND ,1)
+      CALL DCOPY(3*NPTTPT,PMINDD,1,DINDD,1)
+C NOW DIND AND DIND ... DM AND DM~
+       CALL DNUCP(DE,EF3)
+       CALL ENUCP
+C
+C     ----- RECOVER DIND AND DINDD -----
+C
+      DO LEFP=1,NPTTPT
+          DIND(1,LEFP) = WORK(1,LEFP)
+          DIND(2,LEFP) = WORK(2,LEFP)
+          DIND(3,LEFP) = WORK(3,LEFP)
+         DINDD(1,LEFP) = WORK(4,LEFP)
+         DINDD(2,LEFP) = WORK(5,LEFP)
+         DINDD(3,LEFP) = WORK(6,LEFP)
+      END DO
+C
+      RETURN
+      END
+C*MODULE TDDEFG  *DECK TDEFP_FRGDER
+      SUBROUTINE TDEFP_FRGDER
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      CHARACTER*8 POLNAM,DPOLNAM
+C
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      LOGICAL TRIPLET,SG1T,TAMMD
+C
+      PARAMETER (ONE=1.0D+00, TWO=2.0D+00)
+      PARAMETER (MXATM=2000)
+      PARAMETER (MXDFG=5, MXFRG=1050, MXFGPT=12000,
+     *           MXIFRQ=12,MXDPPT=MXFRG*MXDFG*12)
+C
+      COMMON /DEIDIP/ PMIND(3,MXFGPT),PMINDD(3,MXFGPT),
+     *                XYIND(3,MXFGPT),XYINDD(3,MXFGPT)
+      COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
+     *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
+     *                ATORQ(3,MXFRG)
+      COMMON /EFPOTD/ METHPOL,ISCCHG,MOVE
+      COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
+     *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
+     *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
+     *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ*MXFGPT),
+     *                POLSCR(MXFGPT),IPLSCR,INDSCR
+      COMMON /FMCOM / X(1)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /INFOTD/ CNVTOL,TRIPLET,SG1T,JANST,NRADT,NTHET,NPHIT,NLEBT,
+     *                NSTAT,NTRIAL,MAXVEC,NTHST,IRECTD,ITDFG,NONEQR,
+     *                ITDPRP,TAMMD
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+C
+      DATA CHECK/8HCHECK   /
+C
+C     ----- TDDFT-EFP GRADIENT CALCULATION -----
+C
+      L1 = NUM
+      L2 = (NUM*(NUM+1))/2
+      L3 = NUM*NUM
+C
+      NGREAT = MAX(NMTTPT,NPTTPT,4*NRTTPT)
+      NTOTPT = NMTTPT + NPTTPT + NRTTPT
+      L4 = 300*NGREAT
+C
+      CALL VALFM(LOADFM)
+      LDUM1 = LOADFM+ 1
+      LDUM2 = LDUM1 + L2
+      LBUF  = LDUM2 + L3
+      LCH   = LBUF  + 6*NPTTPT
+      LAST  = LCH   + L4
+      NEED  = LAST - LOADFM - 1
+      CALL GETFM(NEED)
+C
+      IF(EXETYP.EQ.CHECK) GO TO 1000
+      IF(IEFP.NE.1) GO TO 1000
+C
+C  IF PARALLEL, SCALE NUCLEAR CONTRIBUTIONS TO FRAGMENT GRADIENT.
+C   ...AND TORQUE CORRECTIONS (ATORQ)
+C
+      IF(GOPARR) CALL DSCAL(3*NTOTPT,ONE/NPROC,DEF,1)
+      IF(GOPARR) CALL DSCAL(3*NFRG,ONE/NPROC,ATORQ,1)
+C
+C     ----- QM-EFP ELECTROSTATIC CONTRIBUTION -----
+C
+C     NOTE: DAF #16 HOLDS THE FULL TDDFT DENSITY MATRIX (=D+P)
+C
+C     DNUCC , DNUCD , DNUCQ , DNUCO  ... SKIP
+C     EFCDER, EFDDER, EFQDER, EFODER ... SKIP
+C     EFCDEF, EFDDEF, EFQDEF, EFODEF ... SKIP
+C     EFTORD, EFQTOR, EFTORO         ... SKIP
+C
+C     ----- QM-EFP REPULSIVE CONTRIBUTION -----
+C
+C     REPDER AND REPDEF ... SKIP
+C
+C
+C     ----- POLARIZATION CONTRIBUTION -----
+C
+C SAVE DIND AND DINDD
+C
+      IC = LBUF - 6
+      DO LEFP=1,NPTTPT
+         IC = IC + 6
+         X(IC  ) =  DIND(1,LEFP)
+         X(IC+1) =  DIND(2,LEFP)
+         X(IC+2) =  DIND(3,LEFP)
+         X(IC+3) = DINDD(1,LEFP)
+         X(IC+4) = DINDD(2,LEFP)
+         X(IC+5) = DINDD(3,LEFP)
+      END DO
+C
+C     CORRECTION TO -EFPDER- AND -EFPDEF-
+C         -(1/2)*[ M + ( M~)]*TRACE[   D   * D(EFI)/DX]
+C     ADD
+C     (B) -(1/2)*[ M + ( M~)]*TRACE[   P   * D(EFI)/DX]
+C     (C) -(1/2)*[DM + (DM~)]*TRACE[   D   * D(EFI)/DX]
+C     (D) -(1/2)*[DN + (DN~)]*TRACE[2*(X+Y)* D(EFI)/DX]
+C
+C     CORRECTION TO -EFTORP-: TORQUE ON THE INDUCED DIPOLE
+C     ... VECTOR PRODUCT OF
+C          (1/2)*[ M + ( M~)] AND TRACE[   D   *   EFI    ]
+C     ADD
+C     (E)  (1/2)*[ M + ( M~)] AND TRACE[   P   *   EFI    ]
+C     (F)  (1/2)*[DM + (DM~)] AND TRACE[   D   *   EFI    ]
+C     (G)  (1/2)*[DN + (DN~)] AND TRACE[2*(X+Y)*   EFI    ]
+C
+C     WHERE DM=PMIND, (DM~)=PMINDD, DN=XYIND, AND (DN~)=XYINDD.
+C
+C****                   ************************************************
+C**** TERMS (C) AND (F) ************************************************
+C****                   ************************************************
+      CALL DAREAD(IDAF,IODA,X(LDUM1),L2,308,0)
+C X(LDUM1) ... GROUND STATE DENSITY
+      CALL DCOPY(3*NPTTPT,PMIND ,1,DIND ,1)
+      CALL DCOPY(3*NPTTPT,PMINDD,1,DINDD,1)
+C NOW DIND AND DINDD ARE DM AND DM~
+      CALL EFPDER(X(LDUM1))
+      IF(MOVE.NE.0) CALL EFPDEF(X(LDUM1),X(LCH),L4)
+      CALL EFTORP(X(LDUM1),X(LCH),L4)
+C****                   ************************************************
+C**** TERMS (D) AND (G) ************************************************
+C****                   ************************************************
+      CALL DAREAD(IDAF,IODA,X(LDUM2),L3,IRECTD+2,0)
+      CALL TDPCMDEN(X(LDUM1),X(LDUM2),L1)
+      CALL DSCAL(L2,TWO,X(LDUM1),1)
+C X(LDUM1) ... 2*(X+Y)
+      CALL DCOPY(3*NPTTPT,XYIND ,1,DIND ,1)
+      CALL DCOPY(3*NPTTPT,XYINDD,1,DINDD,1)
+C NOW DIND AND DINDD ARE DN AND DN~.
+      CALL EFPDER(X(LDUM1))
+      IF(MOVE.NE.0) CALL EFPDEF(X(LDUM1),X(LCH),L4)
+      CALL EFTORP(X(LDUM1),X(LCH),L4)
+C**** RECOVER DIND AND DINDD *******************************************
+      IC = LBUF - 6
+      DO LEFP=1,NPTTPT
+         IC = IC + 6
+          DIND(1,LEFP) = X(IC  )
+          DIND(2,LEFP) = X(IC+1)
+          DIND(3,LEFP) = X(IC+2)
+         DINDD(1,LEFP) = X(IC+3)
+         DINDD(2,LEFP) = X(IC+4)
+         DINDD(3,LEFP) = X(IC+5)
+      END DO
+C
+C        SUM CONTRIBUTIONS FROM ALL NODES FOR PARALLEL RUNS
+C
+      IF(GOPARR) CALL DDI_GSUMF(1505,DEF,3*NTOTPT)
+      IF(GOPARR) CALL DDI_GSUMF(1506,ATORQ,3*NFRG)
+C
+ 1000 CONTINUE
+      CALL RETFM(NEED)
+      RETURN
+      END
+C*MODULE TDDEFG  *DECK TDEFP_DININ
+      SUBROUTINE TDEFP_DININ(WORK,OUT)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      CHARACTER*8 POLNAM,DPOLNAM
+C
+      LOGICAL OUT
+C
+      PARAMETER (MXDFG=5, MXFRG=1050, MXFGPT=12000,
+     *           MXIFRQ=12, MXDPPT=MXFRG*MXDFG*12)
+      PARAMETER (TWO=2.0D+00)
+C
+      COMMON /DEIDIP/ PMIND(3,MXFGPT),PMINDD(3,MXFGPT),
+     *                XYIND(3,MXFGPT),XYINDD(3,MXFGPT)
+      COMMON /EFPGES/ DESFRG(6,MXFRG)
+      COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
+     *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
+     *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
+     *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ,MXFGPT),
+     *                POLSCR(MXFGPT),IPLSCR,INDSCR
+      COMMON /FMCOM / XX(1)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+C
+      DIMENSION WORK(6,*)
+C
+C * * * THE FOLLOWING TERMS ARE REQUIRED ONLY WHEN NFRG > 1. * * *
+C
+C     CORRECTION TO -DININ-: INDUCED DIPOLE-INDUCED DIPOLE
+C         -(1/2)*[    M~ ]*(DT/DX)*  M
+C     ADD
+C     (H) -(1/2)*[    M~ ]*(DT/DX)* DM
+C     (I) -(1/2)*[   DM~ ]*(DT/DX)*  M
+C     (J) -(1/2)*[2*(DN~)]*(DT/DX)* DN
+C
+C     WHERE DM=PMIND, (DM~)=PMINDD, DN=XYIND, AND (DN~)=XYINDD.
+C
+      IF(NFRG.LE.1) RETURN
+C
+C     ----- SAVE DIND AND DINDD -----
+C
+      DO LEFP=1,NPTTPT
+         WORK(1,LEFP) =  DIND(1,LEFP)
+         WORK(2,LEFP) =  DIND(2,LEFP)
+         WORK(3,LEFP) =  DIND(3,LEFP)
+         WORK(4,LEFP) = DINDD(1,LEFP)
+         WORK(5,LEFP) = DINDD(2,LEFP)
+         WORK(6,LEFP) = DINDD(3,LEFP)
+      END DO
+C****          *********************************************************
+C**** TERM (H) *********************************************************
+C****          *********************************************************
+      IFMO = 0
+      CALL VALFM(LOADFM)
+      LDIP1 = LOADFM + 1
+      LDIP2 = LDIP1  + 3
+      LDFRG = LDIP2  + 3
+      LWORK = LDFRG  + 3
+      LAST  = LWORK  + 6*NMTTPT
+      NEED  = LAST - LOADFM - 1
+      CALL GETFM(NEED)
+C
+      DO LEFP=1,NPTTPT
+         DO IXYZ=1,3
+             DIND(IXYZ,LEFP) =  DIND(IXYZ,LEFP) + PMIND(IXYZ,LEFP)
+         END DO
+      END DO
+C NOW DIND AND DINDD ... M+DM AND M~
+      CALL DININ(XX(LDIP1),XX(LDIP2),XX(LDFRG),IFMO)
+      CALL INDIND(IFMO)
+      IF(OUT) CALL EFP_GRD_DBG('DININ   ',DESFRG)
+C****          *********************************************************
+C**** TERM (I) *********************************************************
+C****          *********************************************************
+      DO LEFP=1,NPTTPT
+         DO IXYZ=1,3
+             DIND(IXYZ,LEFP) =   WORK(IXYZ,LEFP)
+            DINDD(IXYZ,LEFP) = PMINDD(IXYZ,LEFP)
+         END DO
+      END DO
+C NOW DIND AND DINDD ... M AND DM~
+      CALL DININ(XX(LDIP1),XX(LDIP2),XX(LDFRG),IFMO)
+      CALL INDIND(IFMO)
+      IF(OUT) CALL EFP_GRD_DBG('DININ   ',DESFRG)
+C****          *********************************************************
+C**** TERM (J) *********************************************************
+C****          *********************************************************
+      DO LEFP=1,NPTTPT
+         DO IXYZ=1,3
+             DIND(IXYZ,LEFP) =  XYIND(IXYZ,LEFP)
+            DINDD(IXYZ,LEFP) = XYINDD(IXYZ,LEFP)*TWO
+         END DO
+      END DO
+C NOW DIND AND DINDD ... DN AND 2*DN~
+      CALL DININ(XX(LDIP1),XX(LDIP2),XX(LDFRG),IFMO)
+      CALL INDIND(IFMO)
+      IF(OUT) CALL EFP_GRD_DBG('DININ   ',DESFRG)
+C
+C     ----- RECOVER DIND AND DINDD -----
+C
+      DO LEFP=1,NPTTPT
+          DIND(1,LEFP) = WORK(1,LEFP)
+          DIND(2,LEFP) = WORK(2,LEFP)
+          DIND(3,LEFP) = WORK(3,LEFP)
+         DINDD(1,LEFP) = WORK(4,LEFP)
+         DINDD(2,LEFP) = WORK(5,LEFP)
+         DINDD(3,LEFP) = WORK(6,LEFP)
+      END DO
+C
+      CALL RETFM(NEED)
+      RETURN
+      END
+C*MODULE TDDEFG  *DECK TDEFP_MPIND
+      SUBROUTINE TDEFP_MPIND(WORK,OUT)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      CHARACTER*8 POLNAM,DPOLNAM
+C
+      LOGICAL OUT
+C
+      PARAMETER (MXDFG=5, MXFRG=1050, MXFGPT=12000,
+     *           MXIFRQ=12, MXDPPT=MXFRG*MXDFG*12)
+C
+      COMMON /DEIDIP/ PMIND(3,MXFGPT),PMINDD(3,MXFGPT),
+     *                XYIND(3,MXFGPT),XYINDD(3,MXFGPT)
+      COMMON /EFPGES/ DESFRG(6,MXFRG)
+      COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
+     *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
+     *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
+     *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ,MXFGPT),
+     *                POLSCR(MXFGPT),IPLSCR,INDSCR
+      COMMON /FMCOM / XX(1)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+C
+      DIMENSION WORK(6,*)
+C
+C * * * THE FOLLOWING TERM IS REQUIRED ONLY WHEN NFRG > 1. * * *
+C
+C     CORRECTION TO -DCHIND- ETC.: INDUCED DIPOLE-MULTIPOLE
+C         -(1/2)*[ M + ( M~)]*[D(E_EFP)/DX]
+C     ADD
+C     (K) -(1/2)*[DM + (DM~)]*[D(E_EFP)/DX]
+C
+C     WHERE DM=PMIND, (DM~)=PMINDD, DN=XYIND, AND (DN~)=XYINDD.
+C
+      IF(NFRG.LE.1) RETURN
+C
+      IFMO = 0
+      CALL VALFM(LOADFM)
+      LDIP1 = LOADFM + 1
+      LDIP2 = LDIP1  + 3
+      LDFRG = LDIP2  + 3
+      LWORK = LDFRG  + 3
+      LAST  = LWORK  + 6*NMTTPT
+      NEED  = LAST - LOADFM - 1
+      CALL GETFM(NEED)
+C
+C     ----- SAVE DIND AND DINDD -----
+C
+      DO LEFP=1,NPTTPT
+         WORK(1,LEFP) =  DIND(1,LEFP)
+         WORK(2,LEFP) =  DIND(2,LEFP)
+         WORK(3,LEFP) =  DIND(3,LEFP)
+         WORK(4,LEFP) = DINDD(1,LEFP)
+         WORK(5,LEFP) = DINDD(2,LEFP)
+         WORK(6,LEFP) = DINDD(3,LEFP)
+      END DO
+C****          *********************************************************
+C**** TERM (K) *********************************************************
+C****          *********************************************************
+      DO LEFP=1,NPTTPT
+         DO IXYZ=1,3
+             DIND(IXYZ,LEFP) =  DIND(IXYZ,LEFP) +  PMIND(IXYZ,LEFP)
+            DINDD(IXYZ,LEFP) = DINDD(IXYZ,LEFP) + PMINDD(IXYZ,LEFP)
+         END DO
+      END DO
+C NOW DIND AND DINDD ... M+DM AND (M~)+(DM~)
+C CHARGE-INDUCED DIPOLE
+      IF(IEFC.EQ.1) THEN
+         CALL DCHIND(XX(LDIP1),XX(LDIP2),XX(LDFRG),IFMO)
+         CALL INDCHG(IFMO)
+         IF(OUT) CALL EFP_GRD_DBG('DCHIND  ',DESFRG)
+      END IF
+C PERMANENT DIPOLE-INDUCED DIPOLE
+      IF(IEFD.EQ.1) THEN
+         CALL DDPIND(XX(LDIP1),XX(LDIP2),XX(LDFRG),IFMO)
+         CALL INDDPL(IFMO)
+         IF(OUT) CALL EFP_GRD_DBG('DDPIND  ',DESFRG)
+      END IF
+C QUADRUPOLE-INDUCED DIPOLE
+      IF(IEFQ.EQ.1) THEN
+         CALL DQDIND(XX(LWORK),XX(LDIP1),XX(LDIP2),XX(LDFRG),IFMO)
+         CALL INDQUA(IFMO)
+         IF(OUT) CALL EFP_GRD_DBG('DQDIND  ',DESFRG)
+      END IF
+C
+C     ----- RECOVER DIND AND DINDD -----
+C
+      DO LEFP=1,NPTTPT
+          DIND(1,LEFP) = WORK(1,LEFP)
+          DIND(2,LEFP) = WORK(2,LEFP)
+          DIND(3,LEFP) = WORK(3,LEFP)
+         DINDD(1,LEFP) = WORK(4,LEFP)
+         DINDD(2,LEFP) = WORK(5,LEFP)
+         DINDD(3,LEFP) = WORK(6,LEFP)
+      END DO
+C
+      CALL RETFM(NEED)
+      RETURN
+      END

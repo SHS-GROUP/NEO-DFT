@@ -1,0 +1,976 @@
+C 14 OCT 09 - KML - EXTENDED UP TO L=16, PROGRAM INCLUDED IN GAMESS
+C 02 JAN 06 - KML - CODE ADAPTED FROM ORIGINAL VERSION BY WAS, TO L=10
+C
+C*MODULE PRAMM *DECK ELAMMC
+      SUBROUTINE ELAMMC
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      LOGICAL CUM,LSHORT
+C
+      PARAMETER (MXATM=2000,NMOM=969,NRANK=16)
+C
+      COMMON /AMMPRP/ IAMM,IBOND,CUM,LSHORT
+      COMMON /FMCOM / X(1)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /MTPMAP/ NMTP(0:NRANK),INTCOOR(NMOM,3),
+     *                MAPINT(NRANK+1,NRANK+1,NRANK+1)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+C
+      DATA CHECK/8HCHECK   /
+C
+C      CALCULATE ATOMIC MULTIPOLE MOMENTS
+C
+      CALL VALFM(LOADFM)
+      LA       = LOADFM   + 1
+      LMAPBOND = LA       + NMOM*NAT
+      LAST     = LMAPBOND + NAT*NAT
+      NEEDAMM = LAST - LOADFM - 1
+      CALL GETFM(NEEDAMM)
+C
+      CALL AMMINIT(X(LMAPBOND),NAT)
+C
+      L1 = NUM
+      L2 = (L1*L1+L1)/2
+      NVAL = 0
+      IF ((IAMM.GT.0).AND.(IAMM.LE.NRANK)) NVAL=NMTP(IAMM)-1
+      IF(NVAL.EQ.0) THEN
+         IF(MASWRK) WRITE(IW,*) 'ALAMMC: IMPOSSIBLE -IAMM- VALUE'
+         CALL ABRT
+      END IF
+C
+C     ----- GROW MEMORY -----
+C
+      CALL VALFM(LOADFM)
+      IELM   = LOADFM + 1
+      IEMW   = IELM   + NVAL*L2
+      IDENSA = IEMW   + NVAL*784
+      IDENSB = IDENSA + L2
+      LAST   = IDENSB + L2
+      NEED = LAST - LOADFM - 1
+      CALL GETFM(NEED)
+C
+      IF (EXETYP.EQ.CHECK) THEN
+         CALL RETFM(NEED)
+         RETURN
+      END IF
+C
+C     ----- GET TOTAL DENSITY MATRIX -----
+C
+      CALL DENDD1(X(IDENSA),X(IDENSB),L2)
+C
+C     ----- COMPUTE MULTIPOLE INTEGRALS OVER BASIS FUNCTIONS -----
+C
+      CALL PRCALCR(X(IELM),X(IEMW),NVAL,L2)
+      CALL DAREAD(IDAF,IODA,X(IDENSB),L2,12,0)
+      DO IIII=1,NMTP(IAMM)
+         IF (IIII.EQ.1) THEN
+            INDEX = IDENSB
+         ELSE
+            INDEX = IELM + L2*(IIII-2)
+         ENDIF
+         CALL AMMC(X(IDENSA),X(INDEX),IIII,X(LA),X(LMAPBOND),NMOM,NAT)
+      ENDDO
+C
+C     ----- PRINT THE ATOMIC MOMENTS -----
+C
+      IF (MASWRK) CALL AMMPRINT(X(LA),NMOM,NAT)
+C
+C     ----- RETURN MEMORY -----
+C
+      CALL RETFM(NEED)
+      CALL RETFM(NEEDAMM)
+C
+      RETURN
+      END
+C
+C*MODULE PRPAMM *DECK AMMINIT
+      SUBROUTINE AMMINIT(MAPBOND,NATX)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      DIMENSION MAPBOND(NATX,NATX)
+C
+      PARAMETER (MXATM=2000,NMOM=969,NRANK=16)
+C
+      COMMON /BONDMM/ MMBONDS
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /MTPMAP/ NMTP(0:NRANK),INTCOOR(NMOM,3),
+     *                MAPINT(NRANK+1,NRANK+1,NRANK+1)
+C
+      PARAMETER (PT5=0.5D+00, ONE=1.0D+00, TWO=2.0D+00, THREE=3.0D+00)
+      PARAMETER (RLIMIT=3.0D+00)
+C
+      THIRD1 = ONE / THREE
+      THIRD2 = TWO * THIRD1
+C
+C     ----- INITIATE THE MOMENT COUNT ARRAYS -----
+C
+      N = 1
+      NMTP(0) = 1
+      DO I=1,NRANK
+         N = N+I+1
+         NMTP(I) = NMTP(I-1)+N
+      ENDDO
+C
+C     ----- INITIATE THE INTCOOR ARRAY -----
+C
+      N = 0
+      DO 20 I = 0,NRANK
+      DO 20 J = 0,I
+      DO 20 K = 0,I-J
+C
+      L = I-J-K
+      N = N+1
+      INTCOOR(N,1) = L
+      INTCOOR(N,2) = K
+      INTCOOR(N,3) = J
+      MAPINT(L+1,K+1,J+1) = N
+C
+   20 CONTINUE
+C
+C     ----- INITIATE ATOM-ATOM BOND MATRIX -----
+C           THIS IS NOT TESTED AND DISABLED
+C
+      IBOND = 0
+      IF ((IBOND.GE.1).AND.(IBOND.LE.2)) THEN
+C
+      MMBONDS = 0
+      DO 30 I=1,NAT
+C
+      MAPBOND(I,I) = I
+      DO 30 J=I+1,NAT
+C
+      DX = C(1,J) - C(1,I)
+      DY = C(2,J) - C(2,I)
+      DZ = C(3,J) - C(3,I)
+      DR = SQRT(DX*DX + DY*DY + DZ*DZ)
+      IF (DR*TWO .LT. RLIMIT) THEN
+         IF (IBOND.EQ.1) THEN
+            MMBONDS = MMBONDS + 1
+            K = NAT+MMBONDS
+            MAPBOND(I,J) = K
+            MAPBOND(J,I) = K
+            C(1,K) = C(1,I) + DX*PT5
+            C(2,K) = C(2,I) + DY*PT5
+            C(3,K) = C(3,I) + DZ*PT5
+            ZAN(K) = 0.0D+00
+         ENDIF
+         IF (IBOND.EQ.2) THEN
+            MMBONDS = MMBONDS + 1
+            K = NAT+MMBONDS
+            MAPBOND(I,J) = K
+            C(1,K) = C(1,I) + DX*THIRD1
+            C(2,K) = C(2,I) + DY*THIRD1
+            C(3,K) = C(3,I) + DZ*THIRD1
+            ZAN(K) = 0
+            MMBONDS = MMBONDS + 1
+            K = NAT+MMBONDS
+            MAPBOND(J,I) = K
+            C(1,K) = C(1,I) + DX*THIRD2
+            C(2,K) = C(2,I) + DY*THIRD2
+            C(3,K) = C(3,I) + DZ*THIRD2
+            ZAN(K) = 0
+         ENDIF
+      ELSE
+         MAPBOND(I,J) = I
+         MAPBOND(J,I) = J
+      ENDIF
+C
+   30 CONTINUE
+C
+      ENDIF
+C
+      RETURN
+      END
+C
+C*MODULE PRPAMM *DECK AMMC
+      SUBROUTINE AMMC(P,AMI,M,A,MAPBOND,NMOMX,NATX)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      LOGICAL CUM,LSHORT
+C
+      PARAMETER (MXATM=2000)
+      PARAMETER (NMOM=969, NRANK=16)
+C
+      DIMENSION A(NMOMX,NATX), P(*), AMI(*), MAPBOND(NATX,NATX)
+      DIMENSION IBC(0:NRANK,0:NRANK), ITAB(500), COOR(3)
+C
+      COMMON /AMMPRP/ IAMM,IBOND,CUM,LSHORT
+      COMMON /ATLIM/  LIMLOW(MXATM),LIMSUP(MXATM)
+      COMMON /BONDMM/ MMBONDS
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /MTPMAP/ NMTP(0:NRANK),INTCOOR(NMOM,3),
+     *                MAPINT(NRANK+1,NRANK+1,NRANK+1)
+      COMMON /XYZPRP/ XP,YP,ZP,PAD(35)
+C
+      PARAMETER (ZERO=0.0D+00,PT5=0.5D+00,ONE=1.0D+00)
+C
+      CALL BINOM(IBC,NRANK,NRANK)
+C
+      DO IA=1,NAT
+        DO IORB=LIMLOW(IA),LIMSUP(IA)
+          ITAB(IORB) = IA
+        ENDDO
+      ENDDO
+C
+      DO IA=1,NAT+MMBONDS
+        A(M,IA) = ZERO
+      ENDDO
+C
+C     ----- NUCLEAR CHARGES -----
+C
+      DO IA=1,NAT
+         COOR(1) = C(1,IA) - XP
+         COOR(2) = C(2,IA) - YP
+         COOR(3) = C(3,IA) - ZP
+         X = ZAN(IA)
+         
+         DO I=1,3
+C                COOR MAY BE NEGATIVE, INTCOOR IS SOME INTEGER 0...NRANK
+C                WE CANNOT ALLOW THE COMPUTER TO EXPONENTIATE BY LOGS!
+C                BELOW COMPUTES:     X = X*(COOR(I)**INTCOOR(M,I))
+C
+            POW = ONE
+            DO KKK=1,INTCOOR(M,I)
+               POW=POW*COOR(I)
+            ENDDO
+            X=X*POW
+C
+         ENDDO
+         A(M,IA) = A(M,IA) + X
+      ENDDO
+C
+C     ----- SUM ADDITIVE ATOMIC CONTRIBUTIONS -----
+C
+      K=0
+      XBOND = ONE
+      IF (IBOND.NE.0) XBOND = PT5
+      DO IA=1,NAT
+         DO IO=LIMLOW(IA),LIMSUP(IA)
+            DO JO=1,IO
+               IB = ITAB(JO)
+               K = K+1
+               X = P(K) * AMI(K) * XBOND
+               A(M,IA) = A(M,IA) - X
+               IF (IBOND.NE.0) THEN
+                  IC = MAPBOND(IA,IB)
+                  A(M,IC) = A(M,IC) - X
+               ENDIF
+               IF (IO.NE.JO) THEN
+                  A(M,IB) = A(M,IB) - X
+                  IF (IBOND.NE.0) THEN
+                     IC = MAPBOND(IB,IA)
+                     A(M,IC) = A(M,IC) - X
+                  ENDIF
+               ENDIF
+            ENDDO
+         ENDDO
+      ENDDO
+C
+C     ----- MOVE TO LOCAL COORDINATES BY RECOMBINATION -----
+C
+      IF (CUM) THEN
+      DO IA=1,NAT+MMBONDS
+C
+      COOR(1) = C(1,IA) - XP
+      COOR(2) = C(2,IA) - YP
+      COOR(3) = C(3,IA) - ZP
+      X = ZERO
+      IK = INTCOOR(M,1)
+      IL = INTCOOR(M,2)
+      IM = INTCOOR(M,3)
+C
+      DO 100 IKK = 0,IK
+      DO 100 ILL = 0,IL
+      DO 100 IMM = 0,IM
+         Y = ONE
+         N = MAPINT(IKK+1,ILL+1,IMM+1)
+         IF (N.NE.M) THEN
+            Y = Y*A(N,IA)
+            Y = Y*IBC(IK,IKK)
+            Y = Y*IBC(IL,ILL)
+            Y = Y*IBC(IM,IMM)
+C
+C             AVOID COMPUTING Y**N AS EXP(N*LN(Y)) AS Y MAY BE NEGATIVE,
+C             FIX ASSUMES WE ALWAYS HAVE POSITIVE INTEGER POWERS -N-.
+C                     Y = Y*(COOR(1)**(IK-IKK))
+C                     Y = Y*(COOR(2)**(IL-ILL))
+C                     Y = Y*(COOR(3)**(IM-IMM))
+            POW1 = ONE
+            DO NPOW=1,IK-IKK
+               POW1=POW1*COOR(1)
+            ENDDO
+            POW2 = ONE
+            DO NPOW=1,IL-ILL
+               POW2=POW2*COOR(2)
+            ENDDO
+            POW3 = ONE
+            DO NPOW=1,IM-IMM
+               POW3=POW3*COOR(3)
+            ENDDO
+            Y = Y*POW1*POW2*POW3
+C
+            X = X - Y
+         ENDIF
+C
+  100 CONTINUE
+C
+      A(M,IA) = A(M,IA) + X
+C
+      ENDDO
+      ENDIF
+C
+      RETURN
+      END
+C
+C*MODULE PRPEL *DECK PRCALCR
+      SUBROUTINE PRCALCR(XVAL,WINT,NVAL,L2)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      LOGICAL IANDJ,NORM,DOUBLE
+C
+      PARAMETER (MXATM=2000,MXGTOT=20000,MXSH=5000)
+C
+      DIMENSION IX(84),IY(84),IZ(84),JX(84),JY(84),JZ(84),
+     *          DIJ(784),IJX(784),IJY(784),IJZ(784)
+      DIMENSION XVAL(NVAL*L2),WINT(*)
+C
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /XYZORB/ T,X0,Y0,Z0,XI,YI,ZI,XJ,YJ,ZJ,NI,NJ,NM
+C
+      DATA JX / 0, 1, 0, 0, 2, 0, 0, 1, 1, 0,
+     *          3, 0, 0, 2, 2, 1, 0, 1, 0, 1,
+     *          4, 0, 0, 3, 3, 1, 0, 1, 0, 2,
+     *          2, 0, 2, 1, 1,
+     *          5, 0, 0, 4, 4, 1, 0, 1, 0, 3,
+     *          3, 2, 0, 2, 0, 3, 1, 1, 2, 2,
+     *          1,
+     *          6, 0, 0, 5, 5, 1, 0, 1, 0, 4,
+     *          4, 2, 0, 2, 0, 4, 1, 1, 3, 3,
+     *          0, 3, 3, 2, 1, 2, 1, 2/
+      DATA IX / 1, 8, 1, 1,15, 1, 1, 8, 8, 1,
+     *         22, 1, 1,15,15, 8, 1, 8, 1, 8,
+     *         29, 1, 1,22,22, 8, 1, 8, 1,15,
+     *         15, 1,15, 8, 8,
+     *         36, 1, 1,29,29, 8, 1, 8, 1,22,
+     *         22,15, 1,15, 1,22, 8, 8,15,15,
+     *          8,
+     *         43, 1, 1,36,36, 8, 1, 8, 1,29,
+     *         29,15, 1,15, 1,29, 8, 8,22,22,
+     *          1,22,22,15, 8,15, 8,15/
+      DATA JY / 0, 0, 1, 0, 0, 2, 0, 1, 0, 1,
+     *          0, 3, 0, 1, 0, 2, 2, 0, 1, 1,
+     *          0, 4, 0, 1, 0, 3, 3, 0, 1, 2,
+     *          0, 2, 1, 2, 1,
+     *          0, 5, 0, 1, 0, 4, 4, 0, 1, 2,
+     *          0, 3, 3, 0, 2, 1, 3, 1, 2, 1,
+     *          2,
+     *          0, 6, 0, 1, 0, 5, 5, 0, 1, 2,
+     *          0, 4, 4, 0, 2, 1, 4, 1, 3, 0,
+     *          3, 2, 1, 3, 3, 1, 2, 2/
+      DATA IY / 1, 1, 8, 1, 1,15, 1, 8, 1, 8,
+     *          1,22, 1, 8, 1,15,15, 1, 8, 8,
+     *          1,29, 1, 8, 1,22,22, 1, 8,15,
+     *          1,15, 8,15, 8,
+     *          1,36, 1, 8, 1,29,29, 1, 8,15,
+     *          1,22,22, 1,15, 8,22, 8,15, 8,
+     *         15,
+     *          1,43, 1, 8, 1,36,36, 1, 8,15,
+     *          1,29,29, 1,15, 8,29, 8,22, 1,
+     *         22,15, 8,22,22, 8,15,15/
+      DATA JZ / 0, 0, 0, 1, 0, 0, 2, 0, 1, 1,
+     *          0, 0, 3, 0, 1, 0, 1, 2, 2, 1,
+     *          0, 0, 4, 0, 1, 0, 1, 3, 3, 0,
+     *          2, 2, 1, 1, 2,
+     *          0, 0, 5, 0, 1, 0, 1, 4, 4, 0,
+     *          2, 0, 2, 3, 3, 1, 1, 3, 1, 2,
+     *          2,
+     *          0, 0, 6, 0, 1, 0, 1, 5, 5, 0,
+     *          2, 0, 2, 4, 4, 1, 1, 4, 0, 3,
+     *          3, 1, 2, 1, 2, 3, 3, 2/
+      DATA IZ / 1, 1, 1, 8, 1, 1,15, 1, 8, 8,
+     *          1, 1,22, 1, 8, 1, 8,15,15, 8,
+     *          1, 1,29, 1, 8, 1, 8,22,22, 1,
+     *         15,15, 8, 8,15,
+     *          1, 1,36, 1, 8, 1, 8,29,29, 1,
+     *         15, 1,15,22,22, 8, 8,22, 8,15,
+     *         15,
+     *          1, 1,43, 1, 8, 1, 8,36,36, 1,
+     *         15, 1,15,29,29, 8, 8,29, 1,22,
+     *         22, 8,15, 8,15,22,22,15/
+C
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00)
+      PARAMETER (RLN10=2.30258D+00)
+      PARAMETER (SQRT3=1.73205080756888D+00)
+      PARAMETER (SQRT5=2.23606797749979D+00)
+      PARAMETER (SQRT7=2.64575131106459D+00)
+      PARAMETER (SQRT9 =3.00000000000000000000D+00)
+      PARAMETER (SQRT11=3.31662479035539984911D+00)
+C
+C      CALCULATE INTEGRALS NECESSARY FOR EVALUATION OF PROPERTIES.
+C      THIS IS A RECURSIVE VERSION THAT WORKS ONLY FOR MOMENTS (ELMOM)
+C
+      NIJ = 784*NVAL
+      TOL = RLN10*ITOL
+      NORM = NORMF .NE. 1 .OR. NORMP .NE. 1
+C
+C                     LOOP OVER SHELLS II
+C
+      DO 500  II=1,NSHELL
+      I    = KATOM(II)
+      XI   = C(1,I)
+      YI   = C(2,I)
+      ZI   = C(3,I)
+      I1   = KSTART(II)
+      I2   = I1 + KNG(II) - 1
+      LIT  = KTYPE(II)
+      MINI = KMIN(II)
+      MAXI = KMAX(II)
+      LOCI = KLOC(II) - MINI
+C
+C                     LOOP OVER SHELLS JJ
+C
+      DO 500  JJ=1,II
+      J    = KATOM(JJ)
+      XJ   = C(1,J)
+      YJ   = C(2,J)
+      ZJ   = C(3,J)
+      J1   = KSTART(JJ)
+      J2   = J1 + KNG(JJ) - 1
+      LJT  = KTYPE(JJ)
+      MINJ = KMIN(JJ)
+      MAXJ = KMAX(JJ)
+      LOCJ = KLOC(JJ) - MINJ
+C
+      RR     = (XI-XJ)**2 + (YI-YJ)**2 + (ZI-ZJ)**2
+      IANDJ  = II.EQ.JJ
+C
+C                     PREPARE INDICES FOR PAIRS OF (I,J) ORBITALS
+C
+      IJ = 0
+      MAX = MAXJ
+      DO 100  I=MINI,MAXI
+         NX = IX(I)
+         NY = IY(I)
+         NZ = IZ(I)
+         IF (IANDJ) MAX = I
+         DO 100  J=MINJ,MAX
+            IJ = IJ+1
+            IJX(IJ) = NX+JX(J)
+            IJY(IJ) = NY+JY(J)
+            IJZ(IJ) = NZ+JZ(J)
+  100 CONTINUE
+C
+      DO 120 I=1,NIJ
+  120 WINT(I) = ZERO
+C
+C                     LOOP OVER PRIMITIVES IG
+C
+      JGMAX = J2
+      DO 400  IG=I1,I2
+      AI  = EX(IG)
+      CSI = CS(IG)
+      CPI = CP(IG)
+      CDI = CD(IG)
+      CFI = CF(IG)
+      CGI = CG(IG)
+      CHI = CH(IG)
+      CII = CI(IG)
+C
+C                     LOOP OVER PRIMITIVES JG
+C
+      IF (IANDJ) JGMAX = IG
+      DO 400 JG=J1,JGMAX
+      AJ  = EX(JG)
+      CSJ = CS(JG)
+      CPJ = CP(JG)
+      CDJ = CD(JG)
+      CFJ = CF(JG)
+      CGJ = CG(JG)
+      CHJ = CH(JG)
+      CIJ = CI(JG)
+C
+      AA  = AI + AJ
+      AA1 = ONE/AA
+      AX  = (AI*XI + AJ*XJ)*AA1
+      AY  = (AI*YI + AJ*YJ)*AA1
+      AZ  = (AI*ZI + AJ*ZJ)*AA1
+C
+      DUM = AI*AJ*RR*AA1
+C
+      IF(DUM.GT.TOL) GO TO 400
+C
+      FAC = EXP(-DUM)
+C
+C                     CALCULATE DENSITY FACTORS
+C
+      DOUBLE = IANDJ.AND.IG.NE.JG
+      MAX = MAXJ
+      NN  = 0
+C
+      DUM1 = ZERO
+      DUM2 = ZERO
+      DO 380 I = MINI,MAXI
+         IF( I.EQ.1)            DUM1 = CSI*FAC
+         IF( I.EQ.2)            DUM1 = CPI*FAC
+         IF( I.EQ.5)            DUM1 = CDI*FAC
+         IF( I.EQ.8  .AND.NORM) DUM1 = DUM1*SQRT3
+C
+         IF( I.EQ.11)           DUM1 = CFI*FAC
+         IF((I.EQ.14).AND.NORM) DUM1 = DUM1*SQRT5
+         IF((I.EQ.20).AND.NORM) DUM1 = DUM1*SQRT3
+         IF( I.EQ.21)           DUM1 = CGI*FAC
+C
+         IF((I.EQ.24).AND.NORM) DUM1 = DUM1*SQRT7
+         IF((I.EQ.30).AND.NORM) DUM1 = DUM1*SQRT5/SQRT3
+         IF((I.EQ.33).AND.NORM) DUM1 = DUM1*SQRT3
+C
+         IF( I.EQ.36)           DUM1 = CHI*FAC
+         IF((I.EQ.39).AND.NORM) DUM1 = DUM1*SQRT9
+         IF((I.EQ.45).AND.NORM) DUM1 = DUM1*SQRT7/SQRT3
+         IF((I.EQ.51).AND.NORM) DUM1 = DUM1*SQRT3
+         IF((I.EQ.54).AND.NORM) DUM1 = DUM1*SQRT5/SQRT3
+C
+         IF( I.EQ.57)           DUM1 = CII*FAC
+         IF((I.EQ.60).AND.NORM) DUM1 = DUM1*SQRT11
+         IF((I.EQ.66).AND.NORM) DUM1 = DUM1*SQRT9/SQRT3
+         IF((I.EQ.72).AND.NORM) DUM1 = DUM1*SQRT3
+         IF((I.EQ.75).AND.NORM) DUM1 = DUM1*SQRT7/(SQRT3*SQRT5)
+         IF((I.EQ.78).AND.NORM) DUM1 = DUM1*SQRT5
+         IF((I.EQ.84).AND.NORM) DUM1 = DUM1*SQRT5/SQRT3
+         IF(IANDJ) MAX = I
+         DO 380 J = MINJ,MAX
+            NN = NN+1
+C
+            IF(J.EQ.1) THEN
+              DUM2 = DUM1*CSJ
+              IF(DOUBLE .AND. I.EQ.1) DUM2 = DUM2 + DUM2
+              IF(DOUBLE .AND. I.GT.1) DUM2 = DUM2 + CSI*CPJ*FAC
+C
+            ELSE IF( J.EQ.2) THEN
+              DUM2 = DUM1*CPJ
+              IF(DOUBLE) DUM2 = DUM2 + DUM2
+C
+            ELSE IF( J.EQ.5) THEN
+              DUM2 = DUM1*CDJ
+              IF(DOUBLE) DUM2 = DUM2 + DUM2
+            ELSE IF((J.EQ.8).AND.NORM) THEN
+              DUM2 = DUM2*SQRT3
+C
+            ELSE IF (J.EQ.11) THEN
+              DUM2 = DUM1*CFJ
+              IF (DOUBLE) DUM2 = DUM2+DUM2
+            ELSE IF((J.EQ.14).AND.NORM) THEN
+              DUM2 = DUM2*SQRT5
+            ELSE IF((J.EQ.20).AND.NORM) THEN
+              DUM2 = DUM2*SQRT3
+C
+            ELSE IF(J.EQ.21) THEN
+              DUM2 = DUM1*CGJ
+              IF (DOUBLE) DUM2 = DUM2+DUM2
+            ELSE IF((J.EQ.24).AND.NORM) THEN
+              DUM2 = DUM2*SQRT7
+            ELSE IF((J.EQ.30).AND.NORM) THEN
+              DUM2 = DUM2*SQRT5/SQRT3
+            ELSE IF((J.EQ.33).AND.NORM) THEN
+              DUM2 = DUM2*SQRT3
+C
+            ELSE IF( J.EQ.36) THEN
+              DUM2 = DUM1*CHJ
+              IF (DOUBLE) DUM2 = DUM2+DUM2
+            ELSE IF((J.EQ.39).AND.NORM) THEN
+              DUM2 = DUM2*SQRT9
+            ELSE IF((J.EQ.45).AND.NORM) THEN
+              DUM2 = DUM2*SQRT7/SQRT3
+            ELSE IF((J.EQ.51).AND.NORM) THEN
+              DUM2 = DUM2*SQRT3
+            ELSE IF((J.EQ.54).AND.NORM) THEN
+              DUM2 = DUM2*SQRT5/SQRT3
+C
+            ELSE IF( J.EQ.57) THEN
+              DUM2 = DUM1*CIJ
+              IF (DOUBLE) DUM2 = DUM2+DUM2
+            ELSE IF((J.EQ.60).AND.NORM) THEN
+              DUM2 = DUM2*SQRT11
+            ELSE IF((J.EQ.66).AND.NORM) THEN
+              DUM2 = DUM2*SQRT9/SQRT3
+            ELSE IF((J.EQ.72).AND.NORM) THEN
+              DUM2 = DUM2*SQRT3
+            ELSE IF((J.EQ.75).AND.NORM) THEN
+              DUM2 = DUM2*SQRT7/(SQRT3*SQRT5)
+            ELSE IF((J.EQ.78).AND.NORM) THEN
+              DUM2 = DUM2*SQRT5
+            ELSE IF((J.EQ.84).AND.NORM) THEN
+              DUM2 = DUM2*SQRT5/SQRT3
+            END IF
+            DIJ(NN) = DUM2
+  380 CONTINUE
+      CALL INTMOMR(LIT,LJT,IJ,IJX,IJY,IJZ,DIJ,WINT,AA,AX,AY,AZ)
+  400 CONTINUE
+C
+C        END OF LOOPS OVER PRIMITIVES
+C
+C                  SET UP EXPECTATION VALUE MATRICES
+C
+      MAX = MAXJ
+      DO 460  K=1,NVAL
+         NL2 = (K-1)*L2
+         NN  = (K-1)*IJ
+         DO 460  I=MINI,MAXI
+            LI = LOCI + I
+            IN = LI*(LI-1)/2 + NL2
+            IF (IANDJ) MAX = I
+            DO 460  J=MINJ,MAX
+               LJ = LOCJ + J
+               JN = LJ + IN
+               NN = NN+1
+               XVAL(JN) = WINT(NN)
+  460 CONTINUE
+C
+  500 CONTINUE
+C
+      RETURN
+      END
+C
+C*MODULE PRPEL *DECK INTMOMR
+      SUBROUTINE INTMOMR(LIT,LJT,IJ,IJX,IJY,IJZ,DIJ,WINT,AA,AX,AY,AZ)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      LOGICAL CUM,LSHORT
+C
+      PARAMETER (NMOM=969, NRANK=16)
+C
+      DIMENSION DIJ(*),WINT(*),IJX(*),IJY(*),IJZ(*)
+      DIMENSION XIN(50*(NRANK+1)),YIN(50*(NRANK+1)),ZIN(50*(NRANK+1))
+      DIMENSION XINM(NRANK+1), YINM(NRANK+1), ZINM(NRANK+1)
+C
+      COMMON /AMMPRP/ IAMM,IBOND,CUM,LSHORT
+      COMMON /MTPMAP/ NMTP(0:NRANK),INTCOOR(NMOM,3),
+     *                MAPINT(NRANK+1,NRANK+1,NRANK+1)
+      COMMON /PRPINTV/ XINT(NRANK+1), YINT(NRANK+1), ZINT(NRANK+1)
+      COMMON /XYZORB/ T,X0,Y0,Z0,XI,YI,ZI,XJ,YJ,ZJ,NI,NJ,NM
+C
+      PARAMETER (ONE=1.0D+00)
+C 
+C      CALCULATE INTEGRALS FOR ELECTROSTATIC MOMENTS.
+C
+      NM = IAMM
+C
+      T  = ONE/SQRT(AA)
+      X0 = AX
+      Y0 = AY
+      Z0 = AZ
+C
+C      CALCULATE 1-DIMENSIONAL INTEGRALS OVER ALL ANGULAR MOMENTA
+C
+      IN = -7
+      DO 100  I=1,LIT
+      IN = IN+7
+      NI = I
+C
+      DO 100  J=1,LJT
+      JN = IN+J
+      NJ = J
+C
+      CALL MOMINTR
+C
+      DO II = 0,NM
+         XIN(50*II+JN) = XINT(II+1)*T
+         YIN(50*II+JN) = YINT(II+1)*T
+         ZIN(50*II+JN) = ZINT(II+1)*T
+      ENDDO
+C
+  100 CONTINUE
+C
+C                      LOOP OVER ORBITAL PRODUCTS
+C
+      DO 180  I=1,IJ
+C
+      NX = IJX(I)
+      NY = IJY(I)
+      NZ = IJZ(I)
+      DENS = DIJ(I)
+C
+      DO INX = 0,NM
+         XINM(INX+1) = XIN(NX+50*INX)
+         YINM(INX+1) = YIN(NY+50*INX)
+         ZINM(INX+1) = ZIN(NZ+50*INX)
+      ENDDO
+C
+      INDEX = I
+      DO IW = 2,NMTP(NM)
+         WINT(INDEX) = WINT(INDEX) +
+     *                 XINM(INTCOOR(IW,1)+1) *
+     *                 YINM(INTCOOR(IW,2)+1) *
+     *                 ZINM(INTCOOR(IW,3)+1) * DENS
+         INDEX = INDEX + IJ
+      ENDDO
+C
+  180 CONTINUE
+C
+      RETURN
+      END
+C
+C*MODULE PRPAMM *DECK MOMINTR
+      SUBROUTINE MOMINTR
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      PARAMETER (NRANK=16)
+C
+      DIMENSION H(36),W(36)
+      DIMENSION MIN(15),MAX(15)
+C
+      COMMON /PRPINTV/ XINT(NRANK+1), YINT(NRANK+1), ZINT(NRANK+1)
+      COMMON /XYZORB/ T,X0,Y0,Z0,XI,YI,ZI,XJ,YJ,ZJ,NI,NJ,NM
+      COMMON /XYZPRP/ XP,YP,ZP,PAD(35)
+C
+      COMMON /HERMIT/ H1,H2(2),H3(3),H4(4),H5(5),H6(6),H7(7),
+     *                H8(8),H9(9),H10(10),H11(11),H12(12),
+     *                H13(13),H14(14),H15(15)
+      COMMON /WERMIT/ W1,W2(2),W3(3),W4(4),W5(5),W6(6),W7(7),
+     *                W8(8),W9(9),W10(10),W11(11),W12(12),
+     *                W13(13),W14(14),W15(15)
+C
+      EQUIVALENCE (H(1),H1),(W(1),W1)
+C
+      DATA MIN /1,2,4, 7,11, 16,22,29,37,46, 56,67,79, 92,106/
+      DATA MAX /1,3,6,10,15, 21,28,36,45,55, 66,78,91,105,120/
+C
+      PARAMETER (ZERO=0.0D+00)
+C
+C     ---- EVALUATE MOMENT INTEGRALS USING GAUSS-HERMITE QUADRATURE ----
+C             THIS IS A RECURSIVE VERSION THAT REPLACES MOMINT
+C
+      DO I = 1,NM+1
+         XINT(I) = ZERO    
+         YINT(I) = ZERO    
+         ZINT(I) = ZERO    
+      ENDDO              
+C
+C         -NI- AND -NJ- RUN UP TO 7 FOR SPDFGHI BASIS SETS,
+C         -NM- IS BETWEEN 0 AND 16 FOR ATOMIC MOMENTS
+C         THEREFORE -NPTS- CANNOT EXCEED 15
+C
+      NPTS = (NI + NJ + NM - 2)/2 + 1
+      IMIN = MIN(NPTS)
+      IMAX = MAX(NPTS)
+C
+      DO 500 I = IMIN,IMAX
+C
+         DUM = W(I)
+         PX = DUM
+         PY = DUM
+         PZ = DUM
+C
+         DUM = H(I)*T
+         PTX = DUM + X0
+         PTY = DUM + Y0
+         PTZ = DUM + Z0
+C
+         AX = PTX - XI
+         AY = PTY - YI
+         AZ = PTZ - ZI
+C
+         BX = PTX - XJ
+         BY = PTY - YJ
+         BZ = PTZ - ZJ
+C
+         CX = PTX - XP
+         CY = PTY - YP
+         CZ = PTZ - ZP
+C
+         DO IN=1,NI-1
+            PX = PX * AX
+            PY = PY * AY
+            PZ = PZ * AZ
+         ENDDO
+C
+         DO JN=1,NJ-1
+            PX = PX * BX
+            PY = PY * BY
+            PZ = PZ * BZ
+         ENDDO
+C
+         PCX = PX
+         PCY = PY
+         PCZ = PZ
+         DO IV = 1,NM+1
+            XINT(IV) = XINT(IV) + PCX
+            YINT(IV) = YINT(IV) + PCY
+            ZINT(IV) = ZINT(IV) + PCZ
+            PCX = PCX*CX
+            PCY = PCY*CY
+            PCZ = PCZ*CZ
+         ENDDO
+C
+  500 CONTINUE
+      RETURN
+      END
+C
+C*MODULE PRPAMM *DECK AMMPRINT
+      SUBROUTINE AMMPRINT(A,NMOMX,NATX)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      DIMENSION A(NMOMX,NATX)
+C
+      LOGICAL CUM,LSHORT
+C
+      PARAMETER (MXATM=2000)
+      PARAMETER (NMOM=969, NRANK=16)
+C
+      COMMON /AMMPRP/ IAMM,IBOND,CUM,LSHORT
+      COMMON /BONDMM/ MMBONDS
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /MTPMAP/ NMTP(0:NRANK),INTCOOR(NMOM,3),
+     *                MAPINT(NRANK+1,NRANK+1,NRANK+1)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+C
+      CHARACTER LCOOR(3)
+      CHARACTER*4 ATOMS(106)
+      CHARACTER*12 LINT(NMOM)
+      CHARACTER*18 LMOMENTS(0:NRANK)
+C
+      DATA LCOOR/'X','Y','Z'/
+      DATA LMOMENTS /'CHARGES           ',
+     *               'DIPOLES           ', 'QUADRUPOLES       ',
+     *               'OCTUPOLES         ', 'HEXADECAPOLES     ',
+     *               'MOMENTS OF RANK 5 ', 'MOMENTS OF RANK 6 ',
+     *               'MOMENTS OF RANK 7 ', 'MOMENTS OF RANK 8 ',
+     *               'MOMENTS OF RANK 9 ', 'MOMENTS OF RANK 10',
+     *               'MOMENTS OF RANK 11', 'MOMENTS OF RANK 12',
+     *               'MOMENTS OF RANK 13', 'MOMENTS OF RANK 14',
+     *               'MOMENTS OF RANK 15', 'MOMENTS OF RANK 16'/
+C
+      CALL SETLAB(3,ATOMS)
+C
+      IF (CUM) THEN
+         WRITE(IW,805)
+      ELSE
+         WRITE(IW,800)
+      ENDIF
+C
+      IF ((IAMM.GT.10).AND.(.NOT.LSHORT)) THEN
+         WRITE(IW,905) 
+         LSHORT = .TRUE.
+      ENDIF
+      IF (LSHORT) WRITE(IW,906)
+C
+C     ----- GENERATE MOMENT LABELS -----
+C
+      N = 0
+      DO 10 I = 0,NRANK
+      DO 10 J = 0,I
+      DO 10 K = 0,I-J
+C
+      L = I-J-K
+      N = N+1
+      IF (LSHORT) THEN
+         ASSIGN 900 TO IFORMAT
+         IF (L.GE.10) ASSIGN 901 TO IFORMAT
+         IF (K.GE.10) ASSIGN 902 TO IFORMAT
+         IF (J.GE.10) ASSIGN 903 TO IFORMAT
+         WRITE(LINT(N),IFORMAT) L,K,J
+      ELSE
+         LINT(N) = "            "
+         DO II = 1,L
+            LINT(N)(II:II) = LCOOR(1)
+         ENDDO
+         DO II = L+1,L+K
+            LINT(N)(II:II) = LCOOR(2)
+         ENDDO
+         DO II = L+K+1,I
+            LINT(N)(II:II) = LCOOR(3)
+         ENDDO
+      ENDIF
+C
+   10 CONTINUE
+C
+C     ----- PRINT ATOMIC MOMENTS RECURSIVELY -----
+C
+      WRITE(IW,910) NAT+MMBONDS
+      WRITE(IW,920) 'X','Y','Z'
+      DO IA=1,NAT+MMBONDS
+         WRITE(IW,925) ATOMS(IAN(IA)),A(1,IA),(C(MI,IA),MI=1,3)
+      ENDDO
+C
+      NCOLS = 5
+      DO 30 IM=1,IAMM
+      WRITE(IW,930) LMOMENTS(IM)
+      IMIN = NMTP(IM-1)+1
+      IMAX = NMTP(IM)
+      DO 30 J=0,(IMAX-IMIN)/NCOLS
+         JMIN = IMIN + NCOLS*J
+         JMAX = MIN(JMIN+NCOLS-1,IMAX)
+         WRITE(IW,940) (LINT(II), II=JMIN,JMAX)
+         DO IA=1,NAT+MMBONDS
+            WRITE(IW,950) ATOMS(IAN(IA)),(A(MI,IA),MI=JMIN,JMAX)
+         ENDDO
+   30 CONTINUE
+C
+  800 FORMAT(/10X,26('-')/10X,'ADDITIVE ATOMIC MULTIPOLES'/
+     *        10X,26('-'))
+  805 FORMAT(/10X,28('-')/10X,'CUMULATIVE ATOMIC MULTIPOLES'/
+     *        10X,28('-'))
+  900 FORMAT('  (',I1,',',I1,',',I1,')')
+  901 FORMAT('  (',I2,',',I1,',',I1,')')
+  902 FORMAT('  (',I1,',',I2,',',I1,')')
+  903 FORMAT('  (',I1,',',I1,',',I2,')')
+  905 FORMAT(/1X,'HIGH MULTIPOLES (IAMM ABOVE 10), SETTING LSHORT=.T.')
+  906 FORMAT(/1X,'ALTERNATE, SHORT MOMENT LABELS WILL USED (LSHORT)',/
+     *        3X,'(K,L,M) WHERE KLM ARE EXPONENTS OVER COORDINATES',/
+     *        3X,'FOR EXAMPLE, (1,1,0) IS THE XY QUADRUPOLE MOMENT')
+  910 FORMAT(/5X,'NUMBER OF CENTERS=',I5,
+     *        10X,'ALL VALUES ARE GIVEN IN A.U.')
+  920 FORMAT(/5X,'CHARGES',35X,'COORDINATES'/(33X,A1,13X,A1,13X,A1))
+  925 FORMAT(1X,A2,E14.6,14X,3E14.6)
+  930 FORMAT(/5X,A)
+  940 FORMAT(3X,6A14)
+  950 FORMAT(1X,A2,1P,6E14.6)
+      RETURN
+      END
+C
+C*MODULE PRPAMM *DECK BINOM
+      SUBROUTINE BINOM(NB,N1,N2)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      DIMENSION NB(0:N1,0:N2)
+C
+C     ----- GENERATE BINOMIAL NUMBERS -----
+C
+      DO I=0,N1
+         DO J=0,N2
+            NB(I,J) = 0
+         ENDDO
+      ENDDO
+C
+      DO I=0,N1
+         NB(I,0) = 1
+      ENDDO
+      DO I=0,N2
+         NB(I,I) = 1
+      ENDDO
+C
+      DO 10 I=1,N1
+        DO 10 J=1,MIN(I-1,N2)
+          NB(I,J) = NB(I-1,J-1) + NB(I-1,J)
+   10 CONTINUE
+      END
