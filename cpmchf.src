@@ -1,4 +1,4 @@
-C xx xxx 11 - NM  - NACMEX,cpmcx: sa-mcscf grad and conical intersect
+C 11 Aug 11 - NM  - NACMEX,CPMCX: SA-MCSCF grad and conical intersect.
 C 11 Aug 10 - DGF - SYNCH COMMON BLOCK ENRGYS
 C  1 May 09 - SK  - check basis set is spd only
 C 23 Oct 08 - TJD - fixed state index problem in FMNAC (NACME runs)
@@ -1967,6 +1967,7 @@ C
      *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
       COMMON /RUNLAB/ TITLE(10),ANAM(MXATM),BNAM(MXATM),BFLAB(MXAO)
+      COMMON /FMCOM / X(1)
 C
       PARAMETER (ZERO=0.0D+00,ONE=1.0D+00,TWO=2.0D+00)
 C
@@ -2019,8 +2020,28 @@ C
 C     ----- Generate CSF portion of non-adiabatic coupling -----
 C     -----                 matrix elements                -----
 C
+      L2 = (L1*L1+L1)/2
+      NTOT = NCOR+NACT
+      NSTATS2=(NSTATS*NSTATS+NSTATS)/2
+      CALL VALFM(LOADFM)
+      LXAO   = LOADFM - 1
+      LYAO   = LXAO   + L2
+      LZAO   = LYAO   + L2
+      LXMO   = LZAO   + L2
+      LYMO   = LXMO   + NTOT*NTOT
+      LZMO   = LYMO   + NTOT*NTOT
+      LVAO   = LZMO   + NTOT*NTOT
+      LTDIP  = LVAO   + L3
+      LOSC   = LTDIP  + 3*NSTATS2
+      LAST   = LOSC   + NSTATS2
+      NEEDTD = LAST - LOADFM - 1
+      CALL GETFM(NEEDTD)
       CALL FMTDEN(TDEN,CIVEC,IFA,IOX,IWRK,NACT,NSTATS,NDETMX,NSYM,
-     *            NA,NB,IIS)
+     *            NA,NB,IIS,
+     *            X(LXAO),X(LYAO),X(LZAO),X(LXMO),X(LYMO),X(LZMO),
+     *            X(LVAO),X(LTDIP),X(LOSC),
+     *            NCOR,NTOT,L1,L2,L3,NSTATS2,ESTATE)
+      CALL RETFM(NEEDTD)
 C
       DO 200 IXYZ=1,NXYZ
         DO 150 I=1,NACT
@@ -2388,17 +2409,33 @@ C
       END
 C*MODULE CPMCHF  *DECK FMTDEN
       SUBROUTINE FMTDEN(TDEN,CI,IFA,IOX,IWRK,NACT,NSTATS,NDETMX,NSYM,
-     *                  NA,NB,IIS)
+     *                  NA,NB,IIS,
+     *            XAO,YAO,ZAO,XMO,YMO,ZMO,VAO,TDIP,OSC,
+     *            NCORE,NTOT,L1,L2,L3,NSTATS2,ESTATE)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
-      LOGICAL GOPARR,DSKWRK,MASWRK
+      LOGICAL GOPARR,DSKWRK,MASWRK,DBG
 C
       DIMENSION TDEN(NACT,NACT,NSTATS*NSTATS),CI(NDETMX,NSTATS)
       DIMENSION IFA(0:NACT,0:NACT),IOX(NACT),IWRK(IIS)
+      DIMENSION XAO(L2),YAO(L2),ZAO(L2),VAO(L1,L1)
+      DIMENSION XMO(NTOT,NTOT),YMO(NTOT,NTOT),ZMO(NTOT,NTOT)
+      DIMENSION ESTATE(NSTATS)
+      DIMENSION OSC(NSTATS2)
+      DIMENSION TDIP(3,NSTATS2)
+C
+      PARAMETER (MXATM=2000)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,MA,MB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
 C
       COMMON /IOFILE/ IR,IW,IP,IJKO,IJKT,IDAF,NAV,IODA(950)
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      PARAMETER (DEBYE=2.541766D+00)
+      PARAMETER (ZERO=0.D0,TWO=2.D0,THREE=3.D0)
+      DIMENSION ITAG(3,2)
+      DATA ITAG/4H   X,4H   Y,4H   Z,
+     *          4HD/DX,4HD/DY,4HD/DZ/
 C
       NALP = IFA(NACT,NA)
       NBLP = IFA(NACT,NB)
@@ -2440,6 +2477,97 @@ C
      *            IWRK(INDEX),IWRK(ISYMA),IWRK(ISYMB),IWRK(ISPA),
      *            IWRK(ISPB),IWRK(ISAS),IWRK(ISBS),IWRK(ISAC),
      *            IWRK(ISBC))
+C
+C ALL NUCLEAR CONTRIBUTIONS TO DIPOLE MOMENT
+C
+      CALL CALCOM(XP,YP,ZP)
+      CALL DIPINT(XP,YP,ZP,.FALSE.)
+      CALL DAREAD(IDAF,IODA,XAO,L2,95,0)
+      CALL DAREAD(IDAF,IODA,YAO,L2,96,0)
+      CALL DAREAD(IDAF,IODA,ZAO,L2,97,0)
+      DMXNU=0.0D+00
+      DMYNU=0.0D+00
+      DMZNU=0.0D+00
+      CHARGE=0.0D+00
+      DO 280  I=1,NAT
+         ZNUC = ZAN(I)
+         CHARGE = CHARGE + ZNUC
+         XN = C(1,I) - XP
+         YN = C(2,I) - YP
+         ZN = C(3,I) - ZP
+         DMXNU = DMXNU + ZNUC*XN
+         DMYNU = DMYNU + ZNUC*YN
+         DMZNU = DMZNU + ZNUC*ZN
+ 280  CONTINUE
+C
+C     ----- TRANSFORM THE AO INTEGRALS TO MO INTEGRALS -----
+C
+      CALL DAREAD(IDAF,IODA,VAO,L3,15,0)
+      IFORM=1
+      DBG=.FALSE.
+      CALL TMOINT(XMO,VAO,VAO,XAO,
+     *            ITAG(1,IFORM),IFORM,NTOT,L1,L2,DBG)
+      CALL TMOINT(YMO,VAO,VAO,YAO,
+     *            ITAG(2,IFORM),IFORM,NTOT,L1,L2,DBG)
+      CALL TMOINT(ZMO,VAO,VAO,ZAO,
+     *            ITAG(3,IFORM),IFORM,NTOT,L1,L2,DBG)
+C
+C assume core contribution are the same for all states
+      DMCOREX=ZERO
+      DMCOREY=ZERO
+      DMCOREZ=ZERO
+      DO II=1,NCORE
+         DMCOREX = DMCOREX - TWO*XMO(II,II)
+         DMCOREY = DMCOREY - TWO*YMO(II,II)
+         DMCOREZ = DMCOREZ - TWO*ZMO(II,II)
+      ENDDO
+C
+      CALL VCLR(OSC,1,NSTATS2)
+C
+C the transition dipole moment
+      IF(MASWRK) WRITE(IW,*)
+      IF(MASWRK) WRITE(IW,*) ' --- DIPOLE MOMENTS (DEBYE) ---'
+      IJ2=0
+      DO JST=1,NSTATS
+         DO IST=1,JST
+            IJ=(IST-1)*NSTATS+JST
+            IJ2=IJ2+1
+            DMX=ZERO
+            DMY=ZERO
+            DMZ=ZERO
+            DO II=1,NACT
+               DO JJ=1,NACT
+                  DMX = DMX - XMO(NCORE+II,NCORE+JJ)*TDEN(II,JJ,IJ)
+                  DMY = DMY - YMO(NCORE+II,NCORE+JJ)*TDEN(II,JJ,IJ)
+                  DMZ = DMZ - ZMO(NCORE+II,NCORE+JJ)*TDEN(II,JJ,IJ)
+               ENDDO
+            ENDDO
+C nuclear and core moments needed for single state
+            IF(IST.EQ.JST) THEN
+               DMX = DMX + DMXNU + DMCOREX
+               DMY = DMY + DMYNU + DMCOREY
+               DMZ = DMZ + DMZNU + DMCOREZ
+               DIP=SQRT(DMX*DMX+DMY*DMY+DMZ*DMZ)
+               IF(MASWRK) WRITE(IW,"(I3,',',I3,' :  DIPOLE',4F12.6)")
+     *            IST,JST,
+     *            DMX*DEBYE,DMY*DEBYE,DMZ*DEBYE,DIP*DEBYE
+            ELSE
+               DIP=SQRT(DMX*DMX+DMY*DMY+DMZ*DMZ)
+               OSC(IJ2)=TWO*(ESTATE(JST)-ESTATE(IST))*DIP*DIP/THREE
+               IF(MASWRK) WRITE(IW,"(I3,',',I3,' : TDIPOLE',4F12.6)")
+     *            IST,JST,
+     *            DMX*DEBYE,DMY*DEBYE,DMZ*DEBYE,DIP*DEBYE
+            ENDIF
+            TDIP(1,IJ2) = DMX
+            TDIP(2,IJ2) = DMY
+            TDIP(3,IJ2) = DMZ
+         ENDDO
+      ENDDO
+C
+      IF(MASWRK) WRITE(IW,*)
+      IF(MASWRK) WRITE(IW,*) ' --- OSCILLATOR STRENGTHS  ---'
+      CALL PRTRI(OSC,NSTATS)
+      IF(MASWRK) WRITE(IW,*)
 C
       RETURN
       END
