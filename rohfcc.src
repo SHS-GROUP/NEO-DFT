@@ -1,3 +1,4 @@
+C xx xxx 11 - JJL - changes to allow for open shell EOM-CCSD
 C 10 Dec 10 - MWS - pass BESTEOM up the line for numerical derivatives
 C 11 Aug 10 - DGF - SYNCH COMMON BLOCK ENRGYS
 C 14 Oct 09 - DGF,JRG - save results in EOMTRP, EA-EOM/IP-EOM interface
@@ -64,14 +65,6 @@ C               Chem. Phys. Lett. 418, 467-474 (2006).
 C
       WRITE(IW,9000)
       WRITE(IW,9010)
-C
-C          this lets us keep -eom- in the args, as a "used" variable,
-C          for whenever an actual excited state code is programmed.
-C
-      IF(EOM) THEN
-         WRITE(IW,*) 'THERE IS NO EOM CODE FOR OPEN SHELLS'
-         CALL ABRT
-      END IF
 C
 C        Multiplicity in open shell CCSD can be higher than in the SCF.
 C        The multiplicity of the open shell CCSD defines orbital counts.
@@ -305,7 +298,7 @@ C        ----- perform the CCSD amplitude iterations -----
 C     and perhaps compute the CR-CC(2,3) triples corrections.
 C
       CALL DRCCOPEN(BESTCC,NOA,NUA,NOB,NUB,
-     *              XX(LEHA),XX(LEPA),XX(LEHB),XX(LEPB))
+     *              XX(LEHA),XX(LEPA),XX(LEHB),XX(LEPB),EOM)
       CALL RETFM(NEEDE)
 C
 C        FMO method needs to close disk files so next FMO step is clean
@@ -2029,13 +2022,13 @@ C
       END
 C
 C*MODULE ROHFCC  *DECK DRCCOPEN
-      SUBROUTINE DRCCOPEN(BESTCC,NOA,NUA,NOB,NUB,EHA,EPA,EHB,EPB)
+      SUBROUTINE DRCCOPEN(BESTCC,NOA,NUA,NOB,NUB,EHA,EPA,EHB,EPB,EOM)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
       DIMENSION EHA(*),EPA(*),EHB(*),EPB(*)
 C
-      LOGICAL CNVR
+      LOGICAL CNVR,EOM
 C
       COMMON /CCENGY/ ENRG,EREF,EMP2,ECCN,ETOT(6),ECORR(6),
      *                DIAGS(3),AMPMX(5,2),IAMPMX(5,4,2),XO1,XO2,
@@ -2216,6 +2209,14 @@ C
       IF(CCTYP.EQ.EOMIP2.OR.CCTYP.EQ.EOMIP3.OR. CCTYP.EQ.EOMIP3A) THEN
         CALL DRIPEOM(BESTEOM,NOA,NUA,NOB,NUB)
         BESTCC = BESTEOM
+        RETURN
+      END IF
+C
+C        if run requires EOMCCSD call the following driver
+C        if only asked for EOMCCSD then finished (return)
+C
+      IF(EOM) THEN
+        CALL DROPEOM(NOA,NUA,NOB,NUB)
         RETURN
       END IF
 C
@@ -2631,6 +2632,7 @@ C
      *                NFT828,NFT829,NFT830,NFT831,NFT832,NFT833,NFT834,
      *                NFT835,NFT836,NFT837,NFT838,NFT839,NFT843,NFT848,
      *                NFT858,NFT859,NFT891,NFT892,NFT899
+      COMMON /IOFILE/ IR,IW,IP,IJK,IJKT,IDAF,NAV,IODA(950)
       COMMON /NNMAX / NOU,NO2,NU2,NO2U2,NO4,NU3,NO3U,NOU3,NOU2,NO2U
       COMMON /NNROHF/ NOAUA,NOAUB,NOBUA,NOBUB,NOA2,NOA2UA,NOA4,NOB2,
      *                NOB2UB,NOB4,NUA2,NOAUA2,NUA4,NUB2,NOBUB2,NUB4,
@@ -2659,7 +2661,7 @@ C     ---------------------------------------------------------
 C
       TOL=(10.0D+00)**(-ICONV)
 C
-      WRITE(6,2300)
+      WRITE(IW,2300)
  2300 FORMAT(/6X,'BEGINNING OPEN SHELL CCSD ITERATIONS')
 C
 C     ----------------SET INITIAL VALUES OF T--------------
@@ -2702,6 +2704,7 @@ C             Note that this entails records 1-5 of the file, with
 C             higher records being used for the LAMBDA iterations.
 C
       ELSE
+         WRITE(IW,2310)
          CALL RDTAB2(NOA,NUA,O1AA,1,NFT825)
          CALL RDTAB2(NOB,NUB,O1BB,2,NFT825)
          CALL RDTAB(NOA,NUA,NUA,NOA,O2AA,3,NFT825)
@@ -2713,6 +2716,7 @@ C
          CALL WRTAB(NOB,NUB,NUB,NOB,O2BB,4,NFT858)
          CALL WRTAB(NOA,NUA,NUB,NOB,O2AB,5,NFT858)
       END IF
+ 2310 FORMAT(/6X,'READING VECTORS FROM A PREVIOUS RUN'/)
 C
 C     -----------------------------------------------------
       ITERTOT=0
@@ -2737,7 +2741,7 @@ Cc      call zeroma(o2ab,1,no2u2)
       CALL RDTAB(NOB,NUB,NUB,NOB,O2BB,I2BB,NFT858)
       CALL RDTAB(NOA,NUA,NUB,NOB,O2AB,I2AB,NFT858)
 C
-Cc      write(6,9100)
+Cc      write(iw,9100)
 Cc 9100 FORMAT(1X,'....... BEFORE onebody, twobody .......')
 Cc      CALL TIMIT(1)
 C
@@ -2753,7 +2757,7 @@ C
 C
 C     ---------------------------------------------------------
 C
-Cc      write(6,9105)
+Cc      write(iw,9105)
 Cc 9105 FORMAT(1X,'....... AFTER onebody, twobody .......')
 Cc      CALL TIMIT(1)
 C
@@ -2884,7 +2888,7 @@ C Calculate Energy
       CALL CCMATMUL(FHP,T1,ENRG,1,1,NOAUA,0,0)
       CALL VECMUL(VHPRBB,NOB2UB2,TWO)
 Ccc
-Cc      write(6,9115)
+Cc      write(iw,9115)
 Cc 9115 FORMAT(1X,'....... AFTER t1 .......')
 Cc      CALL TIMIT(1)
 C
@@ -3001,7 +3005,7 @@ C CALCULATE ENERGY
       CALL VECMUL(T2,NOA2UA2,FOURTH)
       CALL CCMATMUL(VHPRAA,T2,ENRG,1,1,NOA2UA2,0,0)
 Ccc
-Cc      write(6,9125)
+Cc      write(iw,9125)
 Cc 9125 FORMAT(1X,'....... AFTER t2aa .......')
 Cc      CALL TIMIT(1)
 C
@@ -3125,7 +3129,7 @@ C CALCULATE ENERGY
       CALL VECMUL(T2,NOB2UB2,FOURTH)
       CALL CCMATMUL(VHPRBB,T2,ENRG,1,1,NOB2UB2,0,0)
 C
-Cc      write(6,9135)
+Cc      write(iw,9135)
 Cc 9135 FORMAT(1X,'....... AFTER t2bb .......')
 Cc      CALL TIMIT(1)
 C
@@ -3280,14 +3284,14 @@ C CALCULATE ENERGY
       CALL CCMATMUL(VHPRAB,T2,ENRG,1,1,NO2U2AB,0,0)
 C     -----------------------------------------------------------------
       RES=SQRT(RES)
-      WRITE(6,99) ITERTOT,ENRG,RES
+      WRITE(IW,99) ITERTOT,ENRG,RES
       CALL FLSHBF(6)
 C
       IF(ITERTOT.EQ.MAXIT) GO TO 4100
 C
       IF(RES.LT.TOL) THEN
-         WRITE(6,97) ENRG
-         WRITE(6,100)
+         WRITE(IW,97) ENRG
+         WRITE(IW,100)
 C
          CALL ZEROMA(O1AA,1,NOU)
          CALL RDTAB2(NOA,NUA,O1AA,(I1AA+5),NFT858)
@@ -3314,7 +3318,7 @@ C
          CALL PRT2AB(NOA,NUA,NUB,NOB,O2AB)
          CALL WRTAB(NOA,NUA,NUB,NOB,O2AB,5,NFT825)
 C
-         WRITE(6,96) EREF,ENRG+EREF,ENRG
+         WRITE(IW,96) EREF,ENRG+EREF,ENRG
          RETURN
       END IF
 C
@@ -3324,7 +3328,7 @@ C     -------DIIS-------
 C
       CALL OPENDIIS(NOA,NOB,NUA,NUB,O1AA,O2AA,O1BB,O2BB,T1,
      *              T2,O2AB,XMAT,BVEC,IPVT,KMICRO)
-      WRITE(6,98) KMICRO
+      WRITE(IW,98) KMICRO
 C
 C          save restart information
 C
@@ -3337,7 +3341,7 @@ C
  1000 CONTINUE
 C
  4100 CONTINUE
-      WRITE(6,95)
+      WRITE(IW,95)
       CALL ABRT
       STOP
 C
