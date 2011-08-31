@@ -7,6 +7,7 @@
  * Author: Ryan M. Olson
  * 10 Jun 09 - RMO - allow for one data server/node on Cray
  * 18 Aug 10 - MWS - add DM handle to argument checking messages
+ *  8 Apr 11 - MWS - change some debug messages to debug-compilable form
 \* -------------------------------------------------------------------- */
  # include "ddi_base.h"
 
@@ -543,13 +544,13 @@
          nr = msg->ihi-msg->ilo+1;
          nc = msg->jhi-msg->jlo+1;
 
-         fprintf(stdout,"%s: nr=%i; nc=%i.\n",DDI_Id(),nr,nc);
+         DEBUG_OUT(LVL6,(stdout,"%s: nr=%i; nc=%i.\n",DDI_Id(),nr,nc));
       /* --------------------------------------------------- *\
          this message will be received in multiple segements
       \* --------------------------------------------------- */
          if(nr > MAX_DS_MSG_WORDS) {
 
-            fprintf(stdout,"%s: remote_get broken down by rows.\n",DDI_Id());
+            DEBUG_OUT(LVL6,(stdout,"%s: remote_get broken down by rows.\n",DDI_Id()));
 
             np = 2;
             while( ((nr/np)+((nr%np)?1:0) ) > MAX_DS_MSG_WORDS ) np++;
@@ -557,7 +558,7 @@
             minr = nr/np;
             lftr = nr%np;
             
-            fprintf(stdout,"%s: remote_get np=%i,minr=%i,lftr=%i.\n",DDI_Id(),np,minr,lftr);
+            DEBUG_OUT(LVL6,(stdout,"%s: remote_get np=%i,minr=%i,lftr=%i.\n",DDI_Id(),np,minr,lftr));
 
             msg_size_base = minr * sizeof(double);
 
@@ -583,8 +584,8 @@
             lftc = nc%np;
             msg_size_base = nr*minc* sizeof(double);
 
-            fprintf(stdout,"%s: remote_get broken down by cols.\n",DDI_Id());
-            fprintf(stdout,"%s: remote_get np=%i,minc=%i,lftc=%i.\n",DDI_Id(),np,minc,lftc);
+            DEBUG_OUT(LVL6,(stdout,"%s: remote_get broken down by cols.\n",DDI_Id()));
+            DEBUG_OUT(LVL6,(stdout,"%s: remote_get np=%i,minc=%i,lftc=%i.\n",DDI_Id(),np,minc,lftc));
 
             for(p=0; p<np; p++) {
                msg_size = msg_size_base;
