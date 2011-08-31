@@ -1,10 +1,11 @@
+C 11 AUG 11 - AAD - QM/EFP ENERGY DECOMPOSITION, RESUSCITATED FLDIND
 C 15 APR 11 - TN  - FMO RELATED CHANGES
 C 12 DEC 10 - HL  - ADD PERIODIC BOUNDARY CONDITION AND SWITCHING 
 C                   FUNCTION FOR QMMM SYSTEMS
 C 11 AUG 10 - TN  - ADD CUTOFFS FOR FMO/EFP 
 C 14 OCT 09 - TN  - CHANGES FOR EFP-IEA
 C 20 NOV 08 - HL  - EFPCMP: ENFORCE VARIATIONAL INDUCED-DIPOLE OPERATOR
-C                   DELETE DECK FLDIND
+C                   DELETE FLDIND ROUTINE
 C 23 OCT 08 - LVS - NEW POLARIZATION DAMPING, CLEAN UP JIE'S CODE
 C  4 MAR 08 - MWS - RAISE EFP PROCESSOR LIMIT FROM 64 TO 1024
 C  7 DEC 07 - LVS - DIPIT: INCREASE NUMBER OF ITERATIONS ALLOWED
@@ -853,6 +854,15 @@ C
      *             NPTTPT,XX(LDIPNEW),XX(LDIPNWD),
      *             XX(LEWLD1),XX(LEWLD2),NFRG)
         CALL RETFM(NEED)
+C AAD   MEMORY NEEDED TO STORE POLARIZATIN INTEGRALS
+        CALL VALFM(LOADFM)
+        LPOLI = LOADFM + 1
+        LAST  = LPOLI  + L2
+        NEEDP = LAST - LOADFM - 1
+        CALL GETFM(NEEDP)
+        DO I=1,L2
+           XX(LPOLI-1+I)=0.0D0
+        ENDDO
 C
       END IF
 C
@@ -941,11 +951,15 @@ C          NOTE BY HUI: ONLY THE FIELD DUE TO INDUCED DIPOLES IS USED
 C          
            IF(DIRDIF) THEN
               DO K=1,L2
+                 XX(LPOLI+K-1)=XX(LPOLI+K-1)
+     *          +(-TOTMUX*XEFI(K) - TOTMUY*YEFI(K) - TOTMUZ*ZEFI(K))*PT5
                  DIP(K) = DIP(K)
      *          +(-TOTMUX*XEFI(K) - TOTMUY*YEFI(K) - TOTMUZ*ZEFI(K))*PT5
               ENDDO
            ELSE
               DO K=1,L2
+                 XX(LPOLI+K-1)=XX(LPOLI+K-1)
+     *          +(-TOTMUX*XEFI(K) - TOTMUY*YEFI(K) - TOTMUZ*ZEFI(K))*PT5
                  H1(K)=H1(K)
      *          +(-TOTMUX*XEFI(K) - TOTMUY*YEFI(K) - TOTMUZ*ZEFI(K))*PT5
               ENDDO
@@ -991,6 +1005,7 @@ C
          ELSE
             CALL DDI_GSUMF(687, H1,L2)
          END IF
+         CALL DDI_GSUMF(688,XX(LPOLI),L2)
       END IF
 C
       ENUCRMC = ENUCR
@@ -1022,6 +1037,10 @@ C
 C
 C     --- FOR MINMEM AND GVB H1+PERTURBATION MUST BE WRITTEN TO DAF ---
 C
+C     ONLY POLARIZATION INTEGRALS HERE!  THIS WAY I DON'T HAVE TO THINK
+C     ABOUT WHAT IS IN DAF 11 WHEN I WANT TO DO SOMETHING WITH THEM.
+      CALL DAWRIT(IDAF,IODA,XX(LPOLI),L2,257,0)
+      CALL RETFM(NEEDP)
       CALL DAWRIT(IDAF,IODA,H1,L2,80,0)
       IF (MINMEM .OR. SCFTYP.EQ.GVB .OR. SCFTYP.EQ.RMC) THEN
          CALL DAWRIT(IDAF,IODA,H1,L2,11,0)
@@ -2065,6 +2084,9 @@ C
       COMMON /ROOT  / XX,U(13),W(13),NROOTS
       COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
       COMMON /STV   / XINT,YINT,ZINT,T,X0,Y0,Z0,XI,YI,ZI,XJ,YJ,ZJ,NI,NJ
+      LOGICAL EFSTATIC,MTD1,MTD2
+      COMMON /EFNRGY/ ENUCRP,REPNUC0,ENEL,EFRMS,QEFEA0(5),QEFEAP(5),
+     *                MTD1,MTD2,EFSTATIC
 C
       DATA JX / 0, 1, 0, 0, 2, 0, 0, 1, 1, 0,
      1          3, 0, 0, 2, 2, 1, 0, 1, 0, 1/
@@ -2439,9 +2461,16 @@ C
       IF (DOEFPIEA) RETURN
       IF (GOPARR) CALL DDI_GSUMF(928,QQ,NUM2)
 C
-      CALL DAREAD(IDAF,IODA,GG,NUM2,11,0)
-      CALL VADD(GG,1,QQ,1,GG,1,NUM2)
-      CALL DAWRIT(IDAF,IODA,GG,NUM2,11,NAV)
+C AAD IN STEP 1 OF QM/EFP ENERGY ANALYSIS
+C     THE QM SYSTEM MUST BELIEVE THERE ARE
+C     NO EFP FRAGMENTS
+      IF(.NOT.EFSTATIC) THEN
+         CALL DAREAD(IDAF,IODA,GG,NUM2,11,0)
+         CALL VADD(GG,1,QQ,1,GG,1,NUM2)
+         CALL DAWRIT(IDAF,IODA,GG,NUM2,11,NAV)
+      ENDIF
+C AAD WRITE THE REPULSION INTEGRALS SEPARATELY
+      CALL DAWRIT(IDAF,IODA,QQ,NUM2,291,NAV)
 C
 C     ----- PRINTING SECTION ----
 C
@@ -2458,6 +2487,648 @@ C
  9128 FORMAT(/,' ...... END OF REP INTEGRALS....')
  9380 FORMAT(10X,14(1H-),/,10X,14H   REP  MATRIX,
      1 /,10X,14(1H-))
+      END
+C AAD PRINT FRAGMENT DIPOLES
+      SUBROUTINE EFDIPOLE
+      
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      CHARACTER*8 FRGNME,PTNAM
+      CHARACTER*8 POLNAM,DPOLNAM
+      CHARACTER*6 FRGNAM
+      LOGICAL PAPER,PUNCH,GOPARR,DSKWRK,MASWRK
+      LOGICAL DOMONO,DODIPO,DOQUAD,DOOCTU
+C
+      PARAMETER (MXFRG=1050, MXFGPT=12000,
+     *           MXIFRQ=12,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      COMMON /EFMULT/ EFC(3,MXFGPT),EFCHG(2,MXFGPT),EFATRM(MXFGPT),
+     *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
+     *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
+     *                EFOCT(10,MXFGPT),FRGNME(MXFGPT)
+      COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
+     *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
+     *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
+     *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ*MXFGPT),
+     *                POLSCR(MXFGPT),IPLSCR,INDSCR
+      COMMON /DOMULT/ DOMONO(MXFGPT),DODIPO(MXFGPT),DOQUAD(MXFGPT),
+     *                DOOCTU(MXFGPT)
+      COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
+     *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
+     *                ATORQ(3,MXFRG)
+C     COMMON /FRGMSS/ FPMASS(MXPT),FMASS(MXFGPT),
+C    *                FPNUC(MXPT),FGNUC(MXFGPT)
+      COMMON /FRAGMT/ XCRD(50,MXFRG),YCRD(50,MXFRG),ZCRD(50,MXFRG),
+     *                PTNAM(50,MXFRG),FRGNAM(MXFRG)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /SYSCET/ SYSMAS,SYSCNT(3)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+      COMMON /ELPROP/ ELDLOC,ELMLOC,ELPLOC,ELFLOC,
+     *                IEDEN,IEMOM,IEPOT,IEFLD,MODENS,
+     *                IEDOUT,IEMOUT,IEPOUT,IEFOUT,
+     *                IEDINT,IEMINT,IEPINT,IEFINT
+      COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
+      COMMON /ZMTALT/ NZMAT2,NZVAR2,NVAR2,NZMTRD,ICOORD
+C     COMMON /XYZPRP/ XP,YP,ZP,
+C    *                DMX,DMY,DMZ,
+C    *                QXX,QYY,QZZ,QXY,QXZ,QYZ,
+C    *                QMXX,QMYY,QMZZ,QMXY,QMXZ,QMYZ,
+C    *                OXXX,OXXY,OXXZ,OXYY,OYYY,OYYZ,
+C    *                OXZZ,OYZZ,OZZZ,OXYZ,
+C    *                OMXXX,OMXXY,OMXXZ,OMXYY,OMYYY,
+C    *                OMYYZ,OMXZZ,OMYZZ,OMZZZ,OMXYZ
+C
+      DATA ZERO/0.0D+00/
+      DATA DEBUG/8HDEBUG   /, DBUGME/8HELMOMC  /
+      PARAMETER (DFAC=2.541766D+00)
+C
+C
+      PAPER = IEMOUT.GE.0
+      IF(EXETYP.EQ.DEBUG)  PAPER=.TRUE.
+      IF(EXETYP.EQ.DBUGME) PAPER=.TRUE.
+      PAPER = PAPER .AND. MASWRK
+C
+      PUNCH = IEMOUT.NE.0 .AND. NFG.EQ.0
+      PUNCH = PUNCH .AND. MASWRK
+C
+      IF(NFRG.GT.10.AND.PAPER) THEN
+         IF(PAPER) WRITE(IW,100)
+         WRITE(IW,*) 'FRAGMENT DIPOLES HAVE BEEN PUNCHED'
+         WRITE(IW,*)
+      ELSE
+         IF(PAPER) WRITE(IW,100)
+      ENDIF
+      WRITE(IP,"(1X,'---- FRAGMENT TOTAL DIPOLES ----')")
+      WRITE(IP,120)
+
+C THIS IS THE TOTAL EFP DIPOLE PRINTED ONLY
+C WHEN COORD=FRAGONLY
+      TOTEFPX=ZERO
+      TOTEFPY=ZERO
+      TOTEFPZ=ZERO
+      
+      KK=0
+      LL=0
+      DO INF=1,NFRG
+         DIPX=ZERO
+         DIPY=ZERO
+         DIPZ=ZERO
+         EFCHARGE=0.0D0
+         DO JJ=1,NMPTS(INF)
+            KK=KK+1
+C           STEP 1:ADD THE DIPOLE FROM THE POINT CHARGES
+            EFCHARGE=EFCHARGE+EFCHG(1,KK)+EFCHG(2,KK)
+            DIPX=DIPX+EFC(1,KK)*(EFCHG(1,KK)+EFCHG(2,KK))
+            DIPY=DIPY+EFC(2,KK)*(EFCHG(1,KK)+EFCHG(2,KK))
+            DIPZ=DIPZ+EFC(3,KK)*(EFCHG(1,KK)+EFCHG(2,KK))
+            IF(DODIPO(KK)) THEN
+C              AND THE POINT DIPOLES
+               DIPX=DIPX+EFDIP(1,KK)
+               DIPY=DIPY+EFDIP(2,KK)
+               DIPZ=DIPZ+EFDIP(3,KK)
+            ENDIF
+         ENDDO
+C        IF POLARIZATION IS TURNED ON, ADD
+C        THE INDUCED DIPOLES
+         IF(IEFP.EQ.1) THEN
+         DO JJ=1,NPPTS(INF)
+            LL=LL+1
+            DIPX=DIPX+DIND(1,LL)
+            DIPY=DIPY+DIND(2,LL)
+            DIPZ=DIPZ+DIND(3,LL)
+         ENDDO
+         ENDIF
+         DIPX=DIPX*DFAC
+         DIPY=DIPY*DFAC
+         DIPZ=DIPZ*DFAC
+C APPEND THE TOTAL EFP DIPOLE
+         TOTEFPX=TOTEFPX+DIPX
+         TOTEFPY=TOTEFPY+DIPY
+         TOTEFPZ=TOTEFPZ+DIPZ
+C
+         DIP=SQRT(DIPX*DIPX+DIPY*DIPY+DIPZ*DIPZ)
+         IF(NFRG.LE.10.AND.PAPER) THEN
+            WRITE(IW,110) INF,FRGNAM(INF),
+     *       (EFCENT(III,INF),III=1,3),
+     *       EFCHARGE,DIPX,DIPY,DIPZ,DIP
+         ENDIF
+         WRITE(IP,130) INF,
+     *    (EFCENT(III,INF),III=1,3),
+     *    DIPX,DIPY,DIPZ
+      ENDDO
+      WRITE(IP,"(1X,'----')")
+
+C WE MAY ALSO WANT THE TOTAL EFP DIPOLE MOMENT
+      IF(ICOORD.EQ.4) THEN
+         SYSDIP=SQRT(TOTEFPX*TOTEFPX+TOTEFPY*TOTEFPY+TOTEFPZ*TOTEFPZ)
+         IF(PAPER) THEN
+            WRITE(IW,101)
+            WRITE(IW,111) (SYSCNT(III),III=1,3),
+     *     EFCHARGE,
+     *     TOTEFPX,TOTEFPY,TOTEFPZ,SYSDIP
+         ENDIF
+      ENDIF
+
+
+  100 FORMAT(/10X,40('-'),/10X,
+     *      'EFFECTIVE FRAGMENT ELECTROSTATIC MOMENTS',
+     *      /10X,40('-'),/)
+  101 FORMAT(10X,28('-'),/10X,
+     *      'SYSTEM ELECTROSTATIC MOMENTS',
+     *      /10X,28('-'),/)
+  110 FORMAT(1X,'FRAGMENT',I4,2X,A6/
+     *       10X,'X',11X,'Y',11X,'Z (BOHR)',4X,'CHARGE'/
+     *       1X,3F12.6,6X,F6.2,1X,'(A.U.)'/
+     *       9X,'DX',10X,'DY',10X,'DZ',9X,'/D/  (DEBYE)'/
+     *       1X,4F12.6/)
+  111 FORMAT(1X,'CENTER',14X,'X',11X,'Y',11X,'Z (BOHR)',4X,
+     *       'CHARGE'/12X,3F12.6,6X,F6.2,1X,'(A.U.)'/
+     *       9X,'DX',10X,'DY',10X,'DZ',9X,'/D/  (DEBYE)'/
+     *       1X,4F12.6)
+  120 FORMAT('!',18X,'CENTER (BOHR)',23X,'DIPOLE (DEBYE)'/
+     *       13X,'X',11X,'Y',11X,'Z',10X,'DX',10X,'DY',10X,'DZ')
+  130 FORMAT(I4,1X,3F12.6,3F12.6)
+      END
+C*MODULE EFINTB  *DECK EFPCMP2
+      SUBROUTINE EFPCMP2(DENTOT,XEFI,YEFI,ZEFI,
+     *                   EFLD,EFLD2,EFADD,ABFLD,L2,L1,EMTD1,EMTD2)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      PARAMETER (MXFRG=1050, MXFGPT=12000,
+     *           MXIFRQ=12,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+      PARAMETER (ZERO=0.0D+00, PT5=0.5D+00,
+     *           DEBYE=2.541766D+00)
+C
+      DIMENSION ATEMP(3,3),DET(2),WORK(3)
+      DIMENSION IPIVOT(3)
+      DIMENSION DENTOT(L2),
+     *          XEFI(L2),YEFI(L2),ZEFI(L2),
+     *          EFLD(3,NPTTPT),EFADD(3,NPTTPT),ABFLD(3,NPTTPT),
+     *          EFLD2(3,NPTTPT)
+      DIMENSION GSUMTMP(6)
+C
+      CHARACTER*8 POLNAM,DPOLNAM
+C
+      LOGICAL GOPARR,MASWRK,DSKWRK,SVDSKW,MINMEM
+      COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
+     *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
+     *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
+     *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ*MXFGPT),
+     *                POLSCR(MXFGPT),IPLSCR,INDSCR
+      COMMON /FMCOM / XX(1)
+      COMMON /FRFD  / PPEFX(MXFGPT), PPEFY(MXFGPT), PPEFZ(MXFGPT)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /INDDIP/ TMUX,TMUY,TMUZ,TMUXD,TMUYD,TMUZD,MINMEM
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PNUC  / PPNX(MXFGPT),PPNY(MXFGPT),PPNZ(MXFGPT),PNZRF(3)
+      LOGICAL EFSTATIC,MTD1,MTD2
+      COMMON /EFNRGY/ ENUCRP,REPNUC0,ENEL,EFRMS,QEFEA0(5),QEFEAP(5),
+     *                MTD1,MTD2,EFSTATIC
+C
+C
+C     -- ELECTRONIC FIELDS AT POL-POINTS
+C        ELECTRIC FIELD INTEGRAL FILE -NFT25- IS A DISTRIBUTED FILE.
+C        ALL NODES MUST DO STATIC LOAD BALANCE PROCESSING OF THIS.
+C
+      NFT25 = 25
+      SVDSKW = DSKWRK
+      DSKWRK = .TRUE.
+      CALL SEQREW(NFT25)
+      IPCOUNT = ME-1
+      DO 10 LEFP = 1, NPTTPT
+         IF(GOPARR) THEN
+            ABFLD(1,LEFP)=ZERO
+            ABFLD(2,LEFP)=ZERO
+            ABFLD(3,LEFP)=ZERO
+            IPCOUNT = IPCOUNT + 1
+            IF (MOD(IPCOUNT,NPROC).NE.0) GO TO 10
+         END IF
+         CALL SQREAD(NFT25,XEFI,L2)
+         CALL SQREAD(NFT25,YEFI,L2)
+         CALL SQREAD(NFT25,ZEFI,L2)
+         ABFLD(1,LEFP)=TRACEP(DENTOT,XEFI,L1)
+         ABFLD(2,LEFP)=TRACEP(DENTOT,YEFI,L1)
+         ABFLD(3,LEFP)=TRACEP(DENTOT,ZEFI,L1)
+ 10   CONTINUE
+      CALL SEQREW(NFT25)
+      IF(GOPARR) CALL DDI_GSUMF(668,ABFLD,3*NPTTPT)
+C
+C     -- TOTAL FIELDS --
+C
+      DO LEFP = 1, NPTTPT
+         EFLD(1,LEFP)=ABFLD(1,LEFP) + PPNX(LEFP) + PPEFX(LEFP)
+         EFLD(2,LEFP)=ABFLD(2,LEFP) + PPNY(LEFP) + PPEFY(LEFP)
+         EFLD(3,LEFP)=ABFLD(3,LEFP) + PPNZ(LEFP) + PPEFZ(LEFP)
+      ENDDO
+C
+C     NOW WE DECIDE HOW THE POLARIZATION IS COMPUTED.  NOTE THAT
+C     FULLY SELF-CONSISTENT METHODS DO NOT NEED TO DO ANYTHING
+C     HERE AND THIS SUBROUTINE SHOULD NOT HAVE BEEN CALLED
+C
+      IF(MTD2) THEN
+C        MTD2 MEANS WE WANT A COMPLETELY NEW EFP POLARIZATION ENERGY
+C        FROM THE CURRENT QM DENSITY (ABFLD).
+         CALL VALFM(LOADFM)
+         LDIPNEW  = LOADFM   + 1
+         LDIPNWD  = LDIPNEW  + NFRG
+         LDINDC   = LDIPNWD  + NFRG
+         LDINDDC  = LDINDC   + 3*NPTTPT
+         LDIND_W  = LDINDDC  + 3*NPTTPT
+         LDIND_C  = LDIND_W  + 6*NPTTPT
+         LEWLD1   = LDIND_C  + 6*NPTTPT
+         LEWLD2   = LEWLD1   + 3*NPTTPT
+         LGPMU    = LEWLD2   + 3*NPTTPT
+         LGPMUD   = LGPMU    + 3*NPTTPT
+         LEFADDG  = LGPMUD   + 3*NPTTPT
+         LAST     = LEFADDG  + 3*NPTTPT
+         NEEDM2 = LAST - LOADFM - 1
+         CALL GETFM(NEEDM2)
+C
+         CALL DIPIT(EFLD,EFADD,XX(LDINDC),XX(LDINDDC),
+     *           XX(LDIND_W),XX(LDIND_C),
+     *           NPTTPT,XX(LDIPNEW),XX(LDIPNWD),
+     *           XX(LEWLD1),XX(LEWLD2),NFRG)
+      ENDIF
+      IF(MTD1) THEN
+C        THIS CAN BE USED AS A GENERAL CHECK THAT YOU HAVE
+C        A PROPERLY SELF-CONSISTENT SOLUTION.
+         CALL FLDIND(EFADD)
+         EFRMS=0.0D+00
+         DO LEFP = 1, NPTTPT
+            ATEMP(1,1)  = EFPOL(1,LEFP)
+            ATEMP(1,2)  = EFPOL(4,LEFP)
+            ATEMP(1,3)  = EFPOL(5,LEFP)
+            ATEMP(2,1)  = EFPOL(7,LEFP)
+            ATEMP(2,2)  = EFPOL(2,LEFP)
+            ATEMP(2,3)  = EFPOL(6,LEFP)
+            ATEMP(3,1)  = EFPOL(8,LEFP)
+            ATEMP(3,2)  = EFPOL(9,LEFP)
+            ATEMP(3,3)  = EFPOL(3,LEFP)
+            CALL DGEFA(ATEMP,3,3,IPIVOT,INFO)
+            IF(INFO.NE.0) THEN
+               IF(MASWRK) WRITE(IW,*) 'PROBLEM INVERTING THE EFP',
+     *            ' POLARIZABILITY TENSOR IN EFPCMP2'
+               CALL ABRT
+            ENDIF
+            JOB=01
+            CALL DGEDI(ATEMP,3,3,IPIVOT,DET,WORK,JOB)
+C           THE POLARIZING FIELD IS \ALPHA^{-1}\CDOT\MU
+            EFLD2(1,LEFP) = ATEMP(1,1)*DIND(1,LEFP)
+     *                     +ATEMP(1,2)*DIND(2,LEFP)
+     *                     +ATEMP(1,3)*DIND(3,LEFP)
+            EFLD2(2,LEFP) = ATEMP(2,1)*DIND(1,LEFP)
+     *                     +ATEMP(2,2)*DIND(2,LEFP)
+     *                     +ATEMP(2,3)*DIND(3,LEFP)
+            EFLD2(3,LEFP) = ATEMP(3,1)*DIND(1,LEFP)
+     *                     +ATEMP(3,2)*DIND(2,LEFP)
+     *                     +ATEMP(3,3)*DIND(3,LEFP)
+C
+            EFRMS = EFRMS + (EFLD2(1,LEFP) - 
+     *                    EFLD(1,LEFP) - EFADD(1,LEFP))**2
+            EFRMS = EFRMS + (EFLD2(2,LEFP) - 
+     *                    EFLD(2,LEFP) - EFADD(2,LEFP))**2
+            EFRMS = EFRMS + (EFLD2(3,LEFP) - 
+     *                    EFLD(3,LEFP) - EFADD(3,LEFP))**2
+         ENDDO
+C RMS DEVIATION OF THE POLARIZING ELECTRIC FIELD
+         EFRMS=DSQRT(EFRMS/3/NPTTPT)
+      ENDIF
+
+C
+      IPCOUNT = ME - 1
+C
+      TMUX=ZERO
+      TMUY=ZERO
+      TMUZ=ZERO
+      EMTD1=0.0D+00
+      EMTD2=0.0D+00
+      DO 25 LEFP=1,NPTTPT
+C
+C     ----- GO PARALLEL! -----
+C
+         IF (GOPARR) THEN
+            IPCOUNT = IPCOUNT + 1
+            IF (MOD(IPCOUNT,NPROC).NE.0) GO TO 25
+         END IF
+C
+           PMUX = DIND(1,LEFP)
+           PMUY = DIND(2,LEFP)
+           PMUZ = DIND(3,LEFP)
+C
+C        - WARNING IF INDUCED DIPOLE IS TOO LARGE
+C          WHY NOT SCALE IT BACK TO THE MAXIMUM, ASKS MIKE?
+C          SOOHAENG RAISED THIS FROM 0.2 TO 0.3 IN AUGUST 2007
+C
+         TOTALP=SQRT(PMUX*PMUX+PMUY*PMUY+PMUZ*PMUZ)
+         IF(TOTALP.GT.0.3D+00) THEN
+            IF(MASWRK) WRITE(IW,9999) LEFP,TOTALP
+            PMUX =ZERO
+            PMUY =ZERO
+            PMUZ =ZERO
+            TOTALP=ZERO
+         END IF
+C
+         IF(MTD1) THEN
+C YU, H. & GUNSTEREN, W.F.V. COMPUT. PHYS. COMMUN. 172, 69Â€“85 (2005).
+C SEE EQUATIONS 37 - 47
+            EMTD1  = EMTD1  - PMUX*(EFLD(1,LEFP)+PT5*EFADD(1,LEFP))
+     *                      - PMUY*(EFLD(2,LEFP)+PT5*EFADD(2,LEFP))
+     *                      - PMUZ*(EFLD(3,LEFP)+PT5*EFADD(3,LEFP))
+     *                      + PT5*PMUX*EFLD2(1,LEFP)
+     *                      + PT5*PMUY*EFLD2(2,LEFP)
+     *                      + PT5*PMUZ*EFLD2(3,LEFP)
+         ENDIF
+         IF(MTD2) THEN
+C    P. ARORA, L. V. SLIPCHENKO, S. P. WEBB, A. DEFUSCO, M. S. GORDON
+C      J. PHYS. CHEM. A, 2010, 114, 6742
+C THIS IS THE VERY SIMPLE APPROACH TO METHOD 2 SINCE I ABSOLUTELY REMOVE
+C ALL EFP POLARIZATION ENERGY ELSEWHERE (ENUCR AND H1).  THE PUBLISHED 
+C METHOD USES TOO MANY TEMPORARY VARIABLES TO BE READABLE.
+            EMTD2  = EMTD2  -PT5*PMUX*EFLD(1,LEFP)
+     *                      -PT5*PMUY*EFLD(2,LEFP)
+     *                      -PT5*PMUZ*EFLD(3,LEFP)
+         ENDIF
+C
+C
+         TMUX=TMUX+PMUX
+         TMUY=TMUY+PMUY
+         TMUZ=TMUZ+PMUZ
+ 25   CONTINUE
+C
+      CALL SEQREW(NFT25)
+      DSKWRK = SVDSKW
+C
+      IF(GOPARR) THEN
+         GSUMTMP(1) = TMUX
+         GSUMTMP(2) = TMUY
+         GSUMTMP(3) = TMUZ
+         GSUMTMP(4) = EMTD1
+         GSUMTMP(5) = EMTD2
+         CALL DDI_GSUMF(685,GSUMTMP,5)
+         TMUX = GSUMTMP(1)
+         TMUY = GSUMTMP(2)
+         TMUZ = GSUMTMP(3)
+         EMTD1= GSUMTMP(4)
+         EMTD2= GSUMTMP(5)
+      END IF
+C
+      TMUXD=TMUX*DEBYE
+      TMUYD=TMUY*DEBYE
+      TMUZD=TMUZ*DEBYE
+      IF(MTD2) CALL RETFM(NEEDM2)
+      IF(EMTD1.EQ.0.0D+00 .AND. EMTD2.EQ.0.0D+00) THEN
+         IF(MASWRK)
+     *   WRITE(IW,*) 'WARNINING: EPCMP2 RETURNED ZERO POLARIZATION',
+     *   ' ENERGY'
+      ENDIF
+C
+      RETURN
+C
+ 9999 FORMAT(1X,'POINT ',I5,' HAS A LARGE INDUCED DIPOLE',
+     *          ' TOTAL: ',F9.4,' THUS IS ZEROED OFF')
+      END
+C*MODULE EFINTB  *DECK FLDIND
+      SUBROUTINE FLDIND(EFADD)
+C
+      IMPLICIT DOUBLE PRECISION (A-H, O-Z)
+C
+      LOGICAL GOPARR,DSKWRK,MASWRK
+C
+      CHARACTER*8 POLNAM,DPOLNAM
+C
+      PARAMETER (MXFRG=1050, MXFGPT=12000, MXIFRQ=12, MXATM=2000,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      COMMON /EFPAR / LOCNFG,NLOW,NUP
+      COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
+     *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
+     *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
+     *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ,MXFGPT),
+     *                POLSCR(MXFGPT),IPLSCR,INDSCR
+      COMMON /EFPPBC/ XBOX,YBOX,ZBOX,XCUT,YCUT,ZCUT,RCUT
+     *                ,SWR1,SWR2,ISWF
+      COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
+     *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
+     *                ATORQ(3,MXFRG)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /EFPSCR/ POLAB(MXFRG),B,SCROFF,IELECS,IDISPS,NEW_POL
+C
+C
+      DIMENSION EFADD(3,NPTTPT)
+C
+      DATA THREE/3.0D+00/, ZERO/0.0D+00/, ONE/1.0D+00/
+C
+C     COMPUTE THE FIELDS ON THE POL-TENSORS DUE TO INDUCED DIPOLES
+C
+C     HUI LI, IOWA STATE UNIVERSITY, DEC 29, 2005
+C
+C
+      CALL VCLR(EFADD,1,3*NPTTPT)
+      IF(NAT.LE.0) RETURN
+C
+      IC1=0
+      IF (GOPARR) THEN
+         DO I=1,NLOW-1
+            IC1 = IC1 + NPPTS(I)
+         ENDDO
+      ENDIF
+C
+C
+      DO 400 IM = NLOW,NUP
+         COMX1 = EFCENT(1,IM)
+         COMY1 = EFCENT(2,IM)
+         COMZ1 = EFCENT(3,IM)
+C
+         DO 390 IPX = 1,NPPTS(IM)
+            IC1=IC1+1
+            X1 = EFP(1,IC1)
+            Y1 = EFP(2,IC1)
+            Z1 = EFP(3,IC1)
+C
+            FXIND  = ZERO
+            FYIND  = ZERO
+            FZIND  = ZERO
+C
+            IC2 = 0
+            DO 380 JM = 1,NFRG
+C
+               IF (IM.EQ.JM) THEN
+                  IC2=IC2+NPPTS(JM)
+                  GO TO 380
+               END IF
+C
+               COMX2 = EFCENT(1,JM)
+               COMY2 = EFCENT(2,JM)
+               COMZ2 = EFCENT(3,JM)
+C
+               COMX = COMX1 - COMX2
+               COMY = COMY1 - COMY2
+               COMZ = COMZ1 - COMZ2
+C
+               PBCX = ZERO
+               PBCY = ZERO
+               PBCZ = ZERO
+               IF (XBOX .NE. ZERO) PBCX = XBOX * ANINT(COMX/XBOX)
+               IF (YBOX .NE. ZERO) PBCY = YBOX * ANINT(COMY/YBOX)
+               IF (ZBOX .NE. ZERO) PBCZ = ZBOX * ANINT(COMZ/ZBOX)
+C
+C   ----  DISTANCE BETWEEN FRAGMENTS
+               X12  = ABS(COMX - PBCX)
+               Y12  = ABS(COMY - PBCY)
+               Z12  = ABS(COMZ - PBCZ)
+               R12  = X12*X12+Y12*Y12+Z12*Z12
+C
+               IF(X12.GT.XCUT.OR.Y12.GT.YCUT.OR.Z12.GT.ZCUT)THEN
+                 IC2=IC2+NPPTS(JM)
+                 GOTO 380
+               END IF
+               R12  = X12*X12+Y12*Y12+Z12*Z12
+               IF(R12.GT.RCUT)THEN
+                 IC2=IC2+NPPTS(JM)
+                 GOTO 380
+               END IF
+C
+               SWF   = 1.0D+00
+               IF(R12.GT.SWR2*SWR2) THEN
+                 IC2=IC2+NPPTS(JM)
+                 GOTO 380
+               ELSE IF(R12.GT.SWR1*SWR1) THEN
+                 IF(ISWF.EQ.1) THEN
+                    DUMY1 = 1.0D+00/(SWR2*SWR2 - SWR1*SWR1)
+                    DUMY2 = DUMY1*DUMY1
+                    DUMY3 = DUMY2*DUMY1
+                    DUMY4 = DUMY2*DUMY2
+                    DUMY5 = DUMY2*DUMY3
+                    VUMY1 = R12 - SWR1*SWR1
+                    VUMY2 = VUMY1*VUMY1
+                    VUMY3 = VUMY2*VUMY1
+                    VUMY4 = VUMY2*VUMY2
+                    VUMY5 = VUMY2*VUMY3
+                    DSWF  = -30.0D+00*DUMY3*VUMY2
+     *                      +60.0D+00*DUMY4*VUMY3
+     *                      -30.0D+00*DUMY5*VUMY4
+                    DSWF  = 2.0D+00*DSWF
+                    SWF   = 1.0D+00 - 10.0D+00*DUMY3*VUMY3
+     *                              + 15.0D+00*DUMY4*VUMY4
+     *                              -  6.0D+00*DUMY5*VUMY5
+                 ELSE IF(ISWF.EQ.2) THEN
+                    R12   = SQRT(R12)
+                    PIL   = 3.1415926535897932D+00/(SWR2-SWR1)
+                    DUMY  = (R12 - SWR1) * PIL
+                    SWF   = 0.50D+00 * (COS(DUMY) + 1.0D+00)
+                 END IF
+               END IF
+C
+               DO 370 JP = 1,NPPTS(JM)
+                  IC2=IC2+1
+                  X2 = EFP(1,IC2)
+                  Y2 = EFP(2,IC2)
+                  Z2 = EFP(3,IC2)
+                  X = X1 - X2
+                  Y = Y1 - Y2
+                  Z = Z1 - Z2
+                  X = X - PBCX
+                  Y = Y - PBCY
+                  Z = Z - PBCZ
+C
+                  R2 = X * X + Y * Y + Z * Z
+                  R = SQRT(R2)
+                  R3 = R * R * R
+                  R5 = R * R * R3
+C
+C  ----  LVS: POLARIZATION FRAG-FRAG SCREENING
+C
+C  ----  TANG-TOENNIS-LIKE FORMULA FOR SCREENING
+                  PENSAB = ONE
+                  IF (NEW_POL .EQ. 1) THEN
+                    AATMP = SQRT(POLAB(IM)*POLAB(JM))
+                    IF (AATMP.LE.2.0D+00) THEN
+                       AR2 = AATMP*R2
+                       PENSAB = ONE-EXP(-AR2)*(ONE+AR2)
+                    END IF
+                  END IF
+C
+                     P1 = ZERO
+                     P1D = ZERO
+                     P2 = ZERO
+C  ----  IF DO ELECTROSTATIC_BASED SCREENING
+                     IF(IPLSCR.EQ.1) THEN
+                       ALPHAB = POLSCR(JP)
+                       ALPHAA = POLSCR(IPX)
+C
+                       IF(R.LE.SCROFF) THEN
+                         AP=ALPHAA*R
+                         BP=ALPHAB*R
+                         AA2=ALPHAA*ALPHAA
+                         AB2=ALPHAB*ALPHAB
+                         DIFF=ABS(ALPHAA-ALPHAB)
+C
+C  ----  NOW CALCULATE ALL FRAG-FRAG CHARGE-PENETRATION TERMS
+                         CALL EPENCHDIP(AP,BP,AA2,AB2,DIFF,
+     *                                  P1,P1_N1,P1_N2)
+                         CALL EPENCHQU(AP,BP,AA2,AB2,DIFF,R2,
+     *                            P1D,P1D_N1,P1D_N2)
+                         P2 =  -P1D/R3
+                       END IF
+                     END IF
+C   ---- END OF POLARIZATION SCREENING PART
+C
+                  IF (NEW_POL .EQ. 1) THEN  
+                      DOT1 = DIND(1,IC2)*X
+     *                    + DIND(2,IC2)*Y + DIND(3,IC2)*Z
+                      DOT = THREE * DOT1 / R5
+                      FXIND=FXIND +SWF*(-DIND(1,IC2)/R3 +DOT*X)*PENSAB
+                      FYIND=FYIND +SWF*(-DIND(2,IC2)/R3 +DOT*Y)*PENSAB
+                      FZIND=FZIND +SWF*(-DIND(3,IC2)/R3 +DOT*Z)*PENSAB                      
+                  ELSE
+C                     DOT = DIND(1,IC2)*X + DIND(2,IC2)*Y
+C     *                   + DIND(3,IC2)*Z
+C                     DOT = THREE * DOT / R5
+C                     FXIND=FXIND-SWF*DIND(1,IC2)/R3+SWF*DOT*X
+C                     FYIND=FYIND-SWF*DIND(2,IC2)/R3+SWF*DOT*Y
+C                     FZIND=FZIND-SWF*DIND(3,IC2)/R3+SWF*DOT*Z
+C
+                     DOT1 = DIND(1,IC2)*X
+     *                    + DIND(2,IC2)*Y + DIND(3,IC2)*Z
+                     DOT = THREE * DOT1 / R5
+                     FXIND=FXIND + SWF*((ONE+P1)*
+     *                          (-DIND(1,IC2)/R3 + DOT*X)+P2*DOT1*X)
+                     FYIND=FYIND + SWF*((ONE+P1)*
+     *                          (-DIND(2,IC2)/R3 + DOT*Y)+P2*DOT1*Y)
+                     FZIND=FZIND + SWF*((ONE+P1)*
+     *                          (-DIND(3,IC2)/R3 + DOT*Z)+P2*DOT1*Z)
+                  END IF
+C
+370            CONTINUE
+380         CONTINUE
+            EFADD(1,IC1)   = FXIND
+            EFADD(2,IC1)   = FYIND
+            EFADD(3,IC1)   = FZIND
+390      CONTINUE
+400   CONTINUE
+C
+      IF(GOPARR) THEN
+         CALL DDI_GSUMF(770,EFADD,3*NPTTPT)
+      END IF
+C
+      RETURN
       END
 C*MODULE EFINTB  *DECK ENUCP
       SUBROUTINE ENUCP

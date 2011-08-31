@@ -1,3 +1,6 @@
+C 11 Aug 11 - AAD - CINRGY: form the energy from integrals/density
+C 11 Aug 11 - NM  - DETINP: CI point search skips state weight test,
+C                           terminate SA-MCSCF gradient if iroot=0
 C 15 Apr 11 - MWS - DETINP: store STSYMPRINT in the common
 C  3 Jan 10 - MWS - DETINP: read STSYM as string value
 C 11 Aug 10 - DGF - SYNCH FMO COMMON BLOCKS
@@ -119,9 +122,13 @@ C
      *            DOVVVO,DOVVVV,DOCORE)
 C
 C        ----- direct full CI calculation -----
-C        run flag 1=set up CI and 2=integral transformation are ignored
+C        run flag 1=set up CI (always done)
+C        run flag 2=integral transformation (always done)
 C        run flag 3=carry out the direct full CI iterations
-C        run flag 5=DM1, 6=DM1+DM2, 7=Lagrangian=unimplemented
+C        run flag 5=DM1
+C        run flag 6=DM1+DM2
+C        run flag 7=Lagrangian which is not implemented
+C        run flag 8=energy from density and integrals (analysis)
 C
       IF(NRNFG(3).EQ.0) THEN
          IF(MASWRK) WRITE(IW,9200)
@@ -141,6 +148,12 @@ C
 C        ----- state averaged 1e- and 2e- density matrix -----
 C
       IF(NRNFG(6).GT.0) CALL DETDM2(NPFLG(6))
+C
+C        ----- regenerate energy from integrals and density -----
+C        note that the two particle density is required for this!
+C
+      IF(NRNFG(8).GT.0) CALL CINRGY(NPFLG(8))
+C
       RETURN
 C
  9200 FORMAT(/1X,'RUN FLAG INPUT IN $CIINP SKIPS FULL CI ENTIRELY')
@@ -201,6 +214,7 @@ C
       DATA RNONE/8HNONE    /
       DATA HESS/8HHESSIAN /
       DATA NACME/8HNACME   /
+      DATA CONICL/8HCONICAL /
       DATA FANT/8HC1      ,8HCI      ,8HCS      ,8HC2      ,
      *          8HD2      ,8HC2V     ,8HC2H     ,8HD2H     /
       DATA LFANT/1,1,1,1,2,2,2,3/
@@ -228,7 +242,7 @@ C          for the use of
      *   8HA1      ,8HA2      ,8HB1      ,8HB2      ,4*8HXXXXXXXX,
      *   8HA       ,8HB1      ,8HB2      ,8HB3      ,4*8HXXXXXXXX,
      *   8HAG      ,8HB1G     ,8HB2G     ,8HB3G     ,
-     *   8HAU      ,8HB1U     ,8HB2U     ,8HB2U     /
+     *   8HAU      ,8HB1U     ,8HB2U     ,8HB3U     /
       DATA GRPTAB/8HC1      ,8HCS      ,8HCI      ,8HC2       ,
      *            8H        ,
      *            8HC2H     ,8HC2V     ,8HD2      ,8HD2H      /
@@ -561,7 +575,7 @@ C     AVERAGE AND ALSO DO A NUCLEAR GRADIENT SHOULD BE FLUSHED.
 C     There is a secret input keyword to avoid being flushed, which
 C     may be reasonable if the states being averaged are degenerate.
 C
-      IF(RUNTYP.EQ.NACME) GO TO 100
+      IF(RUNTYP.EQ.NACME .OR. RUNTYP.EQ.CONICL) GO TO 100
 C
       CALL DERCHK(MAXDER)
       IF(MXSTAT.GT.1  .AND.  MAXDER.GT.0) THEN
@@ -581,7 +595,8 @@ C
               CALL ABRT
             ENDIF
          END IF
-         IF(IROOT.EQ.0   .AND.  NGLEVL+NHLEVL.GT.0) THEN
+         IF(IROOT.EQ.0 .AND.
+     *        (MAXDER.GT.0 .OR. NGLEVL+NHLEVL.GT.0)) THEN
             IF(SOME) WRITE(IW,9064)
             CALL ABRT
          END IF
@@ -9709,4 +9724,274 @@ C
      *        1X,'BEWARE! ORBITALS BELOW ARE UNMIXED BETWEEN SPACES'/
      *        1X,'FOR EXACT NOS SET -BLOCK- TO FALSE IN $ORMAS'/
      *        1X,49(1H-))
+      END
+C*MODULE ALDECI  *DECK CINRGY
+      SUBROUTINE CINRGY(NPRINT)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (MXATM=2000, MXRT=100, MXNORO=250)
+      DOUBLE PRECISION METHOD
+C
+      LOGICAL SOME,GOPARR,DSKWRK,MASWRK,PACK2E,CANONC,FCORE,FORS,NOCI,
+     *        EKT,LINSER,DOFOCK,DOEXCH,JACOBI,
+     *        DDITRF,DOOOOO,DOVOOO,DOVVOO,DOVOVO,DOVVVO,DOVVVV,DOCORE,
+     *        DOATOMS
+C
+      COMMON /CIFILS/ NFT11,NFT12,NFT13,NFT14,NFT15,NFT16,IDAF20,NEMEMX
+      COMMON /DETWFN/ WSTATE(MXRT),SPINS(MXRT),CRIT,PRTTOL,SDET,SZDET,
+     *                GRPDET,STSYM,GLIST,
+     *                NFLGDM(MXRT),IWTS(MXRT),
+     *                NCORSVDET,NCORDET,NACTDET,NORBDET,
+     *                NADET,NBDET,KDET,KSTDET,IROOT,IPURES,MAXW1,NITDET,
+     *                MAXP,NCIDET,IGPDET,KSTSYM,NFTGCI
+      COMMON /ENRGYS/ ENUCR,EELCT,ETOT,SZ,SZZ,ECORE,ESCF,EERD,E1,E2,
+     *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2),EDISP
+      COMMON /FMCOM / X(1)
+      COMMON /GUGWFN/ NFZC,NMCC,NDOC,NAOS,NBOS,NALP,NVAL,NEXT,NFZV,
+     *                IFORS,IEXCIT,ICICI,NOIRR
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NBT,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /INTFIL/ NINTMX,NHEX,NTUPL,PACK2E,INTTYP,IGRDTYP
+      COMMON /IOFILE/ IR,IW,IP,IJKO,IJKT,IDAF,NAV,IODA(950)
+      COMMON /JACOBI/ JACOBI,NJAOR,ELAST,ISTAT
+      COMMON /MACHIN/ NWDVAR,MAXFM,MAXSM,LIMFM,LIMSM
+      COMMON /MCINP / METHOD,CISTEP,ACURCY,ENGTOL,DAMP,MICIT,NWORD,NORB,
+     *                NOROT(2,MXNORO),MOFRZ(15),NPFLG(10),
+     *                NOFO,MCFMO,CANONC,FCORE,FORS,NOCI,EKT,LINSER
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
+     *                MPLEVL,MPCTYP
+C
+      DATA GUGA/8HGUGA    /
+C
+C         use integrals and density elements to recompute energy
+C                routine by Albert Defusco, August 2011
+C         intention is to let you modify this, as wished, for
+C         energy decompositions, et cetera.
+C
+      SOME= NPRINT.NE.-5 .AND. MASWRK
+      IF(SOME) WRITE(IW,*)
+      IF(SOME) WRITE(IW,*) 'CI ENERGY ANALYSIS'
+C
+C
+C         pick up orbital counts, correct for the CI case, only
+C
+      IF(CITYP.EQ.GUGA) THEN
+         NACT  = NDOC + NAOS + NBOS + NALP + NVAL + NEXT
+         NCORE = NFZC
+      ELSE
+         NACT  = NACTDET
+         NCORE = NCORSVDET
+      END IF
+C
+      M1 = NACT+NCORE
+      M2 = (M1*M1+M1)/2
+      M4 = (M2*M2+M2)/2
+C
+      K1 = NACT+NCORE
+      K2 = (K1*K1+K1)/2
+      K4 = (K2*K2+K2)/2
+C
+      L1 = NACT
+      L2 = (L1*L1+L1)/2
+      L4 = (L2*L2+L2)/2
+C
+      N2 = NUM*NUM
+      N2A= (NUM*NUM+NUM)/2
+C
+C   MAKE all INTEGRALS OVER ALL NACT+NCORE ORBITALS
+C
+      DOFOCK = .FALSE.
+      DOEXCH = .FALSE.
+      DDITRF = .FALSE.
+      DOOOOO = .FALSE.
+      DOVOOO = .FALSE.
+      DOVVOO = .FALSE.
+      DOVOVO = .FALSE.
+      DOVVVO = .FALSE.
+      DOVVVV = .FALSE.
+      DOCORE = .TRUE.
+      CALL TRFMCX(NPFLG(2),0,M1,M1,DOFOCK,DOEXCH,
+     *               DDITRF,DOOOOO,DOVOOO,DOVVOO,DOVOVO,
+     *               DOVVVO,DOVVVV,DOCORE)
+C
+      CALL VALFM(LOADFM)
+      LSINT1  = LOADFM  + 1
+      LSINT2  = LSINT1 + M2
+      LIA     = LSINT2 + M4
+      LXX     = LIA    + M2/NWDVAR + 1
+      LIXX    = LXX    + NINTMX
+      LAST    = LIXX + NINTMX
+      NEED2   = LAST - LOADFM - 1
+      CALL GETFM(NEED2)
+C
+      CALL RDCI12(DDITRF,IJKT,X(LSINT1),X(LSINT2),0,M1,M2,M4,
+     *            X(LIA),X(LXX),X(LIXX),NINTMX)
+      CALL SEQREW(IJKT)
+C
+      NFTCIE=23
+      CALL SEQOPN(NFTCIE,'JKFILE','UNKNOWN',.FALSE.,'UNFORMATTED')
+      CALL SEQREW(NFTCIE)
+      CALL SQWRIT(NFTCIE,X(LSINT1),M2)
+      CALL SQWRCH(NFTCIE,X(LSINT2),M4)
+C
+      CALL RETFM(NEED2)
+C
+      CALL VALFM(LOADFM)
+      LSINT1 = LOADFM + 1
+      LSINT2 = LSINT1 + M2
+      LXX    = LSINT2 + M4
+      LIXX   = LXX    + NINTMX
+      LDM1   = LIXX   + NINTMX
+      LDM2   = LDM1   + K2
+      LIROTS = LDM2   + K4
+      LARGX  = LIROTS + NJAOR/NWDVAR + 1
+      LARGY  = LARGX  + 65
+      LIE1   = LARGY  + 65
+      LIE2   = LIE1   + ((M1**3)+(5*M1-3*(M1**2))/2+2*M1-2)/NWDVAR + 1
+      LAA    = LIE2   + 13
+      LBB    = LAA    + 14
+      LCC    = LBB    + 9
+      LIE4   = LCC    + 9
+      LVEC   = LIE4   + 4
+      LD     = LVEC   + N2
+      LH1    = LD     + N2A
+      LAST   = LH1    + N2A
+      NEED2  = LAST - LOADFM - 1
+      CALL GETFM(NEED2)
+C
+C   READ 2ND AND 1ST ORDER DENSITIES OVER ACTIVE ORBITALS.
+C
+      CALL M2DM2R(NFT15,L1,X(LSINT2),X(LXX),X(LIXX),NINTMX,X(LDM1))
+      CALL DAREAD(IDAF,IODA,X(LSINT1),L2,320,0)
+C
+C   MODIFY THEM TO COOPERATE WITH THIS CODE.
+C
+      CALL MODDEN(X(LSINT1),X(LSINT2),L1,L2,L4)
+C
+C   PAD THE DENSITIES OUT TO INCLUDE THE CORE ORBITALS.
+C
+      CALL DENPAD(X(LSINT1),X(LSINT2),X(LDM1),X(LDM2),NACT,NCORE,K2,K4)
+C
+C   READ INTEGRALS OVER ALL NACT+NCORE ORBITALS.
+C
+      CALL SEQREW(NFTCIE)
+      CALL SQREAD(NFTCIE,X(LSINT1),M2)
+      CALL SQRDCH(NFTCIE,X(LSINT2),M4)
+C
+C Now the total energy.
+C the AO form used for comparison to the MO energies below
+C
+      CALL DAREAD(IDAF,IODA,X(LH1),N2A,11,0)
+      CALL DAREAD(IDAF,IODA,X(LD),N2A,16,0)
+      E1A=TRACEP(X(LD),X(LH1),NUM)
+      IF(SOME) THEN
+         WRITE(6,*)
+         WRITE(6,*) 'ONE-ELECTRON ENERGY FROM AO BASIS INTEGRALS:',E1A
+      END IF
+C
+      E1=0.0D+00
+      E2=0.0D+00
+      CALL GETENY2(X(LSINT1),X(LSINT2),X(LDM1),X(LDM2),
+     *             K2,K4,E1,E2,.TRUE.,.TRUE.,0)
+C
+      IF(SOME) THEN
+         WRITE(IW,*)
+         WRITE(IW,*) 'ENERGIES FROM MO BASIS INTEGRALS'
+         WRITE(IW,"(1X,'ONE-ELECTRON: ',F30.16)") E1
+         WRITE(IW,"(1X,'TWO-ELECTRON: ',F30.16)") E2
+         WRITE(IW,"(1X,'VNN+CONSTANT: ',F30.16)") ENUCR
+         WRITE(IW,"(1X,'TOTAL ENERGY: ',F30.16)") E1+E2+ENUCR
+      END IF
+C
+      DOATOMS=.FALSE.
+      IF(DOATOMS) THEN
+         CALL VALFM(LOADFM)
+         LH1  = LOADFM + 1
+         LWRK1= LH1    + N2A
+         LWRK2= LWRK1  + N2A
+         LAST = LWRK2  + M2
+         NEED3= LAST - LOADFM -1
+         CALL GETFM(NEED3)
+         WRITE(6,*)
+         DO IATM=1,NAT
+            IANSAV=IAN(IATM)
+            ZANSAV=ZAN(IATM)
+            IAN(IATM)=0
+            ZAN(IATM)=0.0D+00
+C
+            CALL ONEEI
+            CALL DAREAD(IDAF,IODA,X(LH1),N2A,11,0)
+            CALL DAREAD(IDAF,IODA,X(LWRK1),N2A,13,0)
+            CALL DAXPY(N2A,-1.0D+00,X(LWRK1),1,X(LH1),1)
+C           the AO form
+            CALL DAREAD(IDAF,IODA,X(LD),N2A,16,0)
+C           e1a=tracep(x(ld),x(lh1),num)
+C           write(6,*) e1a
+            E1A=0.0D+00
+            IJ = 0
+            DO II=1,L1
+               DO JJ=1,II-1
+                  IJ = IJ + 1
+                  TEMP = X(LD+IJ-1)*2.0D+00*X(LH1+IJ-1)
+                  WRITE(6,'(F17.10," * ",F17.10,"=",F17.10)')
+     *          X(LH1+IJ-1),X(LD+IJ-1),TEMP
+                  E1A = E1A + TEMP
+               ENDDO
+               IJ = IJ + 1
+               TEMP = X(LD+IJ-1)*X(LH1+IJ-1)
+               WRITE(6,'(F17.10," * ",F17.10,"=",F17.10)')
+     *       X(LH1+IJ-1),X(LD+IJ-1),TEMP
+               E1A = E1A + TEMP
+            ENDDO
+            WRITE(6,*) E1A
+            WRITE(6,*) '---'
+C
+C           Transform the one-electron integrals over active orbitals
+            CALL DAREAD(IDAF,IODA,X(LVEC),N2,15,0)
+            CALL TFTRI(X(LSINT1),X(LH1),X(LVEC),X(LWRK2),K1,NUM,NUM)
+            CALL GETENY2(X(LSINT1),X(LSINT2),X(LDM1),X(LDM2),
+     *                   K2,K4,E1,E2,.TRUE.,.FALSE.,1)
+C
+            WRITE(6,*) 'FINAL ONE-ATOM E1: ',E1
+            WRITE(6,*)
+C
+            IAN(IATM)=IANSAV
+            ZAN(IATM)=ZANSAV
+         ENDDO
+         CALL RETFM(NEED3)
+         CALL ONEEI
+      ENDIF
+C
+      CALL RETFM(NEED2)
+      RETURN
+      END
+C
+C*MODULE ALDECI  *DECK GETENY2
+      SUBROUTINE GETENY2(S1,S2,D1,D2,K2,K4,E1,E2,DO1,DO2,NPRINT)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      DIMENSION S1(K2),D1(K2),S2(K4),D2(K4)
+      LOGICAL DO1,DO2
+C
+      E1 = 0.0D+00
+      E2 = 0.0D+00
+      IF(DO1) THEN
+         IF(NPRINT.GE.1)
+     *     WRITE(6,*) 'ONE-ELECTRON INTEGRALS AND DENSITIES'
+         DO II=1,K2
+            IF(NPRINT.GE.1) WRITE(6,'(F17.10," * ",F17.10,"=",F17.10)')
+     *   S1(II),D1(II),S1(II)*D1(II)
+            E1 = E1 + S1(II)*D1(II)
+         ENDDO
+      ENDIF
+C
+      IF(DO2) THEN
+         IF(NPRINT.GE.2)
+     *     WRITE(6,*) 'TWO-ELECTRON INTEGRALS AND DENSITIES'
+         DO II=1,K4
+            IF(NPRINT.GE.2) WRITE(6,'(F17.10," * ",F17.10,"=",F17.10)')
+     *   S2(II),D2(II),S2(II)*D2(II)
+            E2 = E2 + S2(II)*D2(II)
+         ENDDO
+         RETURN
+      ENDIF
       END
