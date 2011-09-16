@@ -1,3 +1,4 @@
+C XX XXX 11 - TZ  - PRSONO: output the natural spinors for MacMolPlt
 C 11 Aug 11 - DGF - SPNORY: fix OPERAT=HSO* nuclear dipole terms
 C 10 Dec 10 - TZ  - PRSONO: punch occ.no.
 C 11 Aug 10 - TZ  - compute SOC averaged density matrix
@@ -1622,13 +1623,12 @@ C
 C ... grow memory
       IF(JZOPT.NE.0) THEN
         CALL VALFM(LOADFM)
-        LEIGMJ=LOADFM+1
-C       lmjmat=leigmj+ndnmat
-C       lno2mj=lmjmat+ndnmat*ndnmat*2
-        LNO2MJ=LEIGMJ+NDNMAT
-        LIWRK=LNO2MJ+NDNMAT*NDNMAT*2
-        LWRK=LIWRK+NDNMAT
-        LAST=LWRK+2*NDNMAT
+        LEIGMJ = LOADFM + 1
+        LNO2MJ = LEIGMJ + NDNMAT
+        LIWRK  = LNO2MJ + NDNMAT*NDNMAT*2
+        LWRK   = LIWRK  + NDNMAT
+        LSUDOR = LWRK   + 2*NDNMAT
+        LAST   = LSUDOR + NDNMAT*L1
         NEEDNZ=LAST-LOADFM-1
 C
         CALL GETFM(NEEDNZ)
@@ -1651,9 +1651,10 @@ C
       ENDIF
 C
 C ... print soc natural orbitals in the basis of MO spin orbitals
+C
       CALL PRSONO(X(LDNMAT),X(LEIGNO),X(LLWORK+2*NDNMAT),X(LLWORK),
      *            NDNMAT,X(LCMO(1)),X(LSONO),X(LDA),
-     *            X(LDB),X(LDT),N1,L1,JZOPT)
+     *            X(LDB),X(LDT),N1,L1,JZOPT,X(LSUDOR))
 C
       IF(DBGSO.AND.MASWRK) THEN
         WRITE(IW,9870)
@@ -2178,7 +2179,7 @@ C
 C
 C*MODULE SOZEFF   *DECK PRSONO
       SUBROUTINE PRSONO(DNMAT,EIGOCC,EIGMJ,WORK,NDNMAT,VMO,VNO,DA,DB,DT,
-     *                  N1,L1,JZOPT)
+     *                  N1,L1,JZOPT,PSUORB)
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
 C
       LOGICAL GOPARR,DSKWRK,MASWRK
@@ -2190,7 +2191,7 @@ C
 C
       COMPLEX*16 DNMAT(NDNMAT,NDNMAT),WORK(*),PHASE,VNO(2*L1,*),ELEMNT,
      *           ELEMT2,DT(2*L1,*),ELEMT3,ELEMT4
-      DIMENSION EIGOCC(*),EIGMJ(*),VMO(L1,*),DA(*),DB(*)
+      DIMENSION EIGOCC(*),EIGMJ(*),VMO(L1,*),DA(*),DB(*),PSUORB(L1,*)
       PARAMETER(ZERO=0.0D+00)
 C
 C     work: work array for reordering eigenvalues and eigenvectors
@@ -2290,11 +2291,55 @@ C
       IF(MASWRK) THEN
          WRITE(IW,9005)
          CALL PRSONO1(VNO,EIGOCC,EIGMJ,2*L1,NDNMAT,JZOPT,1)
+      ENDIF
 C
+C ... punch in the punch file
+C
+      IF(MASWRK) THEN
          WRITE(IP,9009) 'SPIN AO'
-         WRITE(IP,9010)
-         WRITE(IP,9011) (EIGOCC(I),I=3D1,NDNMAT)
          CALL ZPUSQL(VNO,NDNMAT,2*L1,2*L1)
+C ... punch the occupation number
+         WRITE(IP,9010)
+         WRITE(IP,9011) (EIGOCC(I),I=1,NDNMAT)
+C ... punch the four chunks of pseudo orbitals to be read by MacMolPlt.
+C ... the four chunks are real alpha, imaginary alpha,
+C ...                     real beta, and imaginary beta.
+C ... handle the real alpha:
+         DO J=1,NDNMAT
+           DO I=1,L1
+             PSUORB(I,J)=DREAL(VNO(I,J))
+           ENDDO
+         ENDDO
+         WRITE(IP,*) ' $VEC SOCNO REAL      ALPHA'
+         CALL PUSQL(PSUORB,NDNMAT,L1,L1)
+         WRITE(IP,*) ' $END'
+C ... handle the imaginary alpha:
+         DO J=1,NDNMAT
+           DO I=1,L1
+             PSUORB(I,J)=DIMAG(VNO(I,J))
+           ENDDO
+         ENDDO
+         WRITE(IP,*) ' $VEC SOCNO IMAGINARY ALPHA'
+         CALL PUSQL(PSUORB,NDNMAT,L1,L1)
+         WRITE(IP,*) ' $END'
+C ... handle the real beta:
+         DO J=1,NDNMAT
+           DO I=1,L1
+             PSUORB(I,J)=DREAL(VNO(I+L1,J))
+           ENDDO
+         ENDDO
+         WRITE(IP,*) ' $VEC SOCNO REAL      BETA'
+         CALL PUSQL(PSUORB,NDNMAT,L1,L1)
+         WRITE(IP,*) ' $END'
+C ... handle the imaginary beta:
+         DO J=1,NDNMAT
+           DO I=1,L1
+             PSUORB(I,J)=DIMAG(VNO(I+L1,J))
+           ENDDO
+         ENDDO
+         WRITE(IP,*) ' $VEC SOCNO IMAGINARY BETA'
+         CALL PUSQL(PSUORB,NDNMAT,L1,L1)
+         WRITE(IP,*) ' $END'
       ENDIF
 C
 C ... build the alpha and beta density matrix in the AO basis.
@@ -4303,7 +4348,7 @@ C
 C     mare contains the number of discoes given xor mask of two
 C     orbital occupancies (16 bits or less)
 C     In the simple case of 1 orbital m1234 array is the same as mare
-C     ie. m1234(3) corresponds to xor=3D=11B, ie either 10-01 or 01-10
+C     ie. m1234(3) corresponds to xor=11B, ie either 10-01 or 01-10
 C     10 stands for occupation of 2 and 01 of 1 so this adds 1 disco
 C
       NTOT=2**N1PACK-1
