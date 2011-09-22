@@ -1,6 +1,6 @@
 #!/bin/csh
 #
-#  last update = 21 Feb 2011
+#  last update = 3 August 2011
 #
 #  This is a C-shell script to execute GAMESS, by typing
 #       rungms JOB VERNO NCPUS >& JOB.log &
@@ -11,7 +11,7 @@
 #  Unfortunately execution is harder to standardize than compiling,
 #  so you have to do a bit more than name your machine type here:
 #
-#    a) choose the target for execution from the following list: 
+#    a) choose the target for execution from the following list:
 #           sockets, mpi, altix, cray-xt, ibm64-sp, sgi64
 #       IBM Blue Gene uses separate execution files, see ~/gamess/misc/ibm-bg
 #
@@ -54,18 +54,37 @@
 #       file as the backend: one for Sun Grid Engine (sge-gms), and
 #       one for LoadLeveler "ll-gms" on the IBM SP line.
 #
+if (-e install.info) then
+   source install.info
+else if (-e ../install.info) then
+   source ../install.info
+else
+   echo "Please run 'config' first, to set up GAMESS running information"
+   exit 4
+endif
 set TARGET=sockets
-set SCR=$PWD
+set SCR=./
+set GMSPATH=$GMS_BUILD_DIR
+# location where the .dat and .trj files go
+set USERSCR=./
 #
 set JOB=$1      # name of the input file xxx.inp, give only the xxx part
 set VERNO=$2    # revision number of the executable created by 'lked' step
 set NCPUS=$3    # number of compute processes to be run
-
+#
 # provide defaults if last two arguments are not given to this script
-if (null$VERNO == null) set VERNO=master
+if (null$VERNO == null) set VERNO=00
 if (null$NCPUS == null) set NCPUS=1
 #
-#      Batch schedular, if any, will provide its own working directory.
+#  ---- the top third of the script is input and other file assignments ----
+#
+echo "----- GAMESS execution script 'rungms' -----"
+set master=`hostname`
+echo This job is running on host $master
+echo under operating system `uname` at `date`
+#
+#      Batch schedular, if any, should provide its own working directory,
+#      on every assigned node (if not, modify schedular's prolog script).
 #      The SCHED variable, and schedular assigned work space, is used
 #      below only in the MPI section.  See that part for more info.
                       set SCHED=none
@@ -81,14 +100,7 @@ if ($SCHED == PBS) then
    echo "PBS has assigned the following compute nodes to this run:"
    uniq $PBS_NODEFILE
 endif
-
 #
-#  ---- the top third of the script is input and other file assignments ----
-#
-echo ----- GAMESS execution script -----
-set master=`hostname`
-echo This job is running on host $master
-echo under operating system `uname` at `date`
 echo "Available scratch disk space (Kbyte units) at beginning of the job is"
 df -k $SCR
 
@@ -99,14 +111,15 @@ limit stacksize 8192
 #  Grab a copy of the input file.
 #  In the case of EXAMnn jobs, this file might be in the "tests" subdirectory.
 if ($JOB:r.inp == $JOB) set JOB=$JOB:r      # strip off possible .inp
+echo "Copying input file $JOB.inp to your run's scratch directory..."
 if (-e $JOB.inp) then
    set echo
    cp  $JOB.inp  $SCR/$JOB.F05
    unset echo
 else
-   if (-e tests/$JOB.inp) then
+   if (-e $GMS_PATH/tests/$JOB.inp) then
       set echo
-      cp  tests/$JOB.inp  $SCR/$JOB.F05
+      cp  $GMS_PATH/tests/$JOB.inp  $SCR/$JOB.F05
       unset echo
    else
       echo "Input file $JOB.inp does not exist."
@@ -118,45 +131,45 @@ endif
 
 #  file assignments.
 #
-#  All binary files should be put on a node's local disk ($SCR directory), 
+#  All binary files should be put on a node's local disk ($SCR directory),
 #  for the highest speed access possible.  These .Fxx files are typically
 #  not saved for the next run, but they may be big and/or I/O intensive.
-#  
+#
 #  It is convenient to write ASCII output files (PUNCH, RESTART, TRAJECT,
 #  and MAKEFP) to the user's permanent disk, on your file server.  They
 #  are small, written only by the master process, and are useful outputs
 #  for further runs.
 #
+#                        ASCII input files
+#             You must edit a, but will probably skip b+c.
 #  Some data files may be read by a run, each is read only once, so
 #  that storage of one (1) copy on your file server is appropriate.
 #  a) AUXDATA is directory of data sets containing
-#      1. a file of Fm(t) data for ERI computations
-#      2. a BASES subdirectory, containing files of some basis sets.
-#      3. a MCP subdirectory, containing files of MCP bases and potentials
-#      4. data sets for Quantum chemistry Polarizable force field
-#      Note: only AUXDATA itself needs be set!
-#  b) The EXTBAS file is user-supplied basis sets.
-#  c) The NUCBAS directory is for the NEO plug-in code, see its documentation
-#         Note that you must edit a+b, but will probably skip c+d.
-#                        ASCII input files (see explanation above)
-setenv PWD `pwd`
-set wrkdir=$PWD
-set AUXDATA ~albert/gamess/auxdata
-setenv  EXTBAS ~albert/Development/gamess/basis.dat
-setenv  NUCBAS /dev/null
+#     Note: change only AUXDATA, not ERICFMT,MCPPATH,BASPATH,QUANPOL!
+#        1. a file of Fm(t) data for ERI computations
+#        2. a BASES subdirectory, containing files of some basis sets
+#        3. a MCP subdirectory, containing files of MCP bases and potentials
+#        4. data sets for the Quantum chemistry Polarizable force field
+#  b) The EXTBAS file contains any user-supplied basis sets.
+#  c) The NUCBAS or POSBAS files are nuclear or positron basis sets,
+#     used by the NEO method.  See NEO's documentation for more details.
 #
 set echo
+setenv AUXDATA $GMS_PATH/auxdata
+setenv  EXTBAS /dev/null
+setenv  NUCBAS /dev/null
+setenv  POSBAS /dev/null
 #
 setenv ERICFMT $AUXDATA/ericfmt.dat
 setenv MCPPATH $AUXDATA/MCP
 setenv BASPATH $AUXDATA/BASES
 setenv QUANPOL $AUXDATA/QUANPOL
-setenv  MAKEFP $PWD/$JOB.efp
-setenv   GAMMA $PWD/$JOB.gamma
-setenv TRAJECT $PWD/$JOB.trj
-setenv RESTART $PWD/$JOB.rst
+setenv  MAKEFP $USERSCR/$JOB.efp
+setenv   GAMMA $USERSCR/$JOB.gamma
+setenv TRAJECT $USERSCR/$JOB.trj
+setenv RESTART $USERSCR/$JOB.rst
 setenv   INPUT $SCR/$JOB.F05
-setenv   PUNCH $PWD/$JOB.dat
+setenv   PUNCH $USERSCR/$JOB.dat
 setenv  AOINTS $SCR/$JOB.F08
 setenv  MOINTS $SCR/$JOB.F09
 setenv DICTNRY $SCR/$JOB.F10
@@ -175,13 +188,13 @@ setenv DFTGRID $SCR/$JOB.F22
 setenv  JKFILE $SCR/$JOB.F23
 setenv  ORDINT $SCR/$JOB.F24
 setenv  EFPIND $SCR/$JOB.F25
-setenv PCMDATA $SCR/$JOB.F26                                     
+setenv PCMDATA $SCR/$JOB.F26
 setenv PCMINTS $SCR/$JOB.F27
 setenv SVPWRK1 $SCR/$JOB.F26
 setenv SVPWRK2 $SCR/$JOB.F27
 setenv COSCAV  $SCR/$JOB.F26
-setenv COSDATA $PWD/$JOB.cosmo
-setenv COSPOT  $PWD/$JOB.pot
+setenv COSDATA $USERSCR/$JOB.cosmo
+setenv COSPOT  $USERSCR/$JOB.pot
 setenv  MLTPL  $SCR/$JOB.F28
 setenv  MLTPLT $SCR/$JOB.F29
 setenv  DAFL30 $SCR/$JOB.F30
@@ -345,7 +358,7 @@ if ($elgtyp > 0) then
     if (null$4 == null) set ELGNAME=ELGFILE
     set echo
     setenv AOINTS   $SCR/$ELGNAME.F08
-    setenv ELGDOS   $PWD/$JOB.ldos
+    setenv ELGDOS   ~$USER/scr/$JOB.ldos
     setenv ELGDAT   $SCR/$ELGNAME.F71
     setenv ELGPAR   $SCR/$ELGNAME.F72
     setenv ELGCUT   $SCR/$ELGNAME.F74
@@ -465,7 +478,7 @@ endif
 #
 #  we show execution sections that should work for
 #        sockets, mpi, altix, cray-xt, ibm64-sp, sgi64
-#  and then two others 
+#  and then two others
 #        cray-x1, necsx
 #  which are not mentioned at the top of this file, as they are quite stale.
 #
@@ -491,29 +504,28 @@ if ($TARGET == sockets) then
 #
 #     Note that 'uname' is not a terribly specific way to choose
 #     a list of all machines running a specific O/S release, so we
-#     use the host names for finer control, for example, we have 
+#     use the host names for finer control, for example, we have
 #     three different Solaris releases on two different chip types.
 #
    set os=`uname`
-   if ($os == AIX)     set GMSPATH=/u1/mike/gamess
-   if ($os == Darwin)  set GMSPATH=~albert/Development/gamess/$VERNO
-   if ($os == HP-UX)   set GMSPATH=/zr/mike/gamess
-   if ($os == Linux)   set GMSPATH=/cu/mike/gamess
-   if ($os == OSF1)    set GMSPATH=/in/mike/gamess
-   if ($os == SunOS)   set GMSPATH=/hf/mike/gamess
+#   if ($os == AIX)     set GMSPATH=/u1/mike/gamess
+#   if ($os == Darwin)  set GMSPATH=/Users/mike/desktop/gamess
+#   if ($os == HP-UX)   set GMSPATH=/zr/mike/gamess
+#   if ($os == Linux)   set GMSPATH=/cu/mike/gamess
+#   if ($os == OSF1)    set GMSPATH=/in/mike/gamess
+#   if ($os == SunOS)   set GMSPATH=/hf/mike/gamess
 #       special compilation for Sun E450 uSPARC       (uname also= SunOS)
-   if (`hostname` == sc.msg.chem.iastate.edu) set GMSPATH=/sc/mike/gamess
+#   if (`hostname` == sc.fi.ameslab.gov) set GMSPATH=/sc/mike/gamess
 #       special compilation for Sun V40Z Opteron      (uname also= SunOS)
-   if (`hostname` == as.msg.chem.iastate.edu) set GMSPATH=/as/mike/gamess
+#   if (`hostname` == as.fi.ameslab.gov) set GMSPATH=/as/mike/gamess
 #       special compilation for SGI Altix 450         (uname also= Linux)
-   if (`hostname` == br.msg.chem.iastate.edu) set GMSPATH=/br/mike/gamess
+#   if (`hostname` == br.fi.ameslab.gov) set GMSPATH=/br/mike/gamess
 #       special compilation for SGI XE210             (uname also= Linux)
-   if (`hostname` == se.msg.chem.iastate.edu) set GMSPATH=/se/mike/gamess
-   if (`hostname` == sb.msg.chem.iastate.edu) set GMSPATH=/se/mike/gamess
+#   if (`hostname` == se.fi.ameslab.gov) set GMSPATH=/se/mike/gamess
+#   if (`hostname` == sb.fi.ameslab.gov) set GMSPATH=/se/mike/gamess
 #       special compilation for IBM OpenPower 720     (uname also= Linux)
-   if (`hostname` == ga.msg.chem.iastate.edu) set GMSPATH=/ge/mike/gamess
-   if (`hostname` == ge.msg.chem.iastate.edu) set GMSPATH=/ge/mike/gamess
-   if ($os == CYGWIN_NT-5.1) set GMSPATH=/home/mike/gamess
+#   if (`hostname` == ga.fi.ameslab.gov) set GMSPATH=/ge/mike/gamess
+#   if (`hostname` == ge.fi.ameslab.gov) set GMSPATH=/ge/mike/gamess
 
 #         it is unlikely that you would need to change DDI_VER from 'new'!
 #         some antique system lacking pthreads, for example, might have
@@ -540,10 +552,24 @@ if ($TARGET == sockets) then
 #                       NODE= physical enclosure (box/blade)
 #
 #       1. Sequential execution is sure to be on this very same host
-   if ($NCPUS == 1) then
-      set NNODES=1
-      set HOSTLIST=(`hostname`)
-   endif
+#   if ($NCPUS == 1) then
+#      set NNODES=1
+#      set HOSTLIST=(`hostname`)
+#   endif
+#
+#   The following will always run as is, giving you NCPUS number of 
+#   processes on the launching computer. Activate the 4 lines above
+#   and setup appropriate lines below this section with this section
+#   commented out to run in paralle on multiple nodes.
+# 
+   set HOSTLIST=(localhost)
+   @ n=2
+   while ($n <= $NCPUS)
+      set HOSTLIST=($HOSTLIST localhost)
+      @ n++
+   end
+   @ n--
+   set NNODES=$n
 #
 #       2. This is an example of how to run on a 4-way SMP enclosure,
 #          where all CPUs (aka COREs) are inside a -single- NODE.
@@ -574,11 +600,8 @@ if ($TARGET == sockets) then
             set HOSTLIST=(`hostname`:cpus=$NCPUS)
             breaksw
          default:
-	    set NNODES=1
-	    set HOSTLIST=(`hostname`:cpus=2)
-	    breaksw
-            #echo I do not know how to run this node in parallel.
-            #exit 20
+            echo I do not know how to run this node in parallel.
+            exit 20
       endsw
    endif
 #
@@ -602,7 +625,7 @@ if ($TARGET == sockets) then
 #
 #       4. A phony example, of four dual processors (arbitrary names)
 #          Since their names never change, we just can just specify them.
-#          Note that we can use a short name like 'bb' if and only if 
+#          Note that we can use a short name like 'bb' if and only if
 #          system name resolution can map them onto the true host names.
    if (`hostname` == aa.msg.chem.iastate.edu) then
       set NCPUS=8
@@ -689,25 +712,33 @@ if ($TARGET == sockets) then
 #--echo "The generated host list is"
 #--echo $HOSTLIST
 #
+#
+#        choose remote shell execution program.
+#    Parallel run do initial launch of GAMESS on remote nodes by the
+#    following program.  Note that the authentication keys for ssh
+#    must have been set up correctly.
+#    If you wish, choose 'rsh' using .rhosts authentication on next line.
+   setenv DDI_RSH ssh
+#
+   if($DDI_RSH == ssh) then
+      setenv DDI_RCP scp
+   else
+      setenv DDI_RCP rcp
+   endif
 
 #        One way to be sure that the master node of each subgroup
 #        has its necessary copy of the input file is to stuff a
 #        copy of the input file onto every single node right here.
-#        Some sites might prefer 'rcp' to 'scp' below.
    if ($GDDIjob == true) then
       @ n=2   # master in master group already did 'cp' above
       while ($n <= $NNODES)
          set host=$HOSTLIST[$n]
          set host=`echo $host | cut -f 1 -d :` # drop anything behind a colon
-         echo scp $SCR/$JOB.F05 ${host}:$SCR/$JOB.F05
-              scp $SCR/$JOB.F05 ${host}:$SCR/$JOB.F05
+         echo $DDI_RCP $SCR/$JOB.F05 ${host}:$SCR/$JOB.F05
+              $DDI_RCP $SCR/$JOB.F05 ${host}:$SCR/$JOB.F05
          @ n++
       end
    endif
-   #
-   #      next pertains to CPU thread count in case a GPU-node is running
-   #      this setting will just be ignored on conventional nodes.
-   setenv NUM_THREADS $NCPUS
 
 #
 #        Just make sure we have the binaries, before we try to run
@@ -720,13 +751,6 @@ if ($TARGET == sockets) then
       echo or else they did not properly link to executable permission.
       exit 8
    endif
-#
-#        choose remote shell execution program.
-#    Parallel run do initial launch of GAMESS on remote nodes by the
-#    following program.  Note that the authentication keys for ssh
-#    must have been set up correctly.
-#    It is possible to choose 'rsh' using .rhosts authentication.
-   setenv DDI_RSH ssh
 #
 #        OK, now we are ready to execute!
 #    The kickoff program initiates GAMESS process(es) on all CPUs/nodes.
@@ -745,9 +769,7 @@ if ($TARGET == sockets) then
    endif
 endif
 
-#      ------ end of the TCP/IP socket execution section -------
-
-
+#      ------ end of the TCP/IP socket execution sections -------
 
 #                     - a typical MPI example -
 #
@@ -830,10 +852,10 @@ if ($TARGET == mpi) then
    else
              # Parallel run gets node names from schedular's assigned list:
       if ($SCHED == SGE) then
-      uniq $TMPDIR/machines $HOSTFILE
-      set NNODES=`wc -l $HOSTFILE`
-      set NNODES=$NNODES[1]
-   endif
+         uniq $TMPDIR/machines $HOSTFILE
+         set NNODES=`wc -l $HOSTFILE`
+         set NNODES=$NNODES[1]
+      endif
       if ($SCHED == PBS) then
          uniq $PBS_NODEFILE $HOSTFILE
          set NNODES=`wc -l $HOSTFILE`
@@ -893,6 +915,7 @@ if ($TARGET == mpi) then
              # when all processes are inside a single node, it is simple!
              # all MPI processes, whether compute processes or data servers,
              # are just in this node.   (note: NPROCS = 2*NCPUS!)
+      @ PPN2 = $PPN + $PPN
       echo "`hostname`:$NPROCS" > $PROCFILE
    else
              # For more than one node, we want PPN compute processes on
@@ -919,10 +942,10 @@ if ($TARGET == mpi) then
    #--echo '--------------'
    #
    #     add Intel MPI to the library path and to the execution path.
-   #        version number might be 3.2.1 instead of 4.0.1.007
+   #        version number might be 3.2.1, 4.0.1.007, 4.0.2.003, or ...
    #
-   setenv LD_LIBRARY_PATH /opt/intel/impi/4.0.1.007/lib64:$LD_LIBRARY_PATH
-   set path=(/opt/intel/impi/4.0.1.007/bin64 $path)
+   setenv LD_LIBRARY_PATH /opt/intel/impi/4.0.2.003/lib64:$LD_LIBRARY_PATH
+   set path=(/opt/intel/impi/4.0.2.003/bin64 $path)
    #
    #  add MVAPICH2 to the execution path
    #--set path=(/usr/mpi/gcc/mvapich2-1.2p1/bin $path)
@@ -942,8 +965,14 @@ if ($TARGET == mpi) then
    setenv I_MPI_PIN disable
    setenv I_MPI_DEBUG 0
    setenv I_MPI_STATS 0
-   setenv I_MPI_DAT_LIBRARY libdat2.so
    setenv I_MPI_FABRICS dapl
+   setenv I_MPI_DAT_LIBRARY libdat2.so
+   #      in case someone wants to try the "tag matching interface",
+   #      an option which unfortunately ignores the WAIT_MODE in 4.0.2!
+   #--setenv I_MPI_FABRICS tmi
+   #--setenv I_MPI_TMI_LIBRARY libtmi.so
+   #--setenv I_MPI_TMI_PROVIDER psm
+   #--setenv TMI_CONFIG /share/apps/intel/impi/4.0.2.003/intel64/etc/tmi.conf
    unset echo
    #
    #      similar tunings for MVAPICH2 are
@@ -966,6 +995,7 @@ if ($TARGET == mpi) then
    #     has its necessary copy of the input file is to stuff a
    #     copy of the input file onto every single node right here.
    if ($GDDIjob == true) then
+      setenv DDI_RCP scp
       set nmax=`wc -l $HOSTFILE`
       set nmax=$nmax[1]
       set lasthost=$master
@@ -974,19 +1004,59 @@ if ($TARGET == mpi) then
          set host=`sed -n -e "$n p" $HOSTFILE`
          set host=$host[1]
          if ($host != $lasthost) then
-            echo scp $SCR/$JOB.F05 ${host}:$SCR/$JOB.F05
-            scp $SCR/$JOB.F05 ${host}:$SCR/$JOB.F05
+            echo $DDI_RCP $SCR/$JOB.F05 ${host}:$SCR/$JOB.F05
+                 $DDI_RCP $SCR/$JOB.F05 ${host}:$SCR/$JOB.F05
             set lasthost=$host
          endif
          @ n++
       end
+   else
+      set GDDIjob=false
    endif
    #
-   #      next pertains to CPU thread count in case GAMESS has been
-   #      linked to run the GPU code (see that program's readme file).
-   #      this setting will just be ignored otherwise.
-   setenv NUM_THREADS $NCPUS
-   #     
+   #      Next pertains to thread count in case GAMESS has been
+   #      linked to "libcchem" (see that program's readme file),
+   #      otherwise, these settings will just be ignored.
+   #
+   #      the profiling variable inserts extra timing output into the
+   #      log files.  Omit it, if you like.
+   #
+   #      "libcchem" controls the CPU thread count by NUM_THREADS,
+   #      which defaults to the number of CPU cores, if not given.
+   #      Note that the number of CPU threads doing quantum chemistry
+   #      will always be one less than NUM_THREADS, as one core is
+   #      required to do GPU/CPU management things, except if the
+   #      number of cores is just 1 (of course it runs 1 thread then).
+   #
+   #      "libcchem" controls the GPU devices used by GPU_DEVICES,
+   #      which is a list of the devices to be used.  If not given,
+   #      which safest, all avaliable GPUs will be detected and used.
+   #
+   #      You will need to put a path to your CUDA run time libraries here.
+   #
+   #      Finally, note that the front end 'gms' script must edit
+   #      the string 'NUMGPU=0' to the desired number, after which,
+   #      the if clause will actually be executed!
+   #      Or, hardwire this to non-zero if all your nodes own GPUs.
+   #      Setting GPU_DEVICES to -1 runs CPU threads, only.
+   #
+   @ NUMGPU=0
+   if ($NUMGPU > 0) then
+      @ NUMCPU = $PPN - 1
+      echo libcchem kernels will use $NUMCPU cores and $NUMGPU GPUs per node...
+      set echo
+      setenv CCHEM_PROFILE 1
+      setenv NUM_THREADS $PPN
+      #--if ($NUMGPU == 0) setenv GPU_DEVICES -1
+      #--if ($NUMGPU == 2) setenv GPU_DEVICES 0,1
+      #--if ($NUMGPU == 4) setenv GPU_DEVICES 0,1,2,3
+      setenv LD_LIBRARY_PATH /share/apps/cuda/lib64:$LD_LIBRARY_PATH
+      ###### LD_LIBRARY_PATH /usr/local/cuda/lib64:$LD_LIBRARY_PATH
+      unset echo
+   else
+      setenv GPU_DEVICES -1
+   endif
+   #
    #  Now, at last, we can actually kick-off the MPI processes...
    #
    echo "MPI kickoff will run GAMESS on $NCPUS cores in $NNODES nodes."
@@ -1002,25 +1072,27 @@ if ($TARGET == mpi) then
 
    case 3steps:
       #
-   #  a) bring up a 'ring' of MPI demons
-   #
-   set echo
-   mpdboot --rsh=ssh -n $NNODES -f $HOSTFILE
-   #
-   #  b) kick off the compute processes and the data servers
-   #
-   mpiexec -configfile $PROCFILE < /dev/null
-   #
-   #  c) shut down the 'ring' of MPI demons
-   #
-   mpdallexit
-   unset echo
+      #  a) bring up a 'ring' of MPI demons
+      #
+      set echo
+      mpdboot --rsh=ssh -n $NNODES -f $HOSTFILE
+      #
+      #  b) kick off the compute processes and the data servers
+      #
+      mpiexec -configfile $PROCFILE < /dev/null
+      #
+      #  c) shut down the 'ring' of MPI demons
+      #
+      mpdallexit
+      unset echo
       breaksw
    #
    case hydra:
       set echo
       setenv I_MPI_HYDRA_ENV all
-      mpiexec.hydra -f $PROCFILE -n $NPROCS /home/mike/gamess/gamess.$VERNO.x
+      setenv I_MPI_PERHOST $PPN2
+      mpiexec.hydra -f $PROCFILE -n $NPROCS \
+            /home/mike/gamess/gamess.$VERNO.x < /dev/null
       unset echo
       breaksw
    case default:
@@ -1030,7 +1102,7 @@ if ($TARGET == mpi) then
    #
    #    keep HOSTFILE, as it is passed to the file erasing step below
    rm -f $PROCFILE
-   #           
+   #
 endif
 #      ------ end of the MPI execution section -------
 
@@ -1201,7 +1273,6 @@ if ($TARGET == ibm64-sp) then
    unset echo
 endif
 
-
 #   SGI Origin (a very old machine) running SHMEM wants you to
 #      a) set the path to point to the GAMESS executable
 #   NOTE!  This does not mean SGI Altix or ICE!!!
@@ -1260,10 +1331,15 @@ endif
 #
 echo ----- accounting info -----
 #
-#   in the case of GDDI runs, we save the first PUNCH file only.
-#   If something goes wrong, the .F06.00x, .F07.00x, ... from the
-#   other groups are potentially interesting to look at.
-if ($GDDIjob == true) cp $SCR/$JOB.F07 $wrkdir/$JOB.dat
+#   in the case of GDDI runs, we save the first group master's files only.
+if ($GDDIjob == true) then
+   cat $OUTPUT
+   cp $SCR/$JOB.F06.* ~/scr
+                        cp $SCR/$JOB.F07 ~/scr/$JOB.dat
+   if(-e $SCR/$JOB.F04) cp $SCR/$JOB.F04 ~/scr/$JOB.trj
+   if(-e $SCR/$JOB.F35) cp $SCR/$JOB.F35 ~/scr/$JOB.rst
+endif
+
 #
 #   Clean up the master's scratch directory.
 #
@@ -1297,8 +1373,10 @@ if ($TARGET == sockets) then
    end
 endif
 #
-#    this particular example is for the combination iMPI, w/SGE or PBS
-#    we have inherited a file of unique node names from above.
+#    This particular example is for the combination iMPI, w/SGE or PBS.
+#    We have inherited a file of unique node names from above.
+#    There is an option to rescue the output files from group DDI runs,
+#    such as FMO, in case you need to see the other group's outputs.
 if ($TARGET == mpi) then
    set nnodes=`wc -l $HOSTFILE`
    set nnodes=$nnodes[1]
@@ -1312,6 +1390,12 @@ if ($TARGET == mpi) then
       set host=$host[1]
       if ($host != $master) then
          echo Files used on node $host were:
+         #---------FMO rescue------
+         #--if ($GDDIjob == true) then
+         #--   echo "========= OUTPUT from node $host is =============="
+         #--   ssh $host -l $USER "cat $SCR/$JOB.F06*"
+         #--endif
+         #---------FMO rescue------
          ssh $host -l $USER "ls -l $SCR/$JOB.*"
          ssh $host -l $USER "rm -f $SCR/$JOB.*"
       endif
