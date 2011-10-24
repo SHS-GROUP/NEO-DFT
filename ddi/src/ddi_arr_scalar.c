@@ -44,11 +44,20 @@ void DDI_ARR_scalar_local(DDI_Patch *dAPatch, double alpha) {
   DDI_Acquire(Index, dA, DDI_READ_ACCESS, (void**)&dALocal);
 
   switch(op) {
+# if defined WINTEL
+  case DDI_ARR_ZERO_OP:
+  case DDI_ARR_FILL_OP:
+# else
   case DDI_ARR_ZERO:
   case DDI_ARR_FILL:
+# endif
     mfill(alpha, dALocal, dALdaLocal, dAiLocal, dAjLocal, dAmLocal, dAnLocal);
     break;
+# if defined WINTEL
+  case DDI_ARR_SCALE_OP:
+# else
   case DDI_ARR_SCALE:
+# endif
     mscale(alpha, dALocal, dALdaLocal, dAiLocal, dAjLocal, dAmLocal, dAnLocal);
     break;
   } /* switch */
@@ -62,7 +71,11 @@ void DDI_ARR_scalar_remote(DDI_Patch *dAPatch, double alpha, int rank) {
 
   DDI_Send_request(dAPatch, &rank, NULL);
   /* DDI_ARR_ZERO does not need to send alpha */
+  #if defined WINTEL
+  if (dAPatch->oper != DDI_ARR_ZERO_OP) Comm_send(&alpha, sizeof(double), rank, comm);
+  #else
   if (dAPatch->oper != DDI_ARR_ZERO) Comm_send(&alpha, sizeof(double), rank, comm);
+  #endif
   Comm_recv(&ack, 1, rank, comm);
 }
 
@@ -72,7 +85,11 @@ void DDI_ARR_scalar_server(DDI_Patch *dAPatch, int rank) {
   const DDI_Comm *comm = (const DDI_Comm *) Comm_find(DDI_WORKING_COMM);
 
   /* DDI_ARR_ZERO does not need to receive alpha */
+  #if defined WINTEL
+  if (dAPatch->oper == DDI_ARR_ZERO_OP) alpha = (double)0;
+  #else
   if (dAPatch->oper == DDI_ARR_ZERO) alpha = (double)0;
+  #endif
   else Comm_recv(&alpha, sizeof(double), rank, comm);
   DDI_ARR_scalar_local(dAPatch, alpha);  
   Comm_send(&ack, 1, rank, comm);

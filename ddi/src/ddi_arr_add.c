@@ -104,7 +104,11 @@ void DDI_ARR_add_remote(DDI_Patch *dAPatch, double alpha, DDI_Patch *dBPatch, do
   char ack = 39;
 
   /* send request  */
+  #if defined WINTEL
+  request.oper = DDI_ARR_ADD_OP;
+  #else
   request.oper = DDI_ARR_ADD;
+  #endif
   DDI_Send_request(&request, &rank, NULL);
   /* send A, B, and C segment, and wait for completion  */
   sendbuf[0].alpha = alpha;

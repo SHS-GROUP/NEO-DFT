@@ -84,7 +84,11 @@
    /* ------------------------------------- *\
       Ensure the patch has the correct info
    \* ------------------------------------- */
+    # if defined WINTEL
+      patch->oper   = DDI_PUT_OP;
+    # else
       patch->oper   = DDI_PUT;
+    # endif
       patch->handle = handle;
 
 

@@ -661,4 +661,8 @@ double windowstimer_(double *a)
   *a = MPI_Wtime();
   return ((double)clockticks.QuadPart/(double)frequency.QuadPart);
 }
+double walltimer_()
+{
+  return (MPI_Wtime());
+}
 #endif

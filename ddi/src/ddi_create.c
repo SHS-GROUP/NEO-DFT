@@ -166,7 +166,11 @@
       Create Distributed Data Array
    \* ----------------------------- */
       patch.handle = *handle;
+# if defined WINTEL
+      patch.oper   = DDI_CREATE_OP;
+# else
       patch.oper   = DDI_CREATE;
+# endif
       patch.size   = jdim;
 
 

@@ -92,7 +92,11 @@
               break;
 
    
+         # if defined WINTEL
+           case DDI_MEMORY_OP:
+         # else
            case DDI_MEMORY:
+         # endif
               DEBUG_OUT(LVL2,(stdout,
                  "%s: (DS) Received DDI_MEMORY request.\n",DDI_Id()))
    
@@ -104,7 +108,11 @@
               break;
    
    
+         # if defined WINTEL
+           case DDI_CREATE_OP:
+         # else
            case DDI_CREATE:
+         # endif
               DEBUG_OUT(LVL2,(stdout,
                  "%s: (DS) Received DDI_CREATE[%i] request.\n",
                  DDI_Id(),msg->handle))
@@ -117,7 +125,11 @@
               break;
    
    
+         # if defined WINTEL
+           case DDI_DESTROY_OP:
+         # else
            case DDI_DESTROY:
+         # endif
               DEBUG_OUT(LVL2,(stdout,
                  "%s: (DS) Received DDI_DESTROY[%i] request.\n",
                  DDI_Id(),msg->handle))
@@ -130,7 +142,11 @@
               break;
    
    
+         # if defined WINTEL
+           case DDI_ZERO_OP:
+         # else
            case DDI_ZERO:
+         # endif
               DEBUG_OUT(LVL2,(stdout,
                 "%s: (DS) Received DDI_ZERO request from %i.\n",DDI_Id(),from))
               DDI_Array_zero(msg->handle);
@@ -139,7 +155,11 @@
               break;
    
    
+         # if defined WINTEL
+           case DDI_GET_OP:
+         # else
            case DDI_GET:
+         # endif
               DEBUG_OUT(LVL2,(stdout,
                  "%s: (DS) Received DDI_GET request from %i.\n",DDI_Id(),from))
               DDI_Get_server(msg,from);
@@ -148,7 +168,11 @@
               break;
    
            
+         # if defined WINTEL
+           case DDI_PUT_OP:
+         # else
            case DDI_PUT:
+         # endif
               DEBUG_OUT(LVL2,(stdout,
                  "%s: (DS) Received DDI_PUT request from %i.\n",DDI_Id(),from))
               DDI_Put_server(msg,from);
@@ -157,7 +181,11 @@
               break;
    
    
+         # if defined WINTEL
+           case DDI_ACC_OP:
+         # else
            case DDI_ACC:
+         # endif
               DEBUG_OUT(LVL2,(stdout,
                  "%s: (DS) Received DDI_ACC request from %i.\n",DDI_Id(),from))
               DDI_Acc_server(msg,from);
@@ -177,7 +205,11 @@
               break;
               
               
+         # if defined WINTEL
+           case DDI_DLBRESET_OP:
+         # else
            case DDI_DLBRESET:
+         # endif
               DEBUG_OUT(LVL2,(stdout,
                  "%s: (DS) Received DDI_DLBRESET request from %i.\n",
                  DDI_Id(),from))
@@ -189,7 +221,11 @@
               break;
    
     
+         # if defined WINTEL
+           case DDI_DLBNEXT_OP:
+         # else
            case DDI_DLBNEXT:
+         # endif
               DEBUG_OUT(LVL2,(stdout,
                  "%s: (DS) Received DDI_DLBNEXT request from %i.\n",
                  DDI_Id(),from))
@@ -201,12 +237,20 @@
               break;
 
 
+         # if defined WINTEL
+           case DDI_GDLBRESET_OP:
+         # else
            case DDI_GDLBRESET:
+         # endif
               DDI_GDLBReset_local();
               break;
       
       
-           case DDI_GDLBNEXT: 
+         # if defined WINTEL
+           case DDI_GDLBNEXT_OP:
+         # else
+           case DDI_GDLBNEXT:
+         # endif
               DDI_GDLBNext_local(&counter_value);
               DDI_Send(&counter_value,sizeof(size_t),from);
               break;
@@ -269,26 +313,49 @@
              break;
 */
 
+# if defined WINTEL
+	 case DDI_ARR_ZERO_OP:
+	 case DDI_ARR_FILL_OP:
+	 case DDI_ARR_SCALE_OP:
+# else
 	 case DDI_ARR_ZERO:
 	 case DDI_ARR_FILL:
 	 case DDI_ARR_SCALE:
+# endif
 	   DDI_ARR_scalar_server(msg, from);
 	   break;
 	   
+# if defined WINTEL
+	 case DDI_ARR_MIN_OP:
+	 case DDI_ARR_MAX_OP:
+# else
 	 case DDI_ARR_MIN:
 	 case DDI_ARR_MAX:
+# endif
 	   DDI_ARR_select_server(msg, from);
 	   break;
 
+# if defined WINTEL
+	 case DDI_ARR_DOT_OP:
+# else
 	 case DDI_ARR_DOT:
+# endif
 	   DDI_ARR_dot_server(msg, from);
 	   break;
 
+# if defined WINTEL
+	 case DDI_ARR_ADD_OP:
+# else
 	 case DDI_ARR_ADD:
+# endif
 	   DDI_ARR_add_server(msg, from);
 	   break;
 
+# if defined WINTEL
+	 case DDI_ARR_ACC_OP:
+# else
 	 case DDI_ARR_ACC:
+# endif
 	   DDI_ARR_acc_server(msg, from);
 	   break;
 	   

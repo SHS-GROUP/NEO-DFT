@@ -104,7 +104,11 @@
       Send DDI_MEMORY request
    \* ----------------------- */
       remote_id = my;
+    # if defined WINTEL
+      msg.oper  = DDI_MEMORY_OP;
+    # else
       msg.oper  = DDI_MEMORY;
+    # endif
       msg.size  = mempp;
  
       if(USING_DATA_SERVERS()) {
