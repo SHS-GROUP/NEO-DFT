@@ -147,15 +147,32 @@ void DDI_ARR_acc(int dA, int dAi, int dAi2, int dAj, int dAj2, double alpha, dou
 #define DDI_ARR_DMA
 #endif
 
+#if defined WINTEL
 /* DDI_ARR operations */
-#define DDI_ARR_ZERO              65
-#define DDI_ARR_FILL              66
-#define DDI_ARR_SCALE             67
-#define DDI_ARR_MIN               68
-#define DDI_ARR_MAX               69
-#define DDI_ARR_DOT               70
-#define DDI_ARR_ADD               71
-#define DDI_ARR_ACC               72
+/* Operation names have an _OP suffix to avoid
+ * namespace collision with fortran method names
+ * when using ifort on Windows */
+#define DDI_ARR_ZERO_OP              65
+#define DDI_ARR_FILL_OP              66
+#define DDI_ARR_SCALE_OP             67
+#define DDI_ARR_MIN_OP               68
+#define DDI_ARR_MAX_OP               69
+#define DDI_ARR_DOT_OP               70
+#define DDI_ARR_ADD_OP               71
+#define DDI_ARR_ACC_OP               72
+
+#else
+
+/* DDI_ARR operations */
+#define DDI_ARR_ZERO                 65
+#define DDI_ARR_FILL                 66
+#define DDI_ARR_SCALE                67
+#define DDI_ARR_MIN                  68
+#define DDI_ARR_MAX                  69
+#define DDI_ARR_DOT                  70
+#define DDI_ARR_ADD                  71
+#define DDI_ARR_ACC                  72
+#endif
 
 typedef struct {
   double alpha;

@@ -91,11 +91,19 @@ void DDI_ARR_select_local(DDI_Patch *dAPatch, DDI_ARR_Element *element) {
   DDI_Acquire(Index, dA, DDI_READ_ACCESS, (void**)&dALocal);
   
   switch(op) {
+#if defined WINTEL
+  case DDI_ARR_MIN_OP:
+#else
   case DDI_ARR_MIN:
+#endif
     mmin(dALocal, dALdaLocal, dAiLocal, dAjLocal, dAmLocal, dAnLocal, &(element->alpha), element->index);
     break;
     
+#if defined WINTEL
+  case DDI_ARR_MAX_OP:
+#else
   case DDI_ARR_MAX:
+#endif
     mmax(dALocal, dALdaLocal, dAiLocal, dAjLocal, dAmLocal, dAnLocal, &(element->alpha), element->index);
     break;
   } /* switch */
@@ -129,10 +137,18 @@ void DDI_ARR_Element_select(DDI_ARR_Element *a, DDI_ARR_Element *b, int op) {
   }
   else {
     switch(op) {
+#if defined WINTEL
+    case DDI_ARR_MIN_OP:
+#else
     case DDI_ARR_MIN:
+#endif
       if (b->alpha < a->alpha) *a = *b;
       break;
+#if defined WINTEL
+    case DDI_ARR_MAX_OP:
+#else
     case DDI_ARR_MAX:
+#endif
       if (b->alpha > a->alpha) *a = *b;
       break;
     default:

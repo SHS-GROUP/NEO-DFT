@@ -85,6 +85,18 @@
  #     define F77_ARR_dot                 F77_Extern(DDI_ARR_DOT)
  #     define F77_ARR_add                 F77_Extern(DDI_ARR_ADD)
  #     define F77_ARR_acc                 F77_Extern(DDI_ARR_ACC)
+ # if defined WINTEL
+ #     define F77_SMP_Create              F77_Extern(DDI_SMP_CREATE)
+ #     define F77_SMP_Destroy             F77_Extern(DDI_SMP_DESTROY)
+ #     define F77_SMP_Offset              F77_Extern(DDI_SMP_OFFSET)
+ #     define F77_SMP_sync                F77_Extern(DDI_SMP_SYNC)
+ #     define F77_BCast_smp               F77_Extern(DDI_SMP_BCAST)
+ #     define F77_GSumF_smp               F77_Extern(DDI_SMP_GSUMF)
+ #     define F77_GSumF_node              F77_Extern(DDI_MASTERS_GSUMF)
+ #     define F77_BCast_node              F77_Extern(DDI_MASTERS_BCAST)
+ #     define F77_Get_comm                F77_Extern(DDI_GET_COMM)
+ #     define F77_Put_comm                F77_Extern(DDI_PUT_COMM)
+ # endif
  #  else
  #     define F77_PBeg                    F77_Extern(ddi_pbeg)
  #     define F77_Init                    F77_Extern(ddi_init)
@@ -161,4 +173,3 @@
  #     define F77_ARR_add                 F77_Extern(ddi_arr_add)
  #     define F77_ARR_acc                 F77_Extern(ddi_arr_acc)
  #  endif
- 

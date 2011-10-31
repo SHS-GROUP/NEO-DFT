@@ -82,7 +82,11 @@
       Destroy the Distributed Memory Array 
    \* ------------------------------------ */
       msg.handle = handle;
+# if defined WINTEL
+      msg.oper   = DDI_DESTROY_OP;
+# else
       msg.oper   = DDI_DESTROY;
+# endif
 
 # if defined USE_SYSV || defined DDI_ARMCI || defined DDI_MPI2
       DDI_Index_destroy(&msg);

@@ -145,7 +145,11 @@
          MPI_Bcast(buffer,working_size,MPI_BYTE,root,comm->compute_comm);
 
          remaining -= working_size;
+       # if defined WINTEL
+         buffer    = (void*) ((size_t)buffer +  working_size);
+       # else
          buffer    += working_size;
+       # endif
       }
     # else
    /* --------------------------------------------------------------------- *\
@@ -240,7 +244,11 @@
          MPI_Bcast(buff,working_size,MPI_BYTE,list->root,list->comm);
 
          remaining -= working_size;
+       # if defined WINTEL
+         buff    = (void*) ((size_t) buff +  working_size);
+       # else
          buff      += working_size;
+       # endif
       }
     # else
    /* --------------------------------------------------------------------- *\

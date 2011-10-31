@@ -175,22 +175,64 @@
 /* -------------- *\
    DDI Operations
 \* -------------- */
- # define DDI_MEMORY      0
- # define DDI_CREATE      1
- # define DDI_DESTROY     2
- # define DDI_GET         3
- # define DDI_PUT         4
- # define DDI_ACC         5
- # define DDI_GETACC      6
- # define DDI_DLBRESET    7
- # define DDI_DLBNEXT     8
- # define DDI_GDLBRESET   9
- # define DDI_GDLBNEXT   10
- # define DDI_QUIT       11
- # define DDI_ZERO       12 
- # define DDI_FENCE      13
- # define DDI_DEBUGFLAG  20
- # define DB_CREATE_ENTRY  30
- # define DB_READ_ENTRY    31
- # define DB_WRITE_ENTRY   32
+
+/* Certain variables have an _OP suffix to avoid
+ * namespace collision with fortran method names
+ * when using ifort on Windows */
+
+# if defined WINTEL 
+ 
+ # define DDI_MEMORY_OP      0
+ # define DDI_CREATE_OP      1
+ # define DDI_DESTROY_OP     2
+ # define DDI_GET_OP         3
+ # define DDI_PUT_OP         4
+ # define DDI_ACC_OP         5
+
+# else
+
+ # define DDI_MEMORY         0
+ # define DDI_CREATE         1
+ # define DDI_DESTROY        2
+ # define DDI_GET            3
+ # define DDI_PUT            4
+ # define DDI_ACC            5
+
+# endif 
+ 
+ # define DDI_GETACC         6
+ 
+# if defined WINTEL 
+ 
+ # define DDI_DLBRESET_OP    7
+ # define DDI_DLBNEXT_OP     8
+ # define DDI_GDLBRESET_OP   9
+ # define DDI_GDLBNEXT_OP   10
+
+# else
+ 
+ # define DDI_DLBRESET       7
+ # define DDI_DLBNEXT        8
+ # define DDI_GDLBRESET      9
+ # define DDI_GDLBNEXT      10
+
+# endif
+ 
+ # define DDI_QUIT          11
+
+# if defined WINTEL 
+ 
+ # define DDI_ZERO_OP       12 
+ 
+# else
+
+ # define DDI_ZERO          12 
+
+# endif
+ 
+ # define DDI_FENCE         13
+ # define DDI_DEBUGFLAG     20
+ # define DB_CREATE_ENTRY   30
+ # define DB_READ_ENTRY     31
+ # define DB_WRITE_ENTRY    32
 

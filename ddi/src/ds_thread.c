@@ -223,7 +223,11 @@ void DS_main() {
 //             fence[from] = 1;
             break;
             
+          # if defined WINTEL
+            case DDI_GET_OP:
+          # else
             case DDI_GET:
+          # endif
 //             fprintf(stdout,"thread: get memory.\n");
 //             fflush(stdout);
                DDI_Memory_push(msg->size,(void **)&buffer,NULL);                        
@@ -240,7 +244,11 @@ void DS_main() {
 //             fflush(stdout);
             break;
 
+          # if defined WINTEL
+            case DDI_PUT_OP:
+          # else
             case DDI_PUT:
+          # endif
 //             fprintf(stdout,"thread: put memory.\n");
 //             fflush(stdout);
                DDI_Memory_push(msg->size,(void **)&buffer,NULL);                        
@@ -254,7 +262,11 @@ void DS_main() {
                DDI_Memory_pop(msg->size); 
             break;
                
+          # if defined WINTEL
+            case DDI_ACC_OP:
+          # else
             case DDI_ACC:
+          # endif
 //             fprintf(stdout,"thread: acc memory.\n");
 //             fflush(stdout);
                DDI_Memory_push(msg->size,(void **)&buffer,NULL);                        
@@ -277,7 +289,11 @@ void DS_main() {
                Fatal_error(911);
             break;
 
+          # if defined WINTEL
+            case DDI_DLBNEXT_OP:
+          # else
             case DDI_DLBNEXT:
+          # endif
                DDI_DLBNext_local(&counter_value);
                MPI_Send(&counter_value,sizeof(size_t),MPI_BYTE,from,17,comm->world_comm);
             break;

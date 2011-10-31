@@ -245,7 +245,11 @@
                                  int_f77 *jlo, int_f77 *jhi, void *buff) {
       DDI_Patch Patch;
       
+    # if defined WINTEL
+      Patch.oper   = DDI_GET_OP;
+    # else
       Patch.oper   = DDI_GET;
+    # endif
       Patch.handle = (int) *handle;
       Patch.ilo    = (int) *ilo - 1;
       Patch.ihi    = (int) *ihi - 1;
@@ -263,7 +267,11 @@
                                       void *buff, int_f77 *commid) {
       DDI_Patch Patch;
       
+    # if defined WINTEL
+      Patch.oper   = DDI_GET_OP;
+    # else
       Patch.oper   = DDI_GET;
+    # endif
       Patch.handle = (int) *handle;
       Patch.ilo    = (int) *ilo - 1;
       Patch.ihi    = (int) *ihi - 1;
@@ -280,7 +288,11 @@
                                  int_f77 *jlo, int_f77 *jhi, void *buff) {
       DDI_Patch Patch;
       
+    # if defined WINTEL
+      Patch.oper   = DDI_PUT_OP;
+    # else
       Patch.oper   = DDI_PUT;
+    # endif
       Patch.handle = (int) *handle;
       Patch.ilo    = (int) *ilo - 1;
       Patch.ihi    = (int) *ihi - 1;
@@ -298,7 +310,11 @@
                                       void *buff, int_f77 *commid) {
       DDI_Patch Patch;
       
+    # if defined WINTEL
+      Patch.oper   = DDI_PUT_OP;
+    # else
       Patch.oper   = DDI_PUT;
+    # endif
       Patch.handle = (int) *handle;
       Patch.ilo    = (int) *ilo - 1;
       Patch.ihi    = (int) *ihi - 1;
@@ -316,7 +332,11 @@
       DDI_Patch Patch;
       double alpha = (double)1.0;
       
+    # if defined WINTEL
+      Patch.oper   = DDI_ACC_OP;
+    # else
       Patch.oper   = DDI_ACC;
+    # endif
       Patch.handle = (int) *handle;
       Patch.ilo    = (int) *ilo - 1;
       Patch.ihi    = (int) *ihi - 1;

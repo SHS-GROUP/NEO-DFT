@@ -1,0 +1,950 @@
+#!/bin/csh
+#
+#  Oct.  19, 2010 :: Sarom Sok :: File assignments for GAMESS version 1 Oct. 2010 R1
+#                                 COSCAV, COSDATA, COSPOT
+#                                 RIVMAT, RIT2A, RIT3A, RIT2B, RIT3B
+#
+#  March 31, 2010 :: Sarom Sok :: Support for additional Microsoft Windows operating
+#                                 systems that are not connected to a cluster.
+#
+#  March 29, 2010 :: Sarom Sok :: Stripped down version of rungms to work
+#                                 with Windows Server 2008 HPC R2 Edition (beta release)
+#                                 clusters.
+#
+#  This is a C-shell script to execute GAMESS, by typing
+#
+#  rungms JOB VERNO NCPUS >& JOB.log &
+#
+#  JOB    is the name of the 'JOB.inp' file to be executed,
+#  VERNO  is the number of the executable you chose at 'lked' time,
+#  NCPUS  is the number of processors to be used.
+#
+set JOB=$1    # name of the input file xxx.inp, give only the xxx part
+set VERNO=$2  # revision number of the executable created by 'lked' step
+set NCPUS=$3  # number of compute processes to be run
+set PPN=$4    # PPN = Processors Per Node
+#
+# Provide defaults if last two arguments are not given to this script.
+#
+if (null$VERNO == null) set VERNO=00
+if (null$NCPUS == null) set NCPUS=1
+#
+set TARGET=mpi
+#
+#   RUNGMSTYPE=[workstation,cluster]  Choose 'workstation' if you are not
+#                                     connected to a cluster.
+#
+#                                     Choose 'cluster' if you are.
+#
+#                                     The default should be 'workstation'. I've
+#                                     noticed that my system would reboot if I
+#                                     ran with 'cluster' and was not actually
+#                                     connected to a cluster!
+#
+#                                     This variable removes the need to have two
+#                                     different scripts for cluster and
+#                                     non-cluster runs.
+#
+set RUNGMSTYPE=workstation
+#
+#  Since we are running on a Windows HPC cluster we need to provide Windows
+#  Uniform Naming Convention (UNC) paths for some shared resources such
+#  as the user's scratch directory, user's restart directory, and the compute
+#  node's local scratch directory.
+#
+#  LAUNCHNODE    is the name of the host that is launching this script.
+#  GAMESS_       is the name of the GAMESS directory.
+#  RESTART_      is the name of the directory to store restart files
+#               (*.dat, *.rst, *trj, etc.).
+#  SCRATCH_      is the name of the directory to store scratch files
+#               (*.F*).
+#  BATCH_        is the name of the directory storing the batch (*.bat) files for
+#                runs with Windows Server 2008 HPC Edition clusters.
+#
+set LAUNCHNODE=`hostname`
+set    GAMESS_=gamess
+set   RESTART_=scr
+set   SCRATCH_=tmp
+set     BATCH_=windows
+#
+#  GAMESSDIR           Path to GAMESS directory (*nix-like format).
+#  GAMESS_DIR          Path to GAMESS directory (Windows UNC format).
+#
+#  RESTARTDIR          Path to RESTART directory (*nix-like format).
+#  RESTART_DIR         Path to RESTART directory (Windows UNC format).
+#
+#  SCRATCHDIR          Path to SCRATCH directory (*nix-like format).
+#  SCRATCH_DIR         Path to SCRATCH directory (Windows UNC format).
+#
+#  LOCAL_SCRATCH_DIR   Path to local scratch directory (local = compute node).
+#                      This variable is set further down the script.
+#
+#  WINDOWS_BATCH_DIR   Path to the 'windows' folder containing batch files (.bat)
+#
+if ($RUNGMSTYPE == cluster) then
+  #
+  set  GAMESSDIR=//$LAUNCHNODE/$GAMESS_
+  set GAMESS_DIR="\\\\$LAUNCHNODE\\$GAMESS_"
+  #
+else if ($RUNGMSTYPE == workstation) then
+  #
+  set  GAMESSDIR=/home/$USER/gamess
+  set GAMESS_DIR="C:\\cygwin\\home\\$USER\\gamess"
+  #
+  #  Must ensure that we are running locally
+  #
+  if ($PPN != 0) then
+    echo " "
+    echo "RUNGMSTYPE=$RUNGMSTYPE requires ppn=0.  You passed in $PPN."
+    echo " "
+  exit 4
+  endif
+  #
+else
+  echo " "
+  echo "You need to define RUNGMSTYPE in this script."
+  echo " "
+  exit 4
+endif
+#
+#   Need these *nix-like paths for performing Cygwin based file 
+#   operations.
+#
+set   RESTARTDIR=$GAMESSDIR/$RESTART_
+set   SCRATCHDIR=$GAMESSDIR/$SCRATCH_
+#
+#   Need these UNC paths for setting environmental variables within this
+#   script.
+#
+set       RESTART_DIR=$GAMESS_DIR\\\\$RESTART_
+set       SCRATCH_DIR=$GAMESS_DIR\\\\$SCRATCH_
+set WINDOWS_BATCH_DIR=$GAMESS_DIR\\\\$BATCH_
+#
+#  We move this up here so we can check for this early on before
+#  invoking 'job new' which would leave a job in a 'configuring' state 
+#  on the cluster.
+#
+setenv  MAKEFP $RESTART_DIR\\$JOB.efp
+setenv TRAJECT $RESTART_DIR\\$JOB.trj
+setenv RESTART $RESTART_DIR\\$JOB.rst
+setenv   PUNCH $RESTART_DIR\\$JOB.dat
+#
+#  Data left over from a previous run might be precious, stop if found.
+#
+if ((-e $PUNCH) || (-e $MAKEFP) || (-e $TRAJECT) || (-e $RESTART) ) then
+   echo "Please save, rename, or erase these files from a previous run:"
+   if (-e $PUNCH)  then
+     echo "       $PUNCH,"
+   endif
+   if (-e $MAKEFP)  then
+     echo "     $TRAJECT,"
+   endif
+   if (-e $TRAJECT) then
+     echo "     $RESTART,"
+   endif
+   if (-e $RESTART) then
+     echo "     $MAKEFP,"
+   endif
+   echo "and then resubmit this computation."
+   exit 4
+endif
+#
+if ($PPN == 0) then
+  #
+  #  Settings for running on the current node.
+  #
+  @ NODESNEEDED = $NCPUS / $NCPUS
+  #
+  #  Give it a fake JOBID
+  # 
+  set JOBID=00
+  #
+  echo ----- GAMESS execution script -----
+  set master=`hostname`
+  echo This job is running on host $master at `date`
+  echo "Available scratch disk space (Kbyte units) at beginning of the job is"
+  df -k $SCRATCHDIR
+  #
+  #   Note: We use SCRATCH_DIR as the scratch space for local runs.
+  #
+  set LOCAL_SCRATCH_DIR=$SCRATCH_DIR
+else
+  @ NODESNEEDED = $NCPUS / $PPN
+  #
+  #  We start the process of submitting the new job here so we can acquire
+  #  the JOBID.  We will use this JOBID to help create a unique local
+  #  scratch directory on the compute nodes.
+  #
+  set JOBID=`job new  /jobname:\"$JOB\"                     \
+                      /numnodes:$NODESNEEDED                \
+                      /jobenv:JOBNAME=$JOB                  \
+                      /jobenv:LOGFILE=$GAMESS_DIR\\$JOB.log \
+                      | tr -s ' ' | cut -d ' ' -f 4         `
+  #
+  echo ----- GAMESS execution script -----
+  echo This job is launching on host `hostname`
+  echo under operating system `uname` at `date`
+  #
+  #   Note: We use a local path for SCRATCH_DIR on each of the compute
+  #         nodes within your cluster. If you want to use the user's
+  #         scratch then comment out the line below.
+  #
+  #      ** But a word of caution! You will experience a performance hit
+  #         with large I/O jobs or jobs with large number of processes. **
+  #
+  set LOCAL_SCRATCH_DIR="C:\\Temp\\"$JOB.$JOBID
+  #
+  echo "Available USER scratch disk space (Kbyte units) at beginning of the job is"
+  df -k $SCRATCHDIR
+  echo Local scratch disk location on each compute node is: $LOCAL_SCRATCH_DIR
+endif
+#
+#   The default is to save the output of the GAMESS run to a .log file
+#   and the error output of the GAMESS run to a .err file.
+#
+#   Note: The location of the .log and .err file will be within
+#         $GAMESSDIR
+#
+#   This variable is used in the job sumbmission.
+#
+set LOGFILE=$JOB.log
+set ERRFILE=$JOB.err
+#
+#   We will be passing this job's environmental variables to a file.
+#   GAMESS is setup to use the FGEhack so that these environmental
+#   variables are available locally on each compute node.
+#
+#  (FGE = File Get Environment [variables])
+#
+set ENVFIL=$SCRATCH_DIR/$JOB.$JOBID.ENV
+#
+#  The top third of the script is input and other file assignments.
+#
+#  Grab a copy of the input file.
+#  In the case of EXAMnn jobs, this file might be in the "tests"
+#  subdirectory.
+#
+#  Strip off possible .inp
+#
+if ($JOB:r.inp == $JOB) set JOB=$JOB:r
+#
+if (-e $JOB.inp) then
+   cp  $JOB.inp $SCRATCH_DIR\\$JOB.$JOBID.F05
+else
+   if (-e tests/$JOB.inp) then
+      cp  tests/$JOB.inp $SCRATCH_DIR\\$JOB.$JOBID.F05
+   else
+      echo "Input file $JOB.inp does not exist."
+      echo "This job expected the input file to be in directory $PWD"
+      echo "Please fix your file name problem, and resubmit."
+      exit 4
+   endif
+endif
+#
+#  File Assignments:
+#
+#  All binary files should be put on a node's local disk
+# ($LOCAL_SCRATCH_DIR directory), for the highest speed access possible.
+#  These .Fxx files are typically not saved for the next run, but they
+#  may be big and/or I/O intensive.
+#
+#  It is convenient to write ASCII output files (PUNCH, RESTART, TRAJECT,
+#  and MAKEFP) to the user's permanent disk ($RESTART directory), 
+#  on your file server.  They are small, written only by the master 
+#  process, and are useful outputs
+#  for further runs.
+#
+#  Some data files may be read by a run, each is read only once, so
+#  that storage of one (1) copy on your file server is appropriate.
+#  a. The ERICFMT file is the Fm(t) data for ERI computations and is
+#     provided with GAMESS.  It is essential for correct functioning of
+#     2e- integrals.
+#  b. The MCPPATH is just a path name, the program appends the specific
+#     file names inside that path before opening.  The model core
+#     potentials and basis set files come as part of GAMESS's normal
+#     distribution tree.
+#  c. The EXTBAS file is user-supplied basis sets.
+#  d. see NEO plug-in code's documentation regarding the NUCBAS file.
+#         Note that you must edit a+b, but will probably skip c+d.
+#
+set echo
+#
+#  ASCII input files (see explanation above).
+#
+setenv AUXDATA $GAMESS_DIR\\\\auxdata
+setenv ERICFMT $AUXDATA\\ericfmt.dat
+setenv MCPPATH $AUXDATA\\\\MCP
+setenv BASPATH $AUXDATA\\\\BASES
+setenv QUANPOL $AUXDATA\\\\QUANPOL
+setenv  EXTBAS /dev/null
+setenv  NUCBAS /dev/null
+#
+#       MAKEFP - already set above
+setenv   GAMMA $RESTART_DIR\\$JOB.gamma
+#      TRAJECT - already set above
+#      RESTART - already set above
+setenv   INPUT $SCRATCH_DIR\\$JOB.$JOBID.F05
+#        PUNCH - already set above
+setenv  AOINTS $LOCAL_SCRATCH_DIR\\$JOB.F08
+setenv  MOINTS $LOCAL_SCRATCH_DIR\\$JOB.F09
+setenv DICTNRY $LOCAL_SCRATCH_DIR\\$JOB.F10
+setenv DRTFILE $LOCAL_SCRATCH_DIR\\$JOB.F11
+setenv CIVECTR $LOCAL_SCRATCH_DIR\\$JOB.F12
+setenv CASINTS $LOCAL_SCRATCH_DIR\\$JOB.F13
+setenv  CIINTS $LOCAL_SCRATCH_DIR\\$JOB.F14
+setenv  WORK15 $LOCAL_SCRATCH_DIR\\$JOB.F15
+setenv  WORK16 $LOCAL_SCRATCH_DIR\\$JOB.F16
+setenv CSFSAVE $LOCAL_SCRATCH_DIR\\$JOB.F17
+setenv FOCKDER $LOCAL_SCRATCH_DIR\\$JOB.F18
+setenv  WORK19 $LOCAL_SCRATCH_DIR\\$JOB.F19
+setenv  DASORT $LOCAL_SCRATCH_DIR\\$JOB.F20
+setenv DFTINTS $LOCAL_SCRATCH_DIR\\$JOB.F21
+setenv DFTGRID $LOCAL_SCRATCH_DIR\\$JOB.F22
+setenv  JKFILE $LOCAL_SCRATCH_DIR\\$JOB.F23
+setenv  ORDINT $LOCAL_SCRATCH_DIR\\$JOB.F24
+setenv  EFPIND $LOCAL_SCRATCH_DIR\\$JOB.F25
+setenv PCMDATA $LOCAL_SCRATCH_DIR\\$JOB.F26
+setenv PCMINTS $LOCAL_SCRATCH_DIR\\$JOB.F27
+setenv SVPWRK1 $LOCAL_SCRATCH_DIR\\$JOB.F26
+setenv SVPWRK2 $LOCAL_SCRATCH_DIR\\$JOB.F27
+setenv COSCAV  $LOCAL_SCRATCH_DIR\\$JOB.F26
+setenv COSDATA $RESTART_DIR\\$JOB.cosmo
+setenv COSPOT  $RESTART_DIR\\$JOB.pot
+setenv  MLTPL  $LOCAL_SCRATCH_DIR\\$JOB.F28
+setenv  MLTPLT $LOCAL_SCRATCH_DIR\\$JOB.F29
+setenv  DAFL30 $LOCAL_SCRATCH_DIR\\$JOB.F30
+setenv  SOINTX $LOCAL_SCRATCH_DIR\\$JOB.F31
+setenv  SOINTY $LOCAL_SCRATCH_DIR\\$JOB.F32
+setenv  SOINTZ $LOCAL_SCRATCH_DIR\\$JOB.F33
+setenv  SORESC $LOCAL_SCRATCH_DIR\\$JOB.F34
+#
+#  35 is used by RESTART, see above.
+#
+setenv GCILIST $LOCAL_SCRATCH_DIR\\$JOB.F37
+setenv HESSIAN $LOCAL_SCRATCH_DIR\\$JOB.F38
+setenv QMMMTEI $LOCAL_SCRATCH_DIR\\$JOB.F39
+setenv SOCCDAT $LOCAL_SCRATCH_DIR\\$JOB.F40
+setenv  AABB41 $LOCAL_SCRATCH_DIR\\$JOB.F41
+setenv  BBAA42 $LOCAL_SCRATCH_DIR\\$JOB.F42
+setenv  BBBB43 $LOCAL_SCRATCH_DIR\\$JOB.F43
+setenv  MCQD50 $LOCAL_SCRATCH_DIR\\$JOB.F50
+setenv  MCQD51 $LOCAL_SCRATCH_DIR\\$JOB.F51
+setenv  MCQD52 $LOCAL_SCRATCH_DIR\\$JOB.F52
+setenv  MCQD53 $LOCAL_SCRATCH_DIR\\$JOB.F53
+setenv  MCQD54 $LOCAL_SCRATCH_DIR\\$JOB.F54
+setenv  MCQD55 $LOCAL_SCRATCH_DIR\\$JOB.F55
+setenv  MCQD56 $LOCAL_SCRATCH_DIR\\$JOB.F56
+setenv  MCQD57 $LOCAL_SCRATCH_DIR\\$JOB.F57
+setenv  MCQD58 $LOCAL_SCRATCH_DIR\\$JOB.F58
+setenv  MCQD59 $LOCAL_SCRATCH_DIR\\$JOB.F59
+setenv  MCQD60 $LOCAL_SCRATCH_DIR\\$JOB.F60
+setenv  MCQD61 $LOCAL_SCRATCH_DIR\\$JOB.F61
+setenv  MCQD62 $LOCAL_SCRATCH_DIR\\$JOB.F62
+setenv  MCQD63 $LOCAL_SCRATCH_DIR\\$JOB.F63
+setenv  MCQD64 $LOCAL_SCRATCH_DIR\\$JOB.F64
+setenv NMRINT1 $LOCAL_SCRATCH_DIR\\$JOB.F61
+setenv NMRINT2 $LOCAL_SCRATCH_DIR\\$JOB.F62
+setenv NMRINT3 $LOCAL_SCRATCH_DIR\\$JOB.F63
+setenv NMRINT4 $LOCAL_SCRATCH_DIR\\$JOB.F64
+setenv NMRINT5 $LOCAL_SCRATCH_DIR\\$JOB.F65
+setenv NMRINT6 $LOCAL_SCRATCH_DIR\\$JOB.F66
+setenv DCPHFH2 $LOCAL_SCRATCH_DIR\\$JOB.F67
+setenv DCPHF21 $LOCAL_SCRATCH_DIR\\$JOB.F68
+setenv ELNUINT $LOCAL_SCRATCH_DIR\\$JOB.F67
+setenv NUNUINT $LOCAL_SCRATCH_DIR\\$JOB.F68
+setenv   GVVPT $LOCAL_SCRATCH_DIR\\$JOB.F69
+setenv NUMOIN  $LOCAL_SCRATCH_DIR\\$JOB.F69
+setenv NUMOCAS $LOCAL_SCRATCH_DIR\\$JOB.F70
+setenv NUELMO  $LOCAL_SCRATCH_DIR\\$JOB.F71
+setenv NUELCAS $LOCAL_SCRATCH_DIR\\$JOB.F72
+#
+#  Next files are for RI-MP2.
+#
+setenv RIVMAT  $LOCAL_SCRATCH_DIR\\$JOB.F51
+setenv RIT2A   $LOCAL_SCRATCH_DIR\\$JOB.F52
+setenv RIT3A   $LOCAL_SCRATCH_DIR\\$JOB.F53
+setenv RIT2B   $LOCAL_SCRATCH_DIR\\$JOB.F54
+setenv RIT3B   $LOCAL_SCRATCH_DIR\\$JOB.F55
+#
+#  Next files are for GMCQDPT.
+#
+setenv GMCREF $LOCAL_SCRATCH_DIR\\$JOB.F70
+setenv GMCO2R $LOCAL_SCRATCH_DIR\\$JOB.F71
+setenv GMCROC $LOCAL_SCRATCH_DIR\\$JOB.F72
+setenv GMCOOC $LOCAL_SCRATCH_DIR\\$JOB.F73
+setenv GMCCC0 $LOCAL_SCRATCH_DIR\\$JOB.F74
+setenv GMCHMA $LOCAL_SCRATCH_DIR\\$JOB.F75
+setenv GMCEI1 $LOCAL_SCRATCH_DIR\\$JOB.F76
+setenv GMCEI2 $LOCAL_SCRATCH_DIR\\$JOB.F77
+setenv GMCEOB $LOCAL_SCRATCH_DIR\\$JOB.F78
+setenv GMCEDT $LOCAL_SCRATCH_DIR\\$JOB.F79
+setenv GMCERF $LOCAL_SCRATCH_DIR\\$JOB.F80
+setenv GMCHCR $LOCAL_SCRATCH_DIR\\$JOB.F81
+setenv GMCGJK $LOCAL_SCRATCH_DIR\\$JOB.F82
+setenv GMCGAI $LOCAL_SCRATCH_DIR\\$JOB.F83
+setenv GMCGEO $LOCAL_SCRATCH_DIR\\$JOB.F84
+setenv GMCTE1 $LOCAL_SCRATCH_DIR\\$JOB.F85
+setenv GMCTE2 $LOCAL_SCRATCH_DIR\\$JOB.F86
+setenv GMCHEF $LOCAL_SCRATCH_DIR\\$JOB.F87
+setenv GMCMOL $LOCAL_SCRATCH_DIR\\$JOB.F88
+setenv GMCMOS $LOCAL_SCRATCH_DIR\\$JOB.F89
+setenv GMCWGT $LOCAL_SCRATCH_DIR\\$JOB.F90
+setenv GMCRM2 $LOCAL_SCRATCH_DIR\\$JOB.F91
+setenv GMCRM1 $LOCAL_SCRATCH_DIR\\$JOB.F92
+setenv GMCR00 $LOCAL_SCRATCH_DIR\\$JOB.F93
+setenv GMCRP1 $LOCAL_SCRATCH_DIR\\$JOB.F94
+setenv GMCRP2 $LOCAL_SCRATCH_DIR\\$JOB.F95
+setenv GMCVEF $LOCAL_SCRATCH_DIR\\$JOB.F96
+setenv GMCDIN $LOCAL_SCRATCH_DIR\\$JOB.F97
+setenv GMC2SZ $LOCAL_SCRATCH_DIR\\$JOB.F98
+setenv GMCCCS $LOCAL_SCRATCH_DIR\\$JOB.F99
+#
+#  Next files are used only during closed shell coupled cluster runs.
+#  Display the numerous definitions iff they are going to be used.
+#
+unset echo
+set cctyp=`grep -i 'CCTYP[(=]' $SCRATCH_DIR\\$JOB.$JOBID.F05 | wc -l`
+if ($cctyp > 0) set echo
+setenv  CCREST $LOCAL_SCRATCH_DIR\\$JOB.F70
+setenv  CCDIIS $LOCAL_SCRATCH_DIR\\$JOB.F71
+setenv  CCINTS $LOCAL_SCRATCH_DIR\\$JOB.F72
+setenv CCT1AMP $LOCAL_SCRATCH_DIR\\$JOB.F73
+setenv CCT2AMP $LOCAL_SCRATCH_DIR\\$JOB.F74
+setenv CCT3AMP $LOCAL_SCRATCH_DIR\\$JOB.F75
+setenv    CCVM $LOCAL_SCRATCH_DIR\\$JOB.F76
+setenv    CCVE $LOCAL_SCRATCH_DIR\\$JOB.F77
+setenv CCQUADS $LOCAL_SCRATCH_DIR\\$JOB.F78
+setenv QUADSVO $LOCAL_SCRATCH_DIR\\$JOB.F79
+setenv EOMSTAR $LOCAL_SCRATCH_DIR\\$JOB.F80
+setenv EOMVEC1 $LOCAL_SCRATCH_DIR\\$JOB.F81
+setenv EOMVEC2 $LOCAL_SCRATCH_DIR\\$JOB.F82
+setenv  EOMHC1 $LOCAL_SCRATCH_DIR\\$JOB.F83
+setenv  EOMHC2 $LOCAL_SCRATCH_DIR\\$JOB.F84
+setenv EOMHHHH $LOCAL_SCRATCH_DIR\\$JOB.F85
+setenv EOMPPPP $LOCAL_SCRATCH_DIR\\$JOB.F86
+setenv EOMRAMP $LOCAL_SCRATCH_DIR\\$JOB.F87
+setenv EOMRTMP $LOCAL_SCRATCH_DIR\\$JOB.F88
+setenv EOMDG12 $LOCAL_SCRATCH_DIR\\$JOB.F89
+setenv    MMPP $LOCAL_SCRATCH_DIR\\$JOB.F90
+setenv   MMHPP $LOCAL_SCRATCH_DIR\\$JOB.F91
+setenv MMCIVEC $LOCAL_SCRATCH_DIR\\$JOB.F92
+setenv MMCIVC1 $LOCAL_SCRATCH_DIR\\$JOB.F93
+setenv MMCIITR $LOCAL_SCRATCH_DIR\\$JOB.F94
+setenv  EOMVL1 $LOCAL_SCRATCH_DIR\\$JOB.F95
+setenv  EOMVL2 $LOCAL_SCRATCH_DIR\\$JOB.F96
+setenv EOMLVEC $LOCAL_SCRATCH_DIR\\$JOB.F97
+setenv  EOMHL1 $LOCAL_SCRATCH_DIR\\$JOB.F98
+setenv  EOMHL2 $LOCAL_SCRATCH_DIR\\$JOB.F99
+setenv  CCVVVV $LOCAL_SCRATCH_DIR\\$JOB.F80
+#
+#  Next files are used only during open shell coupled cluster runs.
+#
+setenv AMPROCC $LOCAL_SCRATCH_DIR\\$JOB.F70
+setenv ITOPNCC $LOCAL_SCRATCH_DIR\\$JOB.F71
+setenv FOCKMTX $LOCAL_SCRATCH_DIR\\$JOB.F72
+setenv  LAMB23 $LOCAL_SCRATCH_DIR\\$JOB.F73
+setenv   VHHAA $LOCAL_SCRATCH_DIR\\$JOB.F74
+setenv   VHHBB $LOCAL_SCRATCH_DIR\\$JOB.F75
+setenv   VHHAB $LOCAL_SCRATCH_DIR\\$JOB.F76
+setenv    VMAA $LOCAL_SCRATCH_DIR\\$JOB.F77
+setenv    VMBB $LOCAL_SCRATCH_DIR\\$JOB.F78
+setenv    VMAB $LOCAL_SCRATCH_DIR\\$JOB.F79
+setenv    VMBA $LOCAL_SCRATCH_DIR\\$JOB.F80
+setenv  VHPRAA $LOCAL_SCRATCH_DIR\\$JOB.F81
+setenv  VHPRBB $LOCAL_SCRATCH_DIR\\$JOB.F82
+setenv  VHPRAB $LOCAL_SCRATCH_DIR\\$JOB.F83
+setenv  VHPLAA $LOCAL_SCRATCH_DIR\\$JOB.F84
+setenv  VHPLBB $LOCAL_SCRATCH_DIR\\$JOB.F85
+setenv  VHPLAB $LOCAL_SCRATCH_DIR\\$JOB.F86
+setenv  VHPLBA $LOCAL_SCRATCH_DIR\\$JOB.F87
+setenv    VEAA $LOCAL_SCRATCH_DIR\\$JOB.F88
+setenv    VEBB $LOCAL_SCRATCH_DIR\\$JOB.F89
+setenv    VEAB $LOCAL_SCRATCH_DIR\\$JOB.F90
+setenv    VEBA $LOCAL_SCRATCH_DIR\\$JOB.F91
+setenv   VPPPP $LOCAL_SCRATCH_DIR\\$JOB.F92
+setenv INTERM1 $LOCAL_SCRATCH_DIR\\$JOB.F93
+setenv INTERM2 $LOCAL_SCRATCH_DIR\\$JOB.F94
+setenv INTERM3 $LOCAL_SCRATCH_DIR\\$JOB.F95
+setenv ITSPACE $LOCAL_SCRATCH_DIR\\$JOB.F96
+setenv INSTART $LOCAL_SCRATCH_DIR\\$JOB.F97
+setenv  ITSPC3 $LOCAL_SCRATCH_DIR\\$JOB.F98
+#
+#  Next files are used only during elongation method runs.
+#  Display the numerous definitions iff they are going to be used.
+#
+unset echo
+set elgtyp = `grep -i NELONG= $SCRATCH_DIR\\$JOB.$JOBID.F05 | wc -l`
+if ($elgtyp > 0) then
+    set ELGNAME=$4
+    if (null$4 == null) set ELGNAME=ELGFILE
+    set echo
+    setenv AOINTS $LOCAL_SCRATCH_DIR\\$ELGNAME.F08
+    setenv ELGDOS $RESTART_DIR\\$JOB.ldos
+    setenv ELGDAT $LOCAL_SCRATCH_DIR\\$ELGNAME.F71
+    setenv ELGPAR $LOCAL_SCRATCH_DIR\\$ELGNAME.F72
+    setenv ELGCUT $LOCAL_SCRATCH_DIR\\$ELGNAME.F74
+    setenv ELGVEC $LOCAL_SCRATCH_DIR\\$ELGNAME.F75
+    setenv EGINTA $LOCAL_SCRATCH_DIR\\$ELGNAME.F77
+    setenv EGINTB $LOCAL_SCRATCH_DIR\\$ELGNAME.F78
+    setenv EGTDHF $LOCAL_SCRATCH_DIR\\$ELGNAME.F79
+    setenv EGTEST $LOCAL_SCRATCH_DIR\\$ELGNAME.F80
+    unset echo
+endif
+#
+#  Next files are used only during extended TDHF package runs.
+#  Display the numerous definitions iff they are going to be used.
+#
+unset echo
+set txtyp=`grep -i RUNTYP=TDHFX $SCRATCH_DIR\\$JOB.$JOBID.F05 | wc -l`
+if ($txtyp > 0) set echo
+setenv  OLI201 $LOCAL_SCRATCH_DIR\\$JOB.F201
+setenv  OLI202 $LOCAL_SCRATCH_DIR\\$JOB.F202
+setenv  OLI203 $LOCAL_SCRATCH_DIR\\$JOB.F203
+setenv  OLI204 $LOCAL_SCRATCH_DIR\\$JOB.F204
+setenv  OLI205 $LOCAL_SCRATCH_DIR\\$JOB.F205
+setenv  OLI206 $LOCAL_SCRATCH_DIR\\$JOB.F206
+setenv  OLI207 $LOCAL_SCRATCH_DIR\\$JOB.F207
+setenv  OLI208 $LOCAL_SCRATCH_DIR\\$JOB.F208
+setenv  OLI209 $LOCAL_SCRATCH_DIR\\$JOB.F209
+setenv  OLI210 $LOCAL_SCRATCH_DIR\\$JOB.F210
+setenv  OLI211 $LOCAL_SCRATCH_DIR\\$JOB.F211
+setenv  OLI212 $LOCAL_SCRATCH_DIR\\$JOB.F212
+setenv  OLI213 $LOCAL_SCRATCH_DIR\\$JOB.F213
+setenv  OLI214 $LOCAL_SCRATCH_DIR\\$JOB.F214
+setenv  OLI215 $LOCAL_SCRATCH_DIR\\$JOB.F215
+setenv  OLI216 $LOCAL_SCRATCH_DIR\\$JOB.F216
+setenv  OLI217 $LOCAL_SCRATCH_DIR\\$JOB.F217
+setenv  OLI218 $LOCAL_SCRATCH_DIR\\$JOB.F218
+setenv  OLI219 $LOCAL_SCRATCH_DIR\\$JOB.F219
+setenv  OLI220 $LOCAL_SCRATCH_DIR\\$JOB.F220
+setenv  OLI221 $LOCAL_SCRATCH_DIR\\$JOB.F221
+setenv  OLI222 $LOCAL_SCRATCH_DIR\\$JOB.F222
+setenv  OLI223 $LOCAL_SCRATCH_DIR\\$JOB.F223
+setenv  OLI224 $LOCAL_SCRATCH_DIR\\$JOB.F224
+setenv  OLI225 $LOCAL_SCRATCH_DIR\\$JOB.F225
+setenv  OLI226 $LOCAL_SCRATCH_DIR\\$JOB.F226
+setenv  OLI227 $LOCAL_SCRATCH_DIR\\$JOB.F227
+setenv  OLI228 $LOCAL_SCRATCH_DIR\\$JOB.F228
+setenv  OLI229 $LOCAL_SCRATCH_DIR\\$JOB.F229
+setenv  OLI230 $LOCAL_SCRATCH_DIR\\$JOB.F230
+setenv  OLI231 $LOCAL_SCRATCH_DIR\\$JOB.F231
+setenv  OLI232 $LOCAL_SCRATCH_DIR\\$JOB.F232
+setenv  OLI233 $LOCAL_SCRATCH_DIR\\$JOB.F233
+setenv  OLI234 $LOCAL_SCRATCH_DIR\\$JOB.F234
+setenv  OLI235 $LOCAL_SCRATCH_DIR\\$JOB.F235
+setenv  OLI236 $LOCAL_SCRATCH_DIR\\$JOB.F236
+setenv  OLI237 $LOCAL_SCRATCH_DIR\\$JOB.F237
+setenv  OLI238 $LOCAL_SCRATCH_DIR\\$JOB.F238
+setenv  OLI239 $LOCAL_SCRATCH_DIR\\$JOB.F239
+unset echo
+#
+#  Next files are used only during divide-and-conquer runs.
+#
+setenv   DCSUB $LOCAL_SCRATCH_DIR\\$JOB.F250
+setenv   DCVEC $LOCAL_SCRATCH_DIR\\$JOB.F251
+setenv   DCEIG $LOCAL_SCRATCH_DIR\\$JOB.F252
+setenv   DCDM  $LOCAL_SCRATCH_DIR\\$JOB.F253
+setenv   DCDMO $LOCAL_SCRATCH_DIR\\$JOB.F254
+setenv   DCQ   $LOCAL_SCRATCH_DIR\\$JOB.F255
+setenv   DCW   $LOCAL_SCRATCH_DIR\\$JOB.F256
+setenv   DCEDM $LOCAL_SCRATCH_DIR\\$JOB.F257
+#
+#  Next files are used only during LMO hyperpolarizability analysis.
+#
+setenv LHYPWRK $LOCAL_SCRATCH_DIR\\$JOB.F297
+setenv LHYPWK2 $LOCAL_SCRATCH_DIR\\$JOB.F298
+setenv BONDDPF $LOCAL_SCRATCH_DIR\\$JOB.F299
+#
+#  Next value is used only within the VB2000 add-on code.
+#
+setenv GMSJOBNAME $JOB
+#
+#  "Group DDI" should reset to true, below, if $GDDI input is found.
+#
+set GDDIjob=false
+#
+#  Running with Microsoft's MPI (MS-MPI) Implementation
+#
+if ($TARGET == mpi) then
+   #
+   #  Store the environmental variables created in this
+   #  C-shell script to a file that is specific for the job.
+   #
+   #  This needs to be accessible by the compute nodes.
+   #  
+   env > $ENVFIL
+   #
+   #  Allow for compute process and data servers (one pair per core)
+   #
+   @ NPROCS = $NCPUS + $NCPUS
+   #
+   setenv HOSTFILE $SCRATCH_DIR\\$JOB.$JOBID.nodes.mpd
+   #
+   if (-e $HOSTFILE) rm $HOSTFILE
+   touch $HOSTFILE
+   #
+   setenv PROCFILE $SCRATCH_DIR\\$JOB.$JOBID.processes.mpd
+   if (-e $PROCFILE) rm $PROCFILE
+   touch $PROCFILE
+   #
+   if ($RUNGMSTYPE == cluster) then
+     foreach node (`node list | grep 'Online' | tr -s ' ' | cut -d ' ' -f 1`)
+       echo $node >> $HOSTFILE
+     end  
+     #
+     @ PPN2 = $PPN + $PPN
+     @ n=1
+     #
+     set MAX_NODES_AVAILABLE=`wc -l $HOSTFILE`
+     set MAX_NODES_AVAILABLE=$MAX_NODES_AVAILABLE[1]
+     if ($NODESNEEDED > $MAX_NODES_AVAILABLE) then
+       echo " "
+       echo "*****************************************"
+       echo "  This run requires $NODESNEEDED nodes.  "
+       echo "  Only $MAX_NODES_AVAILABLE nodes are ONLINE.  "
+       echo " "
+       echo "  Your job might not run immediately     "
+       echo "  and just sit in the queue forever!     "
+       echo "*****************************************"
+     endif
+     #
+     while ($n <= $NODESNEEDED)
+       echo "-n $PPN2 $GAMESS_DIR\\gamess.$VERNO.x" >> $PROCFILE
+       @ n++
+     end
+   endif
+   #
+   #  Next sets up GDDI usage.
+   #  If a $GDDI input group is present the calculation will be using
+   #  subgroups within DDI.  The master within each group must have a
+   #  copy of INPUT, and will create separate PUNCH and OUTPUT files.
+   #  Note that this separates the OUTPUT from the normal log file, and
+   #  at the end we must take steps to save the files from at least the
+   #  master of the first group.  Skip if no $GDDI is found in the input.
+   #
+   set ngddi=`grep -i '^ \$GDDI' $SCRATCH_DIR\\$JOB.$JOBID.F05 | grep -iv 'NGROUP=0 ' | wc -l`
+   if ($ngddi > 0) then
+      set GDDIjob=true
+      echo " "
+      echo "This is a GDDI run, keeping output files on local disks"
+      echo "until the very end of the run, when they'll be saved from"
+      echo "the master process in the first group, only."
+      echo " "
+      set echo
+      setenv  MAKEFP $LOCAL_SCRATCH_DIR\\$JOB.F01
+      setenv TRAJECT $LOCAL_SCRATCH_DIR\\$JOB.F04
+      setenv  OUTPUT $LOCAL_SCRATCH_DIR\\$JOB.F06
+      setenv   PUNCH $LOCAL_SCRATCH_DIR\\$JOB.F07
+      setenv RESTART $LOCAL_SCRATCH_DIR\\$JOB.F35
+      unset echo
+      #
+      #  If we are running locally (PPN = 0) then there is no need to update
+      #  the environmental variable for the location of the job's INPUT file.
+      #
+      if ($PPN > 0) then
+        #
+        #  If we are running across multiple nodes then we will need to update
+        #  the environmental variable for the location of the job's INPUT file
+        #  which is located on the compute node's local scratch directory.
+        #
+        set echo
+        setenv   INPUT $LOCAL_SCRATCH_DIR\\$JOB.F05
+        unset echo
+      endif
+   #
+   #  We got to update the current job's environmental variable list
+   #
+      env > $ENVFIL
+   #
+   else      
+      set GDDIjob=false
+   endif
+   #
+   echo " "
+   echo The scratch disk location on each node is $LOCAL_SCRATCH_DIR
+   #####################################################################
+   #        Allow PPN = 0 jobs to proceed on the current node.         #
+   #####################################################################
+   if ($PPN == 0) then
+     #
+     @ PPN2 = $NCPUS + $NCPUS
+     #
+     echo "-env ENVFIL $ENVFIL -n $PPN2 $GAMESS_DIR\\gamess.$VERNO.x" > $PROCFILE
+     echo " "
+     echo "--------------------------------------------------------------\ "
+     echo "PROCFILE contains:"
+     cat              $PROCFILE
+     echo " "
+     echo "--------------------------------------------------------------/ "
+     echo " "
+     echo "Microsoft MPI (MS-MPI) will be running GAMESS on $NODESNEEDED nodes."
+     echo "The binary to be kicked off by 'mpiexec' is gamess.$VERNO.x"
+     echo "MS-MPI will run $NCPUS compute processes and $NCPUS data servers."
+     echo "MS-MPI will be running $NCPUS of each process per node."
+     if ($ngddi > 0) then
+       echo " "
+       echo "This is a GDDI run the output will be dumped to this screen when "
+       echo "the run has completed which may be a while. But since this is "
+       echo "running on the current computer you can tail the progress of "
+       echo "the following file:"
+       echo " "
+       echo $SCRATCHDIR/$JOB.F06
+       echo " "
+     endif
+     mpiexec -configfile $PROCFILE < /dev/null
+   else
+     echo " "
+     echo "--------------------------------------------------------------\ "
+     echo "PROCFILE $PROCFILE contains:"
+     cat            $PROCFILE
+     echo " "
+     echo "--------------------------------------------------------------/ "
+     echo " "
+     echo "Microsoft MPI (MS-MPI) will be running GAMESS on $NODESNEEDED nodes."
+     echo "The binary to be kicked off by 'mpiexec' is gamess.$VERNO.x"
+     echo "MS-MPI will run $NCPUS compute processes and $NCPUS data servers."
+     echo "MS-MPI will be running $PPN of each process per node."
+     echo " "
+   #
+   #  We setup the job with tasks.
+   #
+   #  Task #: Get the compute nodes ready.
+   #
+   if($GDDIjob == true) then
+   #
+   #  This NodePrep task will create a $JOB.$JOBID directory in each
+   #  compute node's local scratch directory.
+   #  
+   #  And because this is a GDDI job this task will copy the
+   #  $JOB.$JOBID.F05 (job's input file) from the user's local scratch 
+   #  directory to $JOB.F05 in the local scratch directry on every 
+   #  compute node.
+   #
+      echo "--------------------------------------------------------------\ "
+      echo "Setting up NodePrep task for GAMESS run using GDDI."
+   #
+      job add  $JOBID /name:\"GAMESSGDDIJobNodePreparation\"           \
+                      \-Type:NodePrep                                  \
+                      /env:JOBID=$JOBID                                \
+                      /env:LOCALDIR=$LOCAL_SCRATCH_DIR                 \
+                      /env:WORKDIR=$SCRATCH_DIR                        \
+                      $WINDOWS_BATCH_DIR\\gamess.start.gddi.bat
+   #
+      echo "--------------------------------------------------------------/ "
+   else
+   #
+   #  This isn't a GDDI job so just create a $JOB.$JOBID directory in
+   #  each compute nodes local scratch directory.
+   #
+      echo " "
+      echo "--------------------------------------------------------------\ "
+      echo "Setting up NodePrep task for GAMESS run."
+   #
+      job add  $JOBID /name:\"GAMESSJobNodePreparation\"               \
+                      \-Type:NodePrep                                  \
+                      /env:JOBID=$JOBID                                \
+                      /env:LOCALDIR=$LOCAL_SCRATCH_DIR                 \
+                      /env:WORKDIR=$SCRATCH_DIR                        \
+                      $WINDOWS_BATCH_DIR\\gamess.start.bat
+   #
+      echo "--------------------------------------------------------------/ "
+   endif
+   #
+   #  Task #: Run the job.
+   #
+      echo " "
+      echo "--------------------------------------------------------------\ "
+      echo "Setting up RunGAMESS task for GAMESS run."
+   #
+      job add  $JOBID /name:\"RunGAMESS\"                              \
+                      /numnodes:$NODESNEEDED                           \
+                      /workdir:$GAMESS_DIR                             \
+                      /stdout:$LOGFILE                                 \
+                      /stderr:$ERRFILE                                 \
+                      /env:ENVFIL=$ENVFIL                              \
+      mpiexec -configfile $PROCFILE < /dev/null
+   #
+      echo "--------------------------------------------------------------/ "
+   #
+   #  Task #: Each compute node will create a disk usage information
+   #          log file in the user's local scratch directory.
+   #
+   #          If disk usage information is not important then you may
+   #          want to comment out this task.  Especially, if you are
+   #          performing a parametric sweep job with GAMESS. But you 
+   #          must change the /depend: flag on each task below or else
+   #          your job won't be submitted.  You will also want to
+   #          comment out the GAMESSAppendDiskUsage task as well.
+   #
+      echo " "
+      echo "--------------------------------------------------------------\ "
+      echo "Setting up GAMESSDiskUsage task for GAMESS run."
+   #
+      job add  $JOBID /name:\"GAMESSDiskUsage\"                        \
+                      /depend:\"RunGAMESS\"                            \
+                      /numnodes:$NODESNEEDED                           \
+                      /env:JOBID=$JOBID                                \
+                      /env:LOCALDIR=$LOCAL_SCRATCH_DIR                 \
+                      /env:WORKDIR=$SCRATCH_DIR                        \
+      mpiexec \-n $NODESNEEDED $WINDOWS_BATCH_DIR\\gamess.diskusage.bat
+   #
+      echo "--------------------------------------------------------------/ "
+   #
+   #  Task #: Append disk usage information to the log file.
+   #
+   if($GDDIjob == true) then
+   #
+   #  We need to save some files from each compute nodes local scratch
+   #  to the user's restart directory.
+   #
+      echo " "
+      echo "--------------------------------------------------------------\ "
+      echo "Setting up GAMESSGDDIOutput task for GAMESS run using GDDI."
+   #
+      job add  $JOBID /name:\"GAMESSGDDIOutput\"                       \
+                      /depend:\"GAMESSDiskUsage\"                      \
+                      /numnodes:$NODESNEEDED                           \
+                      /env:JOBID=$JOBID                                \
+                      /env:LOCALDIR=$LOCAL_SCRATCH_DIR                 \
+                      /env:LOGFILE=$GAMESSDIR\\$LOGFILE                \
+                      /env:WORKDIR=$SCRATCH_DIR                        \
+      mpiexec \-n $NODESNEEDED $WINDOWS_BATCH_DIR\\gamess.gddi.output.bat
+   #
+      echo "--------------------------------------------------------------/ "
+   #
+   #  This task is no different from the one directly below it after the
+   #  'else'.  The only difference is in the task's /depend: flag.
+   #  This is to unsure that 
+   #
+      echo " "
+      echo "--------------------------------------------------------------\ "
+      echo "Setting up GAMESSAppendDiskUsage task for GAMESS run using GDDI."
+   #
+      job add  $JOBID /name:\"GAMESSAppendDiskUsage\"                  \
+                      /depend:\"GAMESSGDDIOutput\"                     \
+                      /numnodes:1                                      \
+                      /env:JOBID=$JOBID                                \
+                      /env:LOGFILE=$GAMESSDIR\\$LOGFILE                \
+                      /env:LOCALDIR=$LOCAL_SCRATCH_DIR                 \
+                      /env:WORKDIR=$SCRATCH_DIR                        \
+                      $WINDOWS_BATCH_DIR\\gamess.append.diskusage.bat
+   #
+      echo "--------------------------------------------------------------/ "
+   else
+   #
+      echo " "
+      echo "--------------------------------------------------------------\ "
+      echo "Setting up GAMESSAppendDiskUsage task for GAMESS run."
+   #
+      job add  $JOBID /name:\"GAMESSAppendDiskUsage\"                  \
+                      /depend:\"GAMESSDiskUsage\"                      \
+                      /numnodes:1                                      \
+                      /env:JOBID=$JOBID                                \
+                      /env:LOGFILE=$GAMESSDIR\\$LOGFILE                \
+                      /env:LOCALDIR=$LOCAL_SCRATCH_DIR                 \
+                      /env:WORKDIR=$SCRATCH_DIR                        \
+                      $WINDOWS_BATCH_DIR\\gamess.append.diskusage.bat
+   #
+      echo "--------------------------------------------------------------/ "
+   endif
+   #
+   #  Task #: Clean up the users's local scratch directory.  This is
+   #          done in a folder (default: tmp) within the WORKDIR
+   #          specified below in the task.  This directory contains the
+   #          following files:
+   #
+   #          $JOB.$JOBID.ENV
+   #          $JOB.$JOBID.F05
+   #        *.$JOB.$JOBID.diskusage.log
+   #          $JOB.$JOBID.nodes.mpd
+   #          $JOB.$JOBID.processes.mpd
+   #
+   #          This task also merges two files produced during a GDDI run
+   #          into a single $LOGFILE.  This is done because the output
+   #          the in the user's GAMESS directory that is produced during
+   #          the run only contains the GDDI timing information.  The 
+   #          real output file ($JOB.F06) is located on the master
+   #          compute node.  So the merging is done here.  The GDDI 
+   #          conditional is done in the batch file.
+   #
+      echo " "
+      echo "--------------------------------------------------------------\ "
+      echo "Setting up CleanGAMESS task for GAMESS run."
+   #
+      job add  $JOBID /name:\"CleanGAMESS\"                            \
+                      /depend:\"GAMESSAppendDiskUsage\"                \
+                      /numnodes:1                                      \
+                      /workdir:$GAMESS_DIR                             \
+                      /env:JOBID=$JOBID                                \
+                      /env:WORKDIR=$SCRATCH_DIR                        \
+                      $WINDOWS_BATCH_DIR\\gamess.clean.bat
+   #
+      echo "--------------------------------------------------------------/ "
+   #
+   #  Task #: Clean up the compute nodes.
+   #
+   if($GDDIjob == true) then
+   #
+   #  We need to save some files from each compute nodes local scratch
+   #  to the user's restart directory.
+   #
+      echo " "
+      echo "--------------------------------------------------------------\ "
+      echo "Setting up NodeRelease task for GAMESS run using GDDI."
+   #
+      job add  $JOBID /name:\"GAMESSJobNodeCleanup\"                   \
+                      \-Type:NodeRelease                               \
+                      /env:LOCALDIR=$LOCAL_SCRATCH_DIR                 \
+                      /env:WORKDIR=$RESTART_DIR                        \
+                      $WINDOWS_BATCH_DIR\\gamess.finish.gddi.bat
+   #
+      echo "--------------------------------------------------------------/ "
+   else
+   #
+      echo " "
+      echo "--------------------------------------------------------------\ "
+      echo "Setting up NodeRelease task for GAMESS run."
+   #
+      job add  $JOBID /name:\"GAMESSJobNodeCleanup\"                   \
+                      \-Type:NodeRelease                               \
+                      /env:LOCALDIR=$LOCAL_SCRATCH_DIR                 \
+                      $WINDOWS_BATCH_DIR\\gamess.finish.bat
+   #
+      echo "--------------------------------------------------------------/ "
+   endif
+   #
+   #  Now, submit the job.
+   #
+      job submit /id:$JOBID
+   endif
+   #
+   if ($PPN == 0) then
+     rm -f $PROCFILE
+     if ($GDDIjob == true) then
+       echo " "
+       echo "Output from the master process begins now:"
+       echo " "
+       cat $OUTPUT
+          cp $SCRATCHDIR/$JOB.F06* $RESTARTDIR
+          cp $SCRATCHDIR/$JOB.F07  $RESTARTDIR/$JOB.dat
+       if(-e $SCRATCHDIR/$JOB.F04) \
+          cp $SCRATCHDIR/$JOB.F04  $RESTARTDIR/$JOB.trj
+       if(-e $SCRATCHDIR/$JOB.F35) \
+          cp $SCRATCHDIR/$JOB.F35  $RESTARTDIR/$JOB.rst
+     endif
+     #
+     echo ----- accounting info -----
+     #
+     #   Clean up the master's scratch directory.
+     #
+     echo Files used on the local node $master were:
+     ls -lF $SCRATCHDIR/$JOB.*
+     rm -f  $SCRATCHDIR/$JOB.F*
+     rm -f  $SCRATCHDIR/$JOB.$JOBID.F*
+     rm -f  $SCRATCHDIR/$JOB.$JOBID.ENV
+     rm -f  $SCRATCHDIR/$JOB.$JOBID.nodes.mpd
+     date
+     time
+   endif
+endif
+exit

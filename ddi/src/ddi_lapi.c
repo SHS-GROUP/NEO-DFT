@@ -27,7 +27,11 @@
    /* ----------------------------------------- *\
       If handling an accumulate, raise a fence.
    \* ----------------------------------------- */
+    # if defined WINTEL
+      if(patch->oper == DDI_ACC_OP) DDI_Fence_acquire(patch->handle);
+    # else
       if(patch->oper == DDI_ACC) DDI_Fence_acquire(patch->handle);
+    # endif
 
 
    /* ------------------------------------------ *\
@@ -92,15 +96,25 @@
       nbytes += patch->ds_buffer_size;
             
       switch(patch->oper) {
+       # if defined WINTEL
+         case DDI_GET_OP:  DDI_Get_lapi_server(patch,buffer);  break;
+         case DDI_PUT_OP:  DDI_Put_lapi_server(patch,buffer);  break;
+         case DDI_ACC_OP:  DDI_Acc_lapi_server(patch,buffer);  break;
+       # else
          case DDI_GET:  DDI_Get_lapi_server(patch,buffer);  break;
          case DDI_PUT:  DDI_Put_lapi_server(patch,buffer);  break;
          case DDI_ACC:  DDI_Acc_lapi_server(patch,buffer);  break;
+       # endif
          default:
             fprintf(stdout,"%s: unknown operation in data server handler.\n",DDI_Id());
             Fatal_error(911);
       }
       
+      # if defined WINTEL
+      if(patch->oper == DDI_ACC_OP) DDI_Fence_release(patch->handle);
+      # else
       if(patch->oper == DDI_ACC) DDI_Fence_release(patch->handle);
+      # endif
       DDI_Memory_heap_free(param,nbytes);
 
       MAX_DEBUG((stdout,"%s: Leaving LAPI AM Completion Handler.\n",DDI_Id()))

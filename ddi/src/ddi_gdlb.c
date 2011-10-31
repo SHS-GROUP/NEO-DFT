@@ -41,7 +41,11 @@
     # if defined USE_SYSV
          DDI_GDLBReset_local();
     # else
+         # if defined WINTEL
+         Patch.oper = DDI_GDLBRESET_OP;
+         # else
          Patch.oper = DDI_GDLBRESET;
+         # endif
          DDI_Send_request(&Patch,&remote_id,NULL);
     # endif
       }
@@ -144,13 +148,21 @@
          if(my == 0) {
             DDI_GDLBNext_local(counter);
          } else {
+            # if defined WINTEL
+            Patch.oper = DDI_GDLBNEXT_OP;
+            # else
             Patch.oper = DDI_GDLBNEXT;
+            # endif
             DDI_Send_request(&Patch,&remote_id,NULL);
             DDI_Recv(counter,sizeof(size_t),remote_id);
          }
        # endif
        # else
+         # if defined WINTEL
+         Patch.oper = DDI_GDLBNEXT_OP;
+         # else
          Patch.oper = DDI_GDLBNEXT;
+         # endif
          DDI_Send_request(&Patch,&remote_id,NULL);
          DDI_Recv(counter,sizeof(size_t),remote_id);
        # endif

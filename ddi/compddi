@@ -15,6 +15,8 @@ else
    exit 4
 endif
 #
+set EXTRA_FLAGS=''
+#
 #  the configuration file read just above provides the next two variables,
 #  and several other GMS_XXX values that will be used further down.
 #
@@ -227,7 +229,7 @@ if (($GMS_DDI_COMM == mpi) || ($GMS_DDI_COMM == mixed)) then
         breaksw
 #            MicroSoft MPI uses a compiler flag, set below, not a pathname
      case msmpi:
-        if($GMS_FORTRAN == pgf77) set MPI_INCLUDE_PATH = " "
+        if(($GMS_FORTRAN == pgf77) || ($GMS_FORTRAN == ifort)) set MPI_INCLUDE_PATH = " "
         goto skip_mpi_setup
         breaksw
 #            big machines will find their mpi.f, don't check it.
@@ -937,7 +939,8 @@ endif
 #
            set CC = "$CC -v"
 #
-           set CFLAGS = '-DLINUX -DWINDOWS -DUSE_DDI_COLLECTIVE_ROUTINES -DOLDDDITIMER'
+#          set CFLAGS = '-DLINUX -DWINDOWS -DUSE_DDI_COLLECTIVE_ROUTINES -DOLDDDITIMER'
+           set CFLAGS = '-DLINUX -DWINDOWS -DOLDDDITIMER'
            if ($GMS_WIN_OPT == baseline)    set CFLAGS = "$CFLAGS -Bstatic -Minform=severe -O0"
            if ($GMS_WIN_OPT == linux)       set CFLAGS = "$CFLAGS -Bstatic -Minform=severe -O3"
            if ($GMS_WIN_OPT == fast)        set CFLAGS = "$CFLAGS -Bstatic -Minform=severe -fast"
@@ -963,9 +966,21 @@ endif
 
   if($TARGET == win64) then
 
-     set FORTRAN=pgf77     # choose from pgf77
+     set FORTRAN=$GMS_FORTRAN     # choose from pgf77 and ifort
 
      switch ($FORTRAN)
+        case ifort:
+           set CC = 'icl'
+           set CFLAGS = '-DLINUX -DWINDOWS -DWINDOWS64 -DWINTEL -DOLDDDITIMER'
+           if ($GMS_WIN_OPT == baseline)    set CFLAGS = "$CFLAGS -Od"
+           if ($GMS_WIN_OPT == linux)       set CFLAGS = "$CFLAGS -O2"
+           if ($GMS_WIN_OPT == samara)      set CFLAGS = "$CFLAGS -O3"
+           if ($GMS_WIN_OPT == fast)        set CFLAGS = "$CFLAGS -fast"
+           if ($GMS_WIN_OPT == testing)     set CFLAGS = "$CFLAGS $GMS_WIN_FLAGS"
+           set CFLAGS = "$CFLAGS $GMS_WIN_TP -I./include"
+           set NumUS=0
+           set F77_OPTS = "-DF77_UPPERCASE -Dgetarg_=GETARG -Diargc_=IARGC"
+           breaksw
         case pgf77:
            set CC = 'pgcc'
 #
@@ -974,14 +989,15 @@ endif
 #
            set CC = "$CC -v"
 #
-           set CFLAGS = '-DLINUX -DWINDOWS -DWINDOWS64 -DUSE_DDI_COLLECTIVE_ROUTINES -DOLDDDITIMER'
-#          set CFLAGS = '-DLINUX -DWINDOWS -DWINDOWS64 -DOLDDDITIMER'
+#          set CFLAGS = '-DLINUX -DWINDOWS -DWINDOWS64 -DUSE_DDI_COLLECTIVE_ROUTINES -DOLDDDITIMER'
+           set CFLAGS = '-DLINUX -DWINDOWS -DWINDOWS64 -DOLDDDITIMER'
            if ($GMS_WIN_OPT == baseline)    set CFLAGS = "$CFLAGS -Bstatic -Minform=severe -O0"
            if ($GMS_WIN_OPT == linux)       set CFLAGS = "$CFLAGS -Bstatic -Minform=severe -O2"
            if ($GMS_WIN_OPT == fast)        set CFLAGS = "$CFLAGS -Bstatic -Minform=severe -fast"
-           if ($GMS_WIN_OPT == testing)     set CFLAGS = "$CFLAGS -Bstatic -Minform=severe -fast $GMS_WIN_FLAGS"
+           if ($GMS_WIN_OPT == testing)     set CFLAGS = "$CFLAGS -Bstatic -Minform=severe $GMS_WIN_FLAGS"
            set CFLAGS = "$CFLAGS $GMS_WIN_TP -I./include"
            set NumUS=1
+           set F77_OPTS = ""
            if ($COMM == mpi) then
              echo "----------------------------------------------   ATTENTION   ----------------------------------------------"
              echo "- We are using MPI and not TCP/IP sockets so please ignore the following compiler warning message:        -"
@@ -994,7 +1010,7 @@ endif
            exit 4
      endsw
      set CLIBS  = ' '
-     set F77_OPTS = "-DINT_SIZE=__int64 -D_UNDERSCORES=$NumUS $GMS_WIN_FLAGS"
+     set F77_OPTS = "-DINT_SIZE=__int64 -D_UNDERSCORES=$NumUS $F77_OPTS $GMS_WIN_FLAGS"
      set AR_FLAGS     = 'cr'
      set RANLIB_FLAGS = ' '
   endif
@@ -1028,7 +1044,19 @@ endif
   if($COMM == mpi)   then
      switch ($GMS_MPI_LIB)
         case msmpi:
-           set CFLAGS = "$CFLAGS -Mmpi=msmpi"
+           if ($GMS_FORTRAN == pgf77) set CFLAGS = "$CFLAGS -Mmpi=msmpi"
+           if ($GMS_FORTRAN == ifort) then
+             if ($?MSMPI_INC) then
+               echo "MPI headers path: $MSMPI_INC"
+               # We set EXTRA_FLAGS, instead of CFLAGS as we want to
+               # properly pass through spaces in MSMPI_INC to the compiler.
+               # Setting -I$MSMPI_INC in CFLAGS causes problems with whitespace
+               set EXTRA_FLAGS="-I$MSMPI_INC"
+             else
+               echo "Set MSMPI_INC to the include path for Microsoft MPI and try again"
+               exit 1
+             endif
+           endif
            breaksw
         case Cray-XT-MPI:
         case IBM-BlueGene-MPI:
@@ -1057,8 +1085,9 @@ endif
               )
     echo "Compiling common object: $OBJ.o"
     set echo
-    $CC $CFLAGS $DDI_OPTS -o $OBJ.o -c $OBJ.c
+    $CC $CFLAGS $EXTRA_FLAGS:q $DDI_OPTS -o $OBJ.o -c $OBJ.c
     unset echo
+    if(-e $OBJ.obj) mv -v $OBJ.obj $OBJ.o
     if(-e $OBJ.o) then
        echo "Finished compiling: $OBJ.o"
     else
@@ -1115,9 +1144,17 @@ endif
 
   foreach OBJ ($OBJ_LIST) 
     echo "Compiling DDI object: $OBJ.o"
-    set echo
-    $CC $CFLAGS $DDI_OPTS -o $OBJ.o -c $OBJ.c
+    if(($OBJ == windows) && ($GMS_FORTRAN == ifort)) then
+      set WFLAGS = '-DLINUX -DWINDOWS -DWINDOWS64 -DWINTEL -DOLDDDITIMER'
+      set WFLAGS = "$WFLAGS -Od $GMS_WIN_TP -I./include"
+      set echo
+      $CC $WFLAGS $EXTRA_FLAGS:q $DDI_OPTS -o $OBJ.o -c $OBJ.c
+    else
+      set echo
+      $CC $CFLAGS $EXTRA_FLAGS:q $DDI_OPTS -o $OBJ.o -c $OBJ.c
+    endif
     unset echo
+    if(-e $OBJ.obj) mv -v $OBJ.obj $OBJ.o
     if(-e $OBJ.o) then
        echo "Finished compiling: $OBJ.o"
     else
@@ -1136,8 +1173,9 @@ endif
   chdir src
   echo "Compiling FORTRAN wrappers for DDI"
   set echo
-  $CC $CFLAGS $DDI_OPTS $F77_OPTS -o ddi_fortran.o -c ddi_fortran.c
+  $CC $CFLAGS $EXTRA_FLAGS:q $DDI_OPTS $F77_OPTS -o ddi_fortran.o -c ddi_fortran.c
   unset echo
+  if(-e ddi_fortran.obj) mv -v ddi_fortran.obj ddi_fortran.o
   if(-e ddi_fortran.o) then
      echo "Finished compiling: ddi_fortran.o"
   else

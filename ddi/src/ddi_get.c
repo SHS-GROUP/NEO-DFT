@@ -83,7 +83,11 @@
    /* ------------------------------------- *\
       Ensure the patch has the correct info
    \* ------------------------------------- */
+    # if defined WINTEL
+      patch->oper   = DDI_GET_OP;
+    # else
       patch->oper   = DDI_GET;
+    # endif
       patch->handle = handle;
 
 
