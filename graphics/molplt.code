@@ -1,0 +1,1507 @@
+C 30 Jun 05 - MWS - bump number of atoms to 2000 to match GAMESS
+C 11 OCT 93 - HS  - ROTATE IN STEPS, ELIMINATE BOX DRIFT PROBLEM
+C 26 APR 93 - MWS - REMOVE PANSOPHICS VERSION
+C 16 JUN 92 - MWS - MAKE SURE THIS PROGRAM RUNS SERIALLY
+C 17 FEB 92 - MWS - HUMOR TOM BY SPELLING RUTHENIUM AS RU
+C  7 JAN 92 - MWS - ADD POSTSCRIPT VERSION
+C  3 JAN 92 - MWS - FIX THE 'BL' SUBCOMMAND
+C 19 JUN 91 - MWS - PASS IW INTO DRWMOL
+C 22 MAR 91 - MK  - INCORPORATE FREQUENCY INTO PLOT TITLE.
+C 07 NOV 90 - JAB - USE MXATM=2000 PARAMETER, ALLOW 104 ELEMENTS
+C 31 AUG 90 - MWS - FIX BALL SIZE BUG, AUTOMATIC REDRAW AFTER CHANGES
+C 20 MAR 90 - MWS - X-WINDOWS VERSION, ADDED OPTIONS TO READ MANY
+C                   NORMAL MODES, AND ATOM BONDING.
+C 25 MAY 87 - MWS - FIX BUG WITH H-H BONDING AND STARTING NORMAL
+C                   MODE FROM BALL SURFACE. TRACE BALLS 3 TIMES.
+C  5 MAR 87 - MWS - PORT INTO VAX/VMS, USING DPICT/GKS+CALCOMP,
+C                   KEYWORD DRIVEN INPUT, INTERACTIVE MANIPULATION
+C                   OF THE PLOT, BOFFO HELP MENU.
+C 15 APR 85 - JAB - FIX NORMAL MODE PHASE REVERSAL
+C 31 MAY 84 - TNT - ALLOW STICKS TO INDICATE NORMAL MODE VIBRATION
+C 18 NOV 83 - MWS - IMPROVE HIDDEN LINE ALGORITHMS IN BALL,STICK
+C                   VECTOR DRAW OF BONDS, FIX SCALING
+C  3 AUG 83 - MWS - EXTRACT MOLPLT FROM DICK'S EDPROG, ALLOW COLORS
+C
+C*DECK MOLPLT
+C     --------------
+      PROGRAM MOLPLT
+C     --------------
+      IMPLICIT REAL(A-H,O-Z)
+      REAL RSIZE
+      DIMENSION ATMASS(104)
+      LOGICAL QUIT,FIRST,ERROR,GOPARR,DSKWRK,MASWRK
+      PARAMETER (MXATM=2000)
+      PARAMETER (NBMAX=2000)
+      DIMENSION IBD(NBMAX),JBD(NBMAX)
+      CHARACTER*80 TITLE
+      CHARACTER*4 ATSYMB(104)
+      COMMON /MPDATA/ X0(MXATM),Y0(MXATM),Z0(MXATM),
+     *                DX0(MXATM),DY0(MXATM),DZ0(MXATM),
+     *                X(MXATM),Y(MXATM),Z(MXATM),
+     *                DX(MXATM),DY(MXATM),DZ(MXATM),
+     *                KIND(MXATM),BSIZ(MXATM),SQMASS(MXATM),
+     *                IZAT(104),SIZE(104),KOLORS(104),
+     *                SIZEP,VIEW,SCALEM,BNDWID,BNDLEN,
+     *                NATOMS,NKINDS,NBONDS,KOLOR,MODE,NOBOX
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+*XW   INTEGER WNAME(3)
+*XW   DATA WNAME/4HMOLP,4HLT  ,0/
+*PS   INTEGER WNAME(3)
+*PS   DATA WNAME/4HMOLP,4HLT  ,0/
+C
+C  THIS PROGRAM GENERATES BALL AND STICK MOLECULAR FIGURES.
+C  A NORMAL MODE OF VIBRATION CAN OPTIONALLY BE DISPLAYED.
+C  ONCE DRAWN, EVERYTHING ABOUT THE MOLECULE'S PICTURE CAN
+C  BE CHANGED.  THE INTERACTIVE CHANGES INCLUDE ARBITRARY ROTATION,
+C  ALTERED PERSPECTIVE, COLOR CHANGES, ETC.
+C----------------------------------------------------------------
+C  THIS PROGRAM WAS EXTRACTED FROM THE PROGRAM EDPROG, WHICH
+C  WAS THE ELECTRON DIFFRACTION ANALYSIS PROGRAM USED BY
+C  DICK HILDERBRANDT'S GROUP AT NORTH DAKOTA STATE UNIVERSITY.
+C  A STAND-ALONE BATCH VERSION WAS REMOVED FROM THAT PROGRAM
+C  IN AUGUST OF 1983 BY MIKE SCHMIDT.  IN MAY OF 1984 THANH
+C  TRUONG ADDED THE OPTION TO DISPLAY A NORMAL MODE OF
+C  VIBRATION.  IN MARCH OF 1987 THIS PROGRAM WAS MADE FULLY
+C  INTERACTIVE AND MENU DRIVEN, BY MIKE SCHMIDT.
+C----------------------------------------------------------------
+C  FOR FURTHER INFORMATION ON THIS PROGRAM, CONTACT
+C             Mike Schmidt
+C  U.S. MAIL: 201 Spedding Hall
+C             Iowa State University
+C             Ames, IA 50011
+C     E-MAIL: MIKE@SI.MSG.CHEM.IASTATE.EDU
+C---------------------------------------------------------------
+C
+C           THIS PROGRAM RUNS IN SEQUENTIAL MODE
+C
+      ME = 0
+      MASTER = 0
+      NPROC = 1
+      MASWRK = ME.EQ.MASTER
+      DSKWRK = .FALSE.
+C
+      CALL FILLAT(ATSYMB,ATMASS)
+C
+C  I/O FILES USED BY THIS PROGRAM ARE
+C    IMOL = MOLECULAR INPUT/OUTPUT (SEE DOCUMENTATION)
+C    IR   = INTERACTIVE INPUT (MENU DRIVEN, SELF-EXPLANATORY)
+C    IW   = INTERACTIVE OUTPUT (ERROR MESSAGES, MOSTLY)
+C
+      IMOL=1
+      IR=5
+      IW=6
+C
+C        READ THE MOLECULAR INPUT FROM DISK, THEN
+C        SWITCH TO TAKING INPUT FROM THE KEYBOARD.
+C
+      CALL OPNCRD(IMOL,-IW)
+      CALL RDMOL(IMOL,IW,TITLE,ATSYMB,ATMASS,IBD,JBD,NBMAX,ICHEM3)
+C
+C  ONE OF THE TWO CHEM3D OPTIONS ARE CHOSEN.  NO PLOT WILL MADE.
+C
+      IF(ICHEM3.GE.1) THEN
+         CALL CHEWRT(IW,IMOL,ATSYMB,TITLE,IBD,JBD,NBMAX,ICHEM3)
+         GO TO 999
+      END IF
+
+      CALL OPNCRD(IR,0)
+C
+C     ----- OPEN THE CALCOMP PLOTTING SYSTEM -----
+C     THE SCREEN AREA USED IS 18.6 BY 14.0, RATIO=13.3 TO 10.
+C     THE MOLECULE BOX IS 14 BY 14, THE HELP PANEL 4.6 BY 14.
+C
+*XW   CALL OPENCC(19.0,14.4,0,WNAME)
+*XW   CALL PLOT(0.2,0.2,-3)
+C
+*PS   CALL OPENPS(19.0,14.4,0,WNAME)
+*PS   CALL PLOT(0.2,0.2,-3)
+C
+      RSIZE = SIZEP
+      CALL FACTOR(RSIZE)
+C
+C        DRAW THE MOLECULE
+C
+      FIRST=.TRUE.
+      ERROR=.FALSE.
+  100 CONTINUE
+         IF(NOBOX.EQ.0) CALL TITLNG(TITLE)
+         CALL DRWMOL(IW,ERROR,IBD,JBD,NBMAX)
+         IF(ERROR) GO TO 200
+C
+*XW      CALL MENU
+*XW      CALL FLSHCC
+C
+*PS      CALL EJCTPS
+*PS      IF(FIRST) GO TO 200
+C
+         CALL RDOPT(IW,IMOL,QUIT,ATSYMB,TITLE,IBD,JBD,NBMAX)
+         IF(QUIT) GO TO 200
+*XW      CALL XWINSZ(IDUM1,IDUM2) 
+*XW      CALL ERASE
+*XW      CALL PLOT(0.2,0.2,-3)
+      GO TO 100
+C
+C        CLOSE CALCOMP PLOTTING SYSTEM
+C
+  200 CONTINUE
+*XW   CALL CLOSCC
+*PS   CALL CLOSPS
+C
+  999 CONTINUE
+      STOP
+      END
+C*DECK FILLAT
+C     --------------------------------
+      SUBROUTINE FILLAT(ATSYMB,ATMASS)
+C     --------------------------------
+      CHARACTER*4 ASY(104),ATSYMB(104)
+      DIMENSION  AMS(104),ATMASS(104)
+      DATA ASY/'H   ','HE  ','LI  ','BE  ','B   ','C   ',
+     *         'N   ','O   ','F   ','NE  ','NA  ','MG  ',
+     *         'AL  ','SI  ','P   ','S   ','CL  ','AR  ',
+     *         'K   ','CA  ','SC  ','TI  ','V   ','CR  ',
+     *         'MN  ','FE  ','CO  ','NI  ','CU  ','ZN  ',
+     *         'GA  ','GE  ','AS  ','SE  ','BR  ','KR  ',
+     *         'RB  ','SR  ','Y   ','ZR  ','NB  ','MO  ',
+     *         'TC  ','RU  ','RH  ','PD  ','AG  ','CD  ',
+     *         'IN  ','SN  ','SB  ','TE  ','I   ','XE  ',
+     *         'CS  ','BA  ','LA  ','CE  ','PR  ','ND  ',
+     *         'PM  ','SM  ','EU  ','GD  ','TB  ','DY  ',
+     *         'HO  ','ER  ','TM  ','YB  ','LU  ','HF  ',
+     *         'TA  ','W   ','RE  ','OS  ','IR  ','PT  ',
+     *         'AU  ','HG  ','TL  ','PB  ','BI  ','PO  ',
+     *         'AT  ','RN  ','FR  ','RA  ','AC  ','TH  ',
+     *         'PA  ','U   ','NP  ','PU  ','AM  ','CM  ',
+     *         'BK  ','CF  ','ES  ','FM  ','MD  ','NO  ',
+     *         'LR  ','RF  '/
+C                     MASS OF MOST ABUNDANT ISOTOPE,
+C                     OR LONGEST LIVED ISOTOPE.
+      DATA (AMS(I),I=1,54)
+     *  /1.007825E+00,4.0226E+00,7.01600E+00,9.01218E+00,11.00931E+00,
+     *   12.0E+00,14.00307E+00,15.99491E+00,18.99840E+00,19.99244E+00,
+     *   22.9398E+00,23.98504E+00,26.98153E+00,27.97693E+00,
+     *   30.99376E+00,31.97207E+00,34.96885E+00,39.948E+00,
+     *   38.96371E+00,39.96259E+00,44.95592E+00,47.90E+00,50.9440E+00,
+     *   51.9405E+00,54.9381E+00,55.9349E+00,58.9332E+00,57.9353E+00,
+     *   62.9298E+00,63.9291E+00,68.9257E+00,73.9219E+00,74.9216E+00,
+     *   79.9165E+00,78.9183E+00,83.9115E+00,
+     *   84.9117E+00,87.9056E+00,89.9054E+00,89.9043E+00,92.9060E+00,
+     *   97.9055E+00,97.0E+00,101.9037E+00,102.948E+00,105.9032E+00,
+     *   106.941E+00,113.9036E+00,114.9041E+00,119.9022E+00,
+     *   120.9038E+00,129.9067E+00,126.9044E+00,131.9042E+00/
+      DATA (AMS(I),I=55,104)
+     *  /132.9054E+00,137.9050E+00,138.9061E+00,139.9054E+00,
+     *   140.9076E+00,141.9077E+00,145.0E+00   ,151.9198E+00,
+     *   152.9212E+00,157.9242E+00,158.9254E+00,163.9292E+00,
+     *   164.9292E+00,165.9303E+00,168.9342E+00,173.9387E+00,
+     *   174.9406E+00,179.947 E+00,180.9480E+00,183.9510E+00,
+     *   186.9558E+00,191.9615E+00,192.9630E+00,194.9650E+00,
+     *   196.9665E+00,201.9706E+00,204.9744E+00,207.97665E+00,
+     *   208.98039E+00,208.9824E+00,210.0E+00,222.0175E+00,
+     *   223.0197E+00,226.0254E+00,227.0279E+00,232.0381E+00,
+     *   231.0359E+00,238.0508E+00,237.0481E+00,242.0587E+00,
+     *   243.0614E+00,247.07E+00,247.0703E+00,249.0747E+00,
+     *   254.0E+00,257.0E+00,258.0E+00,257.0E+00,257.0E+00,259.0E+00/
+C
+      DO 100 I=1,104
+         ATMASS(I) = AMS(I)
+         ATSYMB(I) = ASY(I)
+  100 CONTINUE
+      RETURN
+      END
+C*DECK RDMOL
+C     -----------------------------------------------------------
+      SUBROUTINE RDMOL(IMOL,IW,TITLE,ATSYMB,ATMASS,IBD,JBD,NBMAX,ICHEM3)   
+C     -----------------------------------------------------------
+      IMPLICIT REAL(A-H,O-Z)
+      CHARACTER*4   ATSYMB(104),ATOM,KEYWRD,BLANK
+      CHARACTER*80  TITLE
+*UNX  CHARACTER*256 FNAME
+      DOUBLE PRECISION RFIND
+      DIMENSION IBD(NBMAX),JBD(NBMAX)
+      DIMENSION ATMASS(104)
+      PARAMETER (ZERO=0.0E+00)
+      PARAMETER (MXATM=2000)
+      COMMON /MPDATA/ X0(MXATM),Y0(MXATM),Z0(MXATM),
+     *                DX0(MXATM),DY0(MXATM),DZ0(MXATM),
+     *                X(MXATM),Y(MXATM),Z(MXATM),
+     *                DX(MXATM),DY(MXATM),DZ(MXATM),
+     *                KIND(MXATM),BSIZ(MXATM),SQMASS(MXATM),
+     *                IZAT(104),SIZE(104),KOLORS(104),
+     *                SIZEP,VIEW,SCALEM,BNDWID,BNDLEN,
+     *                NATOMS,NKINDS,NBONDS,KOLOR,MODE,NOBOX
+      DATA BLANK/'    '/
+C
+C     ----- READ THE INITIAL MOLECULAR DATA FILE -----
+C
+*VMS  OPEN (UNIT=IMOL, FILE='MOLPLT', STATUS='OLD', READONLY,
+*VMS *      FORM='FORMATTED', ACCESS='SEQUENTIAL', SHARED)
+C
+*UNX  CALL GETENV('MOLPLT',FNAME)
+*UNX  IF(FNAME(1:1).EQ.' ') THEN
+*UNX     WRITE(IW,*) 'YOU MUST ASSIGN MOLPLT TO YOUR INPUT FILE BY'
+*UNX     WRITE(IW,*) '    SETENV MOLPLT MY_INPUT_FILE_NAME'
+*UNX     STOP
+*UNX  END IF
+*UNX  OPEN (UNIT=IMOL, FILE=FNAME, STATUS='OLD',
+*UNX *      FORM='FORMATTED', ACCESS='SEQUENTIAL')
+C
+*IBM  OPEN (UNIT=IMOL, FILE='MOLPLT', STATUS='OLD',
+*IBM *      FORM='FORMATTED', ACCESS='SEQUENTIAL')
+C
+      IEOF=0
+      IERR=0
+C
+      NATOMS=0
+      NKINDS=0
+      KOLOR=1
+      NBONDS=0
+      MODE=0
+      SIZEP=1.0
+      VIEW=10.0
+      BNDWID=0.03
+      BNDLEN=2.0
+      SCALEM=1.0
+      NOBOX=0
+      ICHEM3=0
+C
+C        READ FRESH OPTIONS CARD
+C
+  100 CONTINUE
+      CALL RDCARD('RDMOL  1',IEOF)
+      IF(IEOF.EQ.1) GO TO 800
+C
+C        READ NEXT KEYWORD FROM CARD
+C
+  110 CONTINUE
+      CALL GSTRNG(KEYWRD,-4)
+      IF(KEYWRD.EQ.BLANK) GO TO 100
+C
+C        CHECK FOR VALID KEYWORDS
+C
+      IF(KEYWRD.EQ.'NATO') THEN
+         NATOMS=IFIND('NATOMS  ',IERR)
+         IF(IERR.NE.0) GO TO 850
+         IF(NATOMS.GT.MXATM) WRITE(IW,930)
+         IF(NATOMS.GT.MXATM) GO TO 850
+         GO TO 110
+      END IF
+      IF(KEYWRD.EQ.'NKIN') THEN
+         NKINDS=IFIND('NKINDS  ',IERR)
+         IF(IERR.NE.0) GO TO 850
+         IF(NKINDS.GT.104) WRITE(IW,940)
+         IF(NKINDS.GT.104) GO TO 850
+         GO TO 110
+      END IF
+      IF(KEYWRD.EQ.'NBON') THEN
+         NBONDS=IFIND('NBONDS  ',IERR)
+         IF(IERR.NE.0) GO TO 850
+         BNDLEN=0.0D+00
+         IF(NBONDS.GT.NBMAX) THEN
+            WRITE(6,*) 'MAXIMUM NUMBER OF BONDS IS',NBMAX
+            STOP
+         END IF
+         GO TO 110
+      END IF
+      IF(KEYWRD.EQ.'KOLO') THEN
+         KOLOR=IFIND('KOLOR   ',IERR)
+         IF(IERR.NE.0) GO TO 850
+         GO TO 110
+      END IF
+      IF(KEYWRD.EQ.'MODE') THEN
+         MODE=IFIND('MODE    ',IERR)
+         IF(IERR.NE.0) GO TO 850
+         GO TO 110
+      END IF
+      IF(KEYWRD.EQ.'NOBO') THEN
+         NOBOX=IFIND('NOBOX   ',IERR)
+         IF(IERR.NE.0) GO TO 850
+         GO TO 110
+      END IF
+      IF(KEYWRD.EQ.'SIZE') THEN
+         SIZEP=RFIND('SIZE    ',IERR)
+         IF(IERR.NE.0) GO TO 850
+         GO TO 110
+      END IF
+      IF(KEYWRD.EQ.'VIEW') THEN
+         VIEW=RFIND('VIEWDIST',IERR)
+         IF(IERR.NE.0) GO TO 850
+         GO TO 110
+      END IF
+      IF(KEYWRD.EQ.'BNDW') THEN
+         BNDWID=RFIND('BNDWIDTH',IERR)
+         IF(IERR.NE.0) GO TO 850
+         GO TO 110
+      END IF
+      IF(KEYWRD.EQ.'BNDL') THEN
+         BNDLEN=RFIND('BNDLENGT',IERR)
+         IF(IERR.NE.0) GO TO 850
+         GO TO 110
+      END IF
+      IF(KEYWRD.EQ.'SCAL') THEN
+         SCALEM=RFIND('SCALEMOD',IERR)
+         IF(IERR.NE.0) GO TO 850
+         GO TO 110
+      END IF
+      IF(KEYWRD.EQ.'ICHE') THEN
+         ICHEM3=IFIND('CHEM3D  ',IERR)
+         IF(IERR.NE.0) GO TO 850
+         GO TO 110
+      END IF
+C
+C        IF WE GOT HERE, IT MUST BE THE TITLE CARD.
+C        BACK UP TO START OF PREVIOUS ITEM, SCAN OFF TITLE
+C
+      CALL REREAD
+      CALL GSTRNG(TITLE,80)
+C
+      IF(NATOMS*NKINDS.EQ.0) THEN
+            WRITE(IW,920) NATOMS,NKINDS
+            STOP
+         END IF
+C
+C           INPUT THE ATOM TYPE LIST
+C      KIND INFO CONSIST OF NUCLEAR CHARGE, ATOM COLOR, RADIUS
+C
+      DO 260 I=1,NKINDS
+         CALL RDCARD('RDMOL  2',IEOF)
+         IF(IEOF.EQ.1) GO TO 800
+         CALL GSTRNG(ATOM,-4)
+         CALL ATINFO(0,IW,IERR,IZNUC,ITYP,ATOM,ATSYMB)
+         IF(IERR.NE.0) GO TO 850
+         IZAT(I) = IZNUC
+         KOLORS(I)=IFIND('KOLORS(I',IERR)
+               IF(IERR.NE.0) GO TO 850
+         SIZE(I)=RFIND('SIZE(I) ',IERR)
+               IF(IERR.NE.0) GO TO 850
+  260 CONTINUE
+C
+C           INPUT THE ATOMS LIST (NAME, COORDINATES, AND THE NORMAL
+C           MODE DISPLACEMENTS), ONE CARD FOR EACH ATOM.
+C           KIND IS THE TABLE WHICH MAPS THE ATOM IN THE ATOMS LIST
+C           ONTO ITS TYPE IN THE TYPE LIST GIVEN JUST ABOVE.
+C
+      DO 310 I=1,NATOMS
+         CALL RDCARD('RDMOL  3',IEOF)
+         IF(IEOF.EQ.1) GO TO 800
+         CALL GSTRNG(ATOM,-4)
+C                 CHECK THAT THIS KIND OF ATOM IS DEFINED
+         CALL ATINFO(1,IW,IERR,IZNUC,ITYP,ATOM,ATSYMB)
+         IF(IERR.NE.0) GO TO 850
+         KIND(I) = ITYP
+C
+         X0(I)=RFIND('X(I)    ',IERR)
+               IF(IERR.NE.0) GO TO 850
+         Y0(I)=RFIND('Y(I)    ',IERR)
+               IF(IERR.NE.0) GO TO 850
+         Z0(I)=RFIND('Z(I)    ',IERR)
+               IF(IERR.NE.0) GO TO 850
+C
+         DX0(I)=RFIND('DX(I)   ',IERR)
+               IF(IERR.NE.0) GO TO 850
+         DY0(I)=RFIND('DY(I)   ',IERR)
+               IF(IERR.NE.0) GO TO 850
+         DZ0(I)=RFIND('DZ(I)   ',IERR)
+               IF(IERR.NE.0) GO TO 850
+         AMASS=RFIND('ATMASS  ',IERR)
+               IF(IERR.NE.0) GO TO 850
+         IF(AMASS.GT.ZERO) THEN
+            SQMASS(I) = SQRT(AMASS)
+         ELSE
+            SQMASS(I) = SQRT(ATMASS(IZNUC))
+         END IF
+  310 CONTINUE
+C
+C        READ THE OPTIONAL LIST OF BONDS
+C
+      IF(NBONDS.LE.0) GO TO 500
+      CALL RDCARD('RDMOL  4',IEOF)
+      IF(IEOF.EQ.1) GO TO 800
+      CALL GSTRNG(KEYWRD,-4)
+      IF(KEYWRD.NE.'BOND') THEN
+         WRITE(IW,*) 'I WAS EXPECTING THE -BONDATOMS- CARD!'
+         CALL DMPINP(IW)
+      END IF
+      DO 410 I=1,NBONDS
+         IBD(I)=IFIND('I BOND  ',IERR)
+         IF(IERR.NE.0) GO TO 850
+         JBD(I)=IFIND('J BOND  ',IERR)
+         IF(IERR.NE.0) GO TO 850
+  410 CONTINUE
+C
+C       READ MASSES AND NORMAL MODES AS PUNCHED BY GAMESS
+C
+  500 CONTINUE
+      IF(MODE.LE.0) GO TO 600
+      CALL RDCARD('RDMOL  5',IEOF)
+      IF(IEOF.EQ.1) GO TO 800
+      CALL GSTRNG(KEYWRD,-4)
+      IF(KEYWRD.NE.'ATOM') THEN
+         WRITE(IW,*) 'I WAS EXPECTING THE -ATOMIC MASSES- CARD!'
+         CALL DMPINP(IW)
+      END IF
+      READ(IMOL,*) (SQMASS(I),I=1,NATOMS)
+      DO 510 I=1,NATOMS
+         SQMASS(I) = SQRT(SQMASS(I))
+  510 CONTINUE
+C
+      DO 540 I=1,MODE
+         IF(I.EQ.MODE) THEN
+            READ(IMOL,8000) FREQ
+            WRITE(IW,980) FREQ
+            WRITE(UNIT=TITLE(64:78),FMT='(F8.1,'' CM**-1'')') FREQ
+            DO 520 J=1,NATOMS
+               READ(IMOL,*) DX0(J),DY0(J),DZ0(J)
+  520       CONTINUE
+         ELSE
+            READ(IMOL,*)
+            DO 530 J=1,NATOMS
+               READ(IMOL,*)
+  530       CONTINUE
+         END IF
+  540 CONTINUE
+C
+  600 CONTINUE
+      CLOSE(UNIT=IMOL, STATUS='KEEP')
+      RETURN
+C
+C             END OF FILE ON INPUT FILE
+C
+  800 CONTINUE
+      WRITE(IW,900)
+      CLOSE(UNIT=IMOL, STATUS='KEEP')
+      STOP
+C
+C             ERROR SCANNING CARD
+C
+  850 CONTINUE
+      WRITE(IW,910)
+      CLOSE(UNIT=IMOL, STATUS='KEEP')
+      STOP
+C
+ 8000 FORMAT(4X,5X,13X,F10.5)
+  900 FORMAT(1X,'* * * ERROR * * * END OF INPUT FILE HIT!')
+  910 FORMAT(1X,'* * * ERROR * * * SCANNING INPUT CARD!')
+  920 FORMAT(1X,'NKINDS AND NATOMS ARE BOTH REQUIRED.'/
+     *       1X,'NKINDS=',I5,' NATOMS=',I5)
+  930 FORMAT(1X,'TOO MANY ATOMS')
+  940 FORMAT(1X,'TOO MANY DIFFERENT KINDS OF ATOMS')
+  970 FORMAT(1X,'ATOM ',A4,' DOES NOT MATCH ANY ATOM IN KIND LIST')
+  980 FORMAT(1X,'DRAWING MODE AT FREQUENCY=',F8.1)
+      END
+C*DECK ATINFO
+C     ------------------------------------------------------
+      SUBROUTINE ATINFO(ICALL,IW,IERR,IZNUC,ITYP,ATOM,ATSYMB)
+C     ------------------------------------------------------
+      IMPLICIT REAL(A-H,O-Z)
+      CHARACTER*4 ATOM,ATSYMB(104)
+      PARAMETER (MXATM=2000)
+      COMMON /MPDATA/ X0(MXATM),Y0(MXATM),Z0(MXATM),
+     *                DX0(MXATM),DY0(MXATM),DZ0(MXATM),
+     *                X(MXATM),Y(MXATM),Z(MXATM),
+     *                DX(MXATM),DY(MXATM),DZ(MXATM),
+     *                KIND(MXATM),BSIZ(MXATM),SQMASS(MXATM),
+     *                IZAT(104),SIZE(104),KOLORS(104),
+     *                SIZEP,VIEW,SCALEM,BNDWID,BNDLEN,
+     *                NATOMS,NKINDS,NBONDS,KOLOR,MODE,NOBOX
+C
+C     ----- RETURN ATOMIC CHARGE, MAYBE ATOMIC TYPE NUMBER -----
+C
+      IERR=0
+      DO 100 J=1,104
+         IF(ATOM.EQ.ATSYMB(J)) GO TO 120
+  100 CONTINUE
+      WRITE(IW,950) ATOM
+      IERR=1
+      RETURN
+C
+  120 CONTINUE
+      IZNUC = J
+      IF(ICALL.EQ.0) RETURN
+C                    ******
+C              DETERMINE ATOM TYPE NUMBER
+C
+      DO 200 J=1,NKINDS
+         IF(IZNUC.EQ.IZAT(J)) GO TO 220
+  200 CONTINUE
+      WRITE(IW,960) ATOM
+      IERR=1
+      RETURN
+C
+  220 CONTINUE
+      ITYP=J
+      RETURN
+C
+  950 FORMAT(1X,'ILLEGAL CHEMICAL SYMBOL ',A4,'IN INPUT.')
+  960 FORMAT(1X,'ATOM TYPE ',A4,' WAS NOT GIVEN IN INPUT KIND LIST.')
+      END
+C*DECK TITLNG
+C     ------------------------
+      SUBROUTINE TITLNG(TITLE)
+C     ------------------------
+      CHARACTER*80 TITLE
+      CHARACTER*6  PROGM
+      CHARACTER*3  ISU
+      PARAMETER (MXATM=2000)
+      COMMON /MPDATA/ X0(MXATM),Y0(MXATM),Z0(MXATM),
+     *                DX0(MXATM),DY0(MXATM),DZ0(MXATM),
+     *                X(MXATM),Y(MXATM),Z(MXATM),
+     *                DX(MXATM),DY(MXATM),DZ(MXATM),
+     *                KIND(MXATM),BSIZ(MXATM),SQMASS(MXATM),
+     *                IZAT(104),SIZE(104),KOLORS(104),
+     *                SIZEP,VIEW,SCALEM,BNDWID,BNDLEN,
+     *                NATOMS,NKINDS,NBONDS,KOLOR,MODE,NOBOX
+      DATA ISU/'ISU'/, PROGM/'MOLPLT'/
+C
+C        ----- DRAW BOX AROUND PLOT, AND DO TITLING -----
+C
+      CALL NEWPEN(KOLOR)
+      CALL PLOT( 0.0, 0.0,3)
+      CALL PLOT( 0.0,14.0,2)
+      CALL PLOT(14.0,14.0,2)
+      CALL PLOT(14.0, 0.0,2)
+      CALL PLOT( 0.0, 0.0,2)
+C
+      CALL SYMBL(0.3,13.3,0.50,ISU,0.0,3)
+      CALL SYMBL(10.0,13.3,0.50,PROGM,0.0,6)
+      CALL SYMBL(0.3,0.80,0.35,TITLE,0.0,40)
+      CALL SYMBL(0.3,0.3,0.35,TITLE(41:80),0.0,40)
+      RETURN
+      END
+C*DECK DRWMOL
+C     -----------------------------------------
+      SUBROUTINE DRWMOL(IW,ERROR,IBD,JBD,NBMAX)
+C     -----------------------------------------
+      IMPLICIT REAL(A-H,O-Z)
+      DIMENSION IBD(NBMAX),JBD(NBMAX)
+      LOGICAL ERROR
+      PARAMETER (ZERO=0.0E+00)
+      PARAMETER (MXATM=2000)
+      COMMON /MPDATA/ X0(MXATM),Y0(MXATM),Z0(MXATM),
+     *                DX0(MXATM),DY0(MXATM),DZ0(MXATM),
+     *                X(MXATM),Y(MXATM),Z(MXATM),
+     *                DX(MXATM),DY(MXATM),DZ(MXATM),
+     *                KIND(MXATM),BSIZ(MXATM),SQMASS(MXATM),
+     *                IZAT(104),SIZE(104),KOLORS(104),
+     *                SIZEP,VIEW,SCALEM,BNDWID,BNDLEN,
+     *                NATOMS,NKINDS,NBONDS,KOLOR,MODE,NOBOX
+C
+C     ----- DRAW THE ATOMIC SPHERES, BONDS, AND NORMAL MODE -----
+C
+C              ESTABLISH ORIGIN IN MIDDLE OF 14X14 PLOT AREA
+C
+      ERROR=.FALSE.
+      CALL PLOT(7.0,7.0,-3)
+      CALL CENTER(BIGGST)
+C
+C        SCALE MOLECULE TO FIT AVAILABLE AREA, ADDING PERSPECTIVE.
+C
+C        IF A NORMAL MODE IS TO BE DRAWN, GENERATE POINT (DX,DY,DZ)
+C        USING THE DISPLACEMENT VECTOR (DX0,DY0,DZ0) FROM THE ATOM
+C        CENTER (X0,Y0,Z0).  TO ENHANCE VIEWING OF SMALL DISPLACEMENTS,
+C        THE DISPLACEMENT IS MASS-WEIGHTED, AND STARTS AT THE ATOM
+C        SPHERE'S SURFACE, RATHER THAN THE CENTER.
+C
+      SCALE=4.5/BIGGST
+      VDIST = VIEW*SCALE
+      DO 200 I=1,NATOMS
+         Z(I)=Z0(I)*SCALE
+         X(I)=X0(I)*SCALE*VDIST/(VDIST-Z(I))
+         Y(I)=Y0(I)*SCALE*VDIST/(VDIST-Z(I))
+         BSIZ(I)=SIZE(KIND(I))*SCALE*VDIST/(VDIST-Z(I))
+         IF(MODE.NE.0) THEN
+               SC = SCALEM*SQMASS(I)
+               SIZ = BSIZ(I)
+               IF(SCALEM.LT.ZERO) SIZ = -SIZ
+               DX(I) = X0(I) + SIZ*DX0(I) + SC*DX0(I)
+               DY(I) = Y0(I) + SIZ*DY0(I) + SC*DY0(I)
+               DZ(I) = Z0(I) + SIZ*DZ0(I) + SC*DZ0(I)
+               DZ(I)=DZ(I)*SCALE
+               DX(I)=DX(I)*SCALE*VDIST/(VDIST-DZ(I))
+               DY(I)=DY(I)*SCALE*VDIST/(VDIST-DZ(I))
+            END IF
+  200 CONTINUE
+C
+C              DRAW A SPHERE FOR EACH ATOM
+C
+      DO 300 I=1,NATOMS
+         KOL = KOLORS(KIND(I))
+         CALL NEWPEN(KOL)
+         CALL BALL(I,1.00)
+         CALL BALL(I,0.975)
+         CALL BALL(I,0.950)
+  300 CONTINUE
+C
+C             FIND ALL DISTANCES SHORTER THAN BNDLEN, EXCEPT H-H
+C
+      IF(BNDLEN.LE.ZERO) GO TO 500
+      NBONDS = 0
+      DO 410 I=2,NATOMS
+         DO 400 J=1,I-1
+            IF(IZAT(KIND(I))*IZAT(KIND(J)).EQ.1) GO TO 400
+            IF(DSTNCE(I,J).GT.BNDLEN) GO TO 400
+            NBONDS=NBONDS+1
+            IF(NBONDS.GT.NBMAX) GO TO 890
+            IBD(NBONDS)=I
+            JBD(NBONDS)=J
+  400    CONTINUE
+  410 CONTINUE
+C
+C            DRAW BONDS WHERE APPROPRIATE
+C            SKIP BONDS IF THE WIDTH IS ZERO.
+C
+  500 CONTINUE
+      CALL NEWPEN(KOLOR)
+      IF(BNDWID.EQ.ZERO) GO TO 600
+C
+C            A BOND CONSISTS OF NLINES STRAIGHT LINES,
+C            HILDERBRANDT'S VERSION HAD NLINES=20
+C
+      NLINES=7
+      DO 580 IJ=1,NBONDS
+         I=IBD(IJ)
+         J=JBD(IJ)
+         DELTX=X(J)-X(I)
+         DELTY=Y(J)-Y(I)
+         DELTZ=Z(J)-Z(I)
+         DD=SQRT(DELTX*DELTX+DELTY*DELTY)
+         IF(DD.LT.BSIZ(I)) GO TO 580
+         IF(DD.LT.BSIZ(J)) GO TO 580
+         DELTXYZ=SQRT(DD*DD+DELTZ*DELTZ)
+         IF(DELTZ.LT.ZERO) THEN
+               DELTXI=BSIZ(I)*DELTX/DD
+               DELTYI=BSIZ(I)*DELTY/DD
+               DELTXJ=BSIZ(J)*DELTX/DELTXYZ
+               DELTYJ=BSIZ(J)*DELTY/DELTXYZ
+            ELSE
+               DELTXI=BSIZ(I)*DELTX/DELTXYZ
+               DELTYI=BSIZ(I)*DELTY/DELTXYZ
+               DELTXJ=BSIZ(J)*DELTX/DD
+               DELTYJ=BSIZ(J)*DELTY/DD
+            END IF
+         DO 560 LL=1,NLINES
+            BDSZ=BNDWID*FLOAT(LL-1)/FLOAT(NLINES-1)
+            DDI=BDSZ*SCALE*VDIST/(VDIST-Z(I))
+            DDJ=BDSZ*SCALE*VDIST/(VDIST-Z(J))
+            X1=X(I)+DELTXI-DDI*DELTY/DD
+            Y1=Y(I)+DELTYI+DDI*DELTX/DD
+            X2=X(J)-DELTXJ-DDJ*DELTY/DD
+            Y2=Y(J)-DELTYJ+DDJ*DELTX/DD
+            CALL STICK(X1,Y1,X2,Y2,I,J)
+            X3=X(J)-DELTXJ+DDJ*DELTY/DD
+            Y3=Y(J)-DELTYJ-DDJ*DELTX/DD
+            CALL STICK(X2,Y2,X3,Y3,J,J)
+            X4=X(I)+DELTXI+DDI*DELTY/DD
+            Y4=Y(I)+DELTYI-DDI*DELTX/DD
+            CALL STICK(X3,Y3,X4,Y4,J,I)
+            X5=X(I)+DELTXI-DDI*DELTY/DD
+            Y5=Y(I)+DELTYI+DDI*DELTX/DD
+            CALL STICK(X4,Y4,X5,Y5,I,I)
+  560    CONTINUE
+  580 CONTINUE
+C
+C        SHOW NORMAL MODE DISPLACEMENTS
+C
+  600 CONTINUE
+      IF(MODE.EQ.0) GO TO 700
+      NLINES=3
+      DO 680 I=1,NATOMS
+         DELTX=DX(I)-X(I)
+         DELTY=DY(I)-Y(I)
+         DELTZ=DZ(I)-Z(I)
+         DD=SQRT(DELTX*DELTX+DELTY*DELTY)
+         IF(DD.LT.BSIZ(I)) GO TO 680
+         DELTXYZ=SQRT(DD*DD+DELTZ*DELTZ)
+         IF(DELTZ.LT.ZERO) THEN
+               DELTXI=BSIZ(I)*DELTX/DD
+               DELTYI=BSIZ(I)*DELTY/DD
+            ELSE
+               DELTXI=BSIZ(I)*DELTX/DELTXYZ
+               DELTYI=BSIZ(I)*DELTY/DELTXYZ
+            END IF
+         DO 660 LL=1,NLINES
+            BDSZ=BNDWID*FLOAT(LL-1)/FLOAT(NLINES-1)
+            DDI=BDSZ*SCALE*VDIST/(VDIST-Z(I))
+            X1=X(I)+DELTXI-DDI*DELTY/DD
+            Y1=Y(I)+DELTYI+DDI*DELTX/DD
+            X2=DX(I)
+            Y2=DY(I)
+            CALL STICK(X1,Y1,X2,Y2,I,I)
+            X3=X2
+            Y3=Y2
+            X4=X(I)+DELTXI+DDI*DELTY/DD
+            Y4=Y(I)+DELTYI-DDI*DELTX/DD
+            CALL STICK(X3,Y3,X4,Y4,I,I)
+            X5=X(I)+DELTXI-DDI*DELTY/DD
+            Y5=Y(I)+DELTYI+DDI*DELTX/DD
+            CALL STICK(X4,Y4,X5,Y5,I,I)
+  660    CONTINUE
+  680 CONTINUE
+C
+C        PUT ORIGIN BACK INTO LOWER RIGHT CORNER OF PLOT AREA
+C
+  700 CONTINUE
+      CALL PLOT(-7.0,-7.0,-3)
+      RETURN
+C
+C        EXCEEDED DIMENSION OF BOND ARRAYS
+C
+  890 CONTINUE
+      WRITE(IW,900) I,J,NBMAX
+      ERROR=.TRUE.
+      RETURN
+  900 FORMAT(1X,'TOO MANY BONDS, I,J=',2I6,' REDIMENSION NBMAX=',2I6)
+      END
+C*DECK CENTER
+C     -------------------------
+      SUBROUTINE CENTER(BIGGST)
+C     -------------------------
+      IMPLICIT REAL(A-H,O-Z)
+      PARAMETER (ZERO=0.0E+00, TWO=2.0E+00)
+      PARAMETER (MXATM=2000)
+      COMMON /MPDATA/ X0(MXATM),Y0(MXATM),Z0(MXATM),
+     *                DX0(MXATM),DY0(MXATM),DZ0(MXATM),
+     *                X(MXATM),Y(MXATM),Z(MXATM),
+     *                DX(MXATM),DY(MXATM),DZ(MXATM),
+     *                KIND(MXATM),BSIZ(MXATM),SQMASS(MXATM),
+     *                IZAT(104),SIZE(104),KOLORS(104),
+     *                SIZEP,VIEW,SCALEM,BNDWID,BNDLEN,
+     *                NATOMS,NKINDS,NBONDS,KOLOR,MODE,NOBOX
+C
+C     ----- CENTER THE MOLECULE'S CURRENT COORDINATES -----
+C     THE PERSPECTIVE ALGORITHM CAN MAKE A MOLECULE APPEAR
+C     TO BE OFF CENTER, IF VIEW IS RELATIVELY SMALL.
+C
+      XMIN = ZERO
+      XMAX = ZERO
+      YMIN = ZERO
+      YMAX = ZERO
+      ZMIN = ZERO
+      ZMAX = ZERO
+C
+      DO 100 I=1,NATOMS
+         IF(X0(I).GT.ZERO) THEN
+               XX = X0(I) + SIZE(KIND(I))
+               IF(DX0(I).GT.ZERO) XX = XX + SCALEM*SQMASS(I)*DX0(I)
+            ELSE
+               XX = X0(I) - SIZE(KIND(I))
+               IF(DX0(I).LT.ZERO) XX = XX + SCALEM*SQMASS(I)*DX0(I)
+            END IF
+         IF(Y0(I).GT.ZERO) THEN
+               YY = Y0(I) + SIZE(KIND(I))
+               IF(DY0(I).GT.ZERO) YY = YY + SCALEM*SQMASS(I)*DY0(I)
+            ELSE
+               YY = Y0(I) - SIZE(KIND(I))
+               IF(DY0(I).LT.ZERO) YY = YY + SCALEM*SQMASS(I)*DY0(I)
+            END IF
+         IF(Z0(I).GT.ZERO) THEN
+               ZZ = Z0(I) + SIZE(KIND(I))
+               IF(DZ0(I).GT.ZERO) ZZ = ZZ + SCALEM*SQMASS(I)*DZ0(I)
+            ELSE
+               ZZ = Z0(I) - SIZE(KIND(I))
+               IF(DZ0(I).LT.ZERO) ZZ = ZZ + SCALEM*SQMASS(I)*DZ0(I)
+            END IF
+         XMIN = MIN(XX,XMIN)
+         XMAX = MAX(XX,XMAX)
+         YMIN = MIN(YY,YMIN)
+         YMAX = MAX(YY,YMAX)
+         ZMIN = MIN(ZZ,ZMIN)
+         ZMAX = MAX(ZZ,ZMAX)
+  100 CONTINUE
+C
+      XC = XMIN + (XMAX-XMIN)/TWO
+      YC = YMIN + (YMAX-YMIN)/TWO
+      ZC = ZMIN + (ZMAX-ZMIN)/TWO
+C
+      DO 200 I=1,NATOMS
+         X0(I)=X0(I)-XC
+         Y0(I)=Y0(I)-YC
+         Z0(I)=Z0(I)-ZC
+  200 CONTINUE
+C
+      BIGGST = MAX(XMAX-XC,YMAX-YC)
+      RETURN
+      END
+C*DECK BALL
+C     -----------------------
+      SUBROUTINE BALL(K,FACT)
+C     -----------------------
+      IMPLICIT REAL(A-H,O-Z)
+      LOGICAL HIDDEN
+      DIMENSION IC(104),C(104)
+C        HILDERBRANDT'S ORIGINAL RESOL WAS 0.02
+C        IF A 480X640 PIXEL TEKTRONIX SCREEN IS USED TO DISPLAY
+C        A 14X16.6 "INCH" PLOT, RESOL=14/480=0.029 INCHES/PIXEL.
+      PARAMETER (RESOL=0.03E+00, PI=3.14159 26535E+00,
+     *           ZERO=0.0E+00, TWO=2.0E+00)
+      PARAMETER (MXATM=2000)
+      COMMON /MPDATA/ X0(MXATM),Y0(MXATM),Z0(MXATM),
+     *                DX0(MXATM),DY0(MXATM),DZ0(MXATM),
+     *                X(MXATM),Y(MXATM),Z(MXATM),
+     *                DX(MXATM),DY(MXATM),DZ(MXATM),
+     *                KIND(MXATM),BSIZ(MXATM),SQMASS(MXATM),
+     *                IZAT(104),SIZE(104),KOLORS(104),
+     *                SIZEP,VIEW,SCALEM,BNDWID,BNDLEN,
+     *                NATOMS,NKINDS,NBONDS,KOLOR,MODE,NOBOX
+C
+C     ----- DRAW SPHERE FOR ATOM K -----
+C
+      NC=0
+      HIDDEN=.FALSE.
+C
+C        IS ANY PORTION OF THIS ATOM'S SPHERE HIDDEN BY ANOTHER?
+C
+      DO 100 I=1,NATOMS
+         IF(Z(K).GT.Z(I)) GO TO 100
+         IF(I.EQ.K) GO TO 100
+         R=SQRT((X(I)-X(K))**2+(Y(I)-Y(K))**2)
+         D=BSIZ(I)+FACT*BSIZ(K)
+         IF(R.GT.D) GO TO 100
+         NC=NC+1
+         IC(NC)=I
+         C(NC)=BSIZ(I)
+  100 CONTINUE
+C
+C        NOW DRAW THE SPHERE AROUND THE ATOM
+C
+      SIZ=FACT*BSIZ(K)
+      CIRC=TWO*PI*SIZ
+      DELT=RESOL/SIZ
+      IL=5+CIRC/RESOL
+      X1=SIZ
+      Y1=ZERO
+      XT=X(K)+X1
+      YT=Y(K)+Y1
+      CALL PLOT(XT,YT,3)
+      CS=COS(DELT)
+      SN=SIN(DELT)
+      DO 300 J=1,IL
+         XX=X1*CS-Y1*SN
+         YY=X1*SN+Y1*CS
+         X1=XX
+         Y1=YY
+         XT=X(K)+X1
+         YT=Y(K)+Y1
+         IF(NC.EQ.0) GO TO 210
+         DO 200 I=1,NC
+            L=IC(I)
+            D=C(I)
+            R=SQRT((X(L)-XT)**2+(Y(L)-YT)**2)
+            IF(R.GE.D) GO TO 200
+               XSV=XT
+               YSV=YT
+               HIDDEN=.TRUE.
+               GO TO 300
+  200    CONTINUE
+  210    CONTINUE
+         IF(HIDDEN) CALL PLOT(XSV,YSV,3)
+         HIDDEN=.FALSE.
+         CALL PLOT(XT,YT,2)
+  300 CONTINUE
+      RETURN
+      END
+C*DECK DSTNCE
+C     --------------------
+      FUNCTION DSTNCE(I,J)
+C     --------------------
+      IMPLICIT REAL(A-H,O-Z)
+      PARAMETER (MXATM=2000)
+      COMMON /MPDATA/ X0(MXATM),Y0(MXATM),Z0(MXATM),
+     *                DX0(MXATM),DY0(MXATM),DZ0(MXATM),
+     *                X(MXATM),Y(MXATM),Z(MXATM),
+     *                DX(MXATM),DY(MXATM),DZ(MXATM),
+     *                KIND(MXATM),BSIZ(MXATM),SQMASS(MXATM),
+     *                IZAT(104),SIZE(104),KOLORS(104),
+     *                SIZEP,VIEW,SCALEM,BNDWID,BNDLEN,
+     *                NATOMS,NKINDS,NBONDS,KOLOR,MODE,NOBOX
+C
+C     ----- COMPUTE DISTANCE BETWEEN ATOMS I AND J -----
+C
+      DSTNCE = SQRT( (X0(I)-X0(J))**2
+     *              +(Y0(I)-Y0(J))**2
+     *              +(Z0(I)-Z0(J))**2)
+      RETURN
+      END
+C*DECK STICK
+C     ---------------------------------
+      SUBROUTINE STICK(X1,Y1,X2,Y2,L,M)
+C     ---------------------------------
+      IMPLICIT REAL(A-H,O-Z)
+      DIMENSION IC(104)
+      LOGICAL HIDDEN
+C        RESOL WAS ORIGINALLY 0.01 IN HILDERBRANDT'S VERSION.
+      PARAMETER (RESOL=0.03E+00, TWO=2.00E+00)
+      PARAMETER (MXATM=2000)
+      COMMON /MPDATA/ X0(MXATM),Y0(MXATM),Z0(MXATM),
+     *                DX0(MXATM),DY0(MXATM),DZ0(MXATM),
+     *                X(MXATM),Y(MXATM),Z(MXATM),
+     *                DX(MXATM),DY(MXATM),DZ(MXATM),
+     *                KIND(MXATM),BSIZ(MXATM),SQMASS(MXATM),
+     *                IZAT(104),SIZE(104),KOLORS(104),
+     *                SIZEP,VIEW,SCALEM,BNDWID,BNDLEN,
+     *                NATOMS,NKINDS,NBONDS,KOLOR,MODE,NOBOX
+C
+C        DRAW A LINE FROM (X1,Y1) TO (X2,Y2) CONNECTING ATOM L AND M
+C
+      HIDDEN=.FALSE.
+      NC=0
+      XC=(X1+X2)/TWO
+      YC=(Y1+Y2)/TWO
+      R=SQRT((X2-X1)**2+(Y2-Y1)**2)
+      IF(R.LT.RESOL) RETURN
+C                    ******
+C
+C        LOOK FOR ATOMIC SPHERES HIDING PART OF THE BOND LINE
+C
+      DO 100 I=1,NATOMS
+         IF(I.EQ.L) GO TO 100
+         IF(I.EQ.M) GO TO 100
+         D=SQRT((X(I)-XC)**2+(Y(I)-YC)**2)
+         T=BSIZ(I)+R/TWO
+         IF(D.GT.T) GO TO 100
+         IF((Z(L).GT.Z(I)).AND.(Z(M).GT.Z(I))) GO TO 100
+         NC=NC+1
+         IC(NC)=I
+  100 CONTINUE
+      IF(NC.GT.0) GO TO 200
+C
+C        THE ENTIRE LINE IS VISIBLE, JUST DRAW IT
+C
+      CALL PLOT(X1,Y1,3)
+      CALL PLOT(X2,Y2,2)
+      RETURN
+C     ******
+C
+C        DRAW THE LINE, PART OF WHICH IS HIDDEN BY THE NC
+C        CLOSER ATOMIC SPHERES. A LINE WILL PENETRATE INTO THE
+C        SPHERE WHICH HIDES IT BY NO MORE THAN RESOL INCHES.
+C
+  200 CONTINUE
+      CALL PLOT(X1,Y1,3)
+      XSV=X1
+      YSV=Y1
+      DELX=X2-X1
+      DELY=Y2-Y1
+      XPIECE=RESOL*DELX/R
+      YPIECE=RESOL*DELY/R
+      NN=R/RESOL
+      DO 400 I=1,NN
+         XL=FLOAT(I)*XPIECE+X1
+         YL=FLOAT(I)*YPIECE+Y1
+         DO 300 J=1,NC
+            K=IC(J)
+            D=SQRT((XL-X(K))**2+(YL-Y(K))**2)
+            IF(D.GT.BSIZ(K)) GO TO 300
+               IF(I.NE.1. AND. .NOT.HIDDEN) CALL PLOT(XSV,YSV,2)
+               XSV=XL
+               YSV=YL
+               HIDDEN=.TRUE.
+               GO TO 400
+  300    CONTINUE
+         IF(HIDDEN) CALL PLOT(XSV,YSV,3)
+         HIDDEN=.FALSE.
+         XSV=XL
+         YSV=YL
+  400 CONTINUE
+      IF(.NOT.HIDDEN) CALL PLOT(XSV,YSV,2)
+      RETURN
+      END
+C*DECK MENU
+C     ---------------
+      SUBROUTINE MENU
+C     ---------------
+      IMPLICIT REAL(A-H,O-Z)
+C
+      IRED  =2
+      IGREEN=3
+      IBLUE =4
+      SP=0.5
+C
+C        TOP PART USED TO EXPLAIN COLOR SCHEME,
+C        BOTTOM INCH RESERVED FOR MESSAGES
+C
+      CALL NEWPEN(IBLUE)
+      TOP = 13.7
+      CALL PLOT(14.5,TOP-2.5*SP,3)
+      CALL PLOT(18.5,TOP-2.5*SP,2)
+      CALL PLOT(14.5,1.0,3)
+      CALL PLOT(18.5,1.0,2)
+      CALL SYMBL(14.5,TOP   ,0.25,'Enter red only!',0.0,15)
+      CALL SYMBL(14.5,TOP-SP,0.25,'Color numbers:',0.0,14)
+      DO 100 IPEN=1,15
+         CALL NEWPEN(IPEN)
+         IP = MOD(IPEN,10)
+         CALL NUMBER(14.5+(IPEN-1)*0.25,TOP-2*SP,0.20,FLOAT(IP),0.0,-1)
+  100 CONTINUE
+C
+C        CONTROL OPTIONS TOWARDS TOP
+C
+      CALL NEWPEN(IGREEN)
+      TOP=12.5
+      CALL SYMBL(14.5,TOP-  SP,0.25,'Control Commands',0.0,16)
+      CALL NEWPEN(IRED)
+      CALL SYMBL(14.5,TOP-2*SP,0.25,'Draw ',0.0,5)
+      CALL SYMBL(14.5,TOP-3*SP,0.25,'Write',0.0,5)
+      CALL SYMBL(14.5,TOP-4*SP,0.25,'Quit ',0.0,5)
+      CALL NEWPEN(IBLUE)
+      CALL SYMBL(16.0,TOP-2*SP,0.20,' again',0.0,6)
+      CALL SYMBL(16.2,TOP-3*SP,0.20,' restart',0.0,8)
+C
+C        RESET OPTIONS TOWARDS BOTTOM
+C
+      CALL NEWPEN(IGREEN)
+      BOT=1.2
+      CALL SYMBL(14.5,BOT+6*SP,0.30,'Reset Options',0.0,13)
+      CALL NEWPEN(IRED)
+      CALL SYMBL(14.5,BOT+5*SP,0.25,'ATOM <symbol>',0.0,13)
+      CALL SYMBL(14.5,BOT+4*SP,0.25,'   <kolor> <size>',0.0,17)
+      CALL SYMBL(14.5,BOT+3*SP,0.25,'BW <bndwidth>',0.0,13)
+      CALL SYMBL(14.5,BOT+2*SP,0.25,'BL <bndlngth>',0.0,14)
+      CALL SYMBL(14.5,BOT+1*SP,0.25,'V <viewdistance>',0.0,16)
+      CALL SYMBL(14.5,BOT     ,0.25,'S <scalemode>',0.0,13)
+C
+C        BOX IN MIDDLE FOR ROTATIONS
+C
+      CALL NEWPEN(IBLUE)
+      TOP=10.0
+      BOT=5.0
+      CALL PLOT(14.5,TOP,3)
+      CALL PLOT(18.5,TOP,2)
+      CALL PLOT(18.5,BOT,2)
+      CALL PLOT(14.5,BOT,2)
+      CALL PLOT(14.5,TOP,2)
+      CALL NEWPEN(IGREEN)
+      CALL SYMBL(14.7,TOP-SP,0.22,'rotations',0.0,9)
+      CALL NEWPEN(IRED)
+      BOT=BOT+0.2
+      CALL SYMBL(14.7,BOT+2*SP,0.25,'X <angle> <n>',0.0,13)
+      CALL SYMBL(14.7,BOT+  SP,0.25,'Y <angle> <n>',0.0,13)
+      CALL SYMBL(14.7,BOT     ,0.25,'Z <angle> <n>',0.0,13)
+C               AXES PICTURE
+      CALL NEWPEN(IBLUE)
+      DIST=1.0
+      DST2=0.5
+      XORG=16.0
+      YORG = (TOP-BOT)/2 + BOT + SP
+      CALL PLOT(XORG         ,YORG         ,3)
+C
+      CALL PLOT(XORG+DIST    ,YORG         ,2)
+      CALL PLOT(XORG+DIST-.07,YORG+.07     ,2)
+      CALL PLOT(XORG+DIST-.07,YORG-.07     ,2)
+      CALL PLOT(XORG+DIST    ,YORG         ,2)
+      CALL PLOT(XORG         ,YORG         ,3)
+C
+      CALL PLOT(XORG         ,YORG+DIST    ,2)
+      CALL PLOT(XORG-.07     ,YORG+DIST-.07,2)
+      CALL PLOT(XORG+.07     ,YORG+DIST-.07,2)
+      CALL PLOT(XORG         ,YORG+DIST    ,2)
+      CALL PLOT(XORG         ,YORG         ,3)
+C
+      CALL PLOT(XORG-DST2    ,YORG-DST2    ,2)
+      CALL PLOT(XORG-DST2+.10,YORG-DST2    ,2)
+      CALL PLOT(XORG-DST2    ,YORG-DST2+.10,2)
+      CALL PLOT(XORG-DST2    ,YORG-DST2    ,2)
+C
+      CALL NEWPEN(IGREEN)
+      CALL SYMBL(XORG+DIST   ,YORG     +0.2,0.2,'X',0.0,1)
+      CALL SYMBL(XORG     +.2,YORG+DIST-0.2,0.2,'Y',0.0,1)
+      CALL SYMBL(XORG-DST2+.3,YORG-DST2-0.1,0.2,'Z',0.0,1)
+      CALL NEWPEN(IBLUE)
+      CALL SYMBL(15.0,BOT+3*SP,0.20,'clockwise sense',0.0,15)
+      RETURN
+      END
+C*DECK RDOPT
+C     ---------------------------------------------------------
+      SUBROUTINE RDOPT(IW,IMOL,QUIT,ATSYMB,TITLE,IBD,JBD,NBMAX)
+C     ---------------------------------------------------------
+      IMPLICIT REAL(A-H,O-Z)
+      CHARACTER*4 ATSYMB(104)
+      LOGICAL QUIT
+      DIMENSION IBD(NBMAX),JBD(NBMAX)
+      DOUBLE PRECISION RFIND
+      CHARACTER*4 BLANK,KEYWRD,DONE,ATOM
+      CHARACTER*17 BOOBOO
+      CHARACTER*80 TITLE
+      PARAMETER (ZERO=0.0E+00)
+      PARAMETER (MXATM=2000)
+      COMMON /MPDATA/ X0(MXATM),Y0(MXATM),Z0(MXATM),
+     *                DX0(MXATM),DY0(MXATM),DZ0(MXATM),
+     *                X(MXATM),Y(MXATM),Z(MXATM),
+     *                DX(MXATM),DY(MXATM),DZ(MXATM),
+     *                KIND(MXATM),BSIZ(MXATM),SQMASS(MXATM),
+     *                IZAT(104),SIZE(104),KOLORS(104),
+     *                SIZEP,VIEW,SCALEM,BNDWID,BNDLEN,
+     *                NATOMS,NKINDS,NBONDS,KOLOR,MODE,NOBOX
+      DATA BLANK/'    '/, DONE/'DONE'/
+      DATA BOOBOO/'OOPS...TRY AGAIN!'/
+      DATA NRSTEP/0/
+C
+      SAVE NRSTEP, KEYWRD, ANGLE
+C
+C     ----- PROMPT FOR INTERACTIVE MANIPULATIONS -----
+C
+C     CONTINUE ROTATION IF ANY STEP REMAINS
+C
+      IF (NRSTEP .NE. 0) THEN
+         NRSTEP = NRSTEP - 1
+         CALL ROTATE(KEYWRD, ANGLE)
+         RETURN
+      ENDIF
+C
+      GO TO 120
+C
+C        INDICATE LAST COMMAND TYPED WAS CARRIED OUT
+C
+  100 CONTINUE
+      CALL NEWPEN(1)
+      CALL SYMBL(15.0,0.2,0.30,DONE,0.0,4)
+      CALL NEWPEN(0)
+      CALL SYMBL(15.0,0.2,0.30,DONE,0.0,4)
+C
+C        READ IN THE NEXT INTERACTIVE OPTION
+C
+  120 CONTINUE
+      IERR = 0
+      IEOF = 0
+      WRITE(IW,1)
+*VMS1 FORMAT(1X,'? ',$)
+*UNX1 FORMAT(1X,'? ',$)
+*IBM1 FORMAT(1X,'?')
+      CALL RDCARD('RDOPT  1',IEOF)
+      IF(IEOF.NE.0) THEN
+         QUIT=.TRUE.
+         RETURN
+      END IF
+      CALL GSTRNG(KEYWRD,-4)
+      IF(KEYWRD.EQ.BLANK) GO TO 120
+C
+C        CARRY OUT THE REQUESTED COMMAND
+C
+C        DRAW MOLECULE AGAIN
+C
+      IF(KEYWRD.EQ.'DRAW') THEN
+         QUIT = .FALSE.
+         RETURN
+      END IF
+C
+C        HELP DISPLAY MENU
+C        (IF YOUR CALCOMP SYSTEM DOESN'T PERMIT ERASING A WINDOW,
+C        AS IS DONE IN ROUTINE ERASE, AND YOU DON'T WANT TO WAIT
+C        AFTER EACH MOLECULAR DRAW WHILE THE HELP SCREEN IS PUT
+C        UP, THE FOLLOWING CODE CAN BE USED TO MAKE THE HELP
+C        AVAILABLE, ONLY WHEN DESIRED.  THE CALL TO MENU IN THE
+C        MAIN PROGRAM SHOULD BE DELETED.)
+C
+C...  IF(KEYWRD.EQ.'HELP') THEN
+C...        CALL MENU
+C...        GO TO 120
+C...     END IF
+C
+C        WRITE A RESTART FILE
+C
+      IF(KEYWRD.EQ.'WRIT') THEN
+         CALL WRMOL(IW,IMOL,ATSYMB,TITLE,IBD,JBD,NBMAX,0)
+         GO TO 100
+      END IF
+C
+C        QUIT
+C
+      IF(KEYWRD.EQ.'QUIT') THEN
+         QUIT = .TRUE.
+         RETURN
+      END IF
+C
+C        SCALE OF NORMAL MODE CHANGED
+C
+      IF(KEYWRD.EQ.'S   ') THEN
+         SCALEM = RFIND('SCALEMOD',IERR)
+         IF(IERR.NE.0) GO TO 300
+         RETURN
+      END IF
+C
+C        VIEWING DISTANCE CHANGE
+C
+      IF(KEYWRD.EQ.'V   ') THEN
+         VIEW = RFIND('VIEWDIST',IERR)
+         IF(IERR.NE.0) GO TO 300
+         RETURN
+      END IF
+C
+C        BOND LENGTH CHANGE
+C
+      IF(KEYWRD.EQ.'BL  ') THEN
+         BNDLEN = RFIND('BNDLENGT',IERR)
+         IF(IERR.NE.0) GO TO 300
+         RETURN
+      END IF
+C
+C        BOND WIDTH CHANGE
+C
+      IF(KEYWRD.EQ.'BW  ') THEN
+         BNDWID = RFIND('BNDWIDTH',IERR)
+         IF(IERR.NE.0) GO TO 300
+         IF(BNDWID.GT.0.3) GO TO 300
+         RETURN
+      END IF
+C
+C        X, Y, OR Z AXIS ROTATION
+C
+      IF(KEYWRD.EQ.'X   '.OR.KEYWRD.EQ.'Y   '.OR.KEYWRD.EQ.'Z   ') THEN
+         ANGLE = RFIND('ANGLE   ',IERR)
+         IF(IERR.NE.0) GO TO 300
+         NRSTEP = RFIND('NRSTEP  ', IERR)
+         IF(IERR.NE.0) NRSTEP = 1
+         IF(NRSTEP .LE. 0) NRSTEP = 1
+         ANGLE = ANGLE / NRSTEP
+         NRSTEP = NRSTEP - 1
+         CALL ROTATE(KEYWRD,ANGLE)
+         RETURN
+      END IF
+C
+C        ATOMIC COLOR AND SIZE CHANGE
+C
+      IF(KEYWRD.EQ.'ATOM') THEN
+         CALL GSTRNG(ATOM,-4)
+         CALL ATINFO(1,0,IERR,IZNUC,ITYP,ATOM,ATSYMB)
+         IF(IERR.NE.0) GO TO 300
+         IZAT(ITYP) = IZNUC
+         KOLORS(ITYP) = IFIND('KOLOR   ',IERR)
+         IF(IERR.NE.0) GO TO 300
+         IF(KOLORS(ITYP).EQ.0) GO TO 300
+         SIZE(ITYP) = RFIND('RADIUS  ',IERR)
+         IF(IERR.NE.0) GO TO 300
+         IF(SIZE(ITYP).LE.ZERO) GO TO 300
+         RETURN
+      END IF
+C
+C        IF WE GET HERE, SOME SORT OF INPUT BOOBOO
+C
+  300 CONTINUE
+      DO 310 I=3,0,-1
+         CALL NEWPEN(I)
+         CALL SYMBL(15.0,0.2,0.25,BOOBOO,0.0,17)
+  310 CONTINUE
+      GO TO 120
+      END
+C*DECK WRMOL
+C     --------------------------------------------------------
+      SUBROUTINE WRMOL(IW,IMOL,ATSYMB,TITLE,IBD,JBD,NBMAX,IOP)
+C     --------------------------------------------------------
+      IMPLICIT REAL(A-H,O-Z)
+      DIMENSION IBD(NBMAX),JBD(NBMAX)
+      CHARACTER*4 ATSYMB(104)
+      CHARACTER*80 TITLE
+      PARAMETER (MXATM=2000)
+      COMMON /MPDATA/ X0(MXATM),Y0(MXATM),Z0(MXATM),
+     *                DX0(MXATM),DY0(MXATM),DZ0(MXATM),
+     *                X(MXATM),Y(MXATM),Z(MXATM),
+     *                DX(MXATM),DY(MXATM),DZ(MXATM),
+     *                KIND(MXATM),BSIZ(MXATM),SQMASS(MXATM),
+     *                IZAT(104),SIZE(104),KOLORS(104),
+     *                SIZEP,VIEW,SCALEM,BNDWID,BNDLEN,
+     *                NATOMS,NKINDS,NBONDS,KOLOR,MODE,NOBOX
+C
+C        ----- WRITE RESTART FILE -----
+C        WRITE TO -RESTART.MOL- SO AS NOT TO DESTROY ORIGINAL INPUT.
+C
+C        IOP OPTIONS:
+C        IOP = 0: A MOLPLT FILE WITH THE ROTATED COORDINATES IS WRITTEN.  
+C        IOP = 1: A CHEM3D FILE FOR STATIC DISPLAY OF THE A MODE, SUING
+C                 DUMMY ATOMS, IS WRITTEN.
+C        IOP = 2: FILE IMOL IS OPENED, BUT THE WRITING AND CLOSING IS 
+C                 ELSEWHERE.
+C
+*VMS  OPEN (UNIT=IMOL, FILE='RESTART.MOL', STATUS='UNKNOWN',
+*VMS *      FORM='FORMATTED', ACCESS='SEQUENTIAL',
+*VMS *      CARRIAGECONTROL='LIST')
+C
+*UNX  OPEN (UNIT=IMOL, FILE='restart.mol', STATUS='UNKNOWN',
+*UNX *      FORM='FORMATTED', ACCESS='SEQUENTIAL')
+C
+*IBM  OPEN (UNIT=IMOL, FILE='restart.mol', STATUS='UNKNOWN',
+*IBM *      FORM='FORMATTED', ACCESS='SEQUENTIAL')
+C
+      IF(IOP.GT.0) GO TO 400
+C
+      WRITE(IMOL,900) NATOMS,NKINDS,NBONDS
+      WRITE(IMOL,910) BNDWID,VIEW
+      WRITE(IMOL,920) SIZEP,KOLOR,NOBOX
+      IF(MODE.NE.0) WRITE(IMOL,930) SCALEM
+      WRITE(IMOL,940) TITLE
+C
+      DO 100 I=1,NKINDS
+         WRITE(IMOL,950) ATSYMB(IZAT(I)),KOLORS(I),SIZE(I)
+  100 CONTINUE
+C
+      DO 200 I=1,NATOMS
+         IZ = IZAT(KIND(I))
+         AMASS = SQMASS(I)*SQMASS(I)
+         WRITE(IMOL,960) ATSYMB(IZ),X0(I),Y0(I),Z0(I),
+     *                   DX0(I),DY0(I),DZ0(I),AMASS
+  200 CONTINUE
+C
+      WRITE(IMOL,970) (IBD(I),JBD(I),I=1,NBONDS)
+      GO TO 999
+C
+  400 CONTINUE
+C
+      IF(IOP.EQ.2) RETURN
+C
+      WRITE(IMOL,FMT='(I2)') 2*NATOMS
+      DO 500 I = 1,NATOMS
+         IZ = IZAT(KIND(I))
+         WRITE(IMOL,990) ATSYMB(IZ),X0(I),Y0(I),Z0(I)
+  500 CONTINUE
+      DO 550 I = 1,NATOMS
+         WRITE(IMOL,995) DX(I),DY(I),DZ(I)
+  550 CONTINUE
+C
+C
+  999 CONTINUE
+      CLOSE(UNIT=IMOL, STATUS='KEEP')
+      WRITE(IW,980)
+      RETURN
+C
+  900 FORMAT('NATOMS=',I4,'       NKINDS=',I4,'       NBONDS=',I2)
+  910 FORMAT('BNDWIDTH=',F6.3,'  VIEWDISTANCE=',F6.1)
+  920 FORMAT('SIZE=',F5.2,'    KOLOR=',I2,'    NOBOX=',I2)
+  930 FORMAT('MODE=-1    SCALEMODE=',F7.3)
+  940 FORMAT(A80)
+  950 FORMAT(A4,I4,F6.2)
+  960 FORMAT(A4,3F10.6,2X,3F10.6,F12.5)
+  970 FORMAT('BONDATOMS ',6(I4,I4,2X),:,' >'/ (7(I4,I4,2X),:,' >'))
+  980 FORMAT(1X,'FILE -restart.mol- HAS BEEN WRITTEN.')
+  990 FORMAT(A4,3F10.6)
+  995 FORMAT('DU  ',3F10.6)
+      END
+C*DECK ROTATE
+C     -----------------------------
+      SUBROUTINE ROTATE(AXIS,OMEGA)
+C     -----------------------------
+      IMPLICIT REAL(A-H,O-Z)
+      CHARACTER*4 AXIS
+      DIMENSION TROT(3,3)
+      PARAMETER (ZERO=0.0E+00, ONE=1.0E+00,
+     *          PI=3.14159 26535E+00, ONE80=1.8E+02)
+      PARAMETER (MXATM=2000)
+      COMMON /MPDATA/ X0(MXATM),Y0(MXATM),Z0(MXATM),
+     *                DX0(MXATM),DY0(MXATM),DZ0(MXATM),
+     *                X(MXATM),Y(MXATM),Z(MXATM),
+     *                DX(MXATM),DY(MXATM),DZ(MXATM),
+     *                KIND(MXATM),BSIZ(MXATM),SQMASS(MXATM),
+     *                IZAT(104),SIZE(104),KOLORS(104),
+     *                SIZEP,VIEW,SCALEM,BNDWID,BNDLEN,
+     *                NATOMS,NKINDS,NBONDS,KOLOR,MODE,NOBOX
+C
+C        ROTATE THE MOLECULE BY ANGLE 'OMEGA' ABOUT AXIS 'AXIS'
+C
+      IAX=0
+      IF(AXIS.EQ.'X   ') IAX=1
+      IF(AXIS.EQ.'Y   ') IAX=2
+      IF(AXIS.EQ.'Z   ') IAX=3
+      IF(IAX.EQ.0) RETURN
+      ANGLE=OMEGA*PI/ONE80
+      DO 100 N=1,3
+         TROT(N,IAX)=ZERO
+         TROT(IAX,N)=ZERO
+  100 CONTINUE
+      TROT(IAX,IAX)=ONE
+      M = MOD(IAX+1,3)
+      IF(M.EQ.0) M=3
+      N = MOD(IAX+2,3)
+      IF(N.EQ.0) N=3
+      TROT(M,M)=COS(ANGLE)
+      TROT(N,N)=TROT(M,M)
+      TROT(M,N)=SIN(ANGLE)
+      TROT(N,M)=-TROT(M,N)
+C
+      DO 200 J=1,NATOMS
+         XX=TROT(1,1)*X0(J) + TROT(1,2)*Y0(J) + TROT(1,3)*Z0(J)
+         YY=TROT(2,1)*X0(J) + TROT(2,2)*Y0(J) + TROT(2,3)*Z0(J)
+         ZZ=TROT(3,1)*X0(J) + TROT(3,2)*Y0(J) + TROT(3,3)*Z0(J)
+         X0(J)=XX
+         Y0(J)=YY
+         Z0(J)=ZZ
+         XX=TROT(1,1)*DX0(J) + TROT(1,2)*DY0(J) + TROT(1,3)*DZ0(J)
+         YY=TROT(2,1)*DX0(J) + TROT(2,2)*DY0(J) + TROT(2,3)*DZ0(J)
+         ZZ=TROT(3,1)*DX0(J) + TROT(3,2)*DY0(J) + TROT(3,3)*DZ0(J)
+         DX0(J)=XX
+         DY0(J)=YY
+         DZ0(J)=ZZ
+  200 CONTINUE
+      RETURN
+      END
+C*DECK CHEWRT
+      SUBROUTINE CHEWRT(IW,IMOL,ATSYMB,TITLE,IBD,JBD,NBMAX,ICHEM3)
+C
+      IMPLICIT REAL(A-H,O-Z)
+      DIMENSION IBD(NBMAX),JBD(NBMAX)
+      CHARACTER*4 ATSYMB(104)
+      CHARACTER*80  TITLE
+      PARAMETER (ZERO=0.0E+00)
+      PARAMETER (MXATM=2000)
+      COMMON /MPDATA/ X0(MXATM),Y0(MXATM),Z0(MXATM),
+     *                DX0(MXATM),DY0(MXATM),DZ0(MXATM),
+     *                X(MXATM),Y(MXATM),Z(MXATM),
+     *                DX(MXATM),DY(MXATM),DZ(MXATM),
+     *                KIND(MXATM),BSIZ(MXATM),SQMASS(MXATM),
+     *                IZAT(104),SIZE(104),KOLORS(104),
+     *                SIZEP,VIEW,SCALEM,BNDWID,BNDLEN,
+     *                NATOMS,NKINDS,NBONDS,KOLOR,MODE,NOBOX
+C
+      IF(ICHEM3.GT.1) GO TO 300
+C
+C        A NORMAL MODE IS TO BE DRAWN, GENERATE POINT (DX,DY,DZ)
+C        USING THE DISPLACEMENT VECTOR (DX0,DY0,DZ0) FROM THE ATOM
+C        CENTER (X0,Y0,Z0).  TO ENHANCE VIEWING OF SMALL DISPLACEMENTS,
+C        THE DISPLACEMENT IS MASS-WEIGHTED, AND STARTS AT THE ATOM
+C        SPHERE'S SURFACE, RATHER THAN THE CENTER.
+C
+      DO 200 I=1,NATOMS
+         BSIZ(I)=SIZE(KIND(I))
+         SC = SCALEM*SQMASS(I)
+         SIZ = BSIZ(I)
+         IF(SCALEM.LT.ZERO) SIZ = -SIZ
+         DX(I) = X0(I) + SIZ*DX0(I) + SC*DX0(I)
+         DY(I) = Y0(I) + SIZ*DY0(I) + SC*DY0(I)
+         DZ(I) = Z0(I) + SIZ*DZ0(I) + SC*DZ0(I)
+  200 CONTINUE
+C
+C  WRITE OUT THE CHEM3D FILE
+C
+      CALL WRMOL(IW,IMOL,ATSYMB,TITLE,IBD,JBD,NBMAX,1)
+      GO TO 999
+C
+C  WE WANT TO ANIMATE THE MODE.  FIVE GEOMETRIES ON EITHER SIDE OF THE
+C  EQUILIBRIUM STRUCTURE IS GENERATED AND PUNCHED OUT AS A CHEM3D MOVIE
+C  FILE.
+C
+  300 CONTINUE
+C
+C  OPEN FILE IMOL.
+C
+      CALL WRMOL(IW,IMOL,ATSYMB,TITLE,IBD,JBD,NBMAX,2)
+      DISP = -1.00D+00
+      DO 400 IDSP = 1,11
+         WRITE(IMOL,FMT='(I2)') NATOMS
+         DO 350 I = 1,NATOMS
+            SC = SCALEM*SQMASS(I)
+            DX(I) = X0(I) + SC*DX0(I)*DISP
+            DY(I) = Y0(I) + SC*DY0(I)*DISP
+            DZ(I) = Z0(I) + SC*DZ0(I)*DISP
+            IZ = IZAT(KIND(I))
+            WRITE(IMOL,990) ATSYMB(IZ),DX(I),DY(I),DZ(I)
+  350    CONTINUE
+         DISP = DISP + 0.2D+00
+  400 CONTINUE
+C
+C  CLOSE UNIT IMOL
+C
+      CLOSE(UNIT=IMOL, STATUS='KEEP')
+      WRITE(IW,980)
+C
+  999 CONTINUE
+      RETURN
+  980 FORMAT(1X,'FILE -RESTART.MOL- HAS BEEN WRITTEN.')
+  990 FORMAT(A4,3F10.6)
+      END
