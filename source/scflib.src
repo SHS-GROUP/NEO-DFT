@@ -3054,12 +3054,13 @@ C
       END
 C
 C*MODULE SCFLIB  *DECK OVLSEL
-      SUBROUTINE OVLSEL(VNEW,ENEW,VOLD,S,SMO,WRK,IWRK,IWRK2,L0,L1,L2)
+      SUBROUTINE OVLSEL(VNEW,ENEW,VOLD,S,SMO,WRK,IWRK,IWRK2,
+     *                   KPROJ,NO,L0,L1,L2,MOM)
 C
 C         NOTE THAT WRK AND IWRK2 MAY BE EQUIVALENT BY CALL
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
-      LOGICAL MFRZ,RSTRCT
+      LOGICAL MFRZ,RSTRCT,MOM
 C
       DIMENSION VNEW(L1,L0),ENEW(L0),VOLD(L1,L0),S(L2),
      *          SMO(L1,L0),WRK(L0),IWRK(L0),IWRK2(L0)
@@ -3119,25 +3120,104 @@ C
 C        ----- OBTAIN PERMUTATION TO MAXIMUM COINCIDENCE -----
 C        THE -GVB- CODE LIKES PHASES TO BE CONSISTENT AS WELL
 C
-      DO 290 I=1,L0
-         SMAX = ZERO
-         IWRK(I) = 0
-         DO 230 J=1,L0
-            DO 210 K=1,I
-               IF(IWRK(K).EQ.J) GO TO 230
-  210       CONTINUE
-            SS = ABS(SMO(I,J))
-            IF(SS.GT.SMAX) THEN
-               SMAX = SS
-               IWRK(I) = J
+      IF (MOM) THEN
+         IF(KPROJ.EQ.0) THEN       
+            DO I=1,L0
+               WRK(I) = ZERO
+               DO J = 1,NO
+C        THE ORIGINAL PROJECTION FORMULA FROM 
+C        A.T.B.GILBERT, N.A.BESLEY, P.M.W.GILL
+C        J. PHYS. CHEM. A  112, 13164-13171(2008)
+                  WRK(I) = WRK(I) + SMO(J,I)
+               ENDDO
+            ENDDO           
+         ELSE IF(KPROJ.EQ.1) THEN       
+            DO I=1,L0
+               WRK(I) = ZERO
+               DO J = 1,NO
+C        A MODIFIED PROJECTION FORMULA TAKING INTO ACCOUNT
+C        THE POSSIBILITY OF TWO SIMILAR MO'S BEING OUT-OF-PHASE
+C        (DEFAULT)
+                  WRK(I) = WRK(I) + ABS(SMO(J,I))
+               ENDDO
+            ENDDO           
+         ELSE IF(KPROJ.EQ.2) THEN       
+            DO I=1,L0
+               WRK(I) = ZERO
+               DO J = 1,NO
+C        A MODIFIED PROJECTION FORMULA TAKING INTO ACCOUNT
+C        THE POSSIBILITY OF TWO SIMILAR MO'S BEING OUT-OF-PHASE
+C        (AS IMPLEMENTED IN QCHEM)
+                  WRK(I) = WRK(I) + SMO(J,I)*SMO(J,I)
+               ENDDO
+            ENDDO           
+         ENDIF
+C        WRK(I) ABOVE CORRESPONDS TO P(I) IN THE MOM PAPER 
+C        IWRK2(I) BELLOW WILL HAVE 1'S AT THE TOPMOST NOCC 
+C        MOLECULAR ORBITALS ORDERED ACCORDING TO WRK(I)
+         CALL VCLR(IWRK2,1,L0)
+         DO I=1,NO
+            VMAX = ZERO
+            DO J=1,L0
+               IF (ABS(WRK(J)).GT.VMAX) THEN
+                  VMAX = ABS(WRK(J))
+                  IMAX = J
+               ENDIF
+            ENDDO
+            IWRK2(IMAX) = 1
+            WRK(IMAX) = ZERO
+         ENDDO
+C        CONVERT FROM IWRK2(I) TO IWRK(I) SHOWING
+C        THE ACTUAL PERMUTATION OF INDICES
+         J = NO + 1
+         DO I=1,NO
+            IF (IWRK2(I).EQ.1) THEN
+               IWRK(I) = I
+            ELSE
+               DO WHILE(IWRK2(J).EQ.0)
+                  J = J + 1
+               ENDDO
+               IWRK(J) = I
+               J = J + 1
+            ENDIF
+         ENDDO
+         J = 1
+         DO I=NO+1,L0
+            IF (IWRK2(I).EQ.0) THEN
+               IWRK(I) = I 
+            ELSE
+               DO WHILE (IWRK2(J).EQ.1)
+                  J = J + 1
+               ENDDO
+               IWRK(J) = I
+               J = J + 1
+            ENDIF
+         ENDDO
+      ELSE
+C
+C        ----- OBTAIN PERMUTATION TO MAXIMUM COINCIDENCE -----
+C        THE -GVB- CODE LIKES PHASES TO BE CONSISTENT AS WELL
+C
+         DO 290 I=1,L0
+            SMAX = ZERO
+            IWRK(I) = 0
+            DO 230 J=1,L0
+               DO 210 K=1,I
+                  IF(IWRK(K).EQ.J) GO TO 230
+  210          CONTINUE
+               SS = ABS(SMO(I,J))
+               IF(SS.GT.SMAX) THEN
+                  SMAX = SS
+                  IWRK(I) = J
+               END IF
+  230       CONTINUE
+            IF(SMO(I,IWRK(I)).LT.ZERO) THEN
+               DO 260 J=1,L1
+                  VNEW(J,IWRK(I)) = -VNEW(J,IWRK(I))
+  260          CONTINUE
             END IF
-  230    CONTINUE
-         IF(SMO(I,IWRK(I)).LT.ZERO) THEN
-            DO 260 J=1,L1
-               VNEW(J,IWRK(I)) = -VNEW(J,IWRK(I))
-  260       CONTINUE
-         END IF
-  290 CONTINUE
+  290    CONTINUE
+       ENDIF  
 C
 C        ----- AND APPLY THAT PERMUTATION -----
 C
@@ -3311,7 +3391,7 @@ C
 C
       LOGICAL DIIS,DAMPH,EXTRAP,RSTRCT,VSHIFT,COUPLE,UHFNOS,DEM,
      *        DIRSCF,FDIFF,GOPARR,DSKWRK,MASWRK,VTSCAL,VIROK,
-     *        LVCLN,SOSCF,NOCONV,ABEL,ABELPT,ACAVO,VVOS,SG1
+     *        LVCLN,SOSCF,NOCONV,ABEL,ABELPT,ACAVO,VVOS,SG1,MOM
 C
       PARAMETER (MXSH=5000, MXGTOT=20000, MXAO=8192)
       PARAMETER (MXATM=2000, MXGRID=10)
@@ -3352,6 +3432,7 @@ C
       COMMON /VVOPAR/ IVVOS,NVVOS,BNDDEN
       COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
      *                MPLEVL,MPCTYP
+      COMMON /MOM/    MOM,KPROJ
 C
 C     CHANGE FOR DIVIDE-AND-CONQUER METHOD
 C
@@ -3364,7 +3445,7 @@ C     REPLACED BY THE FLOATING POINT VALUE -CONV- CARRIED AS -CONVHF-.
 C     IN A YEAR OR TWO, THIS FIRST ELEMENT CAN BE RECYLED IF A NEW
 C     INPUT VARIABLE IS NEEDED IN THIS GROUP.
 C
-      PARAMETER (NNAM=39)
+      PARAMETER (NNAM=41)
       DIMENSION QNAM(NNAM),KQNAM(NNAM)
       DATA SCF/8HSCF     /
       DATA QNAM/8HNCONV   ,8HNPUNCH  ,8HNCO     ,
@@ -3377,10 +3458,12 @@ C
      *          8HFDIFF   ,8HVTSCAL  ,8HVTCONV  ,8HMAXVT   ,
      *          8HSCALF   ,8HSOSCF   ,8HSOGTOL  ,8HCONV    ,
      *          8HACAVO   ,8HPACAVO  ,8HVVOS    ,8HNOCONV  ,
-     *          8HDIRTHR  ,8HSWDIIS  ,8HNPREO   /
+     *          8HDIRTHR  ,8HSWDIIS  ,8HNPREO   ,8HMOM     ,
+     *          8HKPROJ   /
       DATA KQNAM/1,1,1,   1,3,1,101,   253,253,3253,3253,
      *           0,3,   1,0,0,   0,0,0,0,   1,0,3,0,
-     *           0,0,3,1,   3,0,3,3,   0,63,0,0,   3,3,41/
+     *           0,0,3,1,   3,0,3,3,   0,63,0,0,   3,3,41,0,
+     *           1/
 C
       DATA RHF,UHF /8HRHF     ,8HUHF     /
       DATA GVB,ROHF/8HGVB     ,8HROHF    /
@@ -3462,6 +3545,10 @@ C                      NEXT ONES APPLY ONLY TO -GVB- CASE
       NCO   = 0
       NSETO = 0
       NPAIR = 0
+C
+      MOM = .FALSE.
+      KPROJ = 1
+C
       DO 120 I = 1,NSETMX
          NO(I) = 0
   120 CONTINUE
@@ -3490,7 +3577,7 @@ C
      *            EXTRAP,DAMPH,VSHIFT,RSTRCT,COUPLE,UHFNOS,MVOQ,
      *            DEM,DEMCUT,DIRSCF,FDIFF,VTSCAL,VTCONV,MAXVT,
      *            SCALF,SOSCF,SOGTOL,CONVHF,ACAVO,PACAVO,VVOS,
-     *            NOCONV,DIRTHR,SWDIIS,NPREO,      0,0,0,0,0,
+     *            NOCONV,DIRTHR,SWDIIS,NPREO,MOM,KPROJ,    0,0,0,
      *            0,0,0,0,0,    0,0,0,0,0,    0,0,0,0,0,    0,0,0,0,0)
       IF (JRET .EQ. 2) THEN
          IF (MASWRK) WRITE (IW,9008)
