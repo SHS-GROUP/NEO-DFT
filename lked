@@ -1,6 +1,6 @@
 #!/bin/csh
 #
-#  11 Aug 11 - script to "link-edit" a GAMESS executable
+#  22 November 11 - script to "link-edit" a GAMESS executable
 #
 #  Invoke this job by 'lked EXE VERNO >& lked.log &'
 #    EXE is normally 'gamess',
@@ -594,8 +594,14 @@ endif
 #
 endif
 #
-#      MacIntosh, clauses for using g77 or gfortran.
-#      The math library is Apple's veclib framework.
+#      MacIntosh
+#
+#      The incantation to link to Apple's BLAS library is rather strange.
+#      The math library is Apple's veclib framework,
+#      which is part of a larger framework called Accelerate.
+#
+#      Older sytems may need to link against the "SystemStubs library"
+#      Even older systems (e.g. 10.3) may need this changed to -lcc_dynamic
 #
 if (($TARGET == mac32) || ($TARGET == mac64)) then
    set LDR=$GMS_FORTRAN
@@ -603,16 +609,30 @@ if (($TARGET == mac32) || ($TARGET == mac64)) then
       case mac32:
          set LDOPTS='-Wl,-multiply_defined -Wl,suppress'
          set BLAS=' '
+         set LIBRARIES='-Wl,-framework -Wl,vecLib -lSystemStubs'
          breaksw
       case mac64:
          set LDOPTS='-m64'
-         set BLAS='blaswrap.o'
+         switch ($GMS_MAC_OSX_VERNO)
+            case 10.4:
+            case 10.5:
+              set BLAS='blaswrap.o'
+              set LIBRARIES='-Wl,-framework -Wl,vecLib -lSystemStubs'
+              breaksw
+            case 10.6:
+              set BLAS=' '
+              set LIBRARIES='-Wl,-framework -Wl,vecLib'
+              breaksw
+#     work around busted vecLib in Lion, at least as far up as 10.7.2
+            case 10.7:
+              echo "Lion's vecLib seems to be broken."
+              echo "Therefore, using a slow FORTRAN equivalent for BLAS."
+              set BLAS='blas.o'
+              set LIBRARIES=' '
+              breaksw
+         endsw
          breaksw
    endsw
-#      Next is the incantation to link to Apple's BLAS library.
-#      The SystemStubs library wasn't needed under Xcode 2.0
-#      Older systems (e.g. 10.3) may need this changed to -lcc_dynamic
-   set LIBRARIES='-Wl,-framework -Wl,vecLib -lSystemStubs'
    set VECTOR=' '
    set QUICHE='zunix.o'
 endif
@@ -1275,34 +1295,26 @@ endif
 #   link GAMESS, using objects/library information as collected above
 #   =================================================================
 #   Insert a "set echo" line to see the full link command in the log file,
-#   which may result in too long a line to display for some c-shells.
+#   which may result in too long a line to display for some vi/c-shells.
 #   Hence it has been printed out piecemeal, but in order, just above.
 #
 echo "Linker messages (if any) follow..."
-chdir $GMS_BUILD_DIR/object
+#
 if (($TARGET == win64) && ($GMS_FORTRAN == ifort)) then
-  set echo
-  $LDR  $EXTRA_LINK_FLAGS:q -o c:/cygwin/$GMS_BUILD_DIR/$EXE.$VERNO.x $LDOPTS \
-        gamess.o unport.o $BLAS $VECTOR $QUICHE \
-        $STANDARD_GAMESS_OBJ1 \
-        $STANDARD_GAMESS_OBJ2 \
-        $STANDARD_GAMESS_OBJ3 \
-        $QMMMOBJ $VBOBJ $NEOOBJ \
-        $GMS_EXTRA_OBJS \
-        $GPU_LIBS \
-        $MSG_LIBRARIES $LIBRARIES $EXTRA_MPI_LIB_FLAGS:q
-else
-  set echo
-  $LDR  $EXTRA_LINK_FLAGS:q -o $GMS_BUILD_DIR/$EXE.$VERNO.x $LDOPTS \
-        gamess.o unport.o $BLAS $VECTOR $QUICHE \
-        $STANDARD_GAMESS_OBJ1 \
-        $STANDARD_GAMESS_OBJ2 \
-        $STANDARD_GAMESS_OBJ3 \
-        $QMMMOBJ $VBOBJ $NEOOBJ \
-        $GMS_EXTRA_OBJS \
-        $GPU_LIBS \
-        $MSG_LIBRARIES $LIBRARIES $EXTRA_MPI_LIB_FLAGS
+   set GMS_BUILD_DIR=c:/cygwin/$GMS_BUILD_DIR
 endif
+chdir $GMS_BUILD_DIR/object
+#
+$LDR  $EXTRA_LINK_FLAGS:q -o $GMS_BUILD_DIR/$EXE.$VERNO.x $LDOPTS \
+      gamess.o unport.o $BLAS $VECTOR $QUICHE \
+      $STANDARD_GAMESS_OBJ1 \
+      $STANDARD_GAMESS_OBJ2 \
+      $STANDARD_GAMESS_OBJ3 \
+      $QMMMOBJ $VBOBJ $NEOOBJ \
+      $GMS_EXTRA_OBJS \
+      $GPU_LIBS \
+      $MSG_LIBRARIES $LIBRARIES $EXTRA_MPI_LIB_FLAGS:q
+#
 set rc=$status
 #
 #   give the installer a simple thumbs up or down on success
@@ -1312,11 +1324,11 @@ chdir ..
 if ((-x $EXE.$VERNO.x) && ($rc == 0)) then
    echo " "
    echo The linking of GAMESS to binary $EXE.$VERNO.x was successful.
-   #set rc=0
+   set rc=0
 else
    echo " "
    echo Unfortunately, there was an error while linking GAMESS.
-   if ($rc == 0) set rc=1
+   set rc=1
 endif
 time
 exit $rc

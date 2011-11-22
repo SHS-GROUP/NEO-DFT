@@ -25,7 +25,7 @@
 #     used by the NEO method.  See NEO's documentation for more details.
 #
 
-setenv AUXDATA $GMS_PATH/auxdata
+setenv AUXDATA $GMSPATH/auxdata
 setenv  EXTBAS /dev/null
 setenv  NUCBAS /dev/null
 setenv  POSBAS /dev/null
