@@ -124,8 +124,8 @@ C
      *                KMAX(MXSHEF,MXDFG),NSHELL(MXDFG),NGAUSS(MXDFG),
      *                NAT(MXDFG),NUM(MXDFG),NTPATM
       COMMON /EFPBUF/ POLCHG(10),NBUFMO,LBUFF(MXAO),LBF,NAPOL,IAPOL(10)
-      COMMON /EFPCMO/ NOCC(MXDFG),NVIR(MXDFG),NAO(MXDFG),NTAO,
-     *                CANFOK(MXAO,MXDFG)
+      COMMON /EFPCT / NOCC(MXDFG),NVIR(MXDFG),NAO(MXDFG),NTAO,
+     *                CTFOK(MXAO,MXDFG),NCTMO(MXDFG),NTCTMO
       COMMON /EFPFRC/ IFRCPNT,NTFRCPN,NFRCPNT(MXFRG),LSTFPTS(MXFRG),
      *                FRCCRD(3,MXFGPT),FRCNME(MXFGPT),FRCTRQ(6,MXFGPT)
      *                ,FRCTRQX(6,MXFGPT)
@@ -211,6 +211,7 @@ C                 PAULI FORMULA REPULSIVE POTENTIAL
       NTMO = 0
 C                 CHARGE TRANSFER
       NTAO = 0
+      NTCTMO = 0
 C                 DISPERSION
       IEFDP= 0
 C
@@ -244,6 +245,7 @@ C         NEW POLARIZATION DAMPING (SEE NEW_POL)
          NAO(I)   = 0
          NOCC(I)  = 0
          NVIR(I)  = 0
+         NCTMO(I) = 0
       ENDDO
 C           THESE ARE THE FLAGS TO GLOBALLY TURN OFF CERTAIN EFP TERMS.
 C           THE OPTION -NOELEC- DOES NOT WORK, ACTUALLY.
@@ -261,6 +263,7 @@ C
       NBM   = -1
       MXMO  =  0
       MXBF  =  0
+      MXCTMO = 0
 C
       XBOX = 0.0D+00
       YBOX = 0.0D+00
@@ -755,6 +758,7 @@ C
 C             COMPLETELY IGNORE ANYTHING GIVEN IN $EFRAG FOR THESE!
       MXBF=0
       MXMO=0
+      MXCTMO=0
 C
       GPSAVE = GOPARR
       GOPARR = .FALSE.
@@ -769,6 +773,7 @@ C
             IF(FRGNAM(NAMIDX(IDFRG)).EQ.'SPC   ') GO TO 165
             IF(FRGNAM(NAMIDX(IDFRG)).EQ.'SPCE  ') GO TO 165
             CALL RDMXBF(IDFRG,MXBF,MXMO)
+            CALL RDMXCTMO(IDFRG,MXCTMO)
  165  CONTINUE
       END IF
 C
@@ -784,11 +789,12 @@ C
       NTMOF=NFRG*MXMO
       MXMO2=(MXMO*MXMO+MXMO)/2
       NTAOF=NFRG*MXBF
+      NTCTMOF = NFRG*MXCTMO
       CALL VALFM(LOADFM)
       LPROVEC = LOADFM  + 1
       LFOCKMA = LPROVEC + MXBF*NTMOF
-      LCANVEC = LFOCKMA + MXMO2*NFRG
-      LAVLVEC = LCANVEC + MXBF*NTAOF
+      LCTVEC  = LFOCKMA + MXMO2*NFRG
+      LAVLVEC = LCTVEC  + MXBF*NTCTMOF
       LTLVEC  = LAVLVEC + MXBF
       LAVCVEC = LTLVEC  + MXBF
       LTCVEC  = LAVCVEC + MXBF
@@ -801,8 +807,8 @@ C
       IF(MXBF.GT.0) THEN
          CALL VCLR(XX(LPROVEC),1,MXBF*NTMOF)
          CALL VCLR(XX(LFOCKMA),1,MXMO2*NFRG)
-         CALL VCLR(XX(LCANVEC),1,MXBF*NTAOF)
-         CALL VCLR(CANFOK     ,1,MXAO*MXDFG)
+         CALL VCLR(XX(LCTVEC),1,MXBF*NTCTMOF)
+         CALL VCLR(CTFOK     ,1,MXAO*MXDFG)
       END IF
       I=1
 C ---- LIST OF MULTIPOLE POINTS
@@ -833,8 +839,8 @@ C-DEAD-         CALL SPCEWA(I)
                 CALL SPC(I,1)
       ELSE
          IF (MASWRK) WRITE(IW,9050) I,FRGMNT
-         CALL RDSTFR(FRGMNT,I,XX(LPROVEC),XX(LFOCKMA),XX(LCANVEC),
-     *               MXBF,NTAOF,MXMO,MXMO2,NTMOF)
+         CALL RDSTFR(FRGMNT,I,XX(LPROVEC),XX(LFOCKMA),XX(LCTVEC),
+     *               MXBF,NTCTMOF,MXMO,MXMO2,NTMOF)
       END IF
 C
 C        TRANSLATE/ROTATE THE FRAGMENT JUST READ TO ITS ACTUAL POSITION,
@@ -844,7 +850,8 @@ C        NUMBER OF ATOMS IN A FROZEN GEOMETRY EFP TO 3...EVEN IF THAT'S
 C        NOT CORRECT!
 C
       IF(KATMS(I).EQ.3) THEN
-         CALL FRGROT(FRGMNT,I,XX(LPROVEC),XX(LCANVEC),MXBF,NTMOF,NTAOF)
+         CALL FRGROT(FRGMNT,I,XX(LPROVEC),XX(LCTVEC),MXBF,NTMOF,
+     *               NTCTMOF)
       ELSE
          NBOPTS = 0
          DO KK=1,NMPTS(I)
@@ -865,8 +872,8 @@ C        - BO** AND L00** CAN NOT BE IN THE SAME FRAGMENT
      *          'ERROR: USE EITHER BO** OR L00** POINTS'
             CALL ABRT
          END IF
-         CALL FLEXIP(I,XX(LPROVEC),XX(LCANVEC),
-     *               MXBF,NTMOF,NTAOF,XX(LAVLVEC),XX(LTLVEC),
+         CALL FLEXIP(I,XX(LPROVEC),XX(LCTVEC),
+     *               MXBF,NTMOF,NTCTMOF,XX(LAVLVEC),XX(LTLVEC),
      *               XX(LAVCVEC),XX(LTCVEC),NBOPTS,NLPTS)
       END IF
 C
@@ -881,6 +888,7 @@ C
       NTPATM = NTPATM + NAT(ISET(I))
       NTMO   = NTMO   + NORB(I)
       NTAO   = NTAO   + NAO(ISET(I))
+      NTCTMO = NTCTMO + NCTMO(ISET(I))
       NTFRCPN=NTFRCPN + NFRCPNT(I)
 C
       LSTMPTS(I+1) = LSTMPTS(I)+NMPTS(I)
@@ -909,12 +917,12 @@ C
       LENFM=MXMO2*NFRG
       CALL DAWRIT(IDAF,IODA,XX(LPROVEC),LENPV,267,0)
       CALL DAWRIT(IDAF,IODA,XX(LFOCKMA),LENFM,268,0)
-      LENCV=MXBF*NTAO
-      CALL DAWRIT(IDAF,IODA,XX(LCANVEC),LENCV,269,0)
+      LENCV=MXBF*NTCTMO
+      CALL DAWRIT(IDAF,IODA,XX(LCTVEC),LENCV,269,0)
       CALL RETFM(NEED)
 C
       EFP1MODEL = NRTTPT+NDTTPT           .GT.0 .AND. NLJTTPT.EQ.0
-      EFP2MODEL = NTPATM+NTMO+NDPTTPT+NTAO.GT.0
+      EFP2MODEL = NTPATM+NTMO+NDPTTPT+NTCTMO.GT.0
 C
 C            SWITCH OFF ANY TERMS THE USER DOESN'T WANT.
 C        THE -FFELEC- ROUTINE DOESN'T PAY ATTENTION TO THE OLD
@@ -951,7 +959,8 @@ C         NDTTPT=0
          NTPATM=0
       END IF
       IF(NOCHTR) THEN
-         NTAO=0
+C         NTAO=0
+         NTCTMO=0
       END IF
       IF(NODISP) THEN
          IEFDP=0
@@ -1004,8 +1013,9 @@ C
             WRITE(IW,9120) NTPATM
             WRITE(IW,9125) NTMO
             WRITE(IW,9130) NDPTTPT
-            WRITE(IW,9135) NTAO
-            WRITE(IW,9145) NTPATM.GT.0, NDPTTPT.GT.0, NTAO.GT.0
+C            WRITE(IW,9135) NTAO
+            WRITE(IW,9135) NTCTMO
+            WRITE(IW,9145) NTPATM.GT.0, NDPTTPT.GT.0, NTCTMO.GT.0
          END IF
          IF(IFRCPNT) WRITE(IW,9147) NTFRCPN
       END IF
@@ -1261,7 +1271,7 @@ C
      *          '  (EFP2 PAULI REPULSION)')
  9130 FORMAT(1X,'TOTAL NO OF DYNAMIC POLARIZABLE PTS=',I10,
      *          '  (EFP2 DISPERSION)')
- 9135 FORMAT(1X,'TOTAL NUMBER OF EFP AOS            =',I10,
+ 9135 FORMAT(1X,'TOTAL NUMBER OF EFP MOS            =',I10,
      *          '  (EFP2 CHARGE TRANSFER)')
  9140 FORMAT(/1X,'THIS IS A -EFP1- TYPE RUN, WITH PAULI REPULSION,',
      *          ' CHARGE TRANSFER, AND'/
@@ -1397,7 +1407,7 @@ C
       END
 C
 C*MODULE EFINP   *DECK FRGROT
-      SUBROUTINE FRGROT(FRGMNT,N,PROVEC,CANVEC,MXBF,NTMOF,NTAOF)
+      SUBROUTINE FRGROT(FRGMNT,N,PROVEC,CTVEC,MXBF,NTMOF,NTCTMOF)
       IMPLICIT DOUBLE PRECISION (A-H, O-Z)
 C
       LOGICAL GOPARR,MASWRK,DSKWRK
@@ -1444,8 +1454,8 @@ C
      *                KLOC(MXSHEF,MXDFG),KMIN(MXSHEF,MXDFG),
      *                KMAX(MXSHEF,MXDFG),NSHELL(MXDFG),NGAUSS(MXDFG),
      *                NAT(MXDFG),NUM(MXDFG),NTPATM
-      COMMON /EFPCMO/ NOCC(MXDFG),NVIR(MXDFG),NAO(MXDFG),NTAO,
-     *                CANFOK(MXAO,MXDFG)
+      COMMON /EFPCT / NOCC(MXDFG),NVIR(MXDFG),NAO(MXDFG),NTAO,
+     *                CTFOK(MXAO,MXDFG),NCTMO(MXDFG),NTCTMO
       COMMON /EFPFRC/ IFRCPNT,NTFRCPN,NFRCPNT(MXFRG),LSTFPTS(MXFRG),
      *                FRCCRD(3,MXFGPT),FRCNME(MXFGPT),FRCTRQ(6,MXFGPT)
      *                ,FRCTRQX(6,MXFGPT)
@@ -1499,7 +1509,7 @@ C
       SAVE JDXSV
       DATA JDXSV/0/
 C
-      DIMENSION PROVEC(MXBF,NTMOF),CANVEC(MXBF,NTAOF)
+      DIMENSION PROVEC(MXBF,NTMOF),CTVEC(MXBF,NTCTMOF)
 C
       SAVE IDXSV
       DATA IDXSV/0/
@@ -2174,7 +2184,8 @@ C
 C
 C  ROTATE CANONICAL VEC
 C
-      IAO = NPBF(N)
+C      IAO = NPBF(N)
+      ICTMO = NCTMO(ISET(N))
       DO NSHL = 1,NSHELL(ISET(N))
          ITYP = KMAX(NSHL,ISET(N)) - KMIN(NSHL,ISET(N)) + 1
          LOC = KLOC(NSHL,ISET(N))
@@ -2184,26 +2195,26 @@ C
 C  P:
 C
          IF(ITYP.EQ.3) THEN
-            DO I = 1,IAO
-               TEMP3(1) = CANVEC(LOC,NTAO+I)
-               TEMP3(2) = CANVEC(LOC+1,NTAO+I)
-               TEMP3(3) = CANVEC(LOC+2,NTAO+I)
+            DO I = 1,ICTMO
+               TEMP3(1) = CTVEC(LOC,NTCTMO+I)
+               TEMP3(2) = CTVEC(LOC+1,NTCTMO+I)
+               TEMP3(3) = CTVEC(LOC+2,NTCTMO+I)
                CALL MRARBR(T3,3,3,3,TEMP3,3,1,TEMP4(1,1),3)
-               CANVEC(LOC,NTAO+I) = TEMP4(1,1)
-               CANVEC(LOC+1,NTAO+I) = TEMP4(2,1)
-               CANVEC(LOC+2,NTAO+I) = TEMP4(3,1)
+               CTVEC(LOC,NTCTMO+I) = TEMP4(1,1)
+               CTVEC(LOC+1,NTCTMO+I) = TEMP4(2,1)
+               CTVEC(LOC+2,NTCTMO+I) = TEMP4(3,1)
             END DO
          END IF
 C  L:
          IF(ITYP.EQ.4) THEN
-            DO I = 1,IAO
-               TEMP3(1) = CANVEC(LOC+1,NTAO+I)
-               TEMP3(2) = CANVEC(LOC+2,NTAO+I)
-               TEMP3(3) = CANVEC(LOC+3,NTAO+I)
+            DO I = 1,ICTMO
+               TEMP3(1) = CTVEC(LOC+1,NTCTMO+I)
+               TEMP3(2) = CTVEC(LOC+2,NTCTMO+I)
+               TEMP3(3) = CTVEC(LOC+3,NTCTMO+I)
                CALL MRARBR(T3,3,3,3,TEMP3,3,1,TEMP4(1,1),3)
-               CANVEC(LOC+1,NTAO+I) = TEMP4(1,1)
-               CANVEC(LOC+2,NTAO+I) = TEMP4(2,1)
-               CANVEC(LOC+3,NTAO+I) = TEMP4(3,1)
+               CTVEC(LOC+1,NTCTMO+I) = TEMP4(1,1)
+               CTVEC(LOC+2,NTCTMO+I) = TEMP4(2,1)
+               CTVEC(LOC+3,NTCTMO+I) = TEMP4(3,1)
             END DO
          END IF
 C  D:
@@ -2212,106 +2223,120 @@ C              LARGER THAN XX,YY,ZZ. FACTOR OF TWO ALLOWS SUMMATION
 C              OVER ALL INDICES RATHER THAN I,J<=I
 C
          IF(ITYP.EQ.6) THEN
-            DO I = 1,IAO
-               TEMP2(1) = CANVEC(LOC,NTAO+I)
-               TEMP2(2) = CANVEC(LOC+3,NTAO+I)/CONST
-               TEMP2(3) = CANVEC(LOC+1,NTAO+I)
-               TEMP2(4) = CANVEC(LOC+4,NTAO+I)/CONST
-               TEMP2(5) = CANVEC(LOC+5,NTAO+I)/CONST
-               TEMP2(6) = CANVEC(LOC+2,NTAO+I)
+            DO I = 1,ICTMO
+               TEMP2(1) = CTVEC(LOC,NTCTMO+I)
+               TEMP2(2) = CTVEC(LOC+3,NTCTMO+I)/CONST
+               TEMP2(3) = CTVEC(LOC+1,NTCTMO+I)
+               TEMP2(4) = CTVEC(LOC+4,NTCTMO+I)/CONST
+               TEMP2(5) = CTVEC(LOC+5,NTCTMO+I)/CONST
+               TEMP2(6) = CTVEC(LOC+2,NTCTMO+I)
                CALL TFTRI(TEMP4(1,1),TEMP2,T3T,TEMP3,3,3,3)
-               CANVEC(LOC,NTAO+I) = TEMP4(1,1)
-               CANVEC(LOC+3,NTAO+I) = TEMP4(2,1)*CONST
-               CANVEC(LOC+1,NTAO+I) = TEMP4(3,1)
-               CANVEC(LOC+4,NTAO+I) = TEMP4(4,1)*CONST
-               CANVEC(LOC+5,NTAO+I) = TEMP4(5,1)*CONST
-               CANVEC(LOC+2,NTAO+I) = TEMP4(6,1)
+               CTVEC(LOC,NTCTMO+I) = TEMP4(1,1)
+               CTVEC(LOC+3,NTCTMO+I) = TEMP4(2,1)*CONST
+               CTVEC(LOC+1,NTCTMO+I) = TEMP4(3,1)
+               CTVEC(LOC+4,NTCTMO+I) = TEMP4(4,1)*CONST
+               CTVEC(LOC+5,NTCTMO+I) = TEMP4(5,1)*CONST
+               CTVEC(LOC+2,NTCTMO+I) = TEMP4(6,1)
             END DO
          END IF
 C
 C  F:
 C
          IF(ITYP.EQ.10) THEN
-            DO I = 1,IAO
-               CANVEC(LOC+3,NTAO+I) = CANVEC(LOC+3,NTAO+I)*SQRT5/THREE
-               CANVEC(LOC+4,NTAO+I) = CANVEC(LOC+4,NTAO+I)*SQRT5/THREE
-               CANVEC(LOC+5,NTAO+I) = CANVEC(LOC+5,NTAO+I)*SQRT5/THREE
-               CANVEC(LOC+6,NTAO+I) = CANVEC(LOC+6,NTAO+I)*SQRT5/THREE
-               CANVEC(LOC+7,NTAO+I) = CANVEC(LOC+7,NTAO+I)*SQRT5/THREE
-               CANVEC(LOC+8,NTAO+I) = CANVEC(LOC+8,NTAO+I)*SQRT5/THREE
-               CANVEC(LOC+9,NTAO+I) = CANVEC(LOC+9,NTAO+I)*SQRT5/THREE
-               CANVEC(LOC+9,NTAO+I) = CANVEC(LOC+9,NTAO+I)*SQRT3/TWO
+            DO I = 1,ICTMO
+               CTVEC(LOC+3,NTCTMO+I) = CTVEC(LOC+3,NTCTMO+I)*SQRT5/
+     *                                  THREE
+               CTVEC(LOC+4,NTCTMO+I) = CTVEC(LOC+4,NTCTMO+I)*SQRT5/
+     *                                  THREE
+               CTVEC(LOC+5,NTCTMO+I) = CTVEC(LOC+5,NTCTMO+I)*SQRT5/
+     *                                  THREE
+               CTVEC(LOC+6,NTCTMO+I) = CTVEC(LOC+6,NTCTMO+I)*SQRT5/
+     *                                  THREE
+               CTVEC(LOC+7,NTCTMO+I) = CTVEC(LOC+7,NTCTMO+I)*SQRT5/
+     *                                  THREE
+               CTVEC(LOC+8,NTCTMO+I) = CTVEC(LOC+8,NTCTMO+I)*SQRT5/
+     *                                  THREE
+               CTVEC(LOC+9,NTCTMO+I) = CTVEC(LOC+9,NTCTMO+I)*SQRT5/
+     *                                  THREE
+               CTVEC(LOC+9,NTCTMO+I) = CTVEC(LOC+9,NTCTMO+I)*SQRT3/
+     *                                  TWO
 C
-               TEMP2(1) = CANVEC(LOC  ,NTAO+I)
-               TEMP2(2) = CANVEC(LOC+3,NTAO+I)
-               TEMP2(3) = CANVEC(LOC+5,NTAO+I)
-               TEMP2(4) = CANVEC(LOC+4,NTAO+I)
-               TEMP2(5) = CANVEC(LOC+9,NTAO+I)
-               TEMP2(6) = CANVEC(LOC+7,NTAO+I)
+               TEMP2(1) = CTVEC(LOC  ,NTCTMO+I)
+               TEMP2(2) = CTVEC(LOC+3,NTCTMO+I)
+               TEMP2(3) = CTVEC(LOC+5,NTCTMO+I)
+               TEMP2(4) = CTVEC(LOC+4,NTCTMO+I)
+               TEMP2(5) = CTVEC(LOC+9,NTCTMO+I)
+               TEMP2(6) = CTVEC(LOC+7,NTCTMO+I)
                CALL TFTRI(TEMP4(1,1),TEMP2,T3T,TEMP3,3,3,3)
 C
-               TEMP2(1) = CANVEC(LOC+3,NTAO+I)
-               TEMP2(2) = CANVEC(LOC+5,NTAO+I)
-               TEMP2(3) = CANVEC(LOC+1,NTAO+I)
-               TEMP2(4) = CANVEC(LOC+9,NTAO+I)
-               TEMP2(5) = CANVEC(LOC+6,NTAO+I)
-               TEMP2(6) = CANVEC(LOC+8,NTAO+I)
+               TEMP2(1) = CTVEC(LOC+3,NTCTMO+I)
+               TEMP2(2) = CTVEC(LOC+5,NTCTMO+I)
+               TEMP2(3) = CTVEC(LOC+1,NTCTMO+I)
+               TEMP2(4) = CTVEC(LOC+9,NTCTMO+I)
+               TEMP2(5) = CTVEC(LOC+6,NTCTMO+I)
+               TEMP2(6) = CTVEC(LOC+8,NTCTMO+I)
                CALL TFTRI(TEMP4(1,2),TEMP2,T3T,TEMP3,3,3,3)
 C
-               TEMP2(1) = CANVEC(LOC+4,NTAO+I)
-               TEMP2(2) = CANVEC(LOC+9,NTAO+I)
-               TEMP2(3) = CANVEC(LOC+6,NTAO+I)
-               TEMP2(4) = CANVEC(LOC+7,NTAO+I)
-               TEMP2(5) = CANVEC(LOC+8,NTAO+I)
-               TEMP2(6) = CANVEC(LOC+2,NTAO+I)
+               TEMP2(1) = CTVEC(LOC+4,NTCTMO+I)
+               TEMP2(2) = CTVEC(LOC+9,NTCTMO+I)
+               TEMP2(3) = CTVEC(LOC+6,NTCTMO+I)
+               TEMP2(4) = CTVEC(LOC+7,NTCTMO+I)
+               TEMP2(5) = CTVEC(LOC+8,NTCTMO+I)
+               TEMP2(6) = CTVEC(LOC+2,NTCTMO+I)
                CALL TFTRI(TEMP4(1,3),TEMP2,T3T,TEMP3,3,3,3)
 C
                CALL MRARBR(TEMP4,6,6,3,T3T,3,3,TEMP5,6)
 C
-               CANVEC(LOC  ,NTAO+I) = TEMP5(1,1)
-               CANVEC(LOC+1,NTAO+I) = TEMP5(3,2)
-               CANVEC(LOC+2,NTAO+I) = TEMP5(6,3)
-               CANVEC(LOC+3,NTAO+I) = TEMP5(2,1)/SQRT5*THREE
-               CANVEC(LOC+4,NTAO+I) = TEMP5(4,1)/SQRT5*THREE
-               CANVEC(LOC+5,NTAO+I) = TEMP5(3,1)/SQRT5*THREE
-               CANVEC(LOC+6,NTAO+I) = TEMP5(5,2)/SQRT5*THREE
-               CANVEC(LOC+7,NTAO+I) = TEMP5(6,1)/SQRT5*THREE
-               CANVEC(LOC+8,NTAO+I) = TEMP5(6,2)/SQRT5*THREE
-               CANVEC(LOC+9,NTAO+I) = TEMP5(5,1)/SQRT5*THREE/SQRT3*TWO
+               CTVEC(LOC  ,NTCTMO+I) = TEMP5(1,1)
+               CTVEC(LOC+1,NTCTMO+I) = TEMP5(3,2)
+               CTVEC(LOC+2,NTCTMO+I) = TEMP5(6,3)
+               CTVEC(LOC+3,NTCTMO+I) = TEMP5(2,1)/SQRT5*THREE
+               CTVEC(LOC+4,NTCTMO+I) = TEMP5(4,1)/SQRT5*THREE
+               CTVEC(LOC+5,NTCTMO+I) = TEMP5(3,1)/SQRT5*THREE
+               CTVEC(LOC+6,NTCTMO+I) = TEMP5(5,2)/SQRT5*THREE
+               CTVEC(LOC+7,NTCTMO+I) = TEMP5(6,1)/SQRT5*THREE
+               CTVEC(LOC+8,NTCTMO+I) = TEMP5(6,2)/SQRT5*THREE
+               CTVEC(LOC+9,NTCTMO+I) = TEMP5(5,1)/SQRT5*THREE/SQRT3*TWO
             END DO
          END IF
 C
 C  G:
 C
          IF(ITYP.EQ.15) THEN
-            DO I = 1,IAO
-               CANVEC(LOC+ 3,NTAO+I) = CANVEC(LOC+ 3,NTAO+I)*SQRT7/FOUR
-               CANVEC(LOC+ 4,NTAO+I) = CANVEC(LOC+ 4,NTAO+I)*SQRT7/FOUR
-               CANVEC(LOC+ 5,NTAO+I) = CANVEC(LOC+ 5,NTAO+I)*SQRT7/FOUR
-               CANVEC(LOC+ 6,NTAO+I) = CANVEC(LOC+ 6,NTAO+I)*SQRT7/FOUR
-               CANVEC(LOC+ 7,NTAO+I) = CANVEC(LOC+ 7,NTAO+I)*SQRT7/FOUR
-               CANVEC(LOC+ 8,NTAO+I) = CANVEC(LOC+ 8,NTAO+I)*SQRT7/FOUR
-               CANVEC(LOC+ 9,NTAO+I) = CANVEC(LOC+ 9,NTAO+I)*SQRT7*
+            DO I = 1,ICTMO
+               CTVEC(LOC+ 3,NTCTMO+I) = CTVEC(LOC+ 3,NTCTMO+I)*SQRT7
+     *                                    /FOUR
+               CTVEC(LOC+ 4,NTCTMO+I) = CTVEC(LOC+ 4,NTCTMO+I)*SQRT7
+     *                                    /FOUR
+               CTVEC(LOC+ 5,NTCTMO+I) = CTVEC(LOC+ 5,NTCTMO+I)*SQRT7
+     *                                    /FOUR
+               CTVEC(LOC+ 6,NTCTMO+I) = CTVEC(LOC+ 6,NTCTMO+I)*SQRT7
+     *                                    /FOUR
+               CTVEC(LOC+ 7,NTCTMO+I) = CTVEC(LOC+ 7,NTCTMO+I)*SQRT7
+     *                                    /FOUR
+               CTVEC(LOC+ 8,NTCTMO+I) = CTVEC(LOC+ 8,NTCTMO+I)*SQRT7
+     *                                    /FOUR
+               CTVEC(LOC+ 9,NTCTMO+I) = CTVEC(LOC+ 9,NTCTMO+I)*SQRT7*
      *                                 SQRT5/SQRT3/SIX
-               CANVEC(LOC+10,NTAO+I) = CANVEC(LOC+10,NTAO+I)*SQRT7*
+               CTVEC(LOC+10,NTCTMO+I) = CTVEC(LOC+10,NTCTMO+I)*SQRT7*
      *                                 SQRT5/SQRT3/SIX
-               CANVEC(LOC+11,NTAO+I) = CANVEC(LOC+11,NTAO+I)*SQRT7*
+               CTVEC(LOC+11,NTCTMO+I) = CTVEC(LOC+11,NTCTMO+I)*SQRT7*
      *                                 SQRT5/SQRT3/SIX
-               CANVEC(LOC+12,NTAO+I) = CANVEC(LOC+12,NTAO+I)*SQRT7*
+               CTVEC(LOC+12,NTCTMO+I) = CTVEC(LOC+12,NTCTMO+I)*SQRT7*
      *                                 SQRT5/TWELVE
-               CANVEC(LOC+13,NTAO+I) = CANVEC(LOC+13,NTAO+I)*SQRT7*
+               CTVEC(LOC+13,NTCTMO+I) = CTVEC(LOC+13,NTCTMO+I)*SQRT7*
      *                                 SQRT5/TWELVE
-               CANVEC(LOC+14,NTAO+I) = CANVEC(LOC+14,NTAO+I)*SQRT7*
+               CTVEC(LOC+14,NTCTMO+I) = CTVEC(LOC+14,NTCTMO+I)*SQRT7*
      *                                 SQRT5/TWELVE
 C
 C              PERFORM THE FIRST AND SECOND ROTATION
 C
-               TEMP2(1) = CANVEC(LOC   ,NTAO+I)
-               TEMP2(2) = CANVEC(LOC+ 3,NTAO+I)
-               TEMP2(3) = CANVEC(LOC+ 9,NTAO+I)
-               TEMP2(4) = CANVEC(LOC+ 4,NTAO+I)
-               TEMP2(5) = CANVEC(LOC+12,NTAO+I)
-               TEMP2(6) = CANVEC(LOC+10,NTAO+I)
+               TEMP2(1) = CTVEC(LOC   ,NTCTMO+I)
+               TEMP2(2) = CTVEC(LOC+ 3,NTCTMO+I)
+               TEMP2(3) = CTVEC(LOC+ 9,NTCTMO+I)
+               TEMP2(4) = CTVEC(LOC+ 4,NTCTMO+I)
+               TEMP2(5) = CTVEC(LOC+12,NTCTMO+I)
+               TEMP2(6) = CTVEC(LOC+10,NTCTMO+I)
                CALL TFTRI(TEMP4(1,1),TEMP2,T3T,TEMP3,3,3,3)
                TPXX(1) = TEMP4(1,1)
                TPXX(2) = TEMP4(2,1)
@@ -2320,12 +2345,12 @@ C
                TPXX(5) = TEMP4(5,1)
                TPXX(6) = TEMP4(6,1)
 C
-               TEMP2(1) = CANVEC(LOC+ 3,NTAO+I)
-               TEMP2(2) = CANVEC(LOC+ 9,NTAO+I)
-               TEMP2(3) = CANVEC(LOC+ 5,NTAO+I)
-               TEMP2(4) = CANVEC(LOC+12,NTAO+I)
-               TEMP2(5) = CANVEC(LOC+13,NTAO+I)
-               TEMP2(6) = CANVEC(LOC+14,NTAO+I)
+               TEMP2(1) = CTVEC(LOC+ 3,NTCTMO+I)
+               TEMP2(2) = CTVEC(LOC+ 9,NTCTMO+I)
+               TEMP2(3) = CTVEC(LOC+ 5,NTCTMO+I)
+               TEMP2(4) = CTVEC(LOC+12,NTCTMO+I)
+               TEMP2(5) = CTVEC(LOC+13,NTCTMO+I)
+               TEMP2(6) = CTVEC(LOC+14,NTCTMO+I)
                CALL TFTRI(TEMP4(1,1),TEMP2,T3T,TEMP3,3,3,3)
                TPXY(1) = TEMP4(1,1)
                TPXY(2) = TEMP4(2,1)
@@ -2334,12 +2359,12 @@ C
                TPXY(5) = TEMP4(5,1)
                TPXY(6) = TEMP4(6,1)
 C
-               TEMP2(1) = CANVEC(LOC+ 9,NTAO+I)
-               TEMP2(2) = CANVEC(LOC+ 5,NTAO+I)
-               TEMP2(3) = CANVEC(LOC+ 1,NTAO+I)
-               TEMP2(4) = CANVEC(LOC+13,NTAO+I)
-               TEMP2(5) = CANVEC(LOC+ 6,NTAO+I)
-               TEMP2(6) = CANVEC(LOC+11,NTAO+I)
+               TEMP2(1) = CTVEC(LOC+ 9,NTCTMO+I)
+               TEMP2(2) = CTVEC(LOC+ 5,NTCTMO+I)
+               TEMP2(3) = CTVEC(LOC+ 1,NTCTMO+I)
+               TEMP2(4) = CTVEC(LOC+13,NTCTMO+I)
+               TEMP2(5) = CTVEC(LOC+ 6,NTCTMO+I)
+               TEMP2(6) = CTVEC(LOC+11,NTCTMO+I)
                CALL TFTRI(TEMP4(1,1),TEMP2,T3T,TEMP3,3,3,3)
                TPYY(1) = TEMP4(1,1)
                TPYY(2) = TEMP4(2,1)
@@ -2348,12 +2373,12 @@ C
                TPYY(5) = TEMP4(5,1)
                TPYY(6) = TEMP4(6,1)
 C
-               TEMP2(1) = CANVEC(LOC+ 4,NTAO+I)
-               TEMP2(2) = CANVEC(LOC+12,NTAO+I)
-               TEMP2(3) = CANVEC(LOC+13,NTAO+I)
-               TEMP2(4) = CANVEC(LOC+10,NTAO+I)
-               TEMP2(5) = CANVEC(LOC+14,NTAO+I)
-               TEMP2(6) = CANVEC(LOC+ 7,NTAO+I)
+               TEMP2(1) = CTVEC(LOC+ 4,NTCTMO+I)
+               TEMP2(2) = CTVEC(LOC+12,NTCTMO+I)
+               TEMP2(3) = CTVEC(LOC+13,NTCTMO+I)
+               TEMP2(4) = CTVEC(LOC+10,NTCTMO+I)
+               TEMP2(5) = CTVEC(LOC+14,NTCTMO+I)
+               TEMP2(6) = CTVEC(LOC+ 7,NTCTMO+I)
                CALL TFTRI(TEMP4(1,1),TEMP2,T3T,TEMP3,3,3,3)
                TPXZ(1) = TEMP4(1,1)
                TPXZ(2) = TEMP4(2,1)
@@ -2362,12 +2387,12 @@ C
                TPXZ(5) = TEMP4(5,1)
                TPXZ(6) = TEMP4(6,1)
 C
-               TEMP2(1) = CANVEC(LOC+12,NTAO+I)
-               TEMP2(2) = CANVEC(LOC+13,NTAO+I)
-               TEMP2(3) = CANVEC(LOC+ 6,NTAO+I)
-               TEMP2(4) = CANVEC(LOC+14,NTAO+I)
-               TEMP2(5) = CANVEC(LOC+11,NTAO+I)
-               TEMP2(6) = CANVEC(LOC+ 8,NTAO+I)
+               TEMP2(1) = CTVEC(LOC+12,NTCTMO+I)
+               TEMP2(2) = CTVEC(LOC+13,NTCTMO+I)
+               TEMP2(3) = CTVEC(LOC+ 6,NTCTMO+I)
+               TEMP2(4) = CTVEC(LOC+14,NTCTMO+I)
+               TEMP2(5) = CTVEC(LOC+11,NTCTMO+I)
+               TEMP2(6) = CTVEC(LOC+ 8,NTCTMO+I)
                CALL TFTRI(TEMP4(1,1),TEMP2,T3T,TEMP3,3,3,3)
                TPYZ(1) = TEMP4(1,1)
                TPYZ(2) = TEMP4(2,1)
@@ -2376,12 +2401,12 @@ C
                TPYZ(5) = TEMP4(5,1)
                TPYZ(6) = TEMP4(6,1)
 C
-               TEMP2(1) = CANVEC(LOC+10,NTAO+I)
-               TEMP2(2) = CANVEC(LOC+14,NTAO+I)
-               TEMP2(3) = CANVEC(LOC+11,NTAO+I)
-               TEMP2(4) = CANVEC(LOC+ 7,NTAO+I)
-               TEMP2(5) = CANVEC(LOC+ 8,NTAO+I)
-               TEMP2(6) = CANVEC(LOC+ 2,NTAO+I)
+               TEMP2(1) = CTVEC(LOC+10,NTCTMO+I)
+               TEMP2(2) = CTVEC(LOC+14,NTCTMO+I)
+               TEMP2(3) = CTVEC(LOC+11,NTCTMO+I)
+               TEMP2(4) = CTVEC(LOC+ 7,NTCTMO+I)
+               TEMP2(5) = CTVEC(LOC+ 8,NTCTMO+I)
+               TEMP2(6) = CTVEC(LOC+ 2,NTCTMO+I)
                CALL TFTRI(TEMP4(1,1),TEMP2,T3T,TEMP3,3,3,3)
                TPZZ(1) = TEMP4(1,1)
                TPZZ(2) = TEMP4(2,1)
@@ -2476,21 +2501,21 @@ C
                TPZZ2(5) = TEMP4(5,1)
                TPZZ2(6) = TEMP4(6,1)
 C
-               CANVEC(LOC   ,NTAO+I) = TPXX2(1)
-               CANVEC(LOC+ 1,NTAO+I) = TPYY2(3)
-               CANVEC(LOC+ 2,NTAO+I) = TPZZ2(6)
-               CANVEC(LOC+ 3,NTAO+I) = TPXY2(1)/SQRT7*FOUR
-               CANVEC(LOC+ 4,NTAO+I) = TPXZ2(1)/SQRT7*FOUR
-               CANVEC(LOC+ 5,NTAO+I) = TPYY2(2)/SQRT7*FOUR
-               CANVEC(LOC+ 6,NTAO+I) = TPYZ2(3)/SQRT7*FOUR
-               CANVEC(LOC+ 7,NTAO+I) = TPXZ2(6)/SQRT7*FOUR
-               CANVEC(LOC+ 8,NTAO+I) = TPYZ2(6)/SQRT7*FOUR
-               CANVEC(LOC+ 9,NTAO+I) = TPYY2(1)/SQRT7/SQRT5*SQRT3*SIX
-               CANVEC(LOC+10,NTAO+I) = TPZZ2(1)/SQRT7/SQRT5*SQRT3*SIX
-               CANVEC(LOC+11,NTAO+I) = TPZZ2(3)/SQRT7/SQRT5*SQRT3*SIX
-               CANVEC(LOC+12,NTAO+I) = TPYZ2(1)/SQRT7/SQRT5*TWELVE
-               CANVEC(LOC+13,NTAO+I) = TPYZ2(2)/SQRT7/SQRT5*TWELVE
-               CANVEC(LOC+14,NTAO+I) = TPZZ2(2)/SQRT7/SQRT5*TWELVE
+               CTVEC(LOC   ,NTCTMO+I) = TPXX2(1)
+               CTVEC(LOC+ 1,NTCTMO+I) = TPYY2(3)
+               CTVEC(LOC+ 2,NTCTMO+I) = TPZZ2(6)
+               CTVEC(LOC+ 3,NTCTMO+I) = TPXY2(1)/SQRT7*FOUR
+               CTVEC(LOC+ 4,NTCTMO+I) = TPXZ2(1)/SQRT7*FOUR
+               CTVEC(LOC+ 5,NTCTMO+I) = TPYY2(2)/SQRT7*FOUR
+               CTVEC(LOC+ 6,NTCTMO+I) = TPYZ2(3)/SQRT7*FOUR
+               CTVEC(LOC+ 7,NTCTMO+I) = TPXZ2(6)/SQRT7*FOUR
+               CTVEC(LOC+ 8,NTCTMO+I) = TPYZ2(6)/SQRT7*FOUR
+               CTVEC(LOC+ 9,NTCTMO+I) = TPYY2(1)/SQRT7/SQRT5*SQRT3*SIX
+               CTVEC(LOC+10,NTCTMO+I) = TPZZ2(1)/SQRT7/SQRT5*SQRT3*SIX
+               CTVEC(LOC+11,NTCTMO+I) = TPZZ2(3)/SQRT7/SQRT5*SQRT3*SIX
+               CTVEC(LOC+12,NTCTMO+I) = TPYZ2(1)/SQRT7/SQRT5*TWELVE
+               CTVEC(LOC+13,NTCTMO+I) = TPYZ2(2)/SQRT7/SQRT5*TWELVE
+               CTVEC(LOC+14,NTCTMO+I) = TPZZ2(2)/SQRT7/SQRT5*TWELVE
             END DO
          END IF
       END DO
@@ -4885,8 +4910,8 @@ C
       END
 C
 C*MODULE EFINP   *DECK RDSTFR
-      SUBROUTINE RDSTFR(FRGMNT,IFRAG,PROVEC,FOCKMA,CANVEC,
-     *                  MXBF,NTAOF,MXMO,MXMO2,NTMOF)
+      SUBROUTINE RDSTFR(FRGMNT,IFRAG,PROVEC,FOCKMA,CTVEC,
+     *                  MXBF,NTCTMOF,MXMO,MXMO2,NTMOF)
 C
       IMPLICIT DOUBLE PRECISION (A-H, O-Z)
 C
@@ -4903,8 +4928,8 @@ C
       CHARACTER*8 WORD,MNAME,PNAME,RNAME,DPNAME,FNAME,FRCNME
       CHARACTER*80 TITLE
 C
-      COMMON /EFPCMO/ NOCC(MXDFG),NVIR(MXDFG),NAO(MXDFG),NTAO,
-     *                CANFOK(MXAO,MXDFG)
+      COMMON /EFPCT / NOCC(MXDFG),NVIR(MXDFG),NAO(MXDFG),NTAO,
+     *                CTFOK(MXAO,MXDFG),NCTMO(MXDFG),NTCTMO
       COMMON /EFPFRC/ IFRCPNT,NTFRCPN,NFRCPNT(MXFRG),LSTFPTS(MXFRG),
      *                FRCCRD(3,MXFGPT),FRCNME(MXFGPT),FRCTRQ(6,MXFGPT)
      *                ,FRCTRQX(6,MXFGPT)
@@ -4942,7 +4967,8 @@ C   ---- LVS: TMP COMMON FOR POLARIZATION SCREENING
 C
       COMMON /EFPNFO/ EFPMUL
 C
-      DIMENSION PROVEC(MXBF,NTMOF),FOCKMA(MXMO2,NFRG),CANVEC(MXBF,NTAOF)
+      DIMENSION PROVEC(MXBF,NTMOF),FOCKMA(MXMO2,NFRG),
+     *          CTVEC(MXBF,NTCTMOF)
 C
       NMPTS(IFRAG)=0
       NPPTS(IFRAG)=0
@@ -5197,6 +5223,7 @@ C
       IF(WORD.EQ.'WAVEFUNC') THEN
         NMOS = IFIND('NMOS    ',IERR)
         NAOS = IFIND('NAOS    ',IERR)
+        NAO(ISET(IFRAG))  = NAOS 
         CALL RDPMO(IFRAG,NMOS,NAOS,PROVEC,FOCKMA,
      *             MXBF,MXMO,MXMO2,NFRG,NTMOF)
       END IF
@@ -5209,11 +5236,11 @@ C
       MULMAT(IFRAG) = 1
 C
   407 CONTINUE
-      IF(WORD.NE.'CANONVEC') GO TO 420
+      IF(WORD.NE.'CTVEC   ') GO TO 420
       NOCC(ISET(IFRAG)) = IFIND('NOCC    ',IERR)
-      NAO(ISET(IFRAG))  = IFIND('NAOS    ',IERR)
-      NVIR(ISET(IFRAG)) = NAO(ISET(IFRAG)) - NOCC(ISET(IFRAG))
-      CALL RDCANV(IFRAG,CANVEC,MXBF,NTAOF)
+      NCTMO(ISET(IFRAG))  = IFIND('NCTMOS  ',IERR)
+      NVIR(ISET(IFRAG)) = NCTMO(ISET(IFRAG)) - NOCC(ISET(IFRAG))
+      CALL RDCANV(IFRAG,CTVEC,MXBF,NTCTMOF)
       GO TO 200
 C
   420 CONTINUE
@@ -6254,7 +6281,7 @@ C
       DOUBLE PRECISION MAKEFP,MCSCF
 C
       LOGICAL GOPARR,DSKWRK,MASWRK,TESTJOB
-      LOGICAL POLAR,DISPER,EXREP,CHGTRN,SCREEN
+      LOGICAL POLAR,DISPER,EXREP,CHGTRN,SCREEN,CTVVO
       LOGICAL MOIDON,EDCOMP,DIPDCM,DEPRNT,QADDCM,ZDO,POLDCM
       LOGICAL POLANG,POLAPP,KMIDPT,POLDYN
 C
@@ -6278,12 +6305,12 @@ C
       COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
      *                MPLEVL,MPCTYP
 C           SET UP $MAKEFP GROUP
-      PARAMETER (NNAM=7)
+      PARAMETER (NNAM=8)
       DIMENSION QNAM(NNAM),KQNAM(NNAM)
       DATA MAKEFP/8HMAKEFP  /
       DATA QNAM/8HTSTJOB  ,8HFRAG    ,8HSCREEN   ,8HPOL     ,
-     *          8HDISP    ,8HEXREP   ,8HCHTR     /
-      DATA KQNAM/0,5,0,0,   0,0,0/
+     *          8HDISP    ,8HEXREP   ,8HCHTR     ,8HCTVVO   /
+      DATA KQNAM/0,5,0,0,   0,0,0,0/
 C
       DATA RNONE/8HNONE    /,NONE/4HNONE/, RHF/8HRHF     /
       DATA ROHF/8HROHF    /
@@ -6318,10 +6345,12 @@ C
       DISPER=.TRUE.
       EXREP =.TRUE.
       CHGTRN=.TRUE.
+      CTVVO = .TRUE.
 C
       CALL NAMEIO(IR,JRET,MAKEFP,NNAM,QNAM,KQNAM,
-     *            TESTJOB,FRAG,SCREEN,POLAR,DISPER,EXREP,CHGTRN,
-     *   0,0,          0,0,0,0,0,   0,0,0,0,0,   0,0,0,0,0,
+     *            TESTJOB,FRAG,SCREEN,POLAR,DISPER,EXREP,
+     *            CHGTRN,CTVVO,
+     *   0,            0,0,0,0,0,   0,0,0,0,0,   0,0,0,0,0,
      *   0,0,0,0,0,    0,0,0,0,0,   0,0,0,0,0,   0,0,0,0,0,
      *   0,0,0,0,0,    0,0,0,0,0,   0,0,0,0,0,   0,0,0,0,0)
 C
@@ -6356,6 +6385,8 @@ C
 C
 C        --- GET THE WAVEFUNCTION ---
 C
+C------------ PX: do not set $SCF VVOS=.T. which will cause ENERGX to----
+C------------     run a VVOS run ------------------
       CALL ENERGX
 C
 C        --- GENERATE DISTRIBUTED MULTIPOLE ANALYSIS ---
@@ -6410,16 +6441,16 @@ C
       LIDMYP  = LDLPOL  + 9*LNA
       LNNOPRT = LIDMYP  + L1
       LPOL    = LNNOPRT + L1
-      LCANVEC = LPOL    + 9*LNA*MXIFRQ
-      LCANFOK = LCANVEC + L3
-      LAST    = LCANFOK + L2
+      LCTVEC  = LPOL    + 9*LNA*MXIFRQ
+      LCTFOK  = LCTVEC + L3
+      LAST    = LCTFOK + L2
       NEED = LAST - LOADFM - 1
       CALL GETFM(NEED)
 C
       CALL EFP2X(X(LVEC),X(LARRAY),X(LFMO),X(LCCHG),X(LWRK2),
-     *            X(LDLPOL),X(LIDMYP),X(LNNOPRT),X(LPOL),X(LCANVEC),
-     *           X(LCANFOK),LNA,LNA2,L1,L2,
-     *           POLAR,DISPER,EXREP,CHGTRN,NFTEFP)
+     *            X(LDLPOL),X(LIDMYP),X(LNNOPRT),X(LPOL),X(LCTVEC),
+     *           X(LCTFOK),LNA,LNA2,L1,L2,
+     *           POLAR,DISPER,EXREP,CHGTRN,CTVVO,NFTEFP)
       CALL RETFM(NEED)
       IF(MASWRK) THEN
          IF(EXREP) WRITE(IW,9032)
@@ -6469,14 +6500,14 @@ C
  9110 FORMAT(/10X,14(1H-)/10X,14HMAKEFP OPTIONS/10X,14(1H-)/
      *       10X,'FRAG=',A8/
      *       10X,'SCREEN=',L2,4X,'POL   =',L2,4X,'EXREP =',L2/
-     *       10X,'DISP  =',L2,4X,'CHTR  =',L2)
+     *       10X,'DISP  =',L2,4X,'CHTR  =',L2,4X,'CTVVO =',L2)
  9130 FORMAT(' $END')
       END
 C
 C*MODULE EFINP   *DECK EFP2X
       SUBROUTINE EFP2X(VEC,ARRAY,FMO,CCHG,WRK2,DLPOL,IDMYPT,NNOPRT,
-     *                 POL,CANVEC,CANFOK,LNA,LNA2,L1,L2,
-     *                 POLAR,DISPER,EXREP,CHGTRN,NFTEFP)
+     *                 POL,CTVEC,CTFOK,LNA,LNA2,L1,L2,
+     *                 POLAR,DISPER,EXREP,CHGTRN,CTVVO,NFTEFP)
 C
       IMPLICIT DOUBLE PRECISION (A-H, O-Z)
 C
@@ -6487,6 +6518,7 @@ C
       LOGICAL MOIDON,EDCOMP,DIPDCM,DEPRNT,QADDCM,ZDO,POLDCM,POLANG,
      *        POLAPP,KMIDPT,POLDYN,GOPARR,DSKWRK,MASWRK,DBG
       LOGICAL POLAR,DISPER,EXREP,CHGTRN
+      LOGICAL CTVVO
 C
       PARAMETER (MXATM=2000, MXSH=5000, MXGTOT=20000, MXAO=8192,
      *           MXFGPT=12000)
@@ -6540,6 +6572,7 @@ C
      *               ,OXZZ,OYZZ,OZZZ,OXYZ
      *               ,OMXXX,OMXXY,OMXXZ,OMXYY,OMYYY
      *               ,OMYYZ,OMXZZ,OMYZZ,OMZZZ,OMXYZ
+      COMMON /VVOPAR/ IVVOS,NVVOS,BNDDEN
       COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
      *                MPLEVL,MPCTYP
 C
@@ -6547,7 +6580,7 @@ C
       DIMENSION VEC(L1,NA), ARRAY(L2), FMO(LNA2), CCHG(3,LNA),
      *          WRK2(L1), DLPOL(9,LNA), IDMYPT(L1), NNOPRT(L1),
      *          POL(9,LNA,NDPFREQ)
-      DIMENSION CANVEC(L1*L1), CANFOK(L2)
+      DIMENSION CTVEC(L1*L1), CTFOK(L2)
 C
       DATA RHF/8HRHF     /, ROHF/8HROHF    /
       DATA LABEL/8HS       ,8HP       ,8HD       ,8HF       ,
@@ -6944,20 +6977,81 @@ C
       IF(.NOT.CHGTRN)   GO TO 700
       IF(SCFTYP.NE.RHF) GO TO 700
 C
-      CALL DAREAD(IDAF,IODA,CANVEC,L1*L1,15,0)
-      IF(MASWRK) WRITE(NFTEFP,*) 'CANONVEC ',NA,' ',L1
-      CALL PUSQLF(NFTEFP,CANVEC,L1,L1,L1)
+C ---------------- PX: choose either VVO or CMO for EFP2 CT ----------
+C --------- LMO -----------
+      IF(CTVVO) THEN
+          L0 = NQMT
+          L1 = NUM
+          L2 = (L1*L1+L1)/2
+          L3 = L1*L1
+          NOCC = NA
+C
+          CALL DAREAD(IDAF,IODA,CTVEC,L1*L1,15,0)
+          CALL DAREAD(IDAF,IODA,CTFOK,L2,14,0)
+C
+          IVVOS=1
+          CALL VALFM(LOADFM)
+          LCTVEC  =  LOADFM + 1
+          LCTFOK  =  LCTVEC + L3
+          LEIG    =  LCTFOK + L2
+          LWRK1   =  LEIG   + L1
+          LWRK2   =  LWRK1  + L3
+          LWRK3   =  LWRK2  + L3
+          LSCR    =  LWRK3  + L3
+          LIWRK   =  LSCR   + L1*8
+          LAST    =  LIWRK  + L1
+          NEED    =  LAST - LOADFM -1
+          CALL GETFM(NEED)
+C 
+          CALL VVOS(CTVEC,CTFOK,X(LEIG),
+     *              X(LWRK1),X(LWRK2),X(LWRK3),X(LSCR),X(LIWRK),
+     *              L0,L1,L2,L3,NOCC)
+
+C        CALL DAREAD(IDAF,IODA,X(LCTVEC),L3,15,0)
+C        CALL DAREAD(IDAF,IODA,X(LEIG),L1,17,0)
+
+          NVVO = NVVOS
+          NLMO = NOCC + NVVO
+C
+C   OUTPUT SEMI-CONANICALIZED MO FROM QUAMBO
+C
+          CALL DAREAD(IDAF,IODA,CTVEC,L1*L1,15,0)
+          CALL STFASE(CTVEC,L1,L1,L1)
+          IF(MASWRK) WRITE(NFTEFP,*) 'CTVEC   ',NA,' ',NLMO
+          CALL PUSQLF(NFTEFP,CTVEC,NLMO,L1,L1)
+C
+C   OUTPUT EXPECTATION VALUE OF FOCK OPERATOR OVER LMO
+C   ONLY NEED THE FIRST NA(NOCC) ONES
+C
+          CALL DAREAD(IDAF,IODA,CTFOK,NA,17,0)
+C
+          IF(MASWRK) THEN
+             WRITE(NFTEFP,*) 'CTFOK'
+             WRITE(NFTEFP,9250) (CTFOK(I),I=1,NA)
+             WRITE(NFTEFP,9111)
+          END IF
+C
+         CALL RETFM(NEED)
+C 
+C ----------CMO------------
+      ELSE 
+C
+        CALL DAREAD(IDAF,IODA,CTVEC,L1*L1,15,0)
+        IF(MASWRK) WRITE(NFTEFP,*) 'CTVEC   ',NA,' ',L1
+        CALL PUSQLF(NFTEFP,CTVEC,L1,L1,L1)
 C
 C        OUTPUT THE FOCK MATRIX OVER CMO'S, FOR CHARGE TRANSFER
 C
-      IF(EXETYP.NE.CHECK) THEN
-         CALL DAREAD(IDAF,IODA,ARRAY,L2,14,0)
-         CALL TFTRI(CANFOK,ARRAY,CANVEC,WRK2,L1,L1,L1)
-      END IF
-      IF(MASWRK) THEN
-         WRITE(NFTEFP,*) 'CANONFOK'
-         WRITE(NFTEFP,9250)(CANFOK(I*(I+1)/2),I=1,L1)
-         WRITE(NFTEFP,9111)
+        IF(EXETYP.NE.CHECK) THEN
+           CALL DAREAD(IDAF,IODA,ARRAY,L2,14,0)
+           CALL TFTRI(CTFOK,ARRAY,CTVEC,WRK2,L1,L1,L1)
+        END IF
+        IF(MASWRK) THEN
+           WRITE(NFTEFP,*) 'CTFOK   '
+           WRITE(NFTEFP,9250)(CTFOK(I*(I+1)/2),I=1,NA)
+           WRITE(NFTEFP,9111)
+        END IF
+C
       END IF
 C
   700 CONTINUE
@@ -7230,7 +7324,7 @@ C
      *       POINTS FOR FRAGMENT',I4,' EXCEEDED MXPT=',I5)
       END
 C*MODULE EFINP   *DECK RDCANV
-      SUBROUTINE RDCANV(N,CANVEC,MXBF,NTAOF)
+      SUBROUTINE RDCANV(N,CTVEC,MXBF,NTCTMOF)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
@@ -7238,20 +7332,21 @@ C
 C
       LOGICAL GOPARR,MASWRK,DSKWRK
 C
-      COMMON /EFPCMO/ NOCC(MXDFG),NVIR(MXDFG),NAO(MXDFG),NTAO,
-     *                CANFOK(MXAO,MXDFG)
+      COMMON /EFPCT / NOCC(MXDFG),NVIR(MXDFG),NAO(MXDFG),NTAO,
+     *                CTFOK(MXAO,MXDFG),NCTMO(MXDFG),NTCTMO
       COMMON /FRGTYP/ NDFRG,ISET(MXFRG),NAMIDX(MXDFG)
       COMMON /IOFILE/ IR,IW,IP,IJK,IJKT,IDAF,NAV,IODA(950)
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
       COMMON /PAULMO/ CENTNM(MXFGPT),CENTCD(3,MXFGPT),NORB(MXFRG),
      *                NPBF(MXFRG),NTMO
 C
-      DIMENSION CANVEC(MXBF,NTAOF)
+      DIMENSION CTVEC(MXBF,NTCTMOF)
 C
       IZERO = 0
       IONE  = 1
       ITWO  = 2
 C
+      NCTMOS=NCTMO(ISET(N))
       NAOS=NAO(ISET(N))
       IF(NAOS.GT.MXBF) THEN
          IF(MASWRK) WRITE(IW,9010) NAOS,MXBF
@@ -7259,7 +7354,7 @@ C
       END IF
 C
       IF (MASWRK) THEN
-      DO 280 J = 1,NAOS
+      DO 280 J = 1,NCTMOS
          IMAX = 0
          IC = 0
   240    CONTINUE
@@ -7268,7 +7363,7 @@ C
             IC = IC+1
             IF(IMAX .GT. NAOS) IMAX = NAOS
             READ(IR,9040,END=300,ERR=300) JJ,ICC,
-     *                                    (CANVEC(I,J+NTAO),I=IMIN,IMAX)
+     *                               (CTVEC(I,J+NTCTMO),I=IMIN,IMAX)
             MODJ=MOD(J,100)
             IF(JJ.EQ.MODJ . AND.  ICC.EQ.IC) GO TO 260
                WRITE(IW,9060) J,IC,JJ,ICC
@@ -7276,6 +7371,7 @@ C
                CALL ABRT
   260       CONTINUE
          IF(IMAX .LT. NPBF(N)) GO TO 240
+C
   280 CONTINUE
       IF (GOPARR) CALL DDI_BCAST(355,'I',IZERO,1,MASTER)
 C
@@ -7289,13 +7385,13 @@ C
 C
 C  GIVE VECTORS TO ALL PROCESSES
 C
-      IF (GOPARR) CALL DDI_BCAST(356,'F',CANVEC,NAOS*NAOS,MASTER)
+      IF (GOPARR) CALL DDI_BCAST(356,'F',CTVEC,NAOS*NCTMOS,MASTER)
 C
       IEOF = 0
-      CALL RDCARD('CANONFOK',IEOF)
+      CALL RDCARD('CTFOK   ',IEOF)
       CALL RDCARD('FOCK    ',IEOF)
-      DO  I = 1,NAOS
-         CANFOK(I,ISET(N)) = RFIND('FOCK    ',IEOF)
+      DO  I = 1,NOCC(ISET(N))
+         CTFOK(I,ISET(N)) = RFIND('FOCK    ',IEOF)
       END DO
       CALL RDCARD('STOP    ',IEOF)
       RETURN
@@ -7396,6 +7492,82 @@ C
  9011 FORMAT(1X,'ERROR, END OF FILE READING',A8,' INPUT GROUP')
       END
 C
+C*MODULE EFINP   *DECK RDMXCTMO
+      SUBROUTINE RDMXCTMO(IDFRG,MXCTMO)
+      IMPLICIT DOUBLE PRECISION (A-H, O-Z)
+      LOGICAL GOPARR,MASWRK,DSKWRK
+C
+      PARAMETER (MXDFG=5, MXFRG=1050)
+C
+      CHARACTER*8 FRGMNT,PTNAM,WORD
+      CHARACTER*6 FRGNAM
+      CHARACTER*1 DOLLAR,BLANK
+C
+      COMMON /FRAGMT/ XCRD(50,MXFRG),YCRD(50,MXFRG),ZCRD(50,MXFRG),
+     *                PTNAM(50,MXFRG),FRGNAM(MXFRG)
+      COMMON /FRGTYP/ NDFRG,ISET(MXFRG),NAMIDX(MXDFG)
+      COMMON /IOFILE/ IR,IW,IP,IJK,IJKT,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+      DATA DOLLAR,BLANK/'$',' '/
+C
+C----PX:  MIMIC RDMXBF
+C         READ THE NUMBER OF LMOS GIVEN IN THE EFP GROUP
+C         OF FRAGMENT NUMBER -IFRG-.  POSITION TO ITS GROUP...
+C
+C
+      WRITE(UNIT=FRGMNT,FMT=8000) BLANK,DOLLAR,FRGNAM(NAMIDX(IDFRG))
+ 8000 FORMAT(A1,A1,A6)
+C
+      IEOF=0
+      CALL SEQREW(IR)
+      CALL FNDGRP(IR,FRGMNT,IEOF)
+      IF(IEOF.EQ.1) THEN
+         IF (MASWRK) WRITE(IW,9010) FRGMNT
+         CALL ABRT
+         RETURN
+      END IF
+C
+C         NUMBER of MO (INCLUDING VIRTUAL) FOR CHARGE TRANSFER
+C         FOR A FRAGMENT
+C         ARE GIVEN ON A LINE READING
+C             "CTVEC <NOCC> <NCTMO>"
+C
+  200 CONTINUE
+      CALL RDCARD('$FRAG 3 ',IEOF)
+      IF(IEOF.EQ.1) THEN
+         IF(MASWRK) WRITE(IW,9011) FRGMNT
+         CALL ABRT
+      END IF
+      WORD='        '
+      LGSTR=-8
+      CALL GSTRNG(WORD,LGSTR)
+
+      IF(WORD.EQ.'CTVEC   ') THEN
+         IERR=0
+         NOCC  = IFIND('NOCC    ',IERR)
+         NCTMO = IFIND('NCTMO   ',IERR)
+         IF(NCTMO.GT.MXCTMO) MXCTMO=NCTMO
+         GO TO 800
+      ELSE
+         GO TO 200
+      END IF
+
+      WORD='        '
+      LGSTR=-8
+      CALL GSTRNG(WORD,LGSTR)
+
+C           NO SUCH LINE, SILENTLY EXIT, BUT ITS PROBABLY A BOOBOO.
+      IF(WORD.EQ.'$END    ') GO TO 800
+
+  800 CONTINUE
+      RETURN
+C
+ 9010 FORMAT(1X,A8,'NOT FOUND, PLEASE CHECK FOR ERRORS')
+ 9011 FORMAT(1X,'ERROR, END OF FILE READING',A8,' INPUT GROUP')
+      END
+C
+C
 C---- NEEDED TO PREPARE Q-CHEM EFP INPUT
 CC*MODULE EFINP   *DECK MAT_TO_EULER
 C      SUBROUTINE MAT_TO_EULER(T3,ALPHA,BETA, GAMMA)
@@ -7460,7 +7632,7 @@ CC  100 FORMAT(1X,'EULER ANGLES:  ',/3X, 3F10.6)
 C      END
 C----
 C*MODULE EFINP   *DECK FLEXIP
-      SUBROUTINE FLEXIP(IJ,PROVEC,CANVEC,MXBF,NTMOF,NTAOF,
+      SUBROUTINE FLEXIP(IJ,PROVEC,CTVEC,MXBF,NTMOF,NTCTMOF,
      *                  AVLVEC,TLVEC,AVCVEC,TCVEC,NBOPTS,NLPTS)
       IMPLICIT DOUBLE PRECISION (A-H, O-Z)
 C
@@ -7497,8 +7669,8 @@ C
      *                KLOC(MXSHEF,MXDFG),KMIN(MXSHEF,MXDFG),
      *                KMAX(MXSHEF,MXDFG),NSHELL(MXDFG),NGAUSS(MXDFG),
      *                NAT(MXDFG),NUM(MXDFG),NTPATM
-      COMMON /EFPCMO/ NOCC(MXDFG),NVIR(MXDFG),NAO(MXDFG),NTAO,
-     *                CANFOK(MXAO,MXDFG)
+      COMMON /EFPCT / NOCC(MXDFG),NVIR(MXDFG),NAO(MXDFG),NTAO,
+     *                CTFOK(MXAO,MXDFG),NCTMO(MXDFG),NTCTMO
       COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
      *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
      *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
@@ -7528,7 +7700,7 @@ C
       COMMON /IOFILE/ IR,IW,IP,IJK,IJKT,IDAF,NAV,IODA(950)
       COMMON /KFINFO/ KATMS(MXFRG)
 C
-      DIMENSION PROVEC(MXBF,NTMOF),CANVEC(MXBF,NTAOF),TDIP1(3)
+      DIMENSION PROVEC(MXBF,NTMOF),CTVEC(MXBF,NTCTMOF),TDIP1(3)
       DIMENSION AVDIP(3),TQAD(6),AVQAD(6),TOCT(10)
       DIMENSION AVOCT(10),TEFP(3),TPOL(9),AVEFP(3)
       DIMENSION AVPOL(9),AVDPOL(9),TEFDP(3),TDPOL(9)
@@ -8179,11 +8351,11 @@ C
                      NOS=NOS+1
                      IF(III.EQ.1) THEN
                         CALL MOROT(IJ,PROVEC,
-     *                         CANVEC,MXBF,NTMOF,NTAOF,
+     *                         CTVEC,MXBF,NTMOF,NTCTMOF,
      *                         P1,P2,P3,I,TCENT,TLVEC,TCVEC)
                      ELSE IF(III.EQ.2) THEN
                         CALL MOROT(IJ,PROVEC,
-     *                         CANVEC,MXBF,NTMOF,NTAOF,
+     *                         CTVEC,MXBF,NTMOF,NTCTMOF,
      *                         P2,P1,P3,I,TCENT,TLVEC,TCVEC)
                      END IF
                      DO KK=1,3
@@ -8215,7 +8387,7 @@ C
                       IF(MTWO.EQ.P2) P3 = MONE
                      NOS=NOS+1
                      CALL MOROT(IJ,PROVEC,
-     *                      CANVEC,MXBF,NTMOF,NTAOF,
+     *                      CTVEC,MXBF,NTMOF,NTCTMOF,
      *                         P1,P2,P3,I,TCENT,TLVEC,TCVEC)
                      DO KK=1,3
                         AVCENT(KK)=(AVCENT(KK)*(NOS-1)+TCENT(KK))/NOS
@@ -8235,7 +8407,7 @@ C
         ENDDO
         DO L=1,MXBF
            PROVEC(L,NTMO+I) = AVLVEC(L)
-           CANVEC(L,NTAO+I) = AVCVEC(L)
+           CTVEC(L,NTCTMO+I) = AVCVEC(L)
         ENDDO
  700  CONTINUE
 C
@@ -8660,7 +8832,7 @@ C
       RETURN
       END
 C*MODULE EFINP   *DECK MOROT
-      SUBROUTINE MOROT(N,PROVEC,CANVEC,MXBF,NTMOF,NTAOF,
+      SUBROUTINE MOROT(N,PROVEC,CTVEC,MXBF,NTMOF,NTCTMOF,
      *                 P1,P2,P3,I,TCENT,TLVEC,TCVEC)
       IMPLICIT DOUBLE PRECISION (A-H, O-Z)
 C
@@ -8694,8 +8866,8 @@ C
      *                KLOC(MXSHEF,MXDFG),KMIN(MXSHEF,MXDFG),
      *                KMAX(MXSHEF,MXDFG),NSHELL(MXDFG),NGAUSS(MXDFG),
      *                NAT(MXDFG),NUM(MXDFG),NTPATM
-      COMMON /EFPCMO/ NOCC(MXDFG),NVIR(MXDFG),NAO(MXDFG),NTAO,
-     *                CANFOK(MXAO,MXDFG)
+      COMMON /EFPCT / NOCC(MXDFG),NVIR(MXDFG),NAO(MXDFG),NTAO,
+     *                CTFOK(MXAO,MXDFG),NCTMO(MXDFG),NTCTMO
       COMMON /FRAGMT/ XCRD(50,MXFRG),YCRD(50,MXFRG),ZCRD(50,MXFRG),
      *                PTNAM(50,MXFRG),FRGNAM(MXFRG)
       COMMON /FRGTYP/ NDFRG,ISET(MXFRG),NAMIDX(MXDFG)
@@ -8712,7 +8884,7 @@ C
       COMMON /PAULMO/ CENTNM(MXFGPT),CENTCD(3,MXFGPT),NORB(MXFRG),
      *                NPBF(MXFRG),NTMO
 C
-      DIMENSION PROVEC(MXBF,NTMOF),CANVEC(MXBF,NTAOF)
+      DIMENSION PROVEC(MXBF,NTMOF),CTVEC(MXBF,NTCTMOF)
 C
 C
 C --- FIND ROTATION MATRIX CONNECTING THE FRAGMENT N TO THE
@@ -9103,15 +9275,15 @@ C
 C  S:
 C
          IF(ITYP.EQ.1) THEN
-               TCVEC(LOC  ) = CANVEC(LOC  ,NTAO+I)
+               TCVEC(LOC  ) = CTVEC(LOC  ,NTCTMO+I)
          END IF
 C
 C  P:
 C
          IF(ITYP.EQ.3) THEN
-               TEMP3(1) = CANVEC(LOC,NTAO+I)
-               TEMP3(2) = CANVEC(LOC+1,NTAO+I)
-               TEMP3(3) = CANVEC(LOC+2,NTAO+I)
+               TEMP3(1) = CTVEC(LOC,NTCTMO+I)
+               TEMP3(2) = CTVEC(LOC+1,NTCTMO+I)
+               TEMP3(3) = CTVEC(LOC+2,NTCTMO+I)
                CALL MRARBR(T3,3,3,3,TEMP3,3,1,TEMP4(1,1),3)
                TCVEC(LOC) = TEMP4(1,1)
                TCVEC(LOC+1) = TEMP4(2,1)
@@ -9119,11 +9291,11 @@ C
          END IF
 C  L:
          IF(ITYP.EQ.4) THEN
-               TEMP3(1) = CANVEC(LOC+1,NTAO+I)
-               TEMP3(2) = CANVEC(LOC+2,NTAO+I)
-               TEMP3(3) = CANVEC(LOC+3,NTAO+I)
+               TEMP3(1) = CTVEC(LOC+1,NTCTMO+I)
+               TEMP3(2) = CTVEC(LOC+2,NTCTMO+I)
+               TEMP3(3) = CTVEC(LOC+3,NTCTMO+I)
                CALL MRARBR(T3,3,3,3,TEMP3,3,1,TEMP4(1,1),3)
-               TCVEC(LOC  ) = CANVEC(LOC  ,NTAO+I)
+               TCVEC(LOC  ) = CTVEC(LOC  ,NTCTMO+I)
                TCVEC(LOC+1) = TEMP4(1,1)
                TCVEC(LOC+2) = TEMP4(2,1)
                TCVEC(LOC+3) = TEMP4(3,1)
@@ -9134,12 +9306,12 @@ C              LARGER THAN XX,YY,ZZ. FACTOR OF TWO ALLOWS SUMMATION
 C              OVER ALL INDICES RATHER THAN I,J<=I
 C
          IF(ITYP.EQ.6) THEN
-               TEMP2(1) = CANVEC(LOC,NTAO+I)
-               TEMP2(2) = CANVEC(LOC+3,NTAO+I)/CONST
-               TEMP2(3) = CANVEC(LOC+1,NTAO+I)
-               TEMP2(4) = CANVEC(LOC+4,NTAO+I)/CONST
-               TEMP2(5) = CANVEC(LOC+5,NTAO+I)/CONST
-               TEMP2(6) = CANVEC(LOC+2,NTAO+I)
+               TEMP2(1) = CTVEC(LOC,NTCTMO+I)
+               TEMP2(2) = CTVEC(LOC+3,NTCTMO+I)/CONST
+               TEMP2(3) = CTVEC(LOC+1,NTCTMO+I)
+               TEMP2(4) = CTVEC(LOC+4,NTCTMO+I)/CONST
+               TEMP2(5) = CTVEC(LOC+5,NTCTMO+I)/CONST
+               TEMP2(6) = CTVEC(LOC+2,NTCTMO+I)
                CALL TFTRI(TEMP4(1,1),TEMP2,T3T,TEMP3,3,3,3)
                TCVEC(LOC  ) = TEMP4(1,1)
                TCVEC(LOC+3) = TEMP4(2,1)*CONST
@@ -9152,37 +9324,45 @@ C
 C  F:
 C
          IF(ITYP.EQ.10) THEN
-               CANVEC(LOC+3,NTAO+I) = CANVEC(LOC+3,NTAO+I)*SQRT5/THREE
-               CANVEC(LOC+4,NTAO+I) = CANVEC(LOC+4,NTAO+I)*SQRT5/THREE
-               CANVEC(LOC+5,NTAO+I) = CANVEC(LOC+5,NTAO+I)*SQRT5/THREE
-               CANVEC(LOC+6,NTAO+I) = CANVEC(LOC+6,NTAO+I)*SQRT5/THREE
-               CANVEC(LOC+7,NTAO+I) = CANVEC(LOC+7,NTAO+I)*SQRT5/THREE
-               CANVEC(LOC+8,NTAO+I) = CANVEC(LOC+8,NTAO+I)*SQRT5/THREE
-               CANVEC(LOC+9,NTAO+I) = CANVEC(LOC+9,NTAO+I)*SQRT5/THREE
-               CANVEC(LOC+9,NTAO+I) = CANVEC(LOC+9,NTAO+I)*SQRT3/TWO
+               CTVEC(LOC+3,NTCTMO+I) = CTVEC(LOC+3,NTCTMO+I)
+     *                                  *SQRT5/THREE
+               CTVEC(LOC+4,NTCTMO+I) = CTVEC(LOC+4,NTCTMO+I)
+     *                                  *SQRT5/THREE
+               CTVEC(LOC+5,NTCTMO+I) = CTVEC(LOC+5,NTCTMO+I)
+     *                                  *SQRT5/THREE
+               CTVEC(LOC+6,NTCTMO+I) = CTVEC(LOC+6,NTCTMO+I)
+     *                                  *SQRT5/THREE
+               CTVEC(LOC+7,NTCTMO+I) = CTVEC(LOC+7,NTCTMO+I)
+     *                                  *SQRT5/THREE
+               CTVEC(LOC+8,NTCTMO+I) = CTVEC(LOC+8,NTCTMO+I)
+     *                                  *SQRT5/THREE
+               CTVEC(LOC+9,NTCTMO+I) = CTVEC(LOC+9,NTCTMO+I)
+     *                                  *SQRT5/THREE
+               CTVEC(LOC+9,NTCTMO+I) = CTVEC(LOC+9,NTCTMO+I)
+     *                                  *SQRT3/TWO
 C
-               TEMP2(1) = CANVEC(LOC  ,NTAO+I)
-               TEMP2(2) = CANVEC(LOC+3,NTAO+I)
-               TEMP2(3) = CANVEC(LOC+5,NTAO+I)
-               TEMP2(4) = CANVEC(LOC+4,NTAO+I)
-               TEMP2(5) = CANVEC(LOC+9,NTAO+I)
-               TEMP2(6) = CANVEC(LOC+7,NTAO+I)
+               TEMP2(1) = CTVEC(LOC  ,NTCTMO+I)
+               TEMP2(2) = CTVEC(LOC+3,NTCTMO+I)
+               TEMP2(3) = CTVEC(LOC+5,NTCTMO+I)
+               TEMP2(4) = CTVEC(LOC+4,NTCTMO+I)
+               TEMP2(5) = CTVEC(LOC+9,NTCTMO+I)
+               TEMP2(6) = CTVEC(LOC+7,NTCTMO+I)
                CALL TFTRI(TEMP4(1,1),TEMP2,T3T,TEMP3,3,3,3)
 C
-               TEMP2(1) = CANVEC(LOC+3,NTAO+I)
-               TEMP2(2) = CANVEC(LOC+5,NTAO+I)
-               TEMP2(3) = CANVEC(LOC+1,NTAO+I)
-               TEMP2(4) = CANVEC(LOC+9,NTAO+I)
-               TEMP2(5) = CANVEC(LOC+6,NTAO+I)
-               TEMP2(6) = CANVEC(LOC+8,NTAO+I)
+               TEMP2(1) = CTVEC(LOC+3,NTCTMO+I)
+               TEMP2(2) = CTVEC(LOC+5,NTCTMO+I)
+               TEMP2(3) = CTVEC(LOC+1,NTCTMO+I)
+               TEMP2(4) = CTVEC(LOC+9,NTCTMO+I)
+               TEMP2(5) = CTVEC(LOC+6,NTCTMO+I)
+               TEMP2(6) = CTVEC(LOC+8,NTCTMO+I)
                CALL TFTRI(TEMP4(1,2),TEMP2,T3T,TEMP3,3,3,3)
 C
-               TEMP2(1) = CANVEC(LOC+4,NTAO+I)
-               TEMP2(2) = CANVEC(LOC+9,NTAO+I)
-               TEMP2(3) = CANVEC(LOC+6,NTAO+I)
-               TEMP2(4) = CANVEC(LOC+7,NTAO+I)
-               TEMP2(5) = CANVEC(LOC+8,NTAO+I)
-               TEMP2(6) = CANVEC(LOC+2,NTAO+I)
+               TEMP2(1) = CTVEC(LOC+4,NTCTMO+I)
+               TEMP2(2) = CTVEC(LOC+9,NTCTMO+I)
+               TEMP2(3) = CTVEC(LOC+6,NTCTMO+I)
+               TEMP2(4) = CTVEC(LOC+7,NTCTMO+I)
+               TEMP2(5) = CTVEC(LOC+8,NTCTMO+I)
+               TEMP2(6) = CTVEC(LOC+2,NTCTMO+I)
                CALL TFTRI(TEMP4(1,3),TEMP2,T3T,TEMP3,3,3,3)
 C
                CALL MRARBR(TEMP4,6,6,3,T3T,3,3,TEMP5,6)
@@ -9198,46 +9378,60 @@ C
                TCVEC(LOC+8) = TEMP5(6,2)/SQRT5*THREE
                TCVEC(LOC+9) = TEMP5(5,1)/SQRT5*THREE/SQRT3*TWO
 C
-               CANVEC(LOC+3,NTAO+I) = CANVEC(LOC+3,NTAO+I)/SQRT5*THREE
-               CANVEC(LOC+4,NTAO+I) = CANVEC(LOC+4,NTAO+I)/SQRT5*THREE
-               CANVEC(LOC+5,NTAO+I) = CANVEC(LOC+5,NTAO+I)/SQRT5*THREE
-               CANVEC(LOC+6,NTAO+I) = CANVEC(LOC+6,NTAO+I)/SQRT5*THREE
-               CANVEC(LOC+7,NTAO+I) = CANVEC(LOC+7,NTAO+I)/SQRT5*THREE
-               CANVEC(LOC+8,NTAO+I) = CANVEC(LOC+8,NTAO+I)/SQRT5*THREE
-               CANVEC(LOC+9,NTAO+I) = CANVEC(LOC+9,NTAO+I)/SQRT5*THREE
-               CANVEC(LOC+9,NTAO+I) = CANVEC(LOC+9,NTAO+I)/SQRT3*TWO
+               CTVEC(LOC+3,NTCTMO+I) = CTVEC(LOC+3,NTCTMO+I)
+     *                                  /SQRT5*THREE
+               CTVEC(LOC+4,NTCTMO+I) = CTVEC(LOC+4,NTCTMO+I)
+     *                                  /SQRT5*THREE
+               CTVEC(LOC+5,NTCTMO+I) = CTVEC(LOC+5,NTCTMO+I)
+     *                                  /SQRT5*THREE
+               CTVEC(LOC+6,NTCTMO+I) = CTVEC(LOC+6,NTCTMO+I)
+     *                                  /SQRT5*THREE
+               CTVEC(LOC+7,NTCTMO+I) = CTVEC(LOC+7,NTCTMO+I)
+     *                                  /SQRT5*THREE
+               CTVEC(LOC+8,NTCTMO+I) = CTVEC(LOC+8,NTCTMO+I)
+     *                                  /SQRT5*THREE
+               CTVEC(LOC+9,NTCTMO+I) = CTVEC(LOC+9,NTCTMO+I)
+     *                                  /SQRT5*THREE
+               CTVEC(LOC+9,NTCTMO+I) = CTVEC(LOC+9,NTCTMO+I)
+     *                                  /SQRT3*TWO
          END IF
 C
 C  G:
 C
          IF(ITYP.EQ.15) THEN
-               CANVEC(LOC+ 3,NTAO+I) = CANVEC(LOC+ 3,NTAO+I)*SQRT7/FOUR
-               CANVEC(LOC+ 4,NTAO+I) = CANVEC(LOC+ 4,NTAO+I)*SQRT7/FOUR
-               CANVEC(LOC+ 5,NTAO+I) = CANVEC(LOC+ 5,NTAO+I)*SQRT7/FOUR
-               CANVEC(LOC+ 6,NTAO+I) = CANVEC(LOC+ 6,NTAO+I)*SQRT7/FOUR
-               CANVEC(LOC+ 7,NTAO+I) = CANVEC(LOC+ 7,NTAO+I)*SQRT7/FOUR
-               CANVEC(LOC+ 8,NTAO+I) = CANVEC(LOC+ 8,NTAO+I)*SQRT7/FOUR
-               CANVEC(LOC+ 9,NTAO+I) = CANVEC(LOC+ 9,NTAO+I)*SQRT7*
-     *                                 SQRT5/SQRT3/SIX
-               CANVEC(LOC+10,NTAO+I) = CANVEC(LOC+10,NTAO+I)*SQRT7*
-     *                                 SQRT5/SQRT3/SIX
-               CANVEC(LOC+11,NTAO+I) = CANVEC(LOC+11,NTAO+I)*SQRT7*
-     *                                 SQRT5/SQRT3/SIX
-               CANVEC(LOC+12,NTAO+I) = CANVEC(LOC+12,NTAO+I)*SQRT7*
-     *                                 SQRT5/TWELVE
-               CANVEC(LOC+13,NTAO+I) = CANVEC(LOC+13,NTAO+I)*SQRT7*
-     *                                 SQRT5/TWELVE
-               CANVEC(LOC+14,NTAO+I) = CANVEC(LOC+14,NTAO+I)*SQRT7*
-     *                                 SQRT5/TWELVE
+               CTVEC(LOC+ 3,NTCTMO+I) = CTVEC(LOC+ 3,NTCTMO+I)
+     *                                   *SQRT7/FOUR
+               CTVEC(LOC+ 4,NTCTMO+I) = CTVEC(LOC+ 4,NTCTMO+I)
+     *                                   *SQRT7/FOUR
+               CTVEC(LOC+ 5,NTCTMO+I) = CTVEC(LOC+ 5,NTCTMO+I)
+     *                                   *SQRT7/FOUR
+               CTVEC(LOC+ 6,NTCTMO+I) = CTVEC(LOC+ 6,NTCTMO+I)
+     *                                   *SQRT7/FOUR
+               CTVEC(LOC+ 7,NTCTMO+I) = CTVEC(LOC+ 7,NTCTMO+I)
+     *                                   *SQRT7/FOUR
+               CTVEC(LOC+ 8,NTCTMO+I) = CTVEC(LOC+ 8,NTCTMO+I)
+     *                                   *SQRT7/FOUR
+               CTVEC(LOC+ 9,NTCTMO+I) = CTVEC(LOC+ 9,NTCTMO+I)
+     *                                   *SQRT7*SQRT5/SQRT3/SIX
+               CTVEC(LOC+10,NTCTMO+I) = CTVEC(LOC+10,NTCTMO+I)
+     *                                   *SQRT7*SQRT5/SQRT3/SIX
+               CTVEC(LOC+11,NTCTMO+I) = CTVEC(LOC+11,NTCTMO+I)
+     *                                   *SQRT7*SQRT5/SQRT3/SIX
+               CTVEC(LOC+12,NTCTMO+I) = CTVEC(LOC+12,NTCTMO+I)
+     *                                   *SQRT7*SQRT5/TWELVE
+               CTVEC(LOC+13,NTCTMO+I) = CTVEC(LOC+13,NTCTMO+I)
+     *                                   *SQRT7*SQRT5/TWELVE
+               CTVEC(LOC+14,NTCTMO+I) = CTVEC(LOC+14,NTCTMO+I)
+     *                                   *SQRT7*SQRT5/TWELVE
 C
 C              PERFORM THE FIRST AND SECOND ROTATION
 C
-               TEMP2(1) = CANVEC(LOC   ,NTAO+I)
-               TEMP2(2) = CANVEC(LOC+ 3,NTAO+I)
-               TEMP2(3) = CANVEC(LOC+ 9,NTAO+I)
-               TEMP2(4) = CANVEC(LOC+ 4,NTAO+I)
-               TEMP2(5) = CANVEC(LOC+12,NTAO+I)
-               TEMP2(6) = CANVEC(LOC+10,NTAO+I)
+               TEMP2(1) = CTVEC(LOC   ,NTCTMO+I)
+               TEMP2(2) = CTVEC(LOC+ 3,NTCTMO+I)
+               TEMP2(3) = CTVEC(LOC+ 9,NTCTMO+I)
+               TEMP2(4) = CTVEC(LOC+ 4,NTCTMO+I)
+               TEMP2(5) = CTVEC(LOC+12,NTCTMO+I)
+               TEMP2(6) = CTVEC(LOC+10,NTCTMO+I)
                CALL TFTRI(TEMP4(1,1),TEMP2,T3T,TEMP3,3,3,3)
                TPXX(1) = TEMP4(1,1)
                TPXX(2) = TEMP4(2,1)
@@ -9246,12 +9440,12 @@ C
                TPXX(5) = TEMP4(5,1)
                TPXX(6) = TEMP4(6,1)
 C
-               TEMP2(1) = CANVEC(LOC+ 3,NTAO+I)
-               TEMP2(2) = CANVEC(LOC+ 9,NTAO+I)
-               TEMP2(3) = CANVEC(LOC+ 5,NTAO+I)
-               TEMP2(4) = CANVEC(LOC+12,NTAO+I)
-               TEMP2(5) = CANVEC(LOC+13,NTAO+I)
-               TEMP2(6) = CANVEC(LOC+14,NTAO+I)
+               TEMP2(1) = CTVEC(LOC+ 3,NTCTMO+I)
+               TEMP2(2) = CTVEC(LOC+ 9,NTCTMO+I)
+               TEMP2(3) = CTVEC(LOC+ 5,NTCTMO+I)
+               TEMP2(4) = CTVEC(LOC+12,NTCTMO+I)
+               TEMP2(5) = CTVEC(LOC+13,NTCTMO+I)
+               TEMP2(6) = CTVEC(LOC+14,NTCTMO+I)
                CALL TFTRI(TEMP4(1,1),TEMP2,T3T,TEMP3,3,3,3)
                TPXY(1) = TEMP4(1,1)
                TPXY(2) = TEMP4(2,1)
@@ -9260,12 +9454,12 @@ C
                TPXY(5) = TEMP4(5,1)
                TPXY(6) = TEMP4(6,1)
 C
-               TEMP2(1) = CANVEC(LOC+ 9,NTAO+I)
-               TEMP2(2) = CANVEC(LOC+ 5,NTAO+I)
-               TEMP2(3) = CANVEC(LOC+ 1,NTAO+I)
-               TEMP2(4) = CANVEC(LOC+13,NTAO+I)
-               TEMP2(5) = CANVEC(LOC+ 6,NTAO+I)
-               TEMP2(6) = CANVEC(LOC+11,NTAO+I)
+               TEMP2(1) = CTVEC(LOC+ 9,NTCTMO+I)
+               TEMP2(2) = CTVEC(LOC+ 5,NTCTMO+I)
+               TEMP2(3) = CTVEC(LOC+ 1,NTCTMO+I)
+               TEMP2(4) = CTVEC(LOC+13,NTCTMO+I)
+               TEMP2(5) = CTVEC(LOC+ 6,NTCTMO+I)
+               TEMP2(6) = CTVEC(LOC+11,NTCTMO+I)
                CALL TFTRI(TEMP4(1,1),TEMP2,T3T,TEMP3,3,3,3)
                TPYY(1) = TEMP4(1,1)
                TPYY(2) = TEMP4(2,1)
@@ -9274,12 +9468,12 @@ C
                TPYY(5) = TEMP4(5,1)
                TPYY(6) = TEMP4(6,1)
 C
-               TEMP2(1) = CANVEC(LOC+ 4,NTAO+I)
-               TEMP2(2) = CANVEC(LOC+12,NTAO+I)
-               TEMP2(3) = CANVEC(LOC+13,NTAO+I)
-               TEMP2(4) = CANVEC(LOC+10,NTAO+I)
-               TEMP2(5) = CANVEC(LOC+14,NTAO+I)
-               TEMP2(6) = CANVEC(LOC+ 7,NTAO+I)
+               TEMP2(1) = CTVEC(LOC+ 4,NTCTMO+I)
+               TEMP2(2) = CTVEC(LOC+12,NTCTMO+I)
+               TEMP2(3) = CTVEC(LOC+13,NTCTMO+I)
+               TEMP2(4) = CTVEC(LOC+10,NTCTMO+I)
+               TEMP2(5) = CTVEC(LOC+14,NTCTMO+I)
+               TEMP2(6) = CTVEC(LOC+ 7,NTCTMO+I)
                CALL TFTRI(TEMP4(1,1),TEMP2,T3T,TEMP3,3,3,3)
                TPXZ(1) = TEMP4(1,1)
                TPXZ(2) = TEMP4(2,1)
@@ -9288,12 +9482,12 @@ C
                TPXZ(5) = TEMP4(5,1)
                TPXZ(6) = TEMP4(6,1)
 C
-               TEMP2(1) = CANVEC(LOC+12,NTAO+I)
-               TEMP2(2) = CANVEC(LOC+13,NTAO+I)
-               TEMP2(3) = CANVEC(LOC+ 6,NTAO+I)
-               TEMP2(4) = CANVEC(LOC+14,NTAO+I)
-               TEMP2(5) = CANVEC(LOC+11,NTAO+I)
-               TEMP2(6) = CANVEC(LOC+ 8,NTAO+I)
+               TEMP2(1) = CTVEC(LOC+12,NTCTMO+I)
+               TEMP2(2) = CTVEC(LOC+13,NTCTMO+I)
+               TEMP2(3) = CTVEC(LOC+ 6,NTCTMO+I)
+               TEMP2(4) = CTVEC(LOC+14,NTCTMO+I)
+               TEMP2(5) = CTVEC(LOC+11,NTCTMO+I)
+               TEMP2(6) = CTVEC(LOC+ 8,NTCTMO+I)
                CALL TFTRI(TEMP4(1,1),TEMP2,T3T,TEMP3,3,3,3)
                TPYZ(1) = TEMP4(1,1)
                TPYZ(2) = TEMP4(2,1)
@@ -9302,12 +9496,12 @@ C
                TPYZ(5) = TEMP4(5,1)
                TPYZ(6) = TEMP4(6,1)
 C
-               TEMP2(1) = CANVEC(LOC+10,NTAO+I)
-               TEMP2(2) = CANVEC(LOC+14,NTAO+I)
-               TEMP2(3) = CANVEC(LOC+11,NTAO+I)
-               TEMP2(4) = CANVEC(LOC+ 7,NTAO+I)
-               TEMP2(5) = CANVEC(LOC+ 8,NTAO+I)
-               TEMP2(6) = CANVEC(LOC+ 2,NTAO+I)
+               TEMP2(1) = CTVEC(LOC+10,NTCTMO+I)
+               TEMP2(2) = CTVEC(LOC+14,NTCTMO+I)
+               TEMP2(3) = CTVEC(LOC+11,NTCTMO+I)
+               TEMP2(4) = CTVEC(LOC+ 7,NTCTMO+I)
+               TEMP2(5) = CTVEC(LOC+ 8,NTCTMO+I)
+               TEMP2(6) = CTVEC(LOC+ 2,NTCTMO+I)
                CALL TFTRI(TEMP4(1,1),TEMP2,T3T,TEMP3,3,3,3)
                TPZZ(1) = TEMP4(1,1)
                TPZZ(2) = TEMP4(2,1)
@@ -9418,24 +9612,30 @@ C
                TCVEC(LOC+13) = TPYZ2(2)/SQRT7/SQRT5*TWELVE
                TCVEC(LOC+14) = TPZZ2(2)/SQRT7/SQRT5*TWELVE
 C
-               CANVEC(LOC+ 3,NTAO+I) = CANVEC(LOC+ 3,NTAO+I)/SQRT7*FOUR
-               CANVEC(LOC+ 4,NTAO+I) = CANVEC(LOC+ 4,NTAO+I)/SQRT7*FOUR
-               CANVEC(LOC+ 5,NTAO+I) = CANVEC(LOC+ 5,NTAO+I)/SQRT7*FOUR
-               CANVEC(LOC+ 6,NTAO+I) = CANVEC(LOC+ 6,NTAO+I)/SQRT7*FOUR
-               CANVEC(LOC+ 7,NTAO+I) = CANVEC(LOC+ 7,NTAO+I)/SQRT7*FOUR
-               CANVEC(LOC+ 8,NTAO+I) = CANVEC(LOC+ 8,NTAO+I)/SQRT7*FOUR
-               CANVEC(LOC+ 9,NTAO+I) = CANVEC(LOC+ 9,NTAO+I)/SQRT7/
-     *                                 SQRT5*SQRT3*SIX
-               CANVEC(LOC+10,NTAO+I) = CANVEC(LOC+10,NTAO+I)/SQRT7/
-     *                                 SQRT5*SQRT3*SIX
-               CANVEC(LOC+11,NTAO+I) = CANVEC(LOC+11,NTAO+I)/SQRT7/
-     *                                 SQRT5*SQRT3*SIX
-               CANVEC(LOC+12,NTAO+I) = CANVEC(LOC+12,NTAO+I)/SQRT7/
-     *                                 SQRT5*TWELVE
-               CANVEC(LOC+13,NTAO+I) = CANVEC(LOC+13,NTAO+I)/SQRT7/
-     *                                 SQRT5*TWELVE
-               CANVEC(LOC+14,NTAO+I) = CANVEC(LOC+14,NTAO+I)/SQRT7/
-     *                                 SQRT5*TWELVE
+               CTVEC(LOC+ 3,NTCTMO+I) = CTVEC(LOC+ 3,NTCTMO+I)
+     *                                   /SQRT7*FOUR
+               CTVEC(LOC+ 4,NTCTMO+I) = CTVEC(LOC+ 4,NTCTMO+I)
+     *                                   /SQRT7*FOUR
+               CTVEC(LOC+ 5,NTCTMO+I) = CTVEC(LOC+ 5,NTCTMO+I)
+     *                                   /SQRT7*FOUR
+               CTVEC(LOC+ 6,NTCTMO+I) = CTVEC(LOC+ 6,NTCTMO+I)
+     *                                   /SQRT7*FOUR
+               CTVEC(LOC+ 7,NTCTMO+I) = CTVEC(LOC+ 7,NTCTMO+I)
+     *                                   /SQRT7*FOUR
+               CTVEC(LOC+ 8,NTCTMO+I) = CTVEC(LOC+ 8,NTCTMO+I)
+     *                                   /SQRT7*FOUR
+               CTVEC(LOC+ 9,NTCTMO+I) = CTVEC(LOC+ 9,NTCTMO+I)
+     *                                   /SQRT7/SQRT5*SQRT3*SIX
+               CTVEC(LOC+10,NTCTMO+I) = CTVEC(LOC+10,NTCTMO+I)
+     *                                   /SQRT7/SQRT5*SQRT3*SIX
+               CTVEC(LOC+11,NTCTMO+I) = CTVEC(LOC+11,NTCTMO+I)
+     *                                   /SQRT7/SQRT5*SQRT3*SIX
+               CTVEC(LOC+12,NTCTMO+I) = CTVEC(LOC+12,NTCTMO+I)
+     *                                   /SQRT7/SQRT5*TWELVE
+               CTVEC(LOC+13,NTCTMO+I) = CTVEC(LOC+13,NTCTMO+I)
+     *                                   /SQRT7/SQRT5*TWELVE
+               CTVEC(LOC+14,NTCTMO+I) = CTVEC(LOC+14,NTCTMO+I)
+     *                                   /SQRT7/SQRT5*TWELVE
          END IF
       END DO
 C
@@ -10072,8 +10272,8 @@ C
      *                KLOC(MXSHEF,MXDFG),KMIN(MXSHEF,MXDFG),
      *                KMAX(MXSHEF,MXDFG),NSHELL(MXDFG),NGAUSS(MXDFG),
      *                NAT(MXDFG),NUM(MXDFG),NTPATM
-      COMMON /EFPCMO/ NOCC(MXDFG),NVIR(MXDFG),NAO(MXDFG),NTAO,
-     *                CANFOK(MXAO,MXDFG)
+      COMMON /EFPCT / NOCC(MXDFG),NVIR(MXDFG),NAO(MXDFG),NTAO,
+     *                CTFOK(MXAO,MXDFG),NCTMO(MXDFG),NTCTMO
       COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
      *                NPPTS(MXFRG),NPTTPT,IEFP,
      *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
@@ -10090,11 +10290,11 @@ C        RETURN THE EFFECTIVE FRAGMENT POTENTIAL IMPLEMENTATION USED
 C
       EFP0MODEL = NMTTPT+NPTTPT           .GT.0  ! ELECSTATICS/INDUCTION
       EFP1MODEL = NRTTPT+NDTTPT           .GT.0
-      EFP2MODEL = NTPATM+NTMO+NDPTTPT+NTAO.GT.0
+      EFP2MODEL = NTPATM+NTMO+NDPTTPT+NTCTMO.GT.0
 C
       IF(EFP1MODEL .AND. EFP2MODEL) THEN
          IF(MASWRK) WRITE(IW,9000) NRTTPT,NDTTPT,
-     *                             NTPATM,NTMO,NDPTTPT,NTAO
+     *                             NTPATM,NTMO,NDPTTPT,NTCTMO
          CALL ABRT
       END IF
 C
@@ -10111,7 +10311,7 @@ C
      *          ' AT THE SAME TIME?'/
      *       1X,'EFP1: NRTTPT=',I7,' NDTTPT=',I7/
      *       1X,'EFP2: NTPATM=',I7,' NTMO=',I7,' NDPTTPT=',I7,
-     *          ' NTAO=',I7)
+     *          ' NTCTMO=',I7)
       END
 C*MODULE EFINP   *DECK POL5P
       SUBROUTINE POL5P(IFRAG)
