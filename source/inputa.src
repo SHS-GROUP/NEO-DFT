@@ -1,3 +1,4 @@
+c 28 DEC 11 - DGF,HU  - add MODIO to reduce I/O
 C XX XXX 11 - JJL - ALLOW OPEN SHELL EOM-CCSD TO PROCEED
 C 11 AUG 11 - AAD - QM/EFP ENERGY DECOMPOSITION ANALYSIS
 C 11 AUG 11 - PEA - POSITRON TWEAKS
@@ -2959,7 +2960,7 @@ C
       COMMON /IOFILE/ IR,IW,IP,IJK,IJKT,IDAF,NAV,IODA(950)
       COMMON /ISEPS / ISEPS,USEPS
       COMMON /MACHIN/ NWDVAR,MAXFM,MAXSM,LIMFM,LIMSM
-      COMMON /MACHSW/ KDIAG,ICORFL,IXDR
+      COMMON /MACHSW/ KDIAG,ICORFL,IXDR,modio
       COMMON /MASSES/ ZMASS(MXATM)
       COMMON /MCINP / METHMC,CISTEP,ACURCY,ENGTOL,DAMP,MICIT,NWORD,NORB,
      *                NOROT(2,MXNORO),MOFRZ(15),NPFLG(10),
@@ -4656,7 +4657,7 @@ C
       PARAMETER (MXUNIT=299)
 C
       COMMON /IOFILE/ IR,IW,IP,IJK,IJKT,IDAF,NAV,IODA(950)
-      COMMON /MACHSW/ KDIAG,ICORFL,IXDR
+      COMMON /MACHSW/ KDIAG,ICORFL,IXDR,modio
       COMMON /OPNNFT/ NFTOPN(MXUNIT),NODEXT(MXUNIT),IOSMP(2)
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
       COMMON /RESTAR/ TIMLIM,IREST,NREC,INTLOC,IST,JST,KST,LST
@@ -4665,14 +4666,14 @@ C
 C
 C      ----- SET UP NAMELIST $SYSTEM TABLES -----
 C
-      PARAMETER (NNAM=14)
+      PARAMETER (NNAM=15)
       DIMENSION QNAM(NNAM),KQNAM(NNAM)
       DATA SYSTEM /8HSYSTEM  /
       DATA QNAM/8HMEMORY  ,8HTIMLIM  ,8HPTIME   ,8HCOREFL  ,
      *          8HKDIAG   ,8HBALTYP  ,8HXDR     ,8HPARALL  ,
      *          8HMEMDDI  ,8HMWORDS  ,8HNODEXT  ,8HIOSMP   ,
-     *          8HMXSEQ2  ,8HMXSEQ3  /
-      DATA KQNAM /1,3,0,0,  1,5,0,0,  1,1,1,21,  1,1/
+     *          8HMXSEQ2  ,8HMXSEQ3  ,8HMODIO   /
+      DATA KQNAM /1,3,0,0,  1,5,0,0,  1,1,1,21,  1,1,1/
 C
       DATA BLANK /8H        /
       DATA RNXTVAL,RLOOP/8HNXTVAL  ,8HLOOP    /
@@ -4751,13 +4752,20 @@ C
 C         FINALLY, -SEQOPN- HAS ALREADY SET THE DEFAULT VALUES
 C         FOR -NODEXT- WHEN OPENING UNIT 5.
 C
+      modio  = 0
+c     Global I/O options (bitwise additive)
+c     1 - forbid flushing files
+c     2 - do not close dictionary file in GDDI (only record indices are reset)
+c     4 - do not print timings on each rank at the end of run
+c     8 - forbid grid data saving in DFT (prevent F22 from being opened)
+c
 C        ----- READ NAMELIST $SYSTEM -----
 C
       JRET = 0
       CALL NAMEIO(IR,JRET,SYSTEM,NNAM,QNAM,KQNAM,
      *            MEMORY,TIMLIM,PTIME,COREFL,KDIAG,BALTYP,XDR,PARALL,
      *            MEMDDI,MWORDS,NODEXT,IOSMP,MXSEQ2,MXSEQ3,
-     *     0,0,0,0,0,  0,0,0,0,0,
+     *            modio,0,0,0,0,  0,0,0,0,0,
      *     0,0,0,0,0,  0,0,0,0,0,   0,0,0,0,0,  0,0,0,0,0,
      *     0,0,0,0,0,  0,0,0,0,0,   0,0,0,0,0,  0,0,0,0,0)
       IF(JRET .EQ. 2) THEN
@@ -4942,8 +4950,13 @@ C     -----------------------------------------------------------------
       IF(ISGDDI) THEN
 C          DO STORENV WHILE STILL IN THE WORLD SCOPE
          CALL STORENV
-         CALL GDDI_INIT(NGROUPS,MANNOD)
+         CALL GDDI_INIT(NGROUPS,MANNOD,.false.)
          CALL DDI_NPROC(NPGRP,MEGRP)
+         IF(MEGLOB.NE.0.AND..not.PAROUT) THEN
+            NFTOPN(IR) = 0
+            NFTOPN(IW) = 0
+            NFTOPN(IP) = 0
+         endif
          IF(MEGLOB.NE.0.AND.(MASWRK.OR.PAROUT)) THEN
             NFTOPN(IR) = 0
             NFTOPN(IW) = 0
@@ -4964,8 +4977,9 @@ C          AS FORMATS 9000 AND 9010 IN GDDI_INIT, INVOKED ABOVE).
 C          IT WOULD BE GOOD TO SUPPRESS MULTIPLE WRITES IN THESE
 C          CASES, TO AVOID GARBLED LOG FILES.
 C          SEE ALSO AN ATTEMPT TO PRINT TIMING ON ALL SLAVES IN FMO.SRC
-         IF(MASWRK) WRITE(IW,1000) MYGROUP+1,NGROUPS,NPROC,
-     *                             BALT(IAND(JBTYP,1))
+         if(MASWRK.OR.PAROUT)
+     *     WRITE(IW,1000) MYGROUP+1,NGROUPS,NPROC,BALT(IAND(JBTYP,1)),
+     *                    meglob
       ELSE
          PAROUT = .FALSE.
       END IF
@@ -4975,11 +4989,10 @@ C          SEE ALSO AN ATTEMPT TO PRINT TIMING ON ALL SLAVES IN FMO.SRC
      *            ' DMITRI G. FEDOROV',
      *        /8X,'FEDOROV ET AL., J. COMPUT. CHEM., 25 (2004) 872.'/
      *         1X,61(1H-)//
-     * 1X,'---------------------------------------------------'/
-     * 1X,'GDDI: INITIALIZATION COMPLETED FOR GROUP',I4,' OF',I4/
-     * 1X,'WORKING IN SCOPE DDI_GROUP (WITH ',I4,' PROCESSES)'/
-     * 1X,'     BALTYP=',A6/
-     * 1X,'---------------------------------------------------'/)
+     * 1X,55(1H-)/
+     * 1X,'GDDI: INITIALIZATION COMPLETED FOR GROUP',I6,' OF',I6/
+     * 1X,'WITH ',I5,' PROCESSES',1X,'BALTYP=',A6,'global rank=',i9/
+     * 1X,55(1H-)/)
  9010 FORMAT(1X,'*** ERROR! KEYWORD ',A6,
      *     ' WAS GIVEN AN ILLEGAL VALUE ',A8,'.')
  9030 FORMAT(1X,'*** ERROR ***'/

@@ -1,3 +1,4 @@
+C 28 DEC 11 - DGF - changes for FMO 4.2
 C 15 Apr 11 - TN  - changes for multiscale solvation in FMO
 C 10 Dec 10 - HL  - add print out for QM/MM(POL)/CONTINUUM methods
 C 10 Dec 10 - AVM - interfacing with U.Minnesota SMX codes
@@ -253,6 +254,7 @@ C     2 do a "wet" run only (no preceeding gas phase)
 C     4 reuse ASCs during geometry optimisations and restarts
 C     (at present, FMO only; also IEF=-3 is not tested).
 C     8 calculate ES dimers in the first PCM iteration in FMO-PCM[1(2)]
+C     16 do not print potential and charges for each tessera 
       MODPAP=0
       IF(NFG.NE.0) MODPAP=1
 C
@@ -537,7 +539,7 @@ C
         IF (NFMOPCM.EQ.-1) THEN
           ISWNEW1 = 1
           NFMOPCM = 1
-          CALL ABRT
+c         CALL ABRT
         END IF
 C
         IF(NFMOPCM.EQ.0) NFMOPCM=1
@@ -1134,7 +1136,7 @@ C*MODULE PCM     *DECK MAKECVM
      *                LIODCFMO,LJOB2GRP,LFMOPG,LEMOCDR,LUNTXYZ,LUNTROT,
      *                LSTONEP,LMAPSU,LFRGMUL,LCLMO,LIALMO,LINDLMO,
      *                LATCLMO,LLMOBDF,LFGFLMO,LNFGLMO,LLFGLMO,LPFGLMO,
-     *                LPOPDMAT,LIDMPNT,LIDDPNT,LIVMPNT,LIACTFG
+     *                LPOPDMAT,LIDMPNT,LIDDPNT,LIVMPNT,LIACTFG,lcrfrg
       COMMON /ECP2  / CLP(400),ZLP(400),NLP(400),KFIRST(MXATM,6),
      *                KLAST(MXATM,6),LMAX(MXATM),LPSKIP(MXATM),
      *                IZCORE(MXATM)
@@ -1304,6 +1306,7 @@ C
 C
 C        special radii selection for U.Minnesota solvation models
 C
+c     write(6,*) 'wwwmm1',ISMX
       IF(ISMX.EQ.1.OR.ISMX.EQ.2) THEN
          IF(JRET.EQ.0) THEN
             IF(MASWRK) WRITE(IW,*)
@@ -1314,6 +1317,7 @@ C
          CALL SMDCOULRAD(SOLA,RVDW)
          ALPHA(1) = 1.0D+00
       ENDIF
+c     write(6,*) 'wwwmm1',ISMX
 C
 C        check spelling on the RADII keyword
 C
@@ -2383,7 +2387,7 @@ C*MODULE PCM     *DECK DISRPE
      *                LIODCFMO,LJOB2GRP,LFMOPG,LEMOCDR,LUNTXYZ,LUNTROT,
      *                LSTONEP,LMAPSU,LFRGMUL,LCLMO,LIALMO,LINDLMO,
      *                LATCLMO,LLMOBDF,LFGFLMO,LNFGLMO,LLFGLMO,LPFGLMO,
-     *                LPOPDMAT,LIDMPNT,LIDDPNT,LIVMPNT,LIACTFG
+     *                LPOPDMAT,LIDMPNT,LIDDPNT,LIVMPNT,LIACTFG,lcrfrg
       COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
      *                NPPTS(MXFRG),NPTTPT,IEFP,
      *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
@@ -2966,13 +2970,20 @@ C
 C
                  R6 = R2*R2*R2
                  AD = - DAT / (3.0D+00 * R6)
-                 SUMKD = SUMKD + AREA * RAPP * AD
+                 SUMKD1= AREA * RAPP * AD
+                 SUMKD = SUMKD + SUMKD1
 C
                  S1  = ALPHAT * R
                  S   = 1.0D+00/S1+2.0D+00/(S1*S1)+2.0D+00/(S1*S1*S1)
                  ESP = EXP(- ALPHAT * R)
                  AR  = BAT * ESP * S
-                 SUMKR = SUMKR + (AREA * AR * RAPP)
+                 SUMKR1 = AREA * AR * RAPP
+                 SUMKR = SUMKR + SUMKR1 
+c
+                 iat=i
+                 IF(NFMOPCM.NE.0.AND.I.LE.NATFMO.AND.NUMDIF.EQ.0.and.
+     *              l.le.natfmo)
+     *             CALL MONEDR(Iat,l,FACT*SUMKD1,FACT*SUMKR1,area/N)
 C
 C                -- POSSIBLE FIXPVA DIS+REP GRADIENTS --
 C
@@ -3039,11 +3050,9 @@ C
   120         CONTINUE
               SUMAD = SUMAD + SUMKD
               SUMAR = SUMAR + SUMKR
-C             fix for multiscale solvation in FMO
-C             IF(NFMOPCM.NE.0.AND.NUMDIF.EQ.0)
-C    *           CALL MONEDR(I,FACT*SUMKD,FACT*SUMKR)
-              IF(NFMOPCM.NE.0.AND.I.LE.NATFMO.AND.NUMDIF.EQ.0)
-     *           CALL MONEDR(I,FACT*SUMKD,FACT*SUMKR)
+c             iat=i
+c             IF(NFMOPCM.NE.0.AND.I.LE.NATFMO.AND.NUMDIF.EQ.0)
+c    *           CALL MONEDR(Iat,l,FACT*SUMKD,FACT*SUMKR/N)
   110      CONTINUE
            SUMTD = SUMTD + FACT * SUMAD
            SUMTR = SUMTR + FACT * SUMAR
@@ -4667,9 +4676,10 @@ C
       RETURN
       END
 C*MODULE PCM     *DECK MONEDR
-      SUBROUTINE MONEDR(IAT,EDISPI,EREPI)
+      SUBROUTINE MONEDR(IAT,jat,EDISPI,EREPI,surf)
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
       COMMON /FMCOM / X(1)
+      COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
       COMMON /FMOPNT/ LICHFG,LMULFG,LIDMREC,LFRGNAM,LLAYFRG,LINDAT,
      *                LNCBS,LFMOZAN,LFMOC,LFMOMAS,LIZBAS,LIAGLOB,LIBDGH,
      *                LIABDFG,LJABDFG,LNCAO,LIDXCAO,LIAPRJO,LJAPRJO,
@@ -4682,15 +4692,27 @@ C*MODULE PCM     *DECK MONEDR
      *                LIODCFMO,LJOB2GRP,LFMOPG,LEMOCDR,LUNTXYZ,LUNTROT,
      *                LSTONEP,LMAPSU,LFRGMUL,LCLMO,LIALMO,LINDLMO,
      *                LATCLMO,LLMOBDF,LFGFLMO,LNFGLMO,LLFGLMO,LPFGLMO,
-     *                LPOPDMAT,LIDMPNT,LIDDPNT,LIVMPNT,LIACTFG
+     *                LPOPDMAT,LIDMPNT,LIDDPNT,LIVMPNT,LIACTFG,lcrfrg
 C
-C     This routine DOES NOT ASSUME that sphere numbers are exactly
-C     same as atomic numbers
+C     This routine assumes that sphere numbers are exactly the
+C     same as the atomic numbers.
 C
       IFG=IXFTCH(X(LINDAT),IAT)
-      LEMOCDRI=LEMOCDR+(IFG-1)*3+1
+      JFG=IXFTCH(X(LINDAT),JAT)
+      if(ifg.eq.jfg) then
+        LEMOCDRI=LEMOCDR+(IFG-1)*7+1
+      else
+        i=max(ifg,jfg)
+        j=min(ifg,jfg)
+        LEMOCDRI=LEMOCDR+nfg*7+(i-1)*(i-2)+(j-1)*2
+      endif
       X(LEMOCDRI)=X(LEMOCDRI)+EDISPI
       X(LEMOCDRI+1)=X(LEMOCDRI+1)+EREPI
-C     write(6,*) 'wwwedr',iat,ifg,edispi,erepi
+      if(iat.eq.1) then
+c       save tessera surface (it does not depend on IAT, do it once for IAT=1)
+        LEMOCDRs=LEMOCDR+(jFG-1)*7+4
+        X(LEMOCDRs)=X(LEMOCDRs)+surf
+      endif
+c     write(6,*) 'wwwedr',iat,jat,ifg,jfg,edispi,erepi
       RETURN
       END
