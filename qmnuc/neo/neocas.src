@@ -1,0 +1,342 @@
+C  8 Jul 11 - PEA - add mxneo parameter
+C 25 OCT 06 - SPW - NEW MODULE FOR NEO-MCSCF
+C
+C*MODULE NEOCAS   *DECK CASNEI
+      SUBROUTINE CASNEI(XPQIJ,X,IX,L2,NACT2)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      PARAMETER (MXRT=100)
+      PARAMETER (MXNEO=20)
+C
+      DIMENSION XPQIJ(L2,NACT2),X(*),IX(*)
+C
+      COMMON /DETNEO/ WSTATE_NEO(MXRT),SPINS_NU(MXRT),CRIT_NU,
+     *                PRTTOL_NEO,S_NU,SZ_NU,GRPDET_NU,STSYM_NU,
+     *                NFLGDM_NEO(MXRT),IWTS_NU(MXRT),NCORSV_NU,
+     *                NCOR_NU,NACT_NU,NORB_NU,NA_NU,NB_NU,
+     *                K_NEO,KST_NEO,IROOT_NEO,IPURES_NEO,MAXW1_NEO,
+     *                NITER_NEO,MAXP_NEO,NCI_NU,IGPDET_NU,KSTSYM_NU
+      COMMON /FMCOM / XX(1)
+      COMMON /NUCMOI/ NUNIQN,IUNIQN(MXNEO),IUNIQT(MXNEO),NQMNUC,
+     *                IQMNUC(MXNEO),IQNTYP(MXNEO),NUMNB,NUCST,NAUXNB,
+     *                IAUXNB(MXNEO),NUMULT,NNA,NNB,NTAUXB
+C
+C     - NUCLEAR BASIS FUNCTIONS
+      N1 = NUMNB
+      N2 = (N1*N1+N1)/2
+C
+C     - ACTIVE NUC ORBS
+      NACT2_NU = (NACT_NU*NACT_NU+NACT_NU)/2
+C
+      CALL VALFM(LOADFM)
+      LGIJKL  = LOADFM + 1
+      LPQKL   = LGIJKL + NACT2*NACT2_NU
+      LAST    = LPQKL  + L2*NACT2_NU
+      NEED = LAST - LOADFM - 1
+      CALL GETFM(NEED)
+C
+      CALL CASINT_NE(XPQIJ,X,IX,XX(LGIJKL),XX(LPQKL),L2,NACT2,
+     *               NACT_NU,NACT2_NU,N1,N2)
+C
+      CALL RETFM(NEED)
+C
+      RETURN
+      END
+C
+C*MODULE NEOCAS   *DECK CASINT_NE
+      SUBROUTINE CASINT_NE(XPQIJ,X,IX,GIJKL,XPQKL,L2,NCI2,
+     *                    NCI_NU,NCI2_NU,N1,N2)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      DIMENSION XPQIJ(L2,NCI2),GIJKL(NCI2,NCI2_NU),X(*),IX(*)
+      DIMENSION XPQKL(L2,NCI2_NU)
+C
+      COMMON /FMCOM / XX(1)
+      COMMON /IOFILE/ IR,IW,IP,IJKO,IJKT,IDAF,NAV,IODA(950)
+      COMMON /MCPAR / NFZC,NCORBS,NCI,NORBS,NORB,NUM
+C
+      PARAMETER (ZERO=0.0D+00)
+C
+C      --- PREPARE (PQ|KL) INTEGRALS ---
+C
+      CALL VALFM(LOADFM)
+      LXPQRS = LOADFM + 1
+      LVEC   = LXPQRS + L2*N2
+      LNVEC  = LVEC   + NUM*NUM
+      LAST   = LNVEC  + N1*N1
+      NEED = LAST - LOADFM - 1
+      CALL GETFM(NEED)
+      CALL CASRINTN(XPQKL,X,IX,XX(LXPQRS),XX(LVEC),XX(LNVEC),
+     *              NUM,L2,N1,N2,NCI_NU,NCI2_NU)
+C
+C     ----- READ NUC-ELEC TWO-PARTICLE DENSITY MATRIX -----
+C
+      NCI4=NCI2*NCI2_NU
+C
+      CALL DAREAD(IDAF,IODA,GIJKL,NCI4,458,0)
+C
+C     --- CONSTRUCT (PQ|IJ)' = SUM OVER KL OF (PQ|KL)*GAMMA(KL,IJ) ---
+C
+      DO MPQ=1,L2
+         DO MIJ=1,NCI2
+            DD=ZERO
+            MKL=0
+            DO K=1,NCI_NU
+               DO L=1,K
+                  MKL = MKL + 1 
+                  IMLT = 2
+                  IF (K.EQ.L) IMLT = 1
+                  DD = DD + XPQKL(MPQ,MKL)*GIJKL(MIJ,MKL)*IMLT
+               END DO
+            END DO
+            XPQIJ(MPQ,MIJ) = XPQIJ(MPQ,MIJ) - DD
+         END DO
+      END DO
+C
+      CALL RETFM(NEED)
+      RETURN
+      END
+C
+C*MODULE NEOCAS   *DECK CASRINTN
+      SUBROUTINE CASRINTN(XPQKL,X,IX,XPQRS,CE,CN,NUM,L2,M1,M2,
+     *                    NCI_NU,NCI2_NU)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      PARAMETER (MXAO=8192)
+C
+      LOGICAL PACK2E
+C
+      COMMON /INTFIL/ NINTMX,NHEX,NTUPL,PACK2E,INTTYP,IGRDTYP
+      COMMON /IJPAIR/ IA(MXAO) 
+      COMMON /IOFILE/ IR,IW,IP,IJKO,IJKT,IDAF,NAV,IODA(950)
+C
+      DIMENSION XPQRS(L2,M2),X(*),IX(*)
+      DIMENSION CE(NUM,NUM),CN(M1,M1),XPQKL(L2,NCI2_NU)
+C
+      PARAMETER (ZERO=0.0D+00)
+C
+      CALL VCLR(XPQRS,1,L2*M2)
+      CALL VCLR(XPQKL,1,L2*NCI2_NU)
+C
+      CALL DAREAD(IDAF,IODA,CN,M1*M1,444,0)
+      CALL DAREAD(IDAF,IODA,CE,NUM*NUM,15,0)
+C
+      CALL SEQREW(67)
+   30 CALL PREAD(67,X,IX,NG,NINTMX)
+C
+      IF(NG.EQ.0) GO TO 50
+      MG=IABS(NG)
+      DO 40 II=1,MG
+         VAL=X(II)
+
+                       NPACK = II
+*I32                     LABEL = IX(NPACK)
+*I32                     IPACK = ISHFT( LABEL, -24 )
+*I32                     JPACK = IAND( ISHFT( LABEL, -16 ), 255 )
+*I32                     KPACK = IAND( ISHFT( LABEL,  -8 ), 255 )
+*I32                     LPACK = IAND( LABEL, 255 )
+*I64                     IF ( MOD(NPACK,2) .EQ. 0 ) THEN
+*I64                       LABEL = IX( NPACK/2 )
+*I64                       IPACK = IAND( ISHFT( LABEL, -24 ), 255 )
+*I64                       JPACK = IAND( ISHFT( LABEL, -16 ), 255 )
+*I64                       KPACK = IAND( ISHFT( LABEL,  -8 ), 255 )
+*I64                       LPACK = IAND( LABEL, 255 )
+*I64                     ELSE
+*I64                       LABEL = IX( (NPACK/2)+1 )
+*I64                       IPACK = ISHFT( LABEL, -56 )
+*I64                       JPACK = IAND( ISHFT( LABEL, -48 ), 255 )
+*I64                       KPACK = IAND( ISHFT( LABEL, -40 ), 255 )
+*I64                       LPACK = IAND( ISHFT( LABEL, -32 ), 255 )
+*I64                     END IF
+                    MP = KPACK
+                    MQ = LPACK
+                    MR = IPACK
+                    MS = JPACK
+                    MPQ= IA(MP)+MQ
+                    MRS= IA(MR)+MS
+                    XPQRS(MPQ,MRS)=VAL
+               MKL=0
+ 40   CONTINUE
+      IF(NG.GT.0) GO TO 30
+ 50   CONTINUE
+      MKL=0
+      DO MK=1,NCI_NU
+         DO ML=1,MK
+            MKL=MKL+1
+            MPQ=0
+            DO MP=1,NUM
+               DO MQ=1,MP
+                  MPQ=MPQ+1
+                  XPQKL(MPQ,MKL)=ZERO
+                  CALL CASTAN(VVV,XPQRS,CN,MPQ,MK,ML,M1,L2,M2)
+                  XPQKL(MPQ,MKL)=VVV
+               END DO
+            END DO
+         END DO
+      END DO
+      CALL SEQREW(67)
+      RETURN
+      END
+C
+C*MODULE NEOCAS  *DECK CASTAN
+      SUBROUTINE CASTAN(VVV,XPQRS,CO,MPQ,K,L,NNBF,L2,M2)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      PARAMETER (MXAO=8192)
+      PARAMETER (ZERO=0.0D+00)
+C
+      COMMON /IJPAIR/ IA(MXAO)
+C
+      DIMENSION XPQRS(L2,M2),CO(NNBF,NNBF)
+C
+      VVV=ZERO
+      DO MR=1,NNBF 
+         DO MS=1,NNBF 
+            MRS=IA(MAX(MR,MS))+MIN(MR,MS)
+            VV=XPQRS(MPQ,MRS)
+            VVV=VVV+VV*CO(MR,K)*CO(MS,L)
+         END DO
+      END DO
+C
+      RETURN
+      END
+C
+C---C*MODULE NEOCAS   *DECK CASDN      
+C---      SUBROUTINE CASDN(V,LDV,DVAL,GIJ,NUM,NCI)
+C---C
+C---      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C---C
+C---      DIMENSION V(LDV,*),DVAL(*),GIJ(*)
+C---C
+C---      COMMON /IOFILE/ IR,IW,IP,IJKO,IJKT,IDAF,NAV,IODA(950)
+C---C
+C---      PARAMETER (ZERO=0.0D+00)
+C---C
+C---C     --- BACK TRANSFORM ACTIVE-ACTIVE BLOCK OF NUC DENSITY TO AO BASIS --- 
+C---C
+C---      NUM3 = NUM*NUM
+C---      NCI2 = (NCI*(NCI+1))/2
+C---C
+C---      CALL DAREAD(IDAF,IODA,V,NUM3,444,0)
+C---      CALL DAREAD(IDAF,IODA,GIJ,NCI2,456,0)
+C---C
+C---      NCORBS=0
+C---      MPQ=0
+C---      DO 30 MP=1,NUM
+C---         DO 30 MQ=1,MP
+C---            MPQ=MPQ+1
+C---            DUM=ZERO
+C---            KL=0
+C---            DO 20 K=1,NCI
+C---               DO 10 L=1,K 
+C---                  KL=KL+1  
+C---                  GPQ = GIJ(KL)*V(MP,K+NCORBS)*V(MQ,L+NCORBS)
+C---                  GQP = GIJ(KL)*V(MQ,K+NCORBS)*V(MP,L+NCORBS)
+C--- 10               DUM = DUM + GPQ + GQP
+C--- 20            DUM = DUM - GPQ 
+C--- 30      DVAL(MPQ)=DUM
+C---C
+C---      RETURN
+C---      END
+C---C
+C*MODULE NEOCAS   *DECK CASDN1
+      SUBROUTINE CASDN1(V,LDV,DVAL,GIJ,NUM,NCI)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      DIMENSION V(LDV,*),DVAL(*),GIJ(*)
+C
+      COMMON /IOFILE/ IR,IW,IP,IJKO,IJKT,IDAF,NAV,IODA(950)
+C
+      PARAMETER (ZERO=0.0D+00)
+C
+C     --- BACK TRANSFORM ACTIVE-ACTIVE BLOCK OF NUC DENSITY TO AO BASIS ---
+C
+      NUM3 = NUM*NUM
+      NCI2 = (NCI*(NCI+1))/2
+      CALL DAREAD(IDAF,IODA,V,NUM3,444,0)
+      CALL DAREAD(IDAF,IODA,GIJ,NCI2,456,0)
+C
+      NCORBS=0
+      MPQ=0
+      DO 30 MP=1,NUM
+         DO 30 MQ=1,MP
+            MPQ=MPQ+1
+            DUM=ZERO
+            KL=0
+            DO 20 K=1,NCI
+               DO 10 L=1,K
+                  KL=KL+1
+                  GPQ = GIJ(KL)*V(MP,K+NCORBS)*V(MQ,L+NCORBS)
+                  GQP = GIJ(KL)*V(MQ,K+NCORBS)*V(MP,L+NCORBS)
+ 10               DUM = DUM + GPQ + GQP
+ 20            DUM = DUM - GPQ
+ 30      DVAL(MPQ)=DUM
+      RETURN
+      END
+C
+C*MODULE NEOCAS   *DECK FACTND
+      SUBROUTINE FACTND(FAAO,WRK,XX,IX,IA,L1,L2)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      PARAMETER (MXRT=100,MXNEO=20)
+C
+      LOGICAL PACK2E
+C
+      DIMENSION FAAO(L2),WRK(L2),XX(NINTMX),IX(*),IA(*)
+C
+      COMMON /DETNEO/ WSTATE_NEO(MXRT),SPINS_NU(MXRT),CRIT_NU,
+     *                PRTTOL_NEO,S_NU,SZ_NU,GRPDET_NU,STSYM_NU,
+     *                NFLGDM_NEO(MXRT),IWTS_NU(MXRT),NCORSV_NU,
+     *                NCOR_NU,NACT_NU,NORB_NU,NA_NU,NB_NU,
+     *                K_NEO,KST_NEO,IROOT_NEO,IPURES_NEO,MAXW1_NEO,
+     *                NITER_NEO,MAXP_NEO,NCI_NU,IGPDET_NU,KSTSYM_NU
+      COMMON /FMCOM / X(1)
+      COMMON /INTFIL/ NINTMX,NHEX,NTUPL,PACK2E,INTTYP,IGRDTYP
+      COMMON /IOFILE/ IR,IW,IP,IJKO,IJKT,IDAF,NAV,IODA(950)
+      COMMON /NUCMOI/ NUNIQN,IUNIQN(MXNEO),IUNIQT(MXNEO),NQMNUC,
+     *                IQMNUC(MXNEO),IQNTYP(MXNEO),NUMNB,NUCST,NAUXNB,
+     *                IAUXNB(MXNEO),NUMULT,NNA,NNB,NTAUXB
+C
+C     - NUCLEAR BASIS FUNCTIONS
+      N1 = NUMNB
+      N2 = (N1*N1+N1)/2
+      N3 = N1*N1
+C
+C     - ACTIVE NUC ORBS
+      NACT2_NU = (NACT_NU*NACT_NU+NACT_NU)/2
+C
+C     --- FORM AND ADD THE 1-NUC DENSITY CONTRIBUTION TO F-ACTIVE ---
+C
+      CALL VALFM(LOADFM)
+      LADD   = LOADFM + 1
+      LNGIJ  = LADD   + L2
+      LNDMMO = LNGIJ  + NACT2_NU
+      LNVEC  = LNDMMO + N2
+      LAST   = LNVEC  + N3
+      NEED   = LAST - LOADFM - 1
+      CALL GETFM(NEED)
+C
+C     --- FORM 1-NUC DENSITY IN THE AO BASIS ---
+C
+      CALL CASDN1(X(LNVEC),N1,X(LNDMMO),X(LNGIJ),N1,NACT_NU)
+C
+C     --- FORM CONTRIBUTION FROM DENSITY AND NUC-ELEC AOS ---
+C
+      ISV = IJKO
+      IJKO  = 67
+      CALL SEQREW(IJKO)
+      CALL NEHAM(X(LNDMMO),X(LADD),XX,IX,NINTMX,IA,L1,.FALSE.)
+      CALL NEO_SYMH(X(LADD),WRK,IA,1)
+      CALL VADD(FAAO,1,X(LADD),1,FAAO,1,L2)
+      IJKO  = ISV
+C
+      CALL RETFM(NEED)
+C
+      RETURN
+      END

@@ -1,0 +1,2197 @@
+C  8 Jul 11 - PEA - added mxneo parameter
+C 12 JUL 07 - JHS - ADD COMMON BLOCK NUCENG TO SAVE NUC ENERGIES
+C 30 APR 07 - SPW - NWFOPN: CLOSE NUC DIIS FILE 30 AFTER SCF
+C  6 NOV 06 - MWS - ADJUST WAVEFUNCTION COMMON BLOCK
+C 25 OCT 06 - SPW - CHANGES FOR NEO VERSION 2
+C 25 MAR 06 - SPW - NEW MODULE FOR NEO-HARTREE-FOCK
+C
+*MODULE NEOHF   *DECK NEOHF
+      SUBROUTINE NEOHF(H1E,FAE,DAE,FBE,DBE,DFDAE,DFDBE,SCR,SCR2,
+     &                 ADDE,L1,L2,ICNT,EHFEL,ITER,EN)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      DOUBLE PRECISION NEOSCF,NEOCI
+C
+      LOGICAL DIRSCF,FDIFF
+      LOGICAL EXCH,VNUCEX,DNUCGS
+C
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /NEOMTD/ NEOSCF,NEOCI
+      COMMON /NUCMOL/ EXCH,VNUCEX,DNUCGS
+      COMMON /OPTSCF/ DIRSCF,FDIFF
+      COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
+     *                MPLEVL,MPCTYP
+C
+      DIMENSION H1E(L2),FAE(L2),DAE(L2),FBE(L2),DBE(L2)
+      DIMENSION DFDAE(L2),DFDBE(L2),SCR(L2),SCR2(L2)
+C
+      PARAMETER (TWO=2.0D+00)
+C
+      DATA ROHF/8HROHF    /
+      DATA DIAGZN,RONHF/8HDIAGZN  ,8HRONHF   /
+C
+C     --- DRIVER WHICH CALLS SUBROUTINE TO CALCULATE REQUESTED TYPE
+C     OF NUCLEAR SCF FOR A NEO-HF RUN ---
+C
+      ICNT = ICNT + 1
+      CALL DAREAD(IDAF,IODA,H1E,L2,11,0)
+C
+C     --- DIRECT ELECTRONIC SCF WITH FDIFF OPTION ON ---
+C
+      IF(DIRSCF .AND. FDIFF) THEN
+C
+C         --- WITH FDIFF OPTION WE NEED TO FORM THE COMPLETE SKELETON
+C         2-ELECTRON FOCK OPERATOR OR ELSE EHFEL WILL BE INCORRECT ---
+C
+         IF(ITER .EQ. 1) THEN
+            CALL DCOPY(L2,FAE,1,SCR,1)
+            CALL DAWRIT(IDAF,IODA,SCR,L2,450,0)
+         ELSE
+            CALL DAREAD(IDAF,IODA,SCR,L2,450,0)
+            CALL VADD(FAE,1,SCR,1,SCR,1,L2)
+            CALL DAWRIT(IDAF,IODA,SCR,L2,450,0)
+         END IF
+         EHFA1 = TRACEP(DAE,SCR,L1)
+C
+         IF(SCFTYP .EQ. ROHF) THEN
+            IF(ITER .EQ. 1) THEN
+               CALL DCOPY(L2,FBE,1,SCR,1)
+               CALL DAWRIT(IDAF,IODA,SCR,L2,451,0)
+            ELSE
+               CALL DAREAD(IDAF,IODA,SCR,L2,451,0)
+               CALL VADD(FBE,1,SCR,1,SCR,1,L2)
+               CALL DAWRIT(IDAF,IODA,SCR,L2,451,0)
+            END IF
+            EHFB1 = TRACEP(DBE,SCR,L1)
+C
+            CALL VADD(DFDAE,1,DFDBE,1,SCR,1,L2)
+            CALL VADD(DAE,1,DBE,1,SCR2,1,L2)
+C
+         ELSE
+            CALL DCOPY(L2,DFDAE,1,SCR,1)
+            CALL DCOPY(L2,DAE,1,SCR2,1)
+         END IF
+C
+C     --- ALL OTHER CASES ---
+C
+      ELSE
+C
+         EHFA1 = TRACEP(DAE,FAE,L1)
+         IF(SCFTYP.EQ.ROHF) THEN
+            EHFB1 = TRACEP(DBE,FBE,L1)
+            CALL VADD(DAE,1,DBE,1,SCR,1,L2)
+            CALL DCOPY(L2,SCR,1,SCR2,1)
+         ELSE
+            CALL DCOPY(L2,DAE,1,SCR,1)
+            CALL DCOPY(L2,DAE,1,SCR2,1)
+         END IF
+C
+      END IF
+C
+C     NOTE THAT:
+C     ----------
+C     -SCR- CONTAINS EITHER TOTAL OR DIFFERENCE ALPHA+BETA EL. DENSITY
+C     -SCR2- ALWAYS CONTAINS TOTAL ALPHA+BETA ELECTRONIC DENSITY
+C
+C     --- COMPLETE ENERGY TERM ---
+C
+      IF(SCFTYP.EQ.ROHF) THEN
+         EHFA2 = TWO*TRACEP(DAE,H1E,L1)
+         EHFB2 = TWO*TRACEP(DBE,H1E,L1)
+         EHFEL = (EHFA1 + EHFA2 + EHFB1 + EHFB2)/TWO + EN
+      ELSE
+         EHFA2 = TWO*TRACEP(DAE,H1E,L1)
+         EHFEL = (EHFA1+EHFA2)/TWO + EN
+      END IF
+C
+C     --- NUCLEAR WAVEFUNCTION (SPECIAL CASE OF ONE-NUCLEUS ONLY) ---
+C
+      IF(NEOSCF .EQ. DIAGZN) THEN
+         CALL NWFDIA(H1E,FAE,FBE,SCR,SCR2,ADDE,L1,L2)
+      END IF
+C
+C     --- ROHF NUCLEAR WAVEFUNCTION SCF ---
+C
+      IF(NEOSCF.EQ.RONHF) THEN
+         CALL NWFOPN(H1E,FAE,FBE,SCR,SCR2,ADDE,
+     &               L1,L2,ICNT,DNUCGS,EHFEL)
+      END IF
+C
+      RETURN
+      END
+C
+C*MODULE NEOHF   *DECK NWFDIA
+      SUBROUTINE NWFDIA(H1E,FAE,FBE,EDN,TOTEDN,ADDE,L1,L2)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      LOGICAL PACK2E,DBG,GOPARR,DSKWRK,MASWRK,TDSKWRK
+      LOGICAL DIRSCF,FDIFF
+      LOGICAL DIRNUC,NUFOCK,SCHWRZ
+      LOGICAL SYMNUC
+C
+      PARAMETER (MXSH=5000, MXGTOT=20000, MXATM=2000)
+      PARAMETER (MXGSH=30, MXG2=MXGSH*MXGSH)
+      PARAMETER (MXAO=8192, MXNEO=20)
+C
+      COMMON /CONV  / DENTOL,EN,ETOT,EHF,EHF0,DIFF,ITER,ICALP,ICBET
+      COMMON /FMCOM / X(1)
+      COMMON /IJPAIR/ IA(MXAO)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /INFON / NNQMT
+      COMMON /INTFIL/ NINTMX,NHEX,NTUPL,PACK2E,INTTYP,IGRDTYP
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /NEOSHL/ NGAUSS,NGAUSE,NGAUSN,NTSHEL,NNUCSH
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /NUCMOI/ NUNIQN,IUNIQN(MXNEO),IUNIQT(MXNEO),NQMNUC,
+     *                IQMNUC(MXNEO),IQNTYP(MXNEO),NUMNB,NUCST,NAUXNB,
+     *                IAUXNB(MXNEO),NUMULT,NNA,NNB,NTAUXB
+      COMMON /NUCMOP/ DIRNUC,NUFOCK
+      COMMON /NUCENG/ EELNU,ENUNU
+      COMMON /OPTSCF/ DIRSCF,FDIFF
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /SYMNEO/ QMTOLN,SYMNUC
+      COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
+     *                MPLEVL,MPCTYP
+C
+      DIMENSION H1E(L2),FAE(L2),FBE(L2),EDN(L2),TOTEDN(L2)
+C
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00)
+C
+      DATA ROHF/8HROHF    /
+C
+C     ---- THIS SUBROUTINE CONSTRUCTS THE NUCLEAR FOCK MATRIX AND ----
+C          THE CORRECTION(S) TO THE ELECTRONIC FOCK MATRIX
+C          FOR THE SPECIAL CASE OF ONE QM NUCLEUS
+C
+C     WRITTEN BY SIMON P. WEBB, TZVETELIN IRODANOV, AND CHET SWALINA
+C
+      DBG    = NPRINT .EQ. 5 .AND. MASWRK
+C
+      N0 = NUMNB
+C
+      IF(SYMNUC) N0 = NNQMT
+C
+      N1 = NUMNB
+      N2 = (N1*N1+N1)/2
+      N3 = N1*N1
+C
+      NSHLSV = NSHELL
+      NSHELL = NTSHEL
+      CALL BASCHK(LMAX)
+      NSHELL = NSHLSV
+                    NANGM =  4
+      IF(LMAX.EQ.2) NANGM =  6
+      IF(LMAX.EQ.3) NANGM = 10
+      IF(LMAX.EQ.4) NANGM = 15
+      MAXG = NANGM**4
+      NSH2 = MAX(NSHELL*NNUCSH,(NNUCSH*NNUCSH+NNUCSH)/2)
+C
+C     ----- GET MEMORY -----
+C
+      IFPK  = 1
+      IF(NOPK.EQ.1) IFPK=0
+C
+      CALL VALFM(LOADFM)
+      LSCR  = LOADFM + 1
+      LIWRK = LSCR   + N1*8
+      LWRK1 = LIWRK  + N1
+      LWRK2 = LWRK1  + MAX(N3,L2)
+      LVA   = LWRK2  + MAX(N2,L2)
+      LDA   = LVA    + N3
+      LFA   = LDA    + N2
+      LEA   = LFA    + N2
+      LAOC  = LEA    + N1
+      LH1   = LAOC   + N1
+      LQ    = LH1    + N2
+      LS    = LQ     + N3
+      LADD  = LS     + N2
+      LAST  = LADD   + L2
+C
+      IF(DIRNUC) THEN
+         LXINTS = LAST
+         LGHOND = LXINTS + NSH2
+         LDDIJ  = LGHOND + MAXG
+         LDSH   = LDDIJ  + 16*MXG2
+         LAST   = LDSH   + NSH2
+         LXP    = LAST
+         LXK    = LAST
+         LIXPK  = LAST
+      ELSE
+         LXP    = LAST
+         LXK    = LXP    + NINTMX
+         LIXPK  = LXK    + NINTMX * IFPK
+         LAST   = LIXPK  + NINTMX
+         LXINTS = LAST
+         LGHOND = LAST
+         LDDIJ  = LAST
+         LDSH   = LAST
+      END IF
+C
+      NEED  = LAST   - LOADFM - 1
+C
+C     --- GET MEMORY ---
+C
+      CALL GETFM(NEED)
+C
+      II = 0
+      ILIM = MAX(N1,L1)
+      DO 100 I = 1,ILIM
+         IA(I) = II
+         II = II + I
+  100 CONTINUE
+C
+C     --- OCCUPATION NUMBERS ---
+C
+      DO 120 I = 1,N1
+         X(I+LAOC-1) = ZERO
+         IF(I.EQ.NUCST) X(I+LAOC-1) = ONE
+  120 CONTINUE
+C
+      CALL DAREAD(IDAF,IODA,X(LS),N2,441,0)
+C
+      IF(SYMNUC) THEN
+         CALL NUQSYM(X(LS),X(LWRK1),X(LQ),X(LEA),X(LSCR),X(LIWRK),
+     *              N0,N1,N2,N3,DBG)
+         CALL DAWRIT(IDAF,IODA,X(LQ),N3,443,0)
+      ELSE
+         CALL QMATRX(X(LS),X(LQ),X(LEA),X(LSCR),X(LIWRK),N0,N1,N1,DBG)
+         CALL DAWRIT(IDAF,IODA,X(LQ),N3,443,0)
+      END IF
+C
+      SCHWRZ=.FALSE.
+C
+C     --- READ CORE HAMILTONIAN ---
+C     --- READ OVERLAP MATRIX ---
+C     --- READ SYMMETRY ADDAPTED Q MATRIX ---
+C
+      CALL DAREAD(IDAF,IODA,X(LH1),N2,440,0)
+      CALL DAREAD(IDAF,IODA,X(LS),N2,441,0)
+      CALL DAREAD(IDAF,IODA,X(LQ),N3,443,0)
+C
+C     --- CONSTRUCT NUCLEAR FOCK MATRIX ---
+C
+      IF(DIRNUC) THEN
+C
+C        --- DIRECT SCF ---
+C
+         NUFOCK = .TRUE.
+         CALL VCLR(X(LFA),1,N2)
+         CALL TWOENI(SCFTYP,DIRNUC,.FALSE.,INTTYP,SCHWRZ,NINT,NSCHWZ,
+     *               N1,N2,DUMMY,DUMMY,IDUMMY,1,X(LXINTS),NSH2,
+     *               X(LGHOND),MAXG,X(LDDIJ),IA,EDN,X(LFA),
+     *               X(LDSH),NTSHEL,.TRUE.,.FALSE.,.TRUE.)
+C
+      ELSE
+C
+C        --- CONVENTIONAL SCF ---
+C
+         TDSKWRK = DSKWRK
+         DSKWRK  = .TRUE.
+         ISAV = IS
+         IS = 67
+         CALL SEQREW(IS)
+C
+C        --- FORM ELEC-NUC INTERACTION TERM OF NUCLEAR FOCK MATRIX ---
+C
+         CALL NEHAM(TOTEDN,X(LFA),X(LXP),X(LIXPK),NINTMX,IA,
+     *              N1,.TRUE.)
+C
+         IS = ISAV
+         DSKWRK  = TDSKWRK
+      END IF
+C
+C     --- SYMMETRIZE THE SKELETON NUCLEAR FOCK MATRIX ---
+C     TRIANGULAR SCRATCH AREA AT -LWRK1-
+C
+      ISTART = NSHELL + 1
+      NSHSAV = NSHELL
+      NUMSAV = NUM
+      NUM = N1
+      NSHELL = NTSHEL
+      CALL NEO_SYMH(X(LFA),X(LWRK1),IA,ISTART)
+      NSHELL = NSHSAV
+      NUM = NUMSAV
+C
+      IF(DBG) THEN
+         WRITE(IW,*) 'SYMMETRIZED NUCLEAR FOCK MATRIX'
+         CALL PRTRI(X(LFA),N1)
+      END IF
+C
+C     --- COMPLETE THE NUCLEAR FOCK MATRIX ---
+C
+      IF(DIRNUC  .AND.  FDIFF) THEN
+         IF(ITER.GT.1) THEN
+            CALL DAREAD(IDAF,IODA,X(LWRK1),N2,446,0)
+            CALL VADD(X(LFA),1,X(LWRK1),1,X(LFA),1,N2)
+         END IF
+         CALL DAWRIT(IDAF,IODA,X(LFA),N2,446,0)
+      END IF
+      CALL VADD(X(LFA),1,X(LH1),1,X(LFA),1,N2)
+C
+      IF(DBG) THEN
+         WRITE(IW,*) 'ALPHA TOTAL HAMILTONIAN MATRIX'
+         CALL PRTRI(X(LFA),N1)
+      END IF
+C
+C     --- TRANSFORM ALPHA FOCK MATRIX TO -Q- ORTHONORMAL BASIS ---
+C     --- DIAGONALIZE ALPHA FOCK MATRIX ---
+C     --- BACK-TRANSFORM TO AO BASIS ---
+C
+      CALL TFTRI(X(LWRK1),X(LFA),X(LQ),X(LSCR),N0,N1,N1)
+      IF(SYMNUC) THEN
+         CALL NUSYMDIA(X(LWRK1),X(LVA),X(LEA),X(LSCR),X(LIWRK),
+     *                 N0,N2,N1)
+      ELSE
+        CALL GLDIAG(N1,N1,N1,X(LWRK1),X(LSCR),X(LEA),X(LVA),
+     *                 IERR,X(LIWRK))
+      END IF
+      CALL TFSQB(X(LVA),X(LQ),X(LSCR),N0,N1,N1)
+C
+      IF(DBG) THEN
+         WRITE(IW,*) 'NEW ALPHA NUCLEAR ORBITALS'
+         CALL PREVNU(X(LVA),X(LEA),N0,N1,NUM+1,NUM+NUMNB)
+      END IF
+C
+C     --- FORM NEW ALPHA DENSITY MATRIX ---
+C
+      CALL DMTX(X(LDA),X(LVA),X(LAOC),N1,N1,N1)
+C
+      IF(DBG) THEN
+         WRITE(IW,*) 'NEW ALPHA DENSITY MATRIX'
+         CALL PRTRI(X(LDA),N1)
+         PROT_NUM= TRACEP(X(LDA),X(LS),N1)
+         WRITE(6,*)'NUMBER OF PROTONS IS',PROT_NUM
+      END IF
+C
+C     --- CONSTRUCT ELECTRON-QM NUCLEAR TERM TO BE ADDED TO ELECTRONIC
+C         FOCK MATRIX ----
+C
+      IF(DIRNUC .AND. FDIFF) THEN
+         IF(ITER .EQ. 1) THEN
+            CALL VCLR(X(LWRK1),1,N2)
+         ELSE
+            CALL DAREAD(IDAF,IODA,X(LWRK1),N2,445,0)
+         END IF
+      END IF
+C
+      IF(DIRNUC) THEN
+C
+C        --- DIRECT ---
+C
+         NUFOCK = .FALSE.
+         IF(FDIFF) THEN
+            CALL VSUB(X(LWRK1),1,X(LDA),1,X(LWRK1),1,N2)
+         ELSE
+            CALL DCOPY(N2,X(LDA),1,X(LWRK1),1)
+         END IF
+C
+         CALL VCLR(X(LADD),1,L2)
+         CALL TWOENI(SCFTYP,DIRNUC,.FALSE.,INTTYP,SCHWRZ,NINT,NSCHWZ,
+     *           L1,L2,DUMMY,DUMMY,IDUMMY,1,X(LXINTS),
+     *           NSH2,X(LGHOND),MAXG,X(LDDIJ),IA,X(LWRK1),X(LADD),
+     *           X(LDSH),NTSHEL,.TRUE.,.FALSE.,.TRUE.)
+      ELSE
+C
+C        --- CONVENTIONAL DISK-BASED ---
+C
+         TDSKWRK = DSKWRK
+         DSKWRK  = .TRUE.
+         ISAV = IS
+         IS = 67
+         CALL SEQREW(IS)
+C
+         CALL NEHAM(X(LDA),X(LADD),X(LXP),X(LIXPK),NINTMX,IA,
+     *              L1,.FALSE.)
+         IS = ISAV
+         DSKWRK  = TDSKWRK
+      END IF
+C
+C     --- SYMMETRIZE THE ELEC-NUCLEAR TERMS OF THE ELEC. FOCK MATRIX ---
+C
+      CALL NEO_SYMH(X(LADD),X(LWRK1),IA,1)
+C
+      IF(DIRNUC .AND. FDIFF) THEN
+         IF(ITER .GT. 1) THEN
+            CALL DCOPY(L2,X(LADD),1,X(LWRK1),1)
+            CALL DAREAD(IDAF,IODA,X(LWRK2),L2,449,0)
+            CALL VADD(X(LWRK2),1,X(LADD),1,X(LADD),1,L2)
+         ELSE
+            CALL DCOPY(L2,X(LADD),1,X(LWRK1),1)
+         END IF
+         CALL DAWRIT(IDAF,IODA,X(LADD),L2,449,0)
+      END IF
+C
+      IF(DIRSCF .AND. FDIFF .AND. (.NOT.DIRNUC)) THEN
+         IF(ITER .GT. 1) THEN
+            CALL DAREAD(IDAF,IODA,X(LWRK1),L2,449,0)
+            CALL VSUB(X(LWRK1),1,X(LADD),1,X(LWRK1),1,L2)
+         ELSE
+            CALL DCOPY(L2,X(LADD),1,X(LWRK1),1)
+         END IF
+         CALL DAWRIT(IDAF,IODA,X(LADD),L2,449,0)
+      END IF
+C
+C     --- ADD ELECTRON-NUCLEAR TERM TO 1-E HAM ---
+C
+      IF(DIRSCF .AND. FDIFF) THEN
+         CALL VADD(FAE,1,X(LWRK1),1,FAE,1,L2)
+         IF(SCFTYP .EQ. ROHF) THEN
+            CALL VADD(FBE,1,X(LWRK1),1,FBE,1,L2)
+         END IF
+      END IF
+      CALL VADD(H1E,1,X(LADD),1,H1E,1,L2)
+C
+C     --- CLASSICAL-QUANTUM NUCLEI ENERGY ---
+C
+      ENUC = TRACEP(X(LDA),X(LH1),N1)
+      ADDE = ENUC
+C
+      EELNU = TRACEP(TOTEDN,X(LADD),L1)
+      ENUNU = ZERO
+C
+      IF(DBG) THEN
+         WRITE(IW,*)'ENUC=',ENUC
+         WRITE(IW,*)'ELNUE=',EELNU
+         H1EE = TRACEP(TOTEDN,H1E,L1)
+         WRITE(IW,*)'H1EE=',H1EE
+      END IF
+C
+      CALL DAWRIT(IDAF,IODA,X(LVA),N3,444,0)
+      CALL DAWRIT(IDAF,IODA,X(LDA),N2,445,0)
+      CALL DAWRIT(IDAF,IODA,X(LEA),N1,447,0)
+C
+      CALL RETFM(NEED)
+C
+      RETURN
+      END
+C
+C*MODULE NEOHF   *DECK NEHAM
+      SUBROUTINE NEHAM(D,F,XX,IX,NINTMX,IA,NUM,CONTIJ)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      LOGICAL CONTIJ
+C
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PCKLAB/ LABSIZ
+C
+      DIMENSION D(*),F(*),IA(*),XX(NINTMX),IX(*)
+C
+      PARAMETER (HALF=0.5D+00)
+C
+      NUMTRI = (NUM*NUM+NUM)/2
+      CALL VCLR(F,1,NUMTRI)
+      I = 0
+      J = 0
+      K = 0
+      L = 0
+      NXX = 0
+C
+C     --- INTEGRALS ARE NOT IN SUPERMATRIX FORM ---
+C
+  120 CONTINUE
+      CALL PREAD(IS,XX,IX,NXX,NINTMX)
+      IF(NXX .EQ. 0) GO TO 220
+      NINT = IABS(NXX)
+      IF(NINT .GT. NINTMX) CALL ABRT
+      DO 200 M = 1,NINT
+C
+                       NPACK = M
+                       IF (LABSIZ .EQ. 2) THEN
+*I32                     LABEL = IX( 2*NPACK - 1 )
+*I32                     IPACK = ISHFT( LABEL, -16 )
+*I32                     JPACK = IAND(  LABEL, 65535 )
+*I32                     LABEL = IX( 2*NPACK     )
+*I32                     KPACK = ISHFT( LABEL, -16 )
+*I32                     LPACK = IAND(  LABEL, 65535 )
+*I64                     LABEL = IX(NPACK)
+*I64                     IPACK = ISHFT( LABEL, -48 )
+*I64                     JPACK = IAND( ISHFT( LABEL, -32 ), 65535 )
+*I64                     KPACK = IAND( ISHFT( LABEL, -16 ), 65535 )
+*I64                     LPACK = IAND( LABEL, 65535 )
+                       ELSE IF (LABSIZ .EQ. 1) THEN
+*I32                     LABEL = IX(NPACK)
+*I32                     IPACK = ISHFT( LABEL, -24 )
+*I32                     JPACK = IAND( ISHFT( LABEL, -16 ), 255 )
+*I32                     KPACK = IAND( ISHFT( LABEL,  -8 ), 255 )
+*I32                     LPACK = IAND( LABEL, 255 )
+*I64                     IF ( MOD(NPACK,2) .EQ. 0 ) THEN
+*I64                       LABEL = IX( NPACK/2 )
+*I64                       IPACK = IAND( ISHFT( LABEL, -24 ), 255 )
+*I64                       JPACK = IAND( ISHFT( LABEL, -16 ), 255 )
+*I64                       KPACK = IAND( ISHFT( LABEL,  -8 ), 255 )
+*I64                       LPACK = IAND( LABEL, 255 )
+*I64                     ELSE
+*I64                       LABEL = IX( (NPACK/2)+1 )
+*I64                       IPACK = ISHFT( LABEL, -56 )
+*I64                       JPACK = IAND( ISHFT( LABEL, -48 ), 255 )
+*I64                       KPACK = IAND( ISHFT( LABEL, -40 ), 255 )
+*I64                       LPACK = IAND( ISHFT( LABEL, -32 ), 255 )
+*I64                     END IF
+                       END IF
+                       I = IPACK
+                       J = JPACK
+                       K = KPACK
+                       L = LPACK
+C
+      VAL = XX(M)
+      NIJ = IA(I)+J
+      NKL = IA(K)+L
+C
+      IF(CONTIJ) THEN
+         IF(K .EQ. L) VAL=VAL*HALF
+      ELSE
+         IF(I .EQ. J) VAL=VAL*HALF
+      END IF
+C
+      VAL2 = VAL+VAL
+      IF(CONTIJ) THEN
+         F(NIJ) = F(NIJ)-VAL2*D(NKL)
+      ELSE
+         F(NKL) = F(NKL)-VAL2*D(NIJ)
+      END IF
+  200 CONTINUE
+C
+      IF(NXX .GT. 0) GO TO 120
+C
+  220 CONTINUE
+      CALL SEQREW(IS)
+      RETURN
+C     ******
+      END
+C
+C*MODULE NEOHF   *DECK NWFOPN
+      SUBROUTINE NWFOPN(H1E,FAE,FBE,EDN,TOTEDN,ADDE,
+     *                  L1,L2,ICNT,DNUCGS,EHFEL)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      LOGICAL PACK2E,DBG,GOPARR,DSKWRK,MASWRK,TDSKWRK
+      LOGICAL CVGED,CVGING,CVDENS,CVENGY
+      LOGICAL DIRSCF,FDIFF,SCHWRZ
+      LOGICAL NOTOPN
+      LOGICAL DNUCGS,DIISNU
+      LOGICAL DIRNUC,NUFOCK
+      LOGICAL SYMNUC
+C
+      DIMENSION FAE(L2),FBE(L2),EDN(L2),TOTEDN(L2)
+C
+      PARAMETER (MXSH=5000, MXGTOT=20000, MXGSH=30, MXG2=MXGSH*MXGSH,
+     *           MXATM=2000)
+      PARAMETER (MXAO=8192, MXNEO=20)
+C
+      SAVE ITNUCT,ETOT_NU
+C
+      COMMON /CONV  / DENTOL,EN,ETOT,EHF,EHF0,DIFF,ITER,ICALP,ICBET
+      COMMON /DIISSO/ SOGTOL,ETHRSH,MAXDII,IRAF
+      COMMON /FMCOM / X(1)
+      COMMON /IJPAIR/ IA(MXAO)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /INFON / NNQMT
+      COMMON /INTFIL/ NINTMX,NHEX,NTUPL,PACK2E,INTTYP,IGRDTYP
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /NEOSHL/ NGAUSS,NGAUSE,NGAUSN,NTSHEL,NNUCSH
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /NUCMOI/ NUNIQN,IUNIQN(MXNEO),IUNIQT(MXNEO),NQMNUC,
+     *                IQMNUC(MXNEO),IQNTYP(MXNEO),NUMNB,NUCST,NAUXNB,
+     *                IAUXNB(MXNEO),NUMULT,NNA,NNB,NTAUXB
+      COMMON /NUCMOP/ DIRNUC,NUFOCK
+      COMMON /NUCENG/ EELNU,ENUNU
+      COMMON /OPTSCF/ DIRSCF,FDIFF
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+      COMMON /SYMNEO/ QMTOLN,SYMNUC
+      COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
+     *                MPLEVL,MPCTYP
+C
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00, TWO=2.0D+00,
+     *           FIVE=5.0D+00, ETOL=1.0D-09, HALF=5.0D-01)
+C
+      DATA ROHF/8HROHF    /
+      DATA DEBUG/8HDEBUG   /
+C
+C     --- NUCLEAR ORBITAL SCF DRIVER FOR USE IN A NEO-HF CALCULATION ---
+C         WRITTEN BY SIMON P. WEBB, TZVETELIN IRODANOV, AND CHET SWALINA
+C
+      DBG    = NPRINT .EQ. 5 .AND. MASWRK
+      IF(EXETYP.EQ.DEBUG) THEN
+         DBG    = .TRUE. .AND. MASWRK
+      END IF
+C
+C     --- INITIALIZE SOME VARIABLES ---
+C
+      N1 = NUMNB
+      N0 = N1
+C
+      IF(SYMNUC) N0 = NNQMT
+C
+      N2 = (N1*N1+N1)/2
+      N3 = N1*N1
+C
+      DIISNU = .TRUE.
+      MAXIT_NU = 200
+C
+      IF(MAXIT_NU.LE.0) MAXIT_NU = 50
+      MAXIT2 = (MAXIT_NU*MAXIT_NU + MAXIT_NU)/2
+      MAXIT3 = MAXIT_NU*MAXIT_NU
+C
+      NSH2 = NSHELL*NNUCSH
+      NSHLSV = NSHELL
+      NSHELL = NTSHEL
+      CALL BASCHK(LMAX)
+      NSHELL = NSHLSV
+                    NANGM =  4
+      IF(LMAX.EQ.2) NANGM =  6
+      IF(LMAX.EQ.3) NANGM = 10
+      IF(LMAX.EQ.4) NANGM = 15
+      MAXG = NANGM**4
+C
+C     --- GET MEMORY ---
+C
+      IFPK  = 1
+      IF(NOPK.EQ.1) IFPK=0
+C
+      CALL VALFM(LOADFM)
+      LSCR  = LOADFM + 1
+      LIWRK = LSCR   + 8*N1
+      LWRK1 = LIWRK  + N1
+      LWRK2 = LWRK1  + MAX(L2,N3)
+      LWRK3 = LWRK2  + MAX(L2,N3)
+      LELNU = LWRK3  + N3
+      LNUNU = LELNU  + N2
+      LNNSV = LNUNU  + N2
+      LVA   = LNNSV  + N2
+      LDA   = LVA    + N3
+      LFA   = LDA    + N2
+      LEA   = LFA    + N2
+      LAOC  = LEA    + N1
+      LH1   = LAOC   + N1
+      LQ    = LH1    + N2
+      LS    = LQ     + N3
+      LADD  = LS     + N2
+      LAST  = LADD   + L2
+C
+      IF(DIRNUC) THEN
+         LDWRK  = LAST
+         LXINTS = LDWRK  + N2
+         LGHOND = LXINTS + NSH2
+         LDDIJ  = LGHOND + MAXG
+         LDSH   = LDDIJ  + 16*MXG2
+         LAST   = LDSH   + NSH2
+         LXP    = LAST
+         LXK    = LAST
+         LIXPK  = LAST
+      ELSE
+         LXP    = LAST
+         LXK    = LXP    + NINTMX
+         LIXPK  = LXK    + NINTMX * IFPK
+         LAST   = LIXPK  + NINTMX
+         LDWRK  = LAST
+         LXINTS = LAST
+         LGHOND = LAST
+         LDSH   = LAST
+         LDDIJ  = LAST
+      END IF
+C
+      IF(DIISNU) THEN
+         LADIIS = LAST
+         LBDIIS = LADIIS + MAXIT3
+         LPDIIS = LBDIIS + MAXIT2
+         LXDIIS = LPDIIS + MAXIT_NU
+         LIODII = LXDIIS + MAXIT_NU
+         LAST   = LIODII + 3*MAXDII
+      ELSE
+         LADIIS = LAST
+         LBDIIS = LAST
+         LPDIIS = LAST
+         LXDIIS = LAST
+         LIODII = LAST
+      END IF
+C
+      NEED  = LAST - LOADFM -1
+C
+C     --- GET MEMORY ---
+C
+      CALL GETFM(NEED)
+C
+      II = 0
+      ILIM = MAX(N1,L1)
+      DO 100 I = 1,ILIM
+         IA(I) = II
+         II = II + I
+  100 CONTINUE
+C
+C     --- OCCUPATION NUMBERS ---
+C
+      DO 120 I = 1,N1
+         X(I+LAOC-1) = ZERO
+         IF(I.LE.NNA) X(I+LAOC-1) = ONE
+  120 CONTINUE
+C
+C     --- INITIALIZE MORE VARIABLES ---
+C
+      ERDIIS = ZERO
+      ITDIIS = 1
+      NOTOPN = .TRUE.
+C
+C     --- USE SAME DENTOL AS IN ELECTRONIC SCF ---
+C
+      DTOL2 = TWO * DENTOL
+      CVGING = .FALSE.
+      CVGED  = .FALSE.
+C
+      EHF_NU  = ZERO
+      IF(ICNT.EQ.1) ETOT_NU = ZERO
+      IF(ICNT.EQ.1) ITNUCT = 1
+      DELE_NU = ZERO
+C
+      DIFFA = ZERO
+      DIFF_NU = ZERO
+C
+      SCHWRZ=.FALSE.
+C
+C     --- READ NUCLEAR CORE HAMILTONIAN AND OVERLAP MATRIX ---
+C
+      CALL DAREAD(IDAF,IODA,X(LH1),N2,440,0)
+      CALL DAREAD(IDAF,IODA,X(LS),N2,441,0)
+C
+C     --- FORM OR READ NUCLEAR SYMMETRY ADDAPTED Q MATRIX ---
+C         N0 = NUMBER OF CANONICAL ORTHONORMAL VECTORS KEPT.
+C         OVERLAP MATRIX IS DESTROYED AND IS REREAD.
+C
+      IF(ITER.EQ.1) THEN
+         IF(SYMNUC) THEN
+            CALL NUQSYM(X(LS),X(LWRK3),X(LQ),X(LEA),X(LSCR),X(LIWRK),
+     *                  N0,N1,N2,N3,DBG)
+         ELSE
+            CALL QMATRX(X(LS),X(LQ),X(LEA),X(LSCR),X(LIWRK),
+     *                  N0,N1,N1,DBG)
+         END IF
+         CALL DAWRIT(IDAF,IODA,X(LQ),N3,443,0)
+         CALL DAREAD(IDAF,IODA,X(LS),N2,441,0)
+      ELSE
+         CALL DAREAD(IDAF,IODA,X(LQ),N2,443,0)
+      END IF
+C
+C     --- GET NUCLEAR MO'S AND DENSITY ---
+C
+      CALL DAREAD(IDAF,IODA,X(LVA),N3,444,0)
+      CALL DMTX(X(LDA),X(LVA),X(LAOC),NNA,N1,N1)
+C
+C     --- DIRECT SCF EL-NUC INTERACTN TERM OF NUCLEAR FOCK MATRIX ---
+C
+      IF(DIRNUC) THEN
+         NUFOCK = .TRUE.
+         CALL VCLR(X(LELNU),1,N2)
+C
+         CALL TWOENI(SCFTYP,DIRNUC,.FALSE.,INTTYP,SCHWRZ,NINT,NSCHWZ,
+     *         N1,N2,DUMMY,DUMMY,IDUMMY,1,X(LXINTS),
+     *         NSH2,X(LGHOND),MAXG,X(LDDIJ),IA,EDN,X(LELNU),
+     *         X(LDSH),NTSHEL,.TRUE.,.FALSE.,.TRUE.)
+C
+      ELSE
+C        --- DISK BASED EL-NUC INTERACTN TERM OF NUCLEAR FOCK MATRIX ---
+C
+         TDSKWRK = DSKWRK
+         DSKWRK  = .TRUE.
+         ISAV = IS
+         IS = 67
+         CALL SEQREW(IS)
+         CALL NEHAM(TOTEDN,X(LELNU),X(LXP),X(LIXPK),NINTMX,IA,
+     *              N1,.TRUE.)
+         IS = ISAV
+      END IF
+C
+C     --- SYMMETRIZE THE SKELETON FOCK MATRICES ---
+C     TRIANGULAR SCRATCH AREA AT -LWRK1-
+C
+      ISTART = NSHELL + 1
+      NUMSAV = NUM
+      NUM = N1
+      NSHSAV = NSHELL
+      NSHELL = NTSHEL
+      CALL NEO_SYMH(X(LELNU),X(LWRK1),IA,ISTART)
+      NUM = NUMSAV
+      NSHELL = NSHSAV
+C
+C     --- FOR ALL DIRECT AND FDIFF NEED PREVIOUS -X(LELNU)- ---
+C
+      IF(DIRNUC .AND. FDIFF .AND. DIRSCF) THEN
+         IF(ITER .GT. 1) THEN
+            CALL DAREAD(IDAF,IODA,X(LWRK1),N2,448,0)
+            CALL VADD(X(LWRK1),1,X(LELNU),1,X(LELNU),1,N2)
+         END IF
+         CALL DAWRIT(IDAF,IODA,X(LELNU),N2,448,0)
+      END IF
+      IF(DIRNUC  .AND.  FDIFF) THEN
+         CALL VCLR(X(LNNSV),1,N2)
+         CALL VCLR(X(LDWRK),1,N2)
+      END IF
+C
+      IF(DBG) THEN
+         WRITE(IW,*) 'SYMMETRIZED EL-NU FOCK MATRIX'
+         CALL PRTRI(X(LELNU),N1)
+      END IF
+C
+C         -----------------------------
+C     --- START NUCLEAR ROHF ITERATIONS ---
+C         -----------------------------
+C
+      DO 500 ITER_NU=1,MAXIT_NU
+C
+C        --- NEO DIRECT SCF ---
+C
+         IF(DIRNUC) THEN
+            IF(FDIFF) THEN
+               CALL VSUB(X(LDWRK),1,X(LDA),1,X(LDWRK),1,N2)
+            ELSE
+               CALL DCOPY(N2,X(LDA),1,X(LDWRK),1)
+            END IF
+            CALL VCLR(X(LNUNU),1,N2)
+            CALL TWOENI(SCFTYP,DIRNUC,.FALSE.,INTTYP,SCHWRZ,NINT,
+     *            NSCHWZ,N1,N2,DUMMY,DUMMY,IDUMMY,1,X(LXINTS),NSH2,
+     *            X(LGHOND),MAXG,X(LDDIJ),IA,X(LDWRK),X(LNUNU),
+     *            X(LDSH),NTSHEL,.FALSE.,.TRUE.,.FALSE.)
+C
+C     --- DIRSCF OFF DIAGONAL ELEMENTS ARE DOUBLE THE CORRECT VALUE ---
+C
+            CALL DSCAL(N2,HALF,X(LNUNU),1)
+            II=LNUNU-1
+            DO 210 I=1,N1
+               II = II+I
+               X(II) = X(II) + X(II)
+  210       CONTINUE
+C
+         ELSE
+C           --- DISK BASED 2-PARTICLE NUCLEAR FOCK MATRIX TERMS ---
+C
+            ISAV = IS
+            IS = 68
+            CALL SEQREW(IS)
+            CALL NUCHU(X(LDA),X(LNUNU),X(LXP),X(LIXPK),NINTMX,IA,N1)
+            IS = ISAV
+            DSKWRK  = TDSKWRK
+         END IF
+C
+         IF(DBG) THEN
+            WRITE(IW,*) 'START OF DEBUG OUTPUT FOR ITERATION',ITER_NU
+            WRITE(IW,*) 'ALPHA NU-NU FOCK MATRIX'
+            CALL PRTRIL(X(LNUNU),N1)
+         END IF
+C
+C        --- SYMMETRIZE THE SKELETON FOCK MATRICES ---
+C        TRIANGULAR SCRATCH AREA AT -LWRK1-
+C
+         ISTART = NSHELL + 1
+         NUMSAV = NUM
+         NUM = N1
+         NSHSAV = NSHELL
+         NSHELL = NTSHEL
+         CALL NEO_SYMH(X(LNUNU),X(LWRK1),IA,ISTART)
+         NSHELL = NSHSAV
+         NUM = NUMSAV
+C
+         IF(DBG) THEN
+            WRITE(IW,*) 'ALPHA SYMMETRIZED NU-NU FOCK MATRIX'
+            CALL PRTRI(X(LNUNU),N1)
+         END IF
+C
+C        --- COMPLETE THE NUCLEAR FOCK MATRIX ---
+C
+         IF(DIRNUC  .AND.  FDIFF) THEN
+            CALL VADD(X(LNUNU),1,X(LNNSV),1,X(LNUNU),1,N2)
+            CALL DCOPY(N2,X(LNUNU),1,X(LNNSV),1)
+         END IF
+         CALL VADD(X(LNUNU),1,X(LELNU),1,X(LFA),1,N2)
+         CALL VADD(X(LFA),1,X(LH1),1,X(LFA),1,N2)
+C
+         IF(DBG) THEN
+            WRITE(IW,*) 'ALPHA TOTAL FOCK MATRIX'
+            CALL PRTRI(X(LFA),N1)
+         END IF
+C
+C        --- CALCULATE ENERGY ---
+C
+         EHFA = TRACEP(X(LDA),X(LH1),N1) + TRACEP(X(LDA),X(LFA),N1)
+     *        + TRACEP(X(LDA),X(LELNU),N1)
+         EHF_NU = EHFA/TWO
+         EHF_NU = EHF_NU + EHFEL
+C
+         ETOT0_NU = ETOT_NU
+         ETOT_NU  = EHF_NU
+         DELE_NU  = ETOT_NU - ETOT0_NU
+C
+C        --- PERFORM DIIS INTERPOLATION ---
+C
+C         THE TOTAL DIIS ERROR MATRIX IS FORMED AT -LWRK3-
+C         ERR = F*D*S-S*D*F
+C         -LWRK1,LWRK2,LWRK3- ARE USED AS SQUARE STORAGE.
+C
+         IF(DIISNU) THEN
+            CALL EXPND(X(LFA),X(LWRK1),N1,0)
+            CALL EXPND(X(LS),X(LWRK2),N1,0)
+            CALL DIISER(X(LWRK1),X(LDA),X(LWRK2),X(LWRK3),X(LSCR),
+     *                  N1,N2,1,1)
+C
+            CALL DIIS_NU(IW,ITDIIS,X(LQ),X(LFA),X(LWRK3),
+     *                X(LWRK1),X(LADIIS),X(LXDIIS),X(LPDIIS),X(LBDIIS),
+     *                X(LIODII),X(LSCR),N1,N2,N3,MAXIT_NU,MAXIT2,
+     *                3*MAXDII,ERDIIS,NOTOPN,ICNT)
+         END IF
+C
+C        --- TRANSFORM ALPHA FOCK MATRIX TO -Q- ORTHONORMAL BASIS ---
+C        --- DIAGONALIZE ALPHA FOCK MATRIX ---
+C        --- BACK-TRANSFORM TO AO BASIS ---
+C
+         CALL TFTRI(X(LWRK1),X(LFA),X(LQ),X(LSCR),N0,N1,N1)
+C
+         IF(SYMNUC) THEN
+          CALL NUSYMDIA(X(LWRK1),X(LVA),X(LEA),X(LSCR),X(LIWRK),
+     *                 N0,N2,N1)
+         ELSE
+           CALL GLDIAG(N1,N1,N1,X(LWRK1),X(LSCR),X(LEA),X(LVA),
+     *                 IERR,X(LIWRK))
+         END IF
+C
+         CALL TFSQB(X(LVA),X(LQ),X(LSCR),N0,N1,N1)
+C
+         IF(DBG) THEN
+            WRITE(IW,*) 'NEW ALPHA NUCLEAR ORBITALS'
+            CALL PREVNU(X(LVA),X(LEA),N0,N1,NUM+1,NUM+NUMNB)
+         END IF
+C
+C        --- FORM NEW ALPHA NUCLEAR DENSITY MATRIX ---
+C        FORMER DENSITY MATRICES ARE COPIED TO -LWRK1- AND -LWRK2-
+C
+         CALL DCOPY(N2,X(LDA),1,X(LDWRK),1)
+         CALL DMTX(X(LDA),X(LVA),X(LAOC),NNA,N1,N1)
+         CALL DDIFF(X(LDWRK),X(LDA),N2,DIFFA)
+C
+         DIFF_NU  = DIFFA
+C
+         IF(DBG) THEN
+            WRITE(IW,*) 'NEW ALPHA DENSITY MATRIX'
+            CALL PRTRI(X(LDA),N1)
+         END IF
+C
+C        --- PRINT THIS ITERATION'S RESULTS ---
+C
+         ICAB=1
+         IF(DBG) THEN
+            IF(DIRSCF) THEN
+               WRITE(IW,9075) ITER_NU,ICAB,ETOT_NU,
+     *                     DELE_NU,DIFF_NU,ERDIIS,NINT,NSCHWZ
+            ELSE
+               WRITE(IW,9075) ITER_NU,ICAB,ETOT_NU,DELE_NU,
+     *                        DIFF_NU,ERDIIS
+            END IF
+         END IF
+C
+C        --- REDUCE NUMBER OF NUCLEAR ITERATIONS EARLY ON ---
+C
+         IF(ICNT.EQ.1 .AND. ITER_NU.EQ.2) GOTO 600
+         IF(ICNT.LE.2 .AND. ITER_NU.EQ.10) GOTO 600
+C
+C        --- CHECK CONVERGENCE BEHAVIOR ---
+C
+         CVDENS = (DIFF_NU.LT.DENTOL/FIVE)
+         CVENGY = ABS(DELE_NU).LT.ETOL  .AND.  DIFF_NU.LT.DTOL2
+         CVGED  = CVGING  .AND.  (CVDENS.AND.CVENGY)
+         CVGING = CVDENS.OR.CVENGY
+C
+         IF(CVGED .AND. CVDENS) THEN
+             IF(DBG) WRITE(IW,9080)
+            GO TO 600
+         END IF
+         IF(CVGED .AND. CVENGY) THEN
+             IF(DBG) WRITE(IW,9090)
+            GO TO 600
+         END IF
+C
+  500 CONTINUE
+C
+C         ------------------------------
+C     --- END OF NUCLEAR ROHF ITERATIONS ---
+C         ------------------------------
+C
+      IF(MASWRK) WRITE(IW,9130)
+      ITER_NU = MAXIT_NU
+C
+  600 CONTINUE
+C
+C     --- WRITE FINAL ITERATION ---
+C
+      ITNUCT=ITNUCT+ITER_NU
+      ITER_NU=ITNUCT
+      IF(MASWRK) THEN
+         IF(DIRNUC) THEN
+            WRITE(IW,9075) ITER_NU,ICAB,ETOT_NU,
+     *                  DELE_NU,DIFF_NU,ERDIIS,NINT,NSCHWZ
+         ELSE
+            WRITE(IW,9075) ITER_NU,ICAB,ETOT_NU,DELE_NU,DIFF_NU,
+     *                     ERDIIS
+         END IF
+         CALL FLSHBF(IW)
+      END IF
+C
+      DNUCGS =.FALSE.
+C
+C     --- IF NEEDED GET NUCLEAR DENSITY FROM PREVIOUS ELEC SCF ITER ---
+C
+      IF(DIRNUC .AND. FDIFF) THEN
+         IF(ITER .EQ. 1) THEN
+            CALL VCLR(X(LDWRK),1,N2)
+         ELSE
+            CALL DAREAD(IDAF,IODA,X(LDWRK),N2,445,0)
+         END IF
+      END IF
+C
+C     --- CONSTRUCT ELECTRON-QM NUCLEAR TERM TO BE ADDED TO ---
+C         ELECTRONIC FOCK MATRIX
+C
+      IF(DIRNUC) THEN
+C
+C        --- DIRECT ---
+C
+         NUFOCK = .FALSE.
+         IF(FDIFF) THEN
+            CALL VSUB(X(LDWRK),1,X(LDA),1,X(LDWRK),1,N2)
+         ELSE
+            CALL DCOPY(N2,X(LDA),1,X(LDWRK),1)
+         END IF
+         CALL VCLR(X(LADD),1,L2)
+         CALL TWOENI(SCFTYP,DIRNUC,.FALSE.,INTTYP,SCHWRZ,NINT,
+     *         NSCHWZ,L1,L2,DUMMY,DUMMY,IDUMMY,1,X(LXINTS),
+     *         NSH2,X(LGHOND),MAXG,X(LDDIJ),IA,X(LDWRK),X(LADD),
+     *         X(LDSH),NTSHEL,.TRUE.,.FALSE.,.TRUE.)
+      ELSE
+C        --- DISK BASED ---
+C
+         TDSKWRK = DSKWRK
+         DSKWRK  = .TRUE.
+         ISAV = IS
+         IS = 67
+         CALL SEQREW(IS)
+C
+         CALL NEHAM(X(LDA),X(LADD),X(LXP),X(LIXPK),NINTMX,IA,
+     *              L1,.FALSE.)
+         IS = ISAV
+         DSKWRK  = TDSKWRK
+      END IF
+C
+C     --- SYMMETRIZE THE SKELETON FOCK MATRICES ---
+C     TRIANGULAR SCRATCH AREA AT -LWRK1-
+C
+      CALL NEO_SYMH(X(LADD),X(LWRK1),IA,1)
+C
+      IF(DBG) THEN
+         WRITE(IW,*) 'SYMMETRIZED EL-NU TERM OF ELEC FOCK MATRIX'
+         CALL PRTRI(X(LNUNU),N1)
+      END IF
+C
+      IF(DIRNUC .AND. FDIFF) THEN
+         IF(ITER .GT. 1) THEN
+            CALL DCOPY(L2,X(LADD),1,X(LWRK1),1)
+            CALL DAREAD(IDAF,IODA,X(LWRK2),L2,449,0)
+            CALL VADD(X(LWRK2),1,X(LADD),1,X(LADD),1,L2)
+            CALL DAWRIT(IDAF,IODA,X(LADD),L2,449,0)
+         ELSE
+            CALL DAWRIT(IDAF,IODA,X(LADD),L2,449,0)
+            CALL DCOPY(L2,X(LADD),1,X(LWRK1),1)
+         END IF
+      END IF
+C
+      IF(DIRSCF .AND. FDIFF .AND. (.NOT.DIRNUC)) THEN
+         IF(ITER .GT. 1) THEN
+            CALL DAREAD(IDAF,IODA,X(LWRK1),L2,449,0)
+            CALL DAWRIT(IDAF,IODA,X(LADD),L2,449,0)
+            CALL VSUB(X(LWRK1),1,X(LADD),1,X(LWRK1),1,L2)
+         ELSE
+            CALL DAWRIT(IDAF,IODA,X(LADD),L2,449,0)
+            CALL DCOPY(L2,X(LADD),1,X(LWRK1),1)
+         END IF
+       END IF
+C
+C     --- ADD ELECTRON-NUCLEAR TERM TO 1-E HAM ---
+C
+      CALL VADD(H1E,1,X(LADD),1,H1E,1,L2)
+      IF(DIRSCF .AND. FDIFF) THEN
+         CALL VADD(FAE,1,X(LWRK1),1,FAE,1,L2)
+         IF(SCFTYP .EQ. ROHF) THEN
+            CALL VADD(FBE,1,X(LWRK1),1,FBE,1,L2)
+         END IF
+      END IF
+C
+C     --- CLASSICAL-QUANTUM NUCLEI ENERGY ---
+C
+      ENUNU = TRACEP(X(LDA),X(LNUNU),N1)/TWO
+C
+      CALL VADD(X(LNUNU),1,X(LH1),1,X(LNUNU),1,N2)
+      ENUCA = TRACEP(X(LDA),X(LH1),N1) + TRACEP(X(LDA),X(LNUNU),N1)
+      ENUC  = ENUCA/TWO
+      ADDE = ENUC
+C
+C     --- PRINT FINAL RESULTS ---
+C
+      IF(DBG) THEN
+         WRITE(IW,9140) ETOT_NU,ITER_NU
+         WRITE(IW,*)'ENUC=',ENUC
+         CALL PREVNU(X(LVA),X(LEA),N0,N1,NUM+1,NUM+NUMNB)
+      END IF
+C
+      EELNU = TRACEP(X(LDA),X(LELNU),N1)
+C
+C     --- WRITE ORBITALS AND DENSITY TO DAF ---
+C
+      CALL DAWRIT(IDAF,IODA,X(LVA),N3,444,0)
+      CALL DAWRIT(IDAF,IODA,X(LDA),N2,445,0)
+      CALL DAWRIT(IDAF,IODA,X(LFA),N2,446,0)
+      CALL DAWRIT(IDAF,IODA,X(LEA),N1,447,0)
+C
+C     --- MAY NEED TO CLOSE NUC DIIS FILE ---
+C
+      IF(.NOT.NOTOPN) CALL RACLOS(30,'DELETE')
+      NOTOPN=.TRUE.
+C
+      CALL RETFM(NEED)
+C
+      RETURN
+C
+ 9075 FORMAT(/1X,2I3,1(' NU   '),2F17.10,2F14.9,I15,1X,I10)
+ 9080 FORMAT(/10X,17(1H-)/10X,17HDENSITY CONVERGED/10X,17(1H-))
+ 9090 FORMAT(/10X,16(1H-)/10X,16HENERGY CONVERGED/10X,16(1H-))
+ 9130 FORMAT(/1X,'SCF IS UNCONVERGED, TOO MANY ITERATIONS')
+ 9140 FORMAT(/1X,'FINAL ENERGY IS',F20.10,' AFTER',I4,' ITERATIONS')
+      END
+C
+C*MODULE NEOHF   *DECK NUCHU
+      SUBROUTINE NUCHU(DA,FA,XX,IX,NINTMX,IA,NUM)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /ORDOPT/ NORDER(7)
+      COMMON /PCKLAB/ LABSIZ
+C
+      DIMENSION DA(*),FA(*),IA(*)
+      DIMENSION XX(NINTMX),IX(NINTMX)
+C
+      PARAMETER (HALF=0.5D+00)
+C
+C     --- FORM A SKELETON FOCK MATRIX FOR UHF ---
+C
+      NUMSCF = NUM
+      NUMTRI = (NUMSCF*NUMSCF+NUMSCF)/2
+      CALL VCLR(FA,1,NUMTRI)
+C
+      I = 0
+      J = 0
+      K = 0
+      L = 0
+      NXX = 0
+C
+C     --- INTEGRALS ARE NOT IN SUPERMATRIX FORM (NOPK=.TRUE.)
+C
+  120 CONTINUE
+      CALL PREAD(IS,XX,IX,NXX,NINTMX)
+      IF(NXX.EQ.0) GO TO 220
+      NINT = IABS(NXX)
+      IF(NINT.GT.NINTMX) CALL ABRT
+      DO 200 M = 1,NINT
+                       NPACK = M
+                       IF (LABSIZ .EQ. 2) THEN
+*I32                     LABEL = IX( 2*NPACK - 1 )
+*I32                     IPACK = ISHFT( LABEL, -16 )
+*I32                     JPACK = IAND(  LABEL, 65535 )
+*I32                     LABEL = IX( 2*NPACK     )
+*I32                     KPACK = ISHFT( LABEL, -16 )
+*I32                     LPACK = IAND(  LABEL, 65535 )
+*I64                     LABEL = IX(NPACK)
+*I64                     IPACK = ISHFT( LABEL, -48 )
+*I64                     JPACK = IAND( ISHFT( LABEL, -32 ), 65535 )
+*I64                     KPACK = IAND( ISHFT( LABEL, -16 ), 65535 )
+*I64                     LPACK = IAND( LABEL, 65535 )
+                       ELSE IF (LABSIZ .EQ. 1) THEN
+*I32                     LABEL = IX(NPACK)
+*I32                     IPACK = ISHFT( LABEL, -24 )
+*I32                     JPACK = IAND( ISHFT( LABEL, -16 ), 255 )
+*I32                     KPACK = IAND( ISHFT( LABEL,  -8 ), 255 )
+*I32                     LPACK = IAND( LABEL, 255 )
+*I64                     IF ( MOD(NPACK,2) .EQ. 0 ) THEN
+*I64                       LABEL = IX( NPACK/2 )
+*I64                       IPACK = IAND( ISHFT( LABEL, -24 ), 255 )
+*I64                       JPACK = IAND( ISHFT( LABEL, -16 ), 255 )
+*I64                       KPACK = IAND( ISHFT( LABEL,  -8 ), 255 )
+*I64                       LPACK = IAND( LABEL, 255 )
+*I64                     ELSE
+*I64                       LABEL = IX( (NPACK/2)+1 )
+*I64                       IPACK = ISHFT( LABEL, -56 )
+*I64                       JPACK = IAND( ISHFT( LABEL, -48 ), 255 )
+*I64                       KPACK = IAND( ISHFT( LABEL, -40 ), 255 )
+*I64                       LPACK = IAND( ISHFT( LABEL, -32 ), 255 )
+*I64                     END IF
+                       END IF
+                       I = IPACK
+                       J = JPACK
+                       K = KPACK
+                       L = LPACK
+C
+      VAL = XX(M)
+      NIJ = IA(I)+J
+      NKL = IA(K)+L
+C
+C           USING SQUARE CANONICAL INTEGRAL FILE
+C
+      IF(NORDER(7).EQ.1) THEN
+         IF(NKL.GT.NIJ) GO TO 200
+            IF  (I.EQ.J)   VAL=VAL*HALF
+            IF  (K.EQ.L)   VAL=VAL*HALF
+            IF(NIJ.EQ.NKL) VAL=VAL*HALF
+      END IF
+C
+      NIK = IA(I)+K
+      NIL = IA(I)+L
+      IF(J.LT.K) GO TO 140
+      NJK = IA(J)+K
+      NJL = IA(J)+L
+      GO TO 180
+C
+  140 NJK = IA(K)+J
+      IF(J.LT.L) GO TO 160
+      NJL = IA(J)+L
+      GO TO 180
+C
+  160 NJL = IA(L)+J
+  180 CONTINUE
+C
+      VAL2 = VAL+VAL
+      VAL4 = VAL2+VAL2
+C
+      DUM = VAL4*DA(NKL)
+      FA(NIJ) = FA(NIJ)+DUM
+C
+      DUM = VAL4*DA(NIJ)
+      FA(NKL) = FA(NKL)+DUM
+C
+      FA(NIK) = FA(NIK)-VAL2*DA(NJL)
+      FA(NIL) = FA(NIL)-VAL2*DA(NJK)
+      FA(NJK) = FA(NJK)-VAL2*DA(NIL)
+      FA(NJL) = FA(NJL)-VAL2*DA(NIK)
+  200 CONTINUE
+      IF(NXX .GT. 0) GO TO 120
+C
+C     DONE FORMING FOCK MATRIX, HALVE THE OFF DIAGONAL ELEMENTS
+C
+  220 CONTINUE
+      L2 = (NUM*NUM+NUM)/2
+      CALL DSCAL(L2,HALF,FA,1)
+      II = 0
+      DO 250 I=1,NUM
+         II = II + I
+         FA(II) = FA(II)+FA(II)
+  250 CONTINUE
+      CALL SEQREW(IS)
+C
+      RETURN
+      END
+C
+C*MODULE NEOHF   *DECK DIIS_NU
+      SUBROUTINE DIIS_NU(IW,ITDIIS,Q,FCKA,ERR,WRK,
+     *                A,X,IPVT,B,IODIIS,SCR,L1,L2,L3,MAXIT,MAXIT2,
+     *                MAXIO,ERDIIS,NOTOPN,ICNT)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL NOTOPN,DBG,GOPARR,DSKWRK,MASWRK,GPSAVE
+C
+      COMMON /DIISSO/ SOGTOL,ETHRSH,MAXDII,IRAF
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+C
+      DIMENSION Q(L3),FCKA(L2),ERR(L3),WRK(L3),IODIIS(MAXIO),
+     *          A(MAXIT,MAXIT),X(MAXIT),IPVT(MAXIT),B(MAXIT2),SCR(L1)
+C
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00)
+C
+      DATA DBUG,DBUGME/8HDEBUG   ,8HDIIS    /
+C
+C                 THIS ROUTINE PERFORMS THE
+C        *** DIRECT INVERSION IN THE ITERATIVE SUBSPACE ***
+C        INTERPOLATION USING THE CURRENT AND PREVIOUS FOCK
+C        MATRICES TO SPEED UP THE CONVERGENCE OF THE SCF.
+C
+C        THE METHOD IS P.PULAY, J.COMPUT.CHEM., 3, 556-560 (1982).
+C        BUT SEE ALSO P.PULAY, CHEM.PHYS.LETT., 73, 393-398 (1980),
+C        T.P.HAMILTON, P.PULAY, J.CHEM.PHYS., 84, 5728-5734 (1986).
+C
+C        WRITTEN BY BRENDA LAM IN APRIL 1986 AT U. HOUSTON
+C        SIMPLIFIED BY MWS IN SEPTEMBER 1991 AT NDSU.
+C
+C     ON ENTRY, -FCKA- AND -ERR- ARE THE CURRENT FOCK
+C               AND ERROR MATRICES, EXPRESSED IN THE AO BASIS.
+C     ON EXIT, -ERR- IS DESTROYED, -FCKA- WILL CONTAIN
+C               THE INTERPOLATED FOCK MATRIX (IF ITDIIS.GT.2)
+C
+C     ITDIIS.EQ.1 MEANS DIIS IS NOT YET TURNED ON
+C     ITDIIS.EQ.2 MEANS DIIS HAS BEEN INITIATED
+C     ITDIIS.GT.2 MEANS A DIIS INTERPOLATION OF ITDIIS-1
+C                 FOCK MATRICES HAS BEEN PERFORMED.
+C
+      DBG = (NPRINT.EQ.5  .OR.  EXETYP.EQ.DBUG  .OR.  EXETYP.EQ.DBUGME)
+     *      .AND. MASWRK
+C
+C     DIIS DATA IS SAVED ON DIRECT FILE -IRAF- IN CYCLIC ORDER,
+C                 1,2,3,...,MAXDII = LAST MAXDII ERROR MATRICES
+C        MAXDII + 1,2,3,...,MAXDII = LAST MAXDII ALPHA FOCK MATRICES
+C      2*MAXDII + 1,2,3,...,MAXDII = LAST MAXDII BETA  FOCK MATRICES
+C
+      LRAFE = 0
+      LRAFFA= MAXDII
+CSPW  LRAFFB= MAXDII*2
+      IRAF_NU = 30
+C
+C     ----- IF WE ARE ON THE LAST SCF CYCLE, SHUT DIIS DOWN -----
+C
+      IF(ITDIIS.GE.MAXIT) THEN
+         IF(.NOT.NOTOPN) CALL RACLOS(IRAF_NU,'DELETE')
+         NOTOPN = .TRUE.
+         RETURN
+      END IF
+C
+      IF(NOTOPN) THEN
+         NOTOPN = .FALSE.
+         IRAF_NU   = 30
+         NDAF20 = MAXIO
+         LEN20  = L3
+         CALL RAOPEN(IRAF_NU,IODIIS,0,NDAF20,LEN20,-5)
+      END IF
+C
+C     ----- SAVE THE CURRENT FOCK MATRIX -----
+C
+      LFCKA = LRAFFA + MOD(ITDIIS-1,MAXDII) + 1
+      CALL RAWRIT(IRAF_NU,IODIIS,FCKA,L2,LFCKA,0)
+C
+C     ----- PUT ERROR MATRIX INTO CONSISTENT O.N.B. -----
+C     PULAY USES S**-1/2, BUT HERE WE USE Q, Q OBEYS Q-DAGGER*S*Q=I
+C     E-ORTH = Q-DAGGER * E * Q, FCKA IS USED AS A SCRATCH -L1- VECTOR
+C
+      CALL DCOPY(L3,ERR,1,WRK,1)
+      CALL TFSQU(ERR,WRK,Q,SCR,L1,L1)
+      IF(DBG) THEN
+         WRITE(IW,*) 'ERROR MATRIX IN O.N.B.'
+         CALL PRSQ(ERR,L1,L1,L1)
+      END IF
+C
+C     ----- SAVE THE CURRENT ERROR MATRIX -----
+C
+      LERR = LRAFE + MOD(ITDIIS-1,MAXDII) + 1
+      CALL RAWRIT(IRAF_NU,IODIIS,ERR,L3,LERR,0)
+C
+C     ----- START DIIS PROCEDURE IF ERDIIS < ETHRSH -----
+C
+      IMAX   = IDAMAX(L3,ERR,1)
+      ERDIIS = ABS(ERR(IMAX))
+      IF(ERDIIS.GT.ETHRSH  .AND.  ITDIIS.EQ.1) RETURN
+      ITDIIS = ITDIIS+1
+C
+C        WHEN RUNNING IN PARALLEL, THE O(N**2) COMMUNICATIONS
+C        COSTS IN -RAREAD- BELOW ARE THE SAME MAGNITUDE AS
+C        THE COMPUTATION IN -TRAREC- AND -DAXPY-.
+C        IT SEEMS WISEST JUST TO LET THE MASTER DO THIS I/O,
+C        THEN BROADCAST THE INTERPOLATION RESULTS AT THE END.
+C
+      GPSAVE = GOPARR
+      GOPARR = .FALSE.
+C
+C         FORM LAST ROW (ROW ITDIIS) OF TRIANGULAR MATRIX B,
+C         FIRST DOING THE DIAGONAL AND THE FIRST ELEMENT OF THE ROW.
+C
+      BJJ=TRAREC(ERR,ERR,L1,L1)
+C
+      IF(ITDIIS.EQ.2) THEN
+         IF (ICNT .EQ. 1 .AND. MASWRK) WRITE(IW,900)
+         CALL VCLR(B,1,MAXIT2)
+         B(1)=ZERO
+         B(2)=-ONE
+         B(3)=BJJ
+         GOPARR = GPSAVE
+         RETURN
+      ELSE
+         J1   = (ITDIIS*ITDIIS-ITDIIS)/2 + 1
+         JJ   = (ITDIIS*ITDIIS+ITDIIS)/2
+         B(J1)= -ONE
+         B(JJ)= BJJ
+      END IF
+C
+C        THE REST OF THE BIJ'S.
+C        NOTE THAT WE ONLY COMPUTE THE NA-2 VALUES NEXT TO THE
+C        DIAGONAL, SO THAT THE OTHER ELEMENTS (EXCEPT THE FIRST
+C        COLUMN) ARE RANDOM VALUES.
+C
+      NA=MIN(ITDIIS,MAXDII)
+      NAM1=NA-1
+      IJ=JJ-NA+1
+      DO 120 IX=2,NAM1
+         LERR = LRAFE + MOD(ITDIIS-NA+IX-2,MAXDII) + 1
+         CALL RAREAD(IRAF_NU,IODIIS,WRK,L3,LERR,0)
+         BIJ=TRAREC(ERR,WRK,L1,L1)
+         IJ=IJ+1
+         B(IJ)=BIJ
+  120 CONTINUE
+C
+      IF(DBG) THEN
+         WRITE(IW,*) 'DIIS EQUATIONS'
+         CALL PRTRI(B,ITDIIS)
+      END IF
+C
+C     ----- SET UP AND SOLVE THE SET OF DIIS LINEAR EQUATIONS -----
+C
+      CALL DIISEQ(A,NA,B,JJ,ITDIIS)
+      CALL VCLR(X,1,NA)
+      X(1)=-ONE
+      IERR=0
+      CALL SLVLEQ(A,X,IPVT,NA,NA,0,IERR)
+      IF(IERR.NE.0) THEN
+         IF (MASWRK) WRITE(IW,*) 'DIIS EQUATIONS ARE SINGULAR, BOMBING'
+         CALL ABRT
+         STOP
+      END IF
+      IF(DBG) THEN
+         WRITE(IW,*) 'DIIS INTERPOLATION COEFFICIENTS'
+         WRITE(IW,910) (X(I),I=1,NA)
+      END IF
+C
+C     ----- FORM THE INTERPOLATED ALPHA FOCK MATRIX -----
+C     THE INTERPOLATION IS SUMMATION C(I)*F(I)
+C
+      CALL VCLR(FCKA,1,L2)
+      DO 220 IX=2,NA
+         LFCKA = LRAFFA + MOD(ITDIIS-NA+IX-2,MAXDII) + 1
+         CALL RAREAD(IRAF_NU,IODIIS,WRK,L2,LFCKA,0)
+         CI = X(IX)
+         CALL DAXPY(L2,CI,WRK,1,FCKA,1)
+  220 CONTINUE
+      IF(DBG) THEN
+         WRITE(IW,*) 'DIIS INTERPOLATED ALPHA FOCK MATRIX IS'
+         CALL PRTRI(FCKA,L1)
+      END IF
+C
+      GOPARR=GPSAVE
+      IF(GOPARR) THEN
+         CALL DDI_BCAST(1005,'F',FCKA,L2,MASTER)
+      END IF
+      RETURN
+C
+  900 FORMAT(10X,'* * *   INITIATING DIIS FOR NUCLEAR MOS   * * *')
+  910 FORMAT(1X,5F13.8)
+      END
+C
+C*MODULE NEOHF   *DECK NWFGSX
+      SUBROUTINE NWFGSX
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      LOGICAL PACK2E,DBG,GOPARR,DSKWRK,MASWRK
+C
+      LOGICAL DIRNUC,NUFOCK
+      LOGICAL SYMNUC
+C
+      PARAMETER (MXSH=5000, MXGTOT=20000, MXGSH=30, MXG2=MXGSH*MXGSH,
+     *           MXATM=2000)
+      PARAMETER (MXAO=8192, MXNEO=20)
+C
+      COMMON /FMCOM / X(1)
+      COMMON /IJPAIR/ IA(MXAO)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /INTFIL/ NINTMX,NHEX,NTUPL,PACK2E,INTTYP,IGRDTYP
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /NEOSHL/ NGAUSS,NGAUSE,NGAUSN,NTSHEL,NNUCSH
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /NUCMOI/ NUNIQN,IUNIQN(MXNEO),IUNIQT(MXNEO),NQMNUC,
+     *                IQMNUC(MXNEO),IQNTYP(MXNEO),NUMNB,NUCST,NAUXNB,
+     *                IAUXNB(MXNEO),NUMULT,NNA,NNB,NTAUXB
+      COMMON /NUCMOP/ DIRNUC,NUFOCK
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+      COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
+     *                MPLEVL,MPCTYP
+C
+      COMMON /SYMNEO/ QMTOLN,SYMNUC
+C
+      DATA ROHF/8HROHF    /, UHF/8HUHF     /
+      DATA DEBUG/8HDEBUG   /
+C
+C     --- MEMORY DRIVER FOR HIGH SPIN NUCLEAR MO GUESS ---
+C
+      DBG    = NPRINT .EQ. 5 .AND. MASWRK
+      IF(EXETYP.EQ.DEBUG) THEN
+         DBG    = .TRUE. .AND. MASWRK
+      END IF
+C
+C     --- INITIALIZE SOME VARIABLES ---
+C
+      L1 = NUM
+      L2 = (L1*L1+L1)/2
+C
+      N1 = NUMNB
+      N0 = N1
+      N2 = (N1*N1+N1)/2
+      N3 = N1*N1
+C
+      NSH2 = MAX(NSHELL*NNUCSH,(NNUCSH*NNUCSH+NNUCSH)/2)
+C
+      NSHLSV = NSHELL
+      NSHELL = NTSHEL
+      CALL BASCHK(LMAX)
+      NSHELL = NSHLSV
+                    NANGM =  4
+      IF(LMAX.EQ.2) NANGM =  6
+      IF(LMAX.EQ.3) NANGM = 10
+      IF(LMAX.EQ.4) NANGM = 15
+      MAXG = NANGM**4
+C
+C     ----- GET MEMORY -----
+C
+      IFPK  = 1
+      IF(NOPK.EQ.1) IFPK=0
+C
+      CALL VALFM(LOADFM)
+      LSCR  = LOADFM + 1
+      LIWRK = LSCR   + 8*N1
+      LWRK1 = LIWRK  + N1
+      LELNU = LWRK1  + MAX(L2,N3)
+      LVA   = LELNU  + N2
+      LDA   = LVA    + N3
+      LFA   = LDA    + N2
+      LEA   = LFA    + N2
+      LAOC  = LEA    + N1
+      LH1   = LAOC   + N1
+      LQ    = LH1    + N2
+      LS    = LQ     + N3
+      LELD  = LS     + N2
+      LAST  = LELD   + L2
+C
+      IF(DIRNUC) THEN
+         LXINTS = LAST
+         LGHOND = LXINTS + NSH2
+         LDDIJ  = LGHOND + MAXG
+         LDSH   = LDDIJ  + 16*MXG2
+         LAST   = LDSH   + NSH2
+         LXP    = LAST
+         LXK    = LAST
+         LIXPK  = LAST
+      ELSE
+         LXP   = LAST
+         LXK   = LXP    + NINTMX
+         LIXPK = LXK    + NINTMX * IFPK
+         LAST  = LIXPK  + NINTMX
+         LXINTS= LAST
+         LGHOND= LAST
+         LDDIJ = LAST
+         LDSH  = LAST
+      END IF
+C
+      NEED  = LAST - LOADFM -1
+C
+C     --- GET MEMORY ---
+C
+      CALL GETFM(NEED)
+C
+C     --- READ CORE HAMILTONIAN FOR QM NUCLEI ---
+C     --- READ OVERLAP MATRIX FOR QM NUCLEI ---
+C     --- READ SYMMETRY ADDAPTED Q MATRIX ---
+C     N0 = NUMBER OF CANONICAL ORTHONORMAL VECTORS KEPT.
+C
+      CALL DAREAD(IDAF,IODA,X(LH1),N2,440,0)
+      CALL DAREAD(IDAF,IODA,X(LS),N2,441,0)
+C
+      IF(SYMNUC) THEN
+         CALL NUQSYM(X(LS),X(LWRK1),X(LQ),X(LEA),X(LSCR),X(LIWRK),
+     *               N0,N1,N2,N3,DBG)
+      ELSE
+         CALL QMATRX(X(LS),X(LQ),X(LEA),X(LSCR),X(LIWRK),N0,N1,N1,DBG)
+      END IF
+C
+      CALL DAWRIT(IDAF,IODA,X(LQ),N3,443,0)
+      CALL DAREAD(IDAF,IODA,X(LS),N2,441,0)
+C
+C     --- GET ELECTRON DENSITY ---
+C
+      CALL DAREAD(IDAF,IODA,X(LELD),L2,16,0)
+      IF(SCFTYP.EQ.ROHF .OR. SCFTYP.EQ.UHF) THEN
+         CALL DAREAD(IDAF,IODA,X(LWRK1),L2,20,0)
+         CALL VADD(X(LELD),1,X(LWRK1),1,X(LELD),1,L2)
+      END IF
+C
+C     --- GUESS INITIAL NUCLEAR MOS AND CALC CORRESPONDING DENS. ---
+C
+      CALL NWFGSS(X(LSCR),X(LIWRK),X(LWRK1),X(LELNU),X(LVA),
+     *            X(LDA),X(LFA),X(LEA),X(LAOC),X(LXP),
+     *            X(LIXPK),X(LXINTS),X(LGHOND),X(LDSH),
+     *            X(LDDIJ),X(LH1),X(LQ),X(LELD),
+     *            IA,L1,L2,N1,N2,N3,NNA,
+     *            NTSHEL,NQMNUC,SCFTYP,NINTMX,DBG,
+     *            INTTYP,MAXG,NSH2)
+C
+C     --- WRITE ORBITALS AND DENSITY TO DAF ---
+C
+      CALL DAWRIT(IDAF,IODA,X(LVA),N3,444,0)
+      CALL DAWRIT(IDAF,IODA,X(LDA),N2,445,0)
+      CALL DAWRIT(IDAF,IODA,X(LEA),N1,447,0)
+C
+      CALL RETFM(NEED)
+C
+      RETURN
+      END
+C
+C*MODULE NEOHF   *DECK NWFGSS
+      SUBROUTINE NWFGSS(SCR,IWRK,WRK1,ELNU,VA,DA,FA,EA,AOC,
+     *                  XP,IXPK,XINTS,GHOND,DSH,DDIJ,H1,Q,
+     *                  ELEDEN,IA,L1,L2,N1,N2,N3,NNA,NTSHEL,
+     *                  NQMNUC,SCFTYP,NINTMX,DBG,INTTYP,MAXG,
+     *                  NSH2)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      LOGICAL DBG,GOPARR,DSKWRK,MASWRK,TDSKWRK
+      LOGICAL SCHWRZ
+C
+      LOGICAL DIRNUC,NUFOCK
+      LOGICAL SYMNUC
+C
+      PARAMETER (MXSH=5000, MXGTOT=20000, MXATM=2000)
+      PARAMETER (MXAO=8192)
+C
+      DIMENSION SCR(8*N1),IWRK(N1),WRK1(*),ELNU(N2)
+      DIMENSION VA(N3),DA(N2),FA(N2),EA(N1),AOC(N1)
+      DIMENSION XP(*),IXPK(*),XINTS(*)
+      DIMENSION GHOND(*),DSH(*),DDIJ(*),H1(N2),Q(N2)
+      DIMENSION ELEDEN(L2),IA(*)
+C
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NEX,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /NUCMOP/ DIRNUC,NUFOCK
+      COMMON /SYMNEO/ QMTOLN,SYMNUC
+C
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00)
+      PARAMETER (HALF=5.0D-01)
+C
+C     --- INITIAL GUESS FOR HIGH-SPIN NUCLEAR MOS ---
+C
+      N0 = N1
+C
+      II = 0
+      ILIM = MAX(N1,L1)
+      DO 100 I = 1,ILIM
+         IA(I) = II
+         II = II + I
+  100 CONTINUE
+C
+C     --- OCCUPATION NUMBERS ---
+C
+      DO 120 I = 1,N1
+         AOC(I) = ZERO
+         IF(I.LE.NNA) AOC(I) = ONE
+  120 CONTINUE
+C
+C     --- SET UP INITIAL NUCLEAR DENSITY MATRICES ---
+C
+      IF(NQMNUC.GT.1) THEN
+         CALL VCLR(DA,1,N2)
+         NN = N1/NNA
+         DO I=1,N1,NN
+            J=I
+            IJ=IA(I)+J
+            DA(IJ) = ONE
+         END DO
+      END IF
+C
+      DO I = 1,MXAO
+         IA(I) = (I*I-I)/2
+      END DO
+C
+      SCHWRZ=.FALSE.
+C
+C     --- DIRECT SCF EL-NUC INTERACTION TERM ---
+C
+      IF(DIRNUC) THEN
+C
+         NUFOCK = .TRUE.
+         CALL VCLR(ELNU,1,N2)
+         CALL TWOENI(SCFTYP,DIRNUC,.FALSE.,INTTYP,SCHWRZ,NINT,NSCHWZ,
+     *               N1,N2,DUMMY,DUMMY,IDUMMY,1,XINTS,NSH2,
+     *               GHOND,MAXG,DDIJ,IA,ELEDEN,ELNU,
+     *               DSH,NTSHEL,.TRUE.,.FALSE.,.TRUE.)
+C
+      ELSE
+C        --- DISK BASED EL-NUC INTERACTN TERM OF NUCLEAR FOCK MATRIX ---
+C
+         TDSKWRK = DSKWRK
+         DSKWRK  = .TRUE.
+         ISAV = IS
+         IS = 67
+         CALL SEQREW(IS)
+C
+         CALL NEHAM(ELEDEN,ELNU,XP,IXPK,NINTMX,IA,N1,.TRUE.)
+C
+         IS = ISAV
+      END IF
+C
+C     --- SYMMETRIZE THE SKELETON FOCK MATRICES ---
+C     TRIANGULAR SCRATCH AREA AT -WRK1-
+C
+      ISTART = NSHELL + 1
+      NUMSAV = NUM
+      NUM = N1
+      NSHSAV = NSHELL
+      NSHELL = NTSHEL
+      CALL NEO_SYMH(ELNU,WRK1,IA,ISTART)
+      NUM = NUMSAV
+      NSHELL = NSHSAV
+C
+      IF(DBG) THEN
+         WRITE(IW,*) 'SYMMETRIZED EL-NU MATRIX ELEMENTS'
+         CALL PRTRI(ELNU,N1)
+      END IF
+C
+C     --- FOR CASES WITH MORE THAN ONE QUANTUM NUCLEUS NUC-NUC TERMS ---
+C
+      IF(NQMNUC.GT.1) THEN
+C
+         SCHWRZ=.FALSE.
+C
+C        --- DIRECT SCF 2-PARTICLE NUCLEAR FOCK MATRIX TERMS ---
+C
+         IF(DIRNUC) THEN
+            CALL VCLR(FA,1,N2)
+            CALL TWOENI(SCFTYP,DIRNUC,.FALSE.,INTTYP,SCHWRZ,NINT,
+     *            NSCHWZ,N1,N2,DUMMY,DUMMY,IDUMMY,1,XINTS,NSH2,
+     *            GHOND,MAXG,DDIJ,IA,DA,FA,
+     *            DSH,NTSHEL,.FALSE.,.TRUE.,.FALSE.)
+C
+C     --- DIRNUC OFF DIAGONAL ELEMENTS ARE DOUBLE THE CORRECT VALUE ---
+C
+            CALL DSCAL(N2,HALF,FA,1)
+            DO 210 I = 1,N1
+               II = (I*I+I)/2
+               FA(II) = FA(II) + FA(II)
+  210       CONTINUE
+C
+         ELSE
+C           --- DISK BASED 2-PARTICLE NUCLEAR FOCK MATRIX TERMS ---
+C
+            ISAV = IS
+            IS = 68
+            CALL SEQREW(IS)
+C
+            CALL NUCHU(DA,FA,XP,IXPK,NINTMX,IA,N1)
+            IS = ISAV
+            DSKWRK  = TDSKWRK
+         END IF
+C
+         IF(DBG) THEN
+            WRITE(IW,*) 'ALPHA NU-NU FOCK MATRIX ELEMENTS'
+            CALL PRTRI(FA,N1)
+         END IF
+C
+C        --- SYMMETRIZE THE SKELETON FOCK MATRICES ---
+C        TRIANGULAR SCRATCH AREA AT -LWRK1-
+C
+         ISTART = NSHELL + 1
+         NUMSAV = NUM
+         NUM = N1
+         NSHSAV = NSHELL
+         NSHELL = NTSHEL
+         CALL NEO_SYMH(FA,WRK1,IA,ISTART)
+         NSHELL = NSHSAV
+         NUM = NUMSAV
+C
+         IF(DBG) THEN
+            WRITE(IW,*)'ALPHA SYMMETRIZED NU-NU FOCK MATRIX ELEMENTS'
+            CALL PRTRI(FA,N1)
+         END IF
+      ELSE
+C
+C        --- FOR SINGLE QM NUCLEUS NO NU-NU CONTRIBUTION ---
+C
+         CALL VCLR(FA,1,N2)
+C
+      END IF
+C
+C     --- COMPLETE THE ALPHA FOCK MATRIX ---
+C
+      CALL VADD(FA,1,ELNU,1,FA,1,N2)
+      CALL VADD(FA,1,H1,1,FA,1,N2)
+C
+      IF(DBG) THEN
+         WRITE(IW,*) 'ALPHA TOTAL FOCK MATRIX'
+         CALL PRTRI(FA,N1)
+      END IF
+C
+C     --- TRANSFORM ALPHA FOCK MATRIX TO -Q- ORTHONORMAL BASIS ---
+C     --- DIAGONALIZE ALPHA FOCK MATRIX ---
+C     --- BACK-TRANSFORM TO AO BASIS ---
+C
+      CALL TFTRI(WRK1,FA,Q,SCR,N0,N1,N1)
+C
+      IF(SYMNUC) THEN
+         CALL NUSYMDIA(WRK1,VA,EA,SCR,IWRK,N0,N2,N1)
+      ELSE
+         CALL GLDIAG(N1,N1,N1,WRK1,SCR,EA,VA,
+     *                 IERR,IWRK)
+      END IF
+C
+      CALL TFSQB(VA,Q,SCR,N0,N1,N1)
+C
+      IF(DBG) THEN
+         WRITE(IW,*) 'NEW ALPHA ORBITALS'
+         CALL PREVNU(VA,EA,N0,N1,NUM+1,NUM+N1)
+      END IF
+C
+C     --- FORM ALPHA DENSITY MATRIX TO BE USED IN SCF ---
+C
+      CALL DMTX(DA,VA,AOC,NNA,N1,N1)
+C
+      IF(DBG) THEN
+         WRITE(IW,*) 'NEW ALPHA DENSITY MATRIX'
+         CALL PRTRI(DA,N1)
+      END IF
+C
+      RETURN
+      END
+C
+C*MODULE NEOHF   *DECK DDFOCK
+      SUBROUTINE DDFOCK(IEXCH,POPLE,IA,DA,FA,GHONDO,NINT)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL IANDJ,KANDL,SAME,OUT,POPLE
+      LOGICAL NUFOCK,DIRNUC
+C
+      DIMENSION IA(*),DA(*),FA(*),GHONDO(*)
+      DIMENSION IBPOP(4,4)
+C
+      PARAMETER (MXSH=5000, MXGTOT=20000)
+C
+      COMMON /FLIPS / IB(4,3)
+      COMMON /GOUT  / GPOPLE(768),NORG
+      COMMON /INTDEX/ IJGT(784),IJX(784),IJY(784),IJZ(784),IK(784),
+     *                KLGT(784),KLX(784),KLY(784),KLZ(784)
+      COMMON /MISC  / IANDJ,KANDL,SAME
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /SHLG70/ ISH,JSH,KSH,LSH,IJKLXX(4)
+      COMMON /SHLNOS/ QQ4,LIT,LJT,LKT,LLT,LOCI,LOCJ,LOCK,LOCL,
+     *                MINI,MINJ,MINK,MINL,MAXI,MAXJ,MAXK,MAXL,
+     *                NIJX,IJ,KL,IJKL
+      COMMON /SHLT  / TOL,CUTOFF,ICOUNT,OUT
+      COMMON /NUCMOP/ DIRNUC,NUFOCK
+C
+      DATA IBPOP/0,0,0,0,64,16,4,1,128,32,8,2,192,48,12,3/
+      DATA HALF /0.5D+00/
+C
+C-NEXT STATEMENT IS FOR VARIOUS IBM XLF 3.X AND 5.X COMPILERS-
+C
+      SAVE IJN,KLN,IBB,JBB,KBB,LBB
+C
+C     THIS ROUTINE WILL FORM THE MIXED PORTION OF THE ELEC/NUC
+C     FOCK MATRIX DIRECTLY FROM THE INTEGRALS. PIECED TOGETHER
+C     FROM NEHAM AND DIRFCK JULY 2002 BY CWS.
+C
+C     ----- FORM FOCK OPERATOR DIRECTLY FROM INTEGRALS -----
+C     THIS ROUTINE WAS PIECED TOGETHER FROM QOUT AND HSTAR
+C     BY FRANK JENSEN AT ODENSE UNIVERSITY IN MARCH 1990.
+C     SCF FUNCTIONS BESIDES RHF ADDED BY MWS IN AUGUST 1991.
+C
+C     NOTE THAT OFF-DIAGONAL ELEMENTS WILL NEED TO BE HALVED LATER.
+C
+C     UROHF = SCFTYP.EQ.UHF  .OR.  SCFTYP.EQ.ROHF
+      CUTINT = CUTOFF
+C
+      IF(POPLE) THEN
+         SAME = ISH .EQ. KSH .AND. JSH .EQ. LSH
+         IBB  = IB(1,IEXCH)
+         JBB  = IB(2,IEXCH)
+         KBB  = IB(3,IEXCH)
+         LBB  = IB(4,IEXCH)
+         MINI = KMIN(ISH)
+         MINJ = KMIN(JSH)
+         MINK = KMIN(KSH)
+         MINL = KMIN(LSH)
+         MAXI = KMAX(ISH)
+         MAXJ = KMAX(JSH)
+         MAXK = KMAX(KSH)
+         MAXL = KMAX(LSH)
+         IANDJ = ISH .EQ. JSH
+         KANDL = KSH .EQ. LSH
+         LOCI = KLOC(ISH)-MINI
+         LOCJ = KLOC(JSH)-MINJ
+         LOCK = KLOC(KSH)-MINK
+         LOCL = KLOC(LSH)-MINL
+      END IF
+C
+      IJN = 0
+      JMAX = MAXJ
+      DO 360 I = MINI,MAXI
+         IF (IANDJ) JMAX = I
+         DO 340 J = MINJ,JMAX
+            IJN = IJN+1
+            IF(POPLE) THEN
+               N1 = IBPOP(IBB,I)+IBPOP(JBB,J)+1+NORG
+            ELSE
+               N1 = IJGT(IJN)
+            END IF
+            LMAX = MAXL
+            KLN = 0
+            DO 320 K =  MINK,MAXK
+               IF (KANDL) LMAX = K
+               DO 300 L = MINL,LMAX
+                  KLN = KLN+1
+                  IF(POPLE) THEN
+                     NN = N1+IBPOP(KBB,K)+IBPOP(LBB,L)
+                     VAL = GPOPLE(NN)
+                  ELSE
+                     NN = N1+KLGT(KLN)
+                     VAL = GHONDO(NN)
+                  END IF
+C
+                  IF(ABS(VAL).LT.CUTINT) GO TO 300
+                  NINT = NINT + 1
+C
+                  II = LOCI+I
+                  JJ = LOCJ+J
+                  KK = LOCK+K
+                  LL = LOCL+L
+                  IF (II .GE. JJ) GO TO 100
+                  N = II
+                  II = JJ
+                  JJ = N
+  100             IF (KK .GE. LL) GO TO 110
+                  N = KK
+                  KK = LL
+                  LL = N
+  110             CONTINUE
+                IF(NUFOCK) THEN
+                  IF(KK.EQ.LL) VAL = VAL*HALF
+                ELSE
+                  IF(II.EQ.JJ) VAL = VAL*HALF
+                ENDIF
+C
+C      WE NOW HAVE EVERYTHING READY, PUT INTEGRALS INTO FOCK MATRIX
+C
+                  NIJ = IA(II)+JJ
+                  NKL = IA(KK)+LL
+C
+                  VAL2 = VAL+VAL
+C                 IF(SCFTYP.EQ.RHF) THEN
+C                       IF(CONTIJ) THEN
+                        IF(NUFOCK) THEN
+                           FA(NIJ) = FA(NIJ)-VAL2*DA(NKL)
+                        ELSE
+                           FA(NKL) = FA(NKL)-VAL2*DA(NIJ)
+                        ENDIF
+  300          CONTINUE
+  320       CONTINUE
+  340    CONTINUE
+  360 CONTINUE
+      RETURN
+      END
+C
+C*MODULE NEOHF   *DECK NNFOCK
+      SUBROUTINE NNFOCK(IEXCH,POPLE,IA,DA,FA,GHONDO,NINT)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL IANDJ,KANDL,SAME,OUT,POPLE
+C
+      DIMENSION IA(*),DA(*),FA(*),GHONDO(*)
+      DIMENSION IBPOP(4,4)
+C
+      PARAMETER (MXSH=5000, MXGTOT=20000)
+C
+      COMMON /FLIPS / IB(4,3)
+      COMMON /GOUT  / GPOPLE(768),NORG
+      COMMON /INTDEX/ IJGT(784),IJX(784),IJY(784),IJZ(784),IK(784),
+     *                KLGT(784),KLX(784),KLY(784),KLZ(784)
+      COMMON /MISC  / IANDJ,KANDL,SAME
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /SHLG70/ ISH,JSH,KSH,LSH,IJKLXX(4)
+      COMMON /SHLNOS/ QQ4,LIT,LJT,LKT,LLT,LOCI,LOCJ,LOCK,LOCL,
+     *                MINI,MINJ,MINK,MINL,MAXI,MAXJ,MAXK,MAXL,
+     *                NIJX,IJ,KL,IJKL
+      COMMON /SHLT  / TOL,CUTOFF,ICOUNT,OUT
+C
+      DATA IBPOP/0,0,0,0,64,16,4,1,128,32,8,2,192,48,12,3/
+      DATA HALF /0.5D+00/
+C
+C-NEXT STATEMENT IS FOR VARIOUS IBM XLF 3.X AND 5.X COMPILERS-
+C
+      SAVE IJN,KLN,IBB,JBB,KBB,LBB
+C
+C     ----- FORM FOCK OPERATOR DIRECTLY FROM INTEGRALS -----
+C     THIS ROUTINE WAS PIECED TOGETHER FROM QOUT AND HSTAR
+C     BY FRANK JENSEN AT ODENSE UNIVERSITY IN MARCH 1990.
+C     SCF FUNCTIONS BESIDES RHF ADDED BY MWS IN AUGUST 1991.
+C
+C     NOTE THAT OFF-DIAGONAL ELEMENTS WILL NEED TO BE HALVED LATER.
+C
+      CUTINT = CUTOFF
+C
+      IF(POPLE) THEN
+         SAME = ISH .EQ. KSH .AND. JSH .EQ. LSH
+         IBB  = IB(1,IEXCH)
+         JBB  = IB(2,IEXCH)
+         KBB  = IB(3,IEXCH)
+         LBB  = IB(4,IEXCH)
+         MINI = KMIN(ISH)
+         MINJ = KMIN(JSH)
+         MINK = KMIN(KSH)
+         MINL = KMIN(LSH)
+         MAXI = KMAX(ISH)
+         MAXJ = KMAX(JSH)
+         MAXK = KMAX(KSH)
+         MAXL = KMAX(LSH)
+         IANDJ = ISH .EQ. JSH
+         KANDL = KSH .EQ. LSH
+         LOCI = KLOC(ISH)-MINI
+         LOCJ = KLOC(JSH)-MINJ
+         LOCK = KLOC(KSH)-MINK
+         LOCL = KLOC(LSH)-MINL
+      END IF
+C
+      IJN = 0
+      JMAX = MAXJ
+      DO 360 I = MINI,MAXI
+         IF (IANDJ) JMAX = I
+         DO 340 J = MINJ,JMAX
+            IJN = IJN+1
+            IF(POPLE) THEN
+               N1 = IBPOP(IBB,I)+IBPOP(JBB,J)+1+NORG
+            ELSE
+               N1 = IJGT(IJN)
+            END IF
+            LMAX = MAXL
+            KLN = 0
+            DO 320 K =  MINK,MAXK
+               IF (KANDL) LMAX = K
+               DO 300 L = MINL,LMAX
+                  KLN = KLN+1
+                  IF(SAME .AND. KLN.GT.IJN) GO TO 340
+                  IF(POPLE) THEN
+                     NN = N1+IBPOP(KBB,K)+IBPOP(LBB,L)
+                     VAL = GPOPLE(NN)
+                  ELSE
+                     NN = N1+KLGT(KLN)
+                     VAL = GHONDO(NN)
+                  END IF
+C
+                  IF(ABS(VAL).LT.CUTINT) GO TO 300
+                  NINT = NINT + 1
+C
+                  II = LOCI+I
+                  JJ = LOCJ+J
+                  KK = LOCK+K
+                  LL = LOCL+L
+                  IF (II .GE. JJ) GO TO 100
+                  N = II
+                  II = JJ
+                  JJ = N
+  100             IF (KK .GE. LL) GO TO 120
+                  N = KK
+                  KK = LL
+                  LL = N
+  120             IF (II-KK) 140,160,180
+  140             N = II
+                  II = KK
+                  KK = N
+                  N = JJ
+                  JJ = LL
+                  LL = N
+                  GO TO 180
+  160             IF (JJ .LT. LL) GO TO 140
+  180             CONTINUE
+C
+                  IF(II.EQ.JJ) VAL = VAL*HALF
+                  IF(KK.EQ.LL) VAL = VAL*HALF
+                  IF(II.EQ.KK  .AND.  JJ.EQ.LL) VAL = VAL*HALF
+C
+C      WE NOW HAVE EVERYTHING READY, PUT INTEGRALS INTO FOCK MATRIX
+C
+                  NIJ = IA(II)+JJ
+                  NKL = IA(KK)+LL
+                  NIK = IA(II)+KK
+                  NIL = IA(II)+LL
+                  NJK = IA(JJ)+KK
+                  NJL = IA(JJ)+LL
+                  IF(JJ.LT.KK) NJK = IA(KK)+JJ
+                  IF(JJ.LT.LL) NJL = IA(LL)+JJ
+C
+                  VAL2 = VAL+VAL
+                  VAL4 = VAL2+VAL2
+C
+                  DUM = VAL4*DA(NKL)
+                  FA(NIJ) = FA(NIJ)+DUM
+                  DUM = VAL4*DA(NIJ)
+                  FA(NKL) = FA(NKL)+DUM
+                  FA(NIK) = FA(NIK)-VAL2*DA(NJL)
+                  FA(NIL) = FA(NIL)-VAL2*DA(NJK)
+                  FA(NJK) = FA(NJK)-VAL2*DA(NIL)
+                  FA(NJL) = FA(NJL)-VAL2*DA(NIK)
+C
+  300          CONTINUE
+  320       CONTINUE
+  340    CONTINUE
+  360 CONTINUE
+      RETURN
+      END
+C
+C*MODULE NEOHF   *DECK TRAREC
+      DOUBLE PRECISION FUNCTION TRAREC(A,B,N,M)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      DIMENSION A(N,M),B(M,N)
+C
+      PARAMETER (ZERO=0.0D+00)
+C
+C     ----- DOT PRODUCT OF 2 RECTANGULAR MATRICES -----
+C           (NOTE THE SHAPES OF -A- AND -B-)
+C
+      TRAREC = ZERO
+      DO 200 I = 1,N
+         DO 100 K = 1,M
+            TRAREC = TRAREC+A(I,K)*B(K,I)
+  100    CONTINUE
+  200 CONTINUE
+      RETURN
+      END

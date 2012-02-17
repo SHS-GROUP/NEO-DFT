@@ -1,0 +1,842 @@
+C 11 Jul 11 - PEA - efficient mp2 annihilation rate code for positrons
+C 23 JUL 10 - MWS - SYNCRONIZE COMMONS AGAINST FMO UPDATE
+C 11 DEC 06 - MWS - ADJUST MP2 COMMON BLOCK
+C 19 NOV 06 - PEA - ADD DUMMY ARGUMENT TO NJANDK CALL
+C  6 NOV 06 - MWS - ADJUST WAVEFUNCTION COMMON BLOCK
+C 25 OCT 06 - SPW - CHANGES FOR NEO VERSION 2
+C 25 MAR 06 - CWS - NEW MODULE FOR NEO-MP2
+C
+C*MODULE NEOMP2  *DECK ENMP2D
+      SUBROUTINE ENMP2D
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      LOGICAL ABEL,ABELPT,PK,PANDK,BLOCK,GPSAVE,GOPARR,
+     *        DSKWRK,MASWRK,DIRTRF,DIRNUC,NUFOCK
+C
+      PARAMETER (MXATM=2000, MXSH=5000)
+C
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /NUCMOP/ DIRNUC,NUFOCK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PKFIL / PK,PANDK,BLOCK
+      COMMON /SYMTRY/ MAPSHL(MXSH,48),MAPCTR(MXATM,48),
+     *                T(432),INVT(48),NT
+      COMMON /TRFOPT/ CUTTRF,NWDTRF,MPTRAN,ITRFAO,NOSYMT,IPURTF,DIRTRF
+      COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
+     *                MPLEVL,MPCTYP
+C
+      IF(DIRNUC) THEN
+         WRITE(IW,*)'DIRECT NUCLEAR-ELECTRONIC MP2 NOT ENABLED'
+         WRITE(IW,*)'TRY SETTING DIRSCF=T AND DIRNUC=F'
+         CALL ABRT
+      END IF
+C
+C     --- IT SHOULD NOT BE POSSIBLE TO GET HERE WITH A SUPERMATRIX ---
+C     BUT CHECK THAT IT IS NOT, JUST TO BE SAFE.
+C
+      IF(.NOT.DIRNUC  .AND.  PK) THEN
+         WRITE(IW,*) 'ELNUMP: ERROR, A -PK- FILE SHOULD NOT BE USED'
+         CALL ABRT
+      END IF
+C
+      ABEL = ABELPT()
+      IF(.NOT.ABEL  .OR.  (GOPARR .AND. ITRFAO.EQ.1)) THEN
+         IF(.NOT.DIRNUC) THEN
+            GPSAVE = GOPARR
+            IF(ITRFAO.EQ.1) GOPARR=.FALSE.
+            NTSAVE = NT
+            IF(.NOT.ABEL) NT=1
+            ISAV = IS
+            IS   = 67
+            CALL SEQOPN(IS,'ELNUINT','UNKNOWN',.FALSE.,'UNFORMATTED')
+            DUM=0.0D+00
+            CALL NJANDK(.TRUE.,.TRUE.,SCFTYP,.FALSE.,.FALSE.,DUM,DUM,
+     *                  .FALSE.,.TRUE.,.FALSE.)
+            GOPARR = GPSAVE
+            NT = NTSAVE
+            IS = ISAV
+         END IF
+      END IF
+C
+CCWS  CALL CHCKMP
+      CALL ENMP2
+C
+      RETURN
+      END
+C
+C*MODULE NEOMP2  *DECK ENMP2
+      SUBROUTINE ENMP2
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      LOGICAL SOME,OUT,DBUG,PACK2E,ABEL,ABELPT,
+     *        GOPARR,DSKWRK,MASWRK,DIRNUC,NUFOCK,posneo,posprp
+C
+      PARAMETER (MXSH=5000, MXRT=100, MXATM=2000, MXAO=8192, MXNEO=20)
+C
+      COMMON /DIRMEM/ LPQRJ,IVEC,IDEN,IFCK,NUM,NOCC,NDIM,MINPQ,MAXPQ
+      COMMON /ENRGYS/ ENUC,EELEC,ETOT,SZ,SZZ,ECORE,ESCF,EERD,E1,E2,
+     *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2),EDISP
+      COMMON /FMCOM / X(1)
+      COMMON /FUNCT / E,EG(3,MXATM)
+      COMMON /IJPAIR/ IA(MXAO)
+      COMMON /INTFIL/ NINTMX,NHEX,NTUPL,PACK2E,INTTYP,IGRDTYP
+      COMMON /IOFILE/ IR,IW,IP,IJK,IPK,IDAF,NAV,IODA(950)
+      COMMON /MP2PAR/ OSPT,CODEMP,SCSPT,TOL,METHOD,NWDMP2,MEMPRI,MPPROP,
+     *                NACORE,NBCORE,NOA,NOB,NO,NBF,NOMIT,MOCPHF,MAXITC
+      COMMON /MP2PRT/ SOME,OUT,DBUG
+      COMMON /NDIRMY/ LABCD
+      COMMON /NEOMPE/ ENMP2E,ENMP3E
+      COMMON /NUCMOI/ NUNIQN,IUNIQN(MXNEO),IUNIQT(MXNEO),NQMNUC,
+     *                IQMNUC(MXNEO),IQNTYP(MXNEO),NUMNB,NUCST,NAUXNB,
+     *                IAUXNB(MXNEO),NUMULT,NNA,NNB,NTAUXB
+      COMMON /NUCMOP/ DIRNUC,NUFOCK
+      COMMON /NUCPOS/ POSNEO,POSPRP
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+      COMMON /SYMTRY/ MAPSHL(MXSH,48),MAPCTR(MXATM,48),
+     *                TSYM(432),INVT(48),NT
+      common /posmp2/ xlep
+C
+      DATA CHECK/8HCHECK   /, RMP2/8HMP2     /
+c
+      PARAMETER (PIRE2C=5.0469693435422D+10)
+C
+C     ---- MAIN CLOSED-SHELL NUCLEAR-ELECTRONIC MP2 ENERGY DRIVER ----
+C
+      SOME=NPRINT.NE.-5 .AND. MASWRK
+      OUT =EXETYP.EQ.RMP2 .AND. MASWRK
+C
+      CALL GOTFM(NGOTMX)
+      IF(NWDMP2.GT.0) NGOTMX=MIN(NGOTMX,NWDMP2)
+C
+      NOC  = NOA - NACORE
+      NVIR = NO  - NOA
+      NORB = NO  - NACORE
+      NBF2 = (NBF*NBF+NBF)/2
+      NBF3 = NBF * NBF
+C
+      MAXBF = MAX(NBF,NUMNB)
+C
+C     ---- JUST AS A PRECAUTION FILL UP THE INDEX ARRAY ----
+C
+      II = 0
+      ILIM = MAXBF
+      DO 5 I = 1,ILIM
+         IA(I) = II
+         II = II + I
+    5 CONTINUE
+C
+      NUM  = NBF
+      IDEN = 0
+      IFCK = 0
+C
+C     ---- FOR THE CASE OF A SINGLE QUANTUM PROTON WE CAN NEO-MP2
+C     CORRECT ANY PROTON VIBRONIC STATE.
+C     NOTE THAT NUCST CAN ONLY BE GT THAN 1 WHEN NEOSCF = DIAGZN.
+C     FOR ALL OTHER CASES THERE ARE NO CORE NUCLEAR ORBITALS. ----
+C
+      IF(NUCST .GT. 1) THEN
+         NNCORE = NUCST - 1
+         NNOC   = 1
+         NNVIR  = NUMNB - NUCST
+         NNORB  = NUMNB - NNCORE
+      ELSE
+         NNCORE = 0
+         NNOC   = NUMULT - 1
+         NNVIR  = NUMNB  - NNOC
+         NNORB  = NUMNB
+      END IF
+      NNBF2  = (NUMNB*NUMNB+NUMNB)/2
+      NNBF3  = NUMNB * NUMNB
+C
+      IF(MASWRK) WRITE(IW,9000) NACORE,NOA,NBF,NNCORE,NNOC,NUMNB
+C
+CCWS  NDIM1 = MAX(NBF2,NVIR*NOC)
+CCWS  NDIM2 = MAX(NNBF2,NNVIR*NNOC)
+CCWS  NDIM  = MAX(NDIM1,NDIM2)
+C
+      NDIM  = MAX(NNBF2,NNVIR*NNOC)
+C
+C    ----- MEMORY POINTERS FOR NEO-MP2 ENERGY -----
+C
+C IVEC    : MATRIX OF ELECTRONIC MO COEFFICIENTS NBF  *  NBF
+C IVECN   : MATRIX OF NUCLEAR MO COEFFICIENTS    NUMNB * NUMNB
+C IPTR1   : PARTIALLY TRANSFORMED INTEGRAL       NOC  *  NBF
+C IPTR2   : PARTIALLY TRANSFORMED INTEGRAL       NVIR *  NBF
+C IENG    : ELECTRONIC ORBITAL ENERGIES          NBF
+C IENGN   : NUCLEAR    ORBITAL ENERGIES          NUMNB
+C ILAB    : MOSLAB     |                         NBF
+C IIRP    : MOSIRP     |---> SEE SYM             NBF
+C IDEG    : MOSDEG     |                         NBF
+C IWRK    : WORK: S, MO, ETC.                  MAX (NBF**2 | NUMNB**2)
+C         : HOLDS (PQ|RJ)                        NBF * NBF OR NINTMX
+C IWRK2   : HOLDS Q MATRIX                       (NBF*(NBF+1))/2
+C         : HOLDS INDICES FOR (PQ|RS)            NBF * NBF OR NINTMX
+C IWRK3   : TEMP STORAGE OF Q*S*V                NBF
+C
+      CALL VALFM(LOADFM)
+      IVEC   = 1     + LOADFM
+      IVECN  = IVEC  + NBF*NBF
+      IPTR1  = IVECN + NUMNB * NUMNB
+      IPTR2  = IPTR1 + NOC*NBF
+      IENG   = IPTR2 + NVIR*NBF
+      IENGN  = IENG  + NBF
+      ILAB   = IENGN + NUMNB
+      IDEG   = ILAB  + NBF
+      LAST   = IDEG  + NBF
+      NEEDA  = LAST - LOADFM - 1
+      CALL GETFM(NEEDA)
+C
+C    ----- SET UP TRANSPOSE MATRIX OF MO COEFFICIENTS -----
+C
+      CALL VALFM(LOADFM)
+      IWRK   = 1    + LOADFM
+      LAST   = IWRK + NBF*NBF
+      NEEDB  = LAST - LOADFM - 1
+      CALL GETFM(NEEDB)
+C
+      CALL DAREAD(IDAF,IODA,X(IWRK),NBF3,15,0)
+      CALL DAREAD(IDAF,IODA,X(IENG),NBF ,17,0)
+C
+      IF(.NOT.(NUCST .GT. 1) ) THEN
+         CALL DAREAD(IDAF,IODA,X(IVECN),NNBF3,444,0)
+         CALL DAREAD(IDAF,IODA,X(IENGN),NUMNB,447,0)
+      END IF
+C
+C          SUBTRACTING CORE ORBITALS
+C
+      DO 15 J=1,NORB
+         X(J+IENG-1)=X(J+NACORE +IENG-1)
+         DO 10 I=1,NBF
+            X(I+ NBF*(J-1)+IVEC-1)=X(I+NBF*(J-1+NACORE)+IWRK-1)
+  10     CONTINUE
+  15  CONTINUE
+C
+C          TRANSPOSING OCCUPIED SPACE
+C
+      DO 25 J=1,NOC
+         DO 20 I=1,NBF
+            X(J+NOC*(I-1)+IPTR1-1)=X(I+NBF*(J-1+NACORE)+IWRK-1)
+   20    CONTINUE
+   25 CONTINUE
+C
+C          TRANSPOSING VIRTUAL SPACE
+C
+      DO 35 J=1,NVIR
+         DO 30 I=1,NBF
+            X(J+NVIR*(I-1)+IPTR2-1)=X(I+NBF*(J-1+NOA)+IWRK-1)
+   30    CONTINUE
+   35 CONTINUE
+      CALL RETFM(NEEDB)
+C
+C     --- IF NUCST IS GREATER THAN ONE WE WILL HAVE TO
+C     ORGANIZE THE PROTON MO'S ---
+C
+      IF(NUCST .GT. 1) THEN
+         CALL VALFM(LOADFM)
+         IWRK   = 1    + LOADFM
+         LAST   = IWRK + NUMNB*NUMNB
+         NEEDNB = LAST - LOADFM - 1
+         CALL GETFM(NEEDNB)
+C
+         CALL DAREAD(IDAF,IODA,X(IWRK),NNBF3,444,0)
+         CALL DAREAD(IDAF,IODA,X(IENGN),NUMNB,447,0)
+C
+C             SUBTRACTING CORE PROTON ORBITALS
+C
+         DO 45 J=1,NNORB
+            X(J+IENGN-1)=X(J+NNCORE +IENGN-1)
+            DO 40 I=1,NUMNB
+               X(I+ NUMNB*(J-1)+IVECN-1)=X(I+NUMNB*(J-1+NNCORE)+IWRK-1)
+  40        CONTINUE
+  45     CONTINUE
+C
+         CALL RETFM(NEEDNB)
+      END IF
+C
+C     ----- ASSIGN -IRREP- LABEL TO ELECTRONIC MO'S -----
+C
+      CALL VALFM(LOADFM)
+      IWRK  = 1     + LOADFM
+      IWRK2 = IWRK  + NBF2
+      IWRK3 = IWRK2 + NBF3
+      LAST  = IWRK3 + NBF
+      NEEDC = LAST -LOADFM - 1
+      CALL GETFM(NEEDC)
+      IF(EXETYP.EQ.CHECK) GO TO 80
+C
+      CALL DAREAD(IDAF,IODA,X(IWRK),NBF2,12,0)
+      CALL DAREAD(IDAF,IODA,X(IWRK2),NBF3,45,0)
+C
+   80 CONTINUE
+C
+      CALL RETFM(NEEDC)
+C
+      ABEL=ABELPT()
+      NTSAVE = NT
+      IF(DIRNUC  .AND.  .NOT.ABEL) NT=1
+C
+C     ----- INTEGRAL STORAGE FOR DIRECT OR CONVENTIONAL MP2 -----
+C     BEWARE!  THE DIRECT TRANSFORMATIONS PASS STORAGE LOCATIONS
+C     FOR THE TRANSFORMED INTEGRAL ARRAY AND THE VECTORS THROUGH
+C     THE -LABCD- AND -IVEC- VARIABLES IN COMMON.  THE NUMBER OF
+C     MO-S IN THE 1ST INDEX TRANSFORM IS -NOCC-, WHICH IS SET LATER.
+C
+      CALL VALFM(LOADFM)
+         LXX    = 1      + LOADFM
+         LIX    = LXX    + NINTMX
+         if (posneo .and. posprp) then
+            lsxx   = LIX    + NINTMX
+            lsix   = lsxx   + nintmx 
+            last   = lsix   + nintmx
+         else
+            LAST   = LIX    + NINTMX
+         end if
+      NEEDD = LAST - LOADFM - 1
+      CALL GETFM(NEEDD)
+C
+C         THE LAST TWO BRANCHES ARE TO ENABLE TESTING
+C
+      NGOT = NGOTMX - NEEDA - NEEDD
+C
+C     ----- SEQUENTIAL SEGMENTED MP2 TRANSFORMATION -----
+C     CURRENTLY ONLY CONVENTIONAL TRANSFORMATION IMPLEMENTED
+C
+C     NEED  = MAX(2*NBF3,2*NNBF3)
+      NEED  = 2*NBF3+2*NNBF3
+      LEFT  = NGOT - NEED
+      NMIN  = NDIM*NBF
+      MNMEM = NEEDA + NEEDD + NEED + NMIN*1
+      MXMEM = NEEDA + NEEDD + NEED + NMIN*NOC
+      IF(SOME) WRITE(IW,9110) MNMEM,MXMEM
+C
+      IF(NMIN.GT.LEFT) THEN
+         NTOT = NEEDA + NEEDD + NEED + NMIN
+         IF(MASWRK) WRITE(IW,9120) NTOT,NGOTMX
+CCWS     UNTIL ALTERNATIVE METHOD IS CODED, STOP HERE
+         WRITE(IW,*)'ABORTING JOB'
+         CALL ABRT
+      END IF
+C
+      LPASS = MIN(NOC,LEFT/NMIN)
+      NPASS = (NOC+LPASS-1)/LPASS
+      LPASS = (NOC+NPASS-1)/NPASS
+C
+      CALL VALFM(LOADFM)
+      LWRK1 = 1     + LOADFM
+      LWRK2 = LWRK1 + NNBF3
+      LWRK3 = LWRK2 + NNBF3
+      LWRK4 = LWRK3 + NBF3
+      LABCD = LWRK4 + NBF3
+      if (posneo .and. posprp) then
+         lswrk1  = LABCD + NDIM*NBF*LPASS
+         lswrk2 = lswrk1 + nnbf3
+         lswrk3 = lswrk2 + nnbf3
+         lswrk4  = lswrk3  + nbf3
+         lsabcd= lswrk4  + nbf3
+         LAST  = lsabcd+ ndim*nbf*lpass
+      else
+         LAST  = LABCD + NDIM*NBF*LPASS
+      end if
+      NEEDE = LAST - LOADFM - 1
+      CALL GETFM(NEEDE)
+C
+      MEM = NEEDA + NEEDD + NEEDE
+      IF(SOME) WRITE(IW,9150) LPASS,NPASS,MEM
+      IF(EXETYP.EQ.CHECK) GO TO 700
+C
+      if (posneo .and. posprp) then
+         CALL MP2S_NE_pos(ENMP2E,X(IENG),X(IVEC),X(LABCD),X(LXX),X(LIX),
+     *          X(LWRK1),X(LWRK2),NBF,NOC,NVIR,NDIM,
+     *          NPASS,LPASS,NINTMX,
+     *          X(IENGN),X(IVECN),NUMNB,
+     *          NNOC,NNVIR,X(LWRK3),X(LWRK4),
+     *          xlep,x(lsabcd),x(lsxx),x(lsix),x(lswrk1),x(lswrk2),
+     *          x(lswrk3),x(lswrk4))
+      else
+         CALL MP2S_NE(ENMP2E,X(IENG),X(IVEC),X(LABCD),X(LXX),X(LIX),
+     *          X(LWRK1),X(LWRK2),NBF,NOC,NVIR,NDIM,
+     *          NPASS,LPASS,NINTMX,
+     *          X(IENGN),X(IVECN),NUMNB,
+     *          NNOC,NNVIR,X(LWRK3),X(LWRK4))
+      end if
+      GO TO 700
+C
+  700 CONTINUE
+      CALL RETFM(NEEDE)
+      CALL RETFM(NEEDD)
+      CALL RETFM(NEEDA)
+C
+C     ----- PRINT ENERGY DATA -----
+C
+      EHF =ESCF
+      EN2=EHF+ENMP2E
+      EN2=EN2 + E2
+C
+C     --- SET THE TOTAL ENERGY EQUAL TO EP2+EE2+NEOHF
+C         THIS IS FOR NUMERICAL GRADIENTS WHERE E IS
+C         PASSED THROUGH COMMON BLOCK FUNCT ---
+C
+      E = EN2
+         IF(MASWRK) WRITE(IW,9010) EHF,E2,ENMP2E,EN2
+C
+      NT = NTSAVE
+
+      if (posneo .and. posprp) xlep = -2.0D+00 * PIRE2C * xlep
+c---      write(iw,*)'in neomp2, xlep=',xlep*1.0d-09
+
+      RETURN
+C
+ 9000 FORMAT(/1X,26('-'),3X,30(1H-)/
+     *        1X,'NEO-MP2 ENERGY CALCULATION',3X,
+     *        3X,'ADAPTED BY CHET SWALINA'/
+     *        1X,26('-'),3X,30(1H-)/
+     *        1X,'NACORE =',I4,'     NOCC =',I5,'     NAOS =',I5/
+     *        1X,'NNCORE =',I4,'     NUOCC=',I5,'     NUOS =',I5)
+ 9010 FORMAT(/1X,'RESULTS OF NEO-MP2 CORRECTION ARE'/
+     *       13X,'  E(0)=',1X,F20.10/
+     *       13X,'  E(1)=',9X,'0.0'/
+     *       13X,'E(2EE)=',1X,F20.10/
+     *       13X,'E(2EP)=',1X,F20.10/
+     *       13X,'E(MP2)=',1X,F20.10)
+ 9110 FORMAT(/1X,
+     * 'MEMORY REQUIREMENTS FOR SEGMENTED NEO-MP2 TRANSFORMATION'/
+     *       1X,'  MINIMUM=',I10,' WORDS, USING 1 MOLECULAR ORBITAL',
+     *          ' PER PASS'/
+     *       1X,'  MAXIMUM=',I10,' WORDS, MAKING ONLY 1 INTEGRAL PASS')
+ 9120 FORMAT(1X,'THERE IS INSUFFICIENT MEMORY TO RUN THE SEGMENTED',
+     *       1X,'NEO-MP2 TRANSFORMATION.'/
+     *       1X,'REQUIRED,AVAILABLE MEMORY=',2I10,' WORDS.')
+ 9150 FORMAT(1X,'CHOOSING THE SEGMENTED NEO-MP2 TRANSFORMATION...'/
+     *       1X,'  NUMBER OF MOS/PASS = ',I4/
+     *       1X,'  NUMBER OF PASSES   = ',I4/
+     *       1X,'  MEMORY USED = ',I10,' WORDS.')
+C
+      END
+C
+C*MODULE NEOMP2  *DECK MP2C1_NE
+      SUBROUTINE MP2C1_NE(NFT8,XABCD,XX,IX,C,NUM,NOC,NDIM)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      LOGICAL GOPARR,DSKWRK,MASWRK,PACK2E
+C
+      DIMENSION XABCD(NOC,NDIM,NUM),C(NUM,*),XX(*),IX(*)
+C
+      COMMON /INTFIL/ NINTMX,NHEX,NTUPL,PACK2E,INTTYP,IGRDTYP
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+C     ----- FORM (PQ/RJ) = SUM OVER S OF (PQ/RS) * C(S,J) -----
+C
+      CALL VCLR(XABCD,1,NOC*NDIM*NUM)
+C
+         CALL SEQREW(NFT8)
+   10    CALL PREAD(NFT8,XX,IX,NXX,NINTMX)
+         IF(NXX.EQ.0) RETURN
+         NINT=IABS(NXX)
+         IF(NINT.GT.NINTMX) THEN
+            IF(MASWRK) WRITE(IW,9999)
+            IF(MASWRK) WRITE(IW,9998)
+            CALL ABRT
+         END IF
+         CALL ONETRF_NE(XABCD,C,NDIM,NUM,NOC,XX,IX,NXX)
+         IF(NXX.GT.0) GO TO 10
+      RETURN
+ 9999 FORMAT(' INCONSISTENT FILE PARAMETERS IN -MP2C1-. STOP')
+ 9998 FORMAT(5X,'*** PROGRAM STOP IN -MP2C1- ***')
+      END
+C
+C*MODULE NEOMP2  *DECK MP2C23_NE
+      SUBROUTINE MP2C23_NE(XABCD,X,Y,C,NBF,NVIR,NOC,NOCC,NDIM,
+     *                     NUMR,NEBF)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      DIMENSION C(NBF,*),XABCD(NOCC,NDIM,NEBF),X(NBF,NBF)
+      DIMENSION Y(NBF,NBF)
+C
+C     ----- FORM (PI|RJ) , AND THEN (AI|RJ) -----
+C        ON ENTRY XABCD IS MULTIPLIED BY OCCUPIED MO'S
+C        AND THEN VIRTUAL.  ON EXIT XABCD IS REWRITTEN TO
+C        CONTAIN 3-INDEX TRANSFORMED INTEGRAL
+C           FIRST MATRIX MULTIPLY INVOLVES Y BEING RETURNED FROM
+C        MULTIPLICATION OF X, CONTAINING ONE-INDEX TRANSFORMED
+C        INTEGRALS, AND C, MO COEFFICIENTS FOR OCCUPIED
+C        ORBITALS.
+C           THE SECOND MATRIX MULTIPLY RETURNS X AFTER MULTIPLYING
+C        A TRANSPOSE OF MO COEFFICIENTS FOR VIRTUAL ORBITALS
+C        AND Y, THE TWO-INDEX TRANSFORMED INTEGRALS.
+C
+      DO 35 MR=1,NUMR
+      DO 30 MJ=1,NOCC
+         CALL VCLR(X,1,NBF*NBF)
+         CALL VCLR(Y,1,NBF*NBF)
+         MPQ=0
+         DO 15 MP=1,NBF
+            DO 10 MQ=1,MP
+               MPQ=MPQ+1
+               X(MP,MQ)=XABCD(MJ,MPQ,MR)
+               X(MQ,MP)=X(MP,MQ)
+   10       CONTINUE
+   15    CONTINUE
+C
+         CALL MRARBR(X,NBF,NBF,NBF,C,NBF,NOC,Y,NBF)
+         CALL MRTRBR(C(1,NOC+1),NBF,NBF,NVIR,Y,NBF,NOC,X,NBF)
+         MAI=0
+         DO 25 MA=1,NVIR
+            DO 20 MI=1,NOC
+               MAI=MAI+1
+               XABCD(MJ,MAI,MR)=X(MA,MI)
+   20       CONTINUE
+   25    CONTINUE
+C
+   30 CONTINUE
+   35 CONTINUE
+      RETURN
+      END
+C
+C*MODULE NEOMP2  *DECK MP2S_NE
+      SUBROUTINE MP2S_NE(E2,E,C,XABCD,XX,IX,X,Y,NBF,
+     *                NOC,NVIR,NDIM,NPASS,LPASS,NINTMX,
+     *                EN,CN,N1,NNOC,NNVIR,XE,YE)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL SOME,OUT,DBUG
+C
+      DIMENSION E(*),C(NBF,*),XABCD(*),X(*),Y(*),
+     *          XX(NINTMX),IX(NINTMX),EN(*),CN(N1,*),
+     *          XE(*),YE(*)
+C
+      COMMON /IOFILE/ IR,IW,IP,IK,IPK,IDAF,NAV,IODA(950)
+      COMMON /DIRMEM/ IPQKL,IVEC,IDEN,IFCK,NUM,NOCC,NNNDIM,MINPQ,MAXPQ
+      COMMON /MP2PRT/ SOME,OUT,DBUG
+C
+      PARAMETER (ZERO=0.0D+00)
+C
+      E2 = ZERO
+      J0 = 1
+      CALL TSECND(TIM1)
+C
+C     ----- LOOP OVER NUMBER OF PASSES -----
+C     ----- FOR ALL  J = J0, ..., J0+NOCC-1 -----
+C
+      DO 100 IPASS=1,NPASS
+         NOCC = MIN(NOC,J0+LPASS-1)-J0+1
+C
+C     ----- FORM -(PQ/RJ)- -----
+C
+      III = 67
+         CALL MP2C1_NE(III,XABCD,XX,IX,C(1,J0),
+     *              NBF,NOCC,NDIM)
+C
+C     ----- FORM -(AI/RJ)- ALL A,I -----
+C
+         CALL MP2C23_NE(XABCD,X,Y,CN,N1,NNVIR,NNOC,NOCC,NDIM,NBF,NBF)
+C
+C     ----- FORM -(AI/BJ)-  ALL B -----
+C
+         CALL MP2S4_NE(XABCD,XE,YE,C(1,NOC+1),NVIR,NBF,
+     *              NOCC,NDIM,NNOC,NNVIR)
+C
+C     ------ CALCULATE PARTIAL CONTRIBUTION TO EN(2) FROM THIS
+C            BATCH -----
+C
+C     EN(2) = SUM (J)  SUM(AIB) 2 * (AI/BJ) * (AI/BJ) /
+C                              (E(A)+E(B)-E(I)-E(J))
+C
+C     A AND I ARE NUCLEAR VIR AND OCC, RESPECTIVELY.
+C     B AND J ARE ELECTRONIC VIR AND OCC.
+C
+         CALL MP2SE_NE(E,XABCD,E2,J0,NOC,NVIR,NOCC,NDIM,
+     *                 EN,NNOC,NNVIR)
+C
+         J0 = J0+NOCC
+         IVEC = IVEC+NOCC*NBF
+C
+         IF(SOME) THEN
+            CALL TSECND(TIM2)
+            TIME = TIM2-TIM1
+            TIM1 = TIM2
+            WRITE(IW,9020) IPASS,TIME
+            CALL FLSHBF(IW)
+         END IF
+  100 CONTINUE
+C
+      IF(SOME) WRITE(IW,9030)
+      RETURN
+C
+ 9020 FORMAT(1X,'PASS #',I4,' TOOK',F12.2,' SECONDS.')
+ 9030 FORMAT(1X,'DONE WITH PARTIAL TRANSFORMATION (PQ|RS) TO (IA|JB)')
+      END
+C
+C*MODULE NEOMP2  *DECK MP2S_NE_pos
+      SUBROUTINE MP2S_NE_pos(E2,E,C,XABCD,XX,IX,X,Y,NBF,
+     *                NOC,NVIR,NDIM,NPASS,LPASS,NINTMX,
+     *                EN,CN,N1,NNOC,NNVIR,XE,YE,
+     *                xlep,sabcd,sxx,six,sx,sy,sxe,sye)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL SOME,OUT,DBUG
+C
+      DIMENSION E(*),C(NBF,*),XABCD(*),X(*),Y(*),
+     *          XX(NINTMX),IX(NINTMX),EN(*),CN(N1,*),
+     *          XE(*),YE(*),
+     *          sabcd(*),sx(*),sy(*),sxx(nintmx),six(nintmx),
+     *          sxe(*),sye(*)
+C
+      COMMON /IOFILE/ IR,IW,IP,IK,IPK,IDAF,NAV,IODA(950)
+      COMMON /DIRMEM/ IPQKL,IVEC,IDEN,IFCK,NUM,NOCC,NNNDIM,MINPQ,MAXPQ
+      COMMON /MP2PRT/ SOME,OUT,DBUG
+C
+      PARAMETER (ZERO=0.0D+00)
+C
+      E2 = ZERO
+      xlep = zero
+      J0 = 1
+      CALL TSECND(TIM1)
+C
+C     ----- LOOP OVER NUMBER OF PASSES -----
+C     ----- FOR ALL  J = J0, ..., J0+NOCC-1 -----
+C
+      DO 100 IPASS=1,NPASS
+         NOCC = MIN(NOC,J0+LPASS-1)-J0+1
+C
+C     ----- FORM -(PQ/RJ)- -----
+C
+      III = 67
+         CALL MP2C1_NE(III,XABCD,XX,IX,C(1,J0),
+     *              NBF,NOCC,NDIM)
+      IIII = 73
+         CALL MP2C1_NE(IIII,sABCD,sXX,sIX,C(1,J0),
+     *              NBF,NOCC,NDIM)
+C
+C     ----- FORM -(AI/RJ)- ALL A,I -----
+C
+         CALL MP2C23_NE(XABCD,X,Y,CN,N1,NNVIR,NNOC,NOCC,NDIM,NBF,NBF)
+         CALL MP2C23_NE(sABCD,sX,sY,CN,N1,NNVIR,NNOC,NOCC,NDIM,NBF,NBF)
+C
+C     ----- FORM -(AI/BJ)-  ALL B -----
+C
+         CALL MP2S4_NE(XABCD,XE,YE,C(1,NOC+1),NVIR,NBF,
+     *              NOCC,NDIM,NNOC,NNVIR)
+         CALL MP2S4_NE(sABCD,sXE,sYE,C(1,NOC+1),NVIR,NBF,
+     *              NOCC,NDIM,NNOC,NNVIR)
+C
+C     ------ CALCULATE PARTIAL CONTRIBUTION TO EN(2) FROM THIS
+C            BATCH -----
+C
+C     EN(2) = SUM (J)  SUM(AIB) 2 * (AI/BJ) * (AI/BJ) /
+C                              (E(A)+E(B)-E(I)-E(J))
+C
+C     A AND I ARE NUCLEAR VIR AND OCC, RESPECTIVELY.
+C     B AND J ARE ELECTRONIC VIR AND OCC.
+C
+         CALL MP2SE_NE_pos(E,XABCD,E2,J0,NOC,NVIR,NOCC,NDIM,
+     *                 EN,NNOC,NNVIR,xlep,sabcd)
+C
+         J0 = J0+NOCC
+         IVEC = IVEC+NOCC*NBF
+C
+         IF(SOME) THEN
+            CALL TSECND(TIM2)
+            TIME = TIM2-TIM1
+            TIM1 = TIM2
+            WRITE(IW,9020) IPASS,TIME
+            CALL FLSHBF(IW)
+         END IF
+  100 CONTINUE
+C
+      IF(SOME) WRITE(IW,9030)
+      RETURN
+C
+ 9020 FORMAT(1X,'PASS #',I4,' TOOK',F12.2,' SECONDS.')
+ 9030 FORMAT(1X,'DONE WITH PARTIAL TRANSFORMATION (PQ|RS) TO (IA|JB)')
+      END
+C
+C*MODULE NEOMP2  *DECK MP2S4_NE
+      SUBROUTINE MP2S4_NE(XABCD,X,Y,CV,NVIR,
+     *                    NBF,NOCC,NDIM,NNOC,NNVIR)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      DIMENSION XABCD(NOCC,NDIM,NBF),X(NBF,*),
+     *                Y(NBF,*),CV(NBF,*)
+C
+C     ----- FORM (AI/BJ) FOR CURRENT BATCH OF J -----
+C
+      MAI = 0
+         DO 35 MA=1,NNVIR
+            DO 30 MI=1,NNOC
+               MAI = MAI+1
+               DO 15 MJ=1,NOCC
+                  DO 10 MR=1,NBF
+                     X(MR,MJ) = XABCD(MJ,MAI,MR)
+   10             CONTINUE
+   15          CONTINUE
+C
+               CALL MRTRBR(CV,NBF,NBF,NVIR,X,NBF,NOCC,Y,NBF)
+               DO 25 MB=1,NVIR
+                  DO 20 MJ=1,NOCC
+                     XABCD(MJ,MAI,MB) = Y(MB,MJ)
+   20             CONTINUE
+   25          CONTINUE
+   30       CONTINUE
+   35    CONTINUE
+      RETURN
+      END
+C
+C*MODULE NEOMP2  *DECK MP2SE_NE
+      SUBROUTINE MP2SE_NE(E,AIBJ,E2,J0,NOC,NVIR,NOCC,NDIM,
+     *                    EN,NNOC,NNVIR)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      DIMENSION AIBJ(NOCC,NDIM,NVIR),E(*),EN(*)
+C
+C     ----- FORM PARTIAL CONTRIBUTION TO THE E(2) ENERGY -----
+C
+      MAI = 0
+      DO 25 MA=1,NNVIR
+         DO 20 MI=1,NNOC
+            MAI = MAI+1
+            DO 15 MB=1,NVIR
+               DO 10 MJ=1,NOCC
+                  XAIBJ = AIBJ(MJ,MAI,MB)
+                  DAIBJ =     EN(MA+NNOC)+E(MB+NOC)  -EN(MI)-E(MJ+J0-1)
+                  E2 = E2-XAIBJ*(XAIBJ+XAIBJ)/DAIBJ
+   10          CONTINUE
+   15       CONTINUE
+   20    CONTINUE
+   25 CONTINUE
+C
+      RETURN
+      END
+C
+C*MODULE NEOMP2  *DECK MP2SE_NE_pos
+      SUBROUTINE MP2SE_NE_pos(E,AIBJ,E2,J0,NOC,NVIR,NOCC,NDIM,
+     *                    EN,NNOC,NNVIR,xlep,saibj)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      DIMENSION AIBJ(NOCC,NDIM,NVIR),E(*),EN(*),
+     *          saibj(nocc,ndim,nvir)
+C
+C     ----- FORM PARTIAL CONTRIBUTION TO THE E(2) ENERGY -----
+C
+      MAI = 0
+      DO 25 MA=1,NNVIR
+         DO 20 MI=1,NNOC
+            MAI = MAI+1
+            DO 15 MB=1,NVIR
+               DO 10 MJ=1,NOCC
+                  XAIBJ = AIBJ(MJ,MAI,MB)
+                  DAIBJ =     EN(MA+NNOC)+E(MB+NOC)  -EN(MI)-E(MJ+J0-1)
+                  E2 = E2-XAIBJ*(XAIBJ+XAIBJ)/DAIBJ
+c
+                  xsAIBJ = sAIBJ(MJ,MAI,MB)
+                  xlep = xlep - xaibj * xsaibj / daibj
+c
+   10          CONTINUE
+   15       CONTINUE
+   20    CONTINUE
+   25 CONTINUE
+C
+      RETURN
+      END
+C
+C*MODULE NEOMP2  *DECK ONETRF_NE
+      SUBROUTINE ONETRF_NE(XABCD,CO,NDIM,NUM,NOC,XX,IX,NXX)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      PARAMETER (MXAO=8192)
+C
+      DIMENSION XABCD(NOC,NDIM,*),CO(NUM,*),XX(*),IX(*)
+C
+      COMMON /IJPAIR/ IA(MXAO)
+      COMMON /PCKLAB/ LABSIZ
+C
+      NINT = ABS(NXX)
+C
+      IF(LABSIZ.GE.2) THEN
+C
+C     ----- TWO BYTES PER LABEL -----
+C
+         DO 20 M=1,NINT
+            VAL1 = XX(M)
+C
+                       NPACK = M
+*I32                     LABEL = IX( 2*NPACK - 1 )
+*I32                     IPACK = ISHFT( LABEL, -16 )
+*I32                     JPACK = IAND(  LABEL, 65535 )
+*I32                     LABEL = IX( 2*NPACK     )
+*I32                     KPACK = ISHFT( LABEL, -16 )
+*I32                     LPACK = IAND(  LABEL, 65535 )
+*I64                     LABEL = IX(NPACK)
+*I64                     IPACK = ISHFT( LABEL, -48 )
+*I64                     JPACK = IAND( ISHFT( LABEL, -32 ), 65535 )
+*I64                     KPACK = IAND( ISHFT( LABEL, -16 ), 65535 )
+*I64                     LPACK = IAND( LABEL, 65535 )
+                       MP = IPACK
+                       MQ = JPACK
+                       MR = KPACK
+                       MS = LPACK
+C
+            MPQ= IA(MP)+MQ
+            IF(MR.EQ.MS) VAL1 = VAL1 * 0.5D+00
+            DO 10 MJ=1,NOC
+               XABCD(MJ,MPQ,MR) = XABCD(MJ,MPQ,MR) + VAL1*CO(MS,MJ)
+               XABCD(MJ,MPQ,MS) = XABCD(MJ,MPQ,MS) + VAL1*CO(MR,MJ)
+   10       CONTINUE
+   20    CONTINUE
+C
+      ELSE
+C
+C     ----- ONE BYTE PER LABEL -----
+C
+*VDIR NODIVLOOP
+         DO 40 M=1,NINT
+            VAL1 = XX(M)
+C
+                       NPACK = M
+*I32                     LABEL = IX(NPACK)
+*I32                     IPACK = ISHFT( LABEL, -24 )
+*I32                     JPACK = IAND( ISHFT( LABEL, -16 ), 255 )
+*I32                     KPACK = IAND( ISHFT( LABEL,  -8 ), 255 )
+*I32                     LPACK = IAND( LABEL, 255 )
+*I64                     IF ( MOD(NPACK,2) .EQ. 0 ) THEN
+*I64                       LABEL = IX( NPACK/2 )
+*I64                       IPACK = IAND( ISHFT( LABEL, -24 ), 255 )
+*I64                       JPACK = IAND( ISHFT( LABEL, -16 ), 255 )
+*I64                       KPACK = IAND( ISHFT( LABEL,  -8 ), 255 )
+*I64                       LPACK = IAND( LABEL, 255 )
+*I64                     ELSE
+*I64                       LABEL = IX( (NPACK/2)+1 )
+*I64                       IPACK = ISHFT( LABEL, -56 )
+*I64                       JPACK = IAND( ISHFT( LABEL, -48 ), 255 )
+*I64                       KPACK = IAND( ISHFT( LABEL, -40 ), 255 )
+*I64                       LPACK = IAND( ISHFT( LABEL, -32 ), 255 )
+*I64                     END IF
+                       MP = IPACK
+                       MQ = JPACK
+                       MR = KPACK
+                       MS = LPACK
+C
+            MPQ= IA(MP)+MQ
+            IF(MR.EQ.MS) VAL1 = VAL1 * 0.5D+00
+            DO 30 MJ=1,NOC
+               XABCD(MJ,MPQ,MR) = XABCD(MJ,MPQ,MR) + VAL1*CO(MS,MJ)
+               XABCD(MJ,MPQ,MS) = XABCD(MJ,MPQ,MS) + VAL1*CO(MR,MJ)
+   30       CONTINUE
+   40    CONTINUE
+C
+      END IF
+C
+      RETURN
+      END

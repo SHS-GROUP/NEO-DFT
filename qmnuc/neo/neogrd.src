@@ -1,0 +1,1564 @@
+C  8 Jul 11 - PEA - add mxneo parameter
+C  3 JAN 11 - MWS - REMOVE OLD COSMO INTERFACE ENTIRELY
+C 30 APR 07 - SPW,TDI - NEW MODULE FOR 1-NUC DERIVATIVE INTEGRALS
+C
+C*MODULE NEOGRD  *DECK NEOGRAD
+      SUBROUTINE NEOGRAD
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      PARAMETER(MXATM=2000)
+C     
+      LOGICAL MIXED,DBG
+C
+      COMMON /FUNCT / E,EG(3*MXATM)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /RESTAR/ TIMLIM,IREST,NREC,INTLOC,IST,JST,KST,LST
+      COMMON /TMVALS/ TI,TX,TIM
+c     COMMON /GRDNEO/ DUMMY_NU(3*MXATM)
+      COMMON /GRDNEO/ DERNEO(3,MXATM)
+C
+C     --- PROGRAM WRITTEN BY TZVETELIN IRODANOV AND SIMON P. WEBB ---
+C
+CSPW  DBG = .TRUE.
+      DBG = .FALSE.
+C
+C     ----- CALCULATE GRADIENT OF THE ENERGY -----
+C        WITH RESPECT TO THE QM NUCLEAR COORDINATES
+C
+      NCOORD = 3*NAT
+C
+C     -- 1PARTICLE- INTEGRAL DERIVATIVE CONTRIBUTIONS TO THE GRADIENT --
+C
+      CALL STVDER_NEO
+      IF (TIM .GE. TIMLIM) RETURN
+C
+      IF(DBG) THEN 
+        WRITE(*,*) '1_NUC_GRAD'
+        CALL EGOUT(DERNEO,NAT) 
+      END IF
+C   
+C
+C     -- 2PARTICLE- INTEGRAL DERIVATIVE CONTRIBUTIONS TO THE GRADIENT --
+C
+C     -- NUCLEAR-NUCLEAR CONTRIBUTIONS --
+C
+      MIXED=.FALSE.
+      CALL JKDER_NEO(MIXED)
+      IF (TIM .GE. TIMLIM) RETURN
+C
+      IF(DBG) THEN 
+        WRITE(*,*) 'NUC_NUC_GRAD'
+        CALL EGOUT(DERNEO,NAT) 
+      END IF
+C
+C     -- MIXED NUCLEAR ELECTRON CONTRIBUTIONS --
+C
+      MIXED=.TRUE. 
+      CALL JKDER_NEO(MIXED)
+      IF (TIM .GE. TIMLIM) RETURN
+C
+      IF(DBG) THEN
+        WRITE(*,*) 'EL_NUC_GRAD'
+        CALL EGOUT(DERNEO,NAT)
+      END IF
+C
+      IREST = 0
+C
+C     --- ADD NEO GRADIENT TERMS TO ALREADY COMPUTED ELECTRONIC GRADIENT ---
+C
+      CALL VADD(EG,1,DERNEO,1,EG,1,NCOORD)
+C
+      RETURN
+      END
+C
+C*MODULE NEOGRD  *DECK STVDER_NEO
+      SUBROUTINE STVDER_NEO
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      LOGICAL SOME,OUT,GOPARR,DSKWRK,MASWRK,EFLDL,SVDSKW
+C
+      PARAMETER (MXATM=2000, mxneo=20)
+C
+      COMMON /EFLDC / EVEC(3),EFLDL
+      COMMON /FMCOM / X(1)
+C     COMMON /GRAD  / DE(3,MXATM)
+      COMMON /GRDNEO/ DERNEO(3,MXATM)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /INTOPT/ ISCHWZ,IECP,NECP,IEFLD
+      COMMON /IOFILE/ IR,IW,IP,IJK,IPK,IDAF,NAV,IODA(950)
+      COMMON /MACHIN/ NWDVAR,MAXFM,MAXSM,LIMFM,LIMSM
+      common /nucmoi/ nuniqn,iuniqn(mxneo),iuniqt(mxneo),nqmnuc,
+     *                iqmnuc(mxneo),iqntyp(mxneo),numnb,nucst,nauxnb,
+     *                iauxnb(mxneo),numult,nna,nnb,ntauxb
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /RESTAR/ TIMLIM,IREST,NREC,INTLOC,IST,JST,KST,LST
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+      COMMON /ZRFPAR/ GZRF,FIND(3),GNUCF,EBORN,DIELEC,IZRF,ICALC
+      COMMON /RELWFN/ RMETHOD,QRQMT,CLIG,CLIG2,QRTOL,IQRORD,MODQR,NESOC,
+     *                NRATOM,NUMU,NQMTR,NQRDAF,MORDA,NDARELB
+C
+      DATA CHECK/8HCHECK   /,GRD1/8HGRD1    /
+      DATA DEBUG/8HDEBUG   /,RESC/8HRESC    /,ANONE/8HNONE    /,
+     *     ANESC/8HNESC    /
+C
+C     ----- DRIVER FOR THE GRADIENT OF THE ONE PARTICLE (QMNUC) TERMS -----
+C
+      SOME = NPRINT.NE.-5 .AND. MASWRK
+      OUT = (EXETYP.EQ.DEBUG  .OR.  EXETYP.EQ.GRD1   .OR.  NPRINT.EQ.-3)
+     *         .AND.  MASWRK
+      IF(SOME) THEN
+         T0 = 0.0D+00
+         IF(IECP.GT.0  .OR.  IZRF.GT.0  .OR.  EFLDL)
+     *     CALL TSECND(T0)
+         WRITE(IW,9000)
+      END IF
+C
+C     INITIALIZE GRADIENT TO ZERO
+C
+      CALL VCLR(DERNEO,1,3*NAT)
+C
+C     ----- GET WORKING STORAGE -----
+C     NOTE THAT THESE THREE SECTIONS OVERLAP, AND THAT THEREFORE
+C     EIJDEN MUST BE CALLED BEFORE DENDD1.  AFTER THOSE TWO CALLS,
+C     ONLY -EPS- AND TOTAL DENSITY -DA- FROM THE 1ST TWO SECTIONS
+C     WILL NEEDED BY ANY OF THE FOLLOWING CALLS.
+C
+      L1 = NUMNB
+      L2 = (NUMNB*NUMNB+NUMNB)/2
+      L3 = NUMNB*NUMNB
+C
+      CALL VALFM(LOADFM)
+      LEPS   = LOADFM + 1
+      LVEC   = LEPS   + L2
+      LEIG   = LVEC   + L3
+      LIA    = LEIG   + L3
+      LWRK   = LIA    + L1
+      LAST1  = LWRK   + L1
+C
+      LDA    = LVEC
+      LDB    = LDA+L2
+      LAST2  = LDB+L2
+C
+      NDIMCD = 1
+      LDRG   = LDB
+      LEF3   = LDRG   + NAT*NAT
+      LAST3  = LEF3   + NDIMCD*NDIMCD
+C
+      LAST = MAX(LAST1,LAST2,LAST3)
+      LDERIV=LAST
+      LDERIV1=LAST
+      IF(RMETHOD.EQ.RESC) THEN
+         NQRDAF=30
+         NTOTREC=4*3*NAT
+         LDERIV1=LDERIV+L2*3*NAT
+         MORDA=LDERIV1+L2*3*NAT
+         LAST = MORDA+(NTOTREC-1)/NWDVAR+1
+      ENDIF
+      NEED = LAST - LOADFM - 1
+      CALL GETFM(NEED)
+      IF(EXETYP.EQ.CHECK) GO TO 100
+C
+C     ----- GET LAGRANGIAN -EPS- AND TOTAL DENSITY -DA- MATRICES -----
+C
+      CALL DAREAD(IDAF,IODA,X(LVEC),L3,444,0)
+      CALL DAREAD(IDAF,IODA,X(LEIG),L1,447,0)
+      CALL EIJDNU(X(LEPS),X(LVEC),X(LEIG),L1,L2,L3,NQMT)
+      IF(OUT) THEN
+         WRITE(IW,*) 'THE LAGRANGIAN MATRIX IS'
+         CALL PRTRI(X(LEPS),L1)
+      END IF
+C
+C     ----- GET NUCLEAR DENSITY -DA- MATRIX -----
+C
+      CALL DAREAD(IDAF,IODA,X(LDA),L2,445,0)
+C
+      IF(OUT) THEN
+         WRITE(6,*) 'THE DENSITY MATRIX IS'
+         CALL PRTRI(X(LDA),L1)
+      END IF
+C
+      IF(RMETHOD.EQ.RESC) THEN
+         SVDSKW=DSKWRK
+         DSKWRK=.TRUE.
+         CALL RAOPEN(NQRDAF,X(MORDA),0,NTOTREC,L3,NPRINT)
+         DSKWRK=SVDSKW
+      ENDIF
+C
+C     ----- NUCLEAR REPULSION FORCE ----- CALCULATED WITH THE E-CONTRIBUTION
+C     ----- DENSITY FORCE -----
+C     ----- HELLMANN-FEYNMAN FORCE -----
+C     ----- INTEGRAL FORCE (AO DERIVATIVE CONTRIBUTION) -----
+C
+      IF(RMETHOD.EQ.ANESC) CALL FLIPBASIS(0)
+      CALL SDERNU(X(LEPS),X(LDERIV),L1,L2)
+C
+      IF(OUT) THEN
+         WRITE(6,*) 'ENERGY GRADIENT VECTOR AFTER SDERNU'
+         CALL EGOUT(DERNEO,NAT)
+      END IF
+C
+      CALL HELFNU(X(LDA),X(LDERIV),L2)
+C
+      IF(OUT) THEN
+         WRITE(6,*) 'PRINT THE ENERGY GRADIENT VECTOR AFTER HELFNU'
+         CALL EGOUT(DERNEO,NAT)
+      END IF
+C
+      CALL TVDER_NEO(X(LDA),X(LDERIV),X(LDERIV1),L2,0)
+C
+      IF(OUT) THEN
+         WRITE(6,*) 'PRINT THE ENERGY GRADIENT VECTOR AFTER TVDER_NEO'
+         CALL EGOUT(DERNEO,NAT)
+      END IF
+C
+      IF(RMETHOD.NE.ANONE) THEN 
+C
+C        DERIVATIVES OF PVP INTEGRALS (HELLMANN-FEYNMAN AND AO DERIVATIVE)
+C        CALLS MUST BE IN THIS ORDER SINCE THE ARRAY IS ACCUMULATED
+C
+         IF(RMETHOD.EQ.ANESC) CALL FLIPBASIS(1)
+         CALL HFPVP(X(LDA),X(LDERIV),L2)
+         CALL DPVPINT(X(LDA),X(LDERIV),L2)
+C
+C        NESC ADDS CORRECTIONS TO S AND T
+C
+         IF(RMETHOD.EQ.ANESC) THEN
+C           --- GET CORRECTION TO S (USE LAGRANGIAN!) ---
+            CALL TVDER_NEO(X(LEPS),X(LDERIV),X(LDERIV1),L2,1)
+            CALL FLIPBASIS(2)
+C           --- GET CORRECTION TO T (USE DENSITY!) ---
+            CALL TVDER_NEO(X(LDA),X(LDERIV),X(LDERIV1),L2,2)
+            CALL FLIPBASIS(3)
+         ENDIF
+         IF(RMETHOD.EQ.RESC) CALL RESCGX(X(LDA),L1,L2,L3)
+C        --- THERE IS NO GRADIENT DRIVER FOR NESC - IT IS NOT NEEDED! ---
+         IF(SOME.AND.(IECP.GT.0.OR.IZRF.GT.0.OR.EFLDL))THEN
+           CALL TSECND(T1)
+           TR = T1-T0
+           WRITE(IW,9015) TR
+           T0 = T1
+         END IF
+      ENDIF
+C
+      IF(SOME  .AND.
+     *  (IECP.GT.0 .OR. IZRF.GT.0 .OR. EFLDL)) THEN
+         CALL TSECND(T1)
+         TG = T1-T0
+         WRITE(IW,9020) TG
+         T0 = T1
+      END IF
+C
+C
+  100 CONTINUE
+C
+      IF(RMETHOD.EQ.RESC) CALL RACLOS(NQRDAF,'KEEP')
+      CALL RETFM(NEED)
+C
+C     ----- GATHER ALL GRADIENT CONTRIBUTIONS -----
+C     ----- SAVE COMPLETED 1E-GRADIENT -----
+C
+      IF(GOPARR) CALL DDI_GSUMF(1500,DE,3*NAT)
+      CALL DAWRIT(IDAF,IODA,DE,3*NAT,3,0)
+C
+C     ----- CHECK TIME -----
+C
+      IST=1
+      JST=1
+      KST=1
+      LST=1
+      IF(MASWRK) WRITE(IW,9010)
+C     CALL TEXIT(1,IREST)
+      RETURN
+C
+ 9000 FORMAT(/1X,'BEGINNING ONE NUCLEUS GRADIENT...')
+ 9010 FORMAT(1X,'..... END OF 1-NUCLEUS GRADIENT ......')
+ 9015 FORMAT(1X,'TIME TO DO RELATIVISTIC GRADIENT INTEGRALS=',F10.2)
+ 9020 FORMAT(1X,'TIME TO DO ORDINARY GRADIENT INTEGRALS=',F10.2)
+      END
+C
+C*MODULE NEOGRD  *DECK EIJDNU
+      SUBROUTINE EIJDNU(EPS,V,E,L1,L2,L3,L0)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      DIMENSION V(L1,L0),EPS(L2),E(*)
+C
+C        E(L1) FOR RHF, E(L3) FOR GVB/MCSCF/CI
+C        NOTE FOR CI RUNS, -ECI- AND -E- MUST BE EQUIVALENT BY CALL
+c
+      parameter (mxneo=20)
+C
+      COMMON /IOFILE/ IR,IW,IP,IJK,IPK,IDAF,NAV,IODA(950)
+      common /nucmoi/ nuniqn,iuniqn(mxneo),iuniqt(mxneo),nqmnuc,
+     *                iqmnuc(mxneo),iqntyp(mxneo),numnb,nucst,nauxnb,
+     *                iauxnb(mxneo),numult,nna,nnb,ntauxb
+C
+      PARAMETER (ZERO=0.0D+00)
+C
+C     ----- COMPUTE "ENERGY WEIGHTED DENSITY MATRIX" -----
+C     THIS QUANTITY IS ACTUALLY THE LAGRANGIAN MATRIX,
+C     BACKTRANSFORMED INTO THE AO BASIS.
+C
+C           NEO-ROHF CASE 
+C     QM-NUCLEI CONTRIBUTION TO THE NEO ENERGY GRADIENT
+C
+      IF(NQMNUC.GT.0) THEN
+         CALL DAREAD(IDAF,IODA,V,L3,444,0)
+         CALL DAREAD(IDAF,IODA,E,L1,447,0)
+         IJ = 0
+         DO 130 I = 1,L1
+            DO 120 J = 1,I
+               IJ = IJ+1                                                       
+               DUM = ZERO
+               DO 100 K = 1,NNA
+                  DUM = DUM-E(K)*V(I,K)*V(J,K)
+  100          CONTINUE
+               EPS(IJ) = DUM+DUM
+  120       CONTINUE
+  130    CONTINUE
+         RETURN
+      END IF 
+C
+C           RHF CASE
+C
+C     IF(SCFTYP.EQ.RHF .AND. MPLEVL.EQ.0 .AND. CITYP.NE.GUGA) THEN
+C        IF(MFRZ) THEN
+C          L2 = (L1*L1+L1)/2
+C          CALL DAREAD(IDAF,IODA,EPS,L2,36,0)
+C          RETURN
+C        END IF
+C        CALL DAREAD(IDAF,IODA,V,L3,15,0)
+C        CALL DAREAD(IDAF,IODA,E,L1,17,0)
+C        IJ = 0
+C        DO 130 I = 1,L1
+C           DO 120 J = 1,I
+C              IJ = IJ+1
+C              DUM = ZERO
+C              DO 100 K = 1,NA
+C                 DUM = DUM-E(K)*V(I,K)*V(J,K)
+C 100          CONTINUE
+C              EPS(IJ) = DUM+DUM
+C 120       CONTINUE
+C 130    CONTINUE
+C        RETURN
+C     END IF
+C
+C           UHF AND ROHF CASE
+C
+C     IF(SCFTYP.EQ.UHF  .OR.  SCFTYP.EQ.ROHF) THEN
+C        L2 = (L1*L1+L1)/2
+C        CALL DAREAD(IDAF,IODA,EPS,L2,36,0)
+C        IJ = 0
+C        DO 160 I = 1,L1
+C           IJ = IJ+I
+C           EPS(IJ) = HALF*EPS(IJ)
+C 160    CONTINUE
+C        RETURN
+C     END IF
+C
+C           READ IN MP2 DENSITY FROM DAF
+C
+C     IF(SCFTYP.EQ.RHF .AND. MPLEVL.EQ.2) THEN
+C        L2 = (L1*L1+L1)/2
+C        CALL DAREAD(IDAF,IODA,EPS,L2,309,0)
+C        RETURN
+C     END IF
+C
+C           ONLY GVB/MCSCF/CI GET THIS FAR...
+C
+C     IF(SCFTYP.EQ.GVB) NORB = NMOGVB
+C     IF(SCFTYP.EQ.RMC) THEN
+C        IF(CISTEP.EQ.ALDET) NORB = NCORSV+NACT
+C        IF(CISTEP.EQ.GUGA)  NORB = NMCC+NDOC+NAOS+NBOS+NALP+NVAL
+C     END IF
+C     IF(CITYP.EQ.GUGA) NORB = NFZC+NDOC+NAOS+NBOS+NALP+NVAL
+C     DO 210 I = 1,L1
+C        IA(I) = (I*I-I)/2
+C 210 CONTINUE
+C
+C     ----- READ MOS AND LAGRANGIAN FROM DISK -----
+C
+C     L3ORB = NORB*NORB
+C     IF(SCFTYP.EQ.RMC  .OR.  CITYP.EQ.GUGA) L3ORB = L3
+C     CALL DAREAD(IDAF,IODA,V,L3,15,0)
+C     CALL DAREAD(IDAF,IODA,E,L3ORB,36,0)
+C
+C     ----- MAP MCSCF/CI LAGRANGIAN INTO NORB BY NORB FORMAT -----
+C
+C     IF(SCFTYP.EQ.GVB .OR. CITYP.EQ.GUGA) GO TO 280
+C     IF(NORB.GT.1) THEN
+C        IADD = 1
+C        IADDE = 1
+C        DO 260 I = 1,NORB
+C           IADD = IADD + NORB
+C           IADDE = IADDE + L1
+C           CALL DCOPY(NORB,E(IADDE),1,E(IADD),1)
+C 260    CONTINUE
+C     END IF
+C
+C     ----- CALCULATE C-DAGGER*E*C -----
+C
+C 280 CONTINUE
+C     CALL VCLR(EPS,1,(L1*L1+L1)/2)
+C
+C     IF (CITYP.NE.GUGA) THEN
+C
+C     ---CALCULATE THE HALF TRANSFORM FIRST -----
+C     NOTE THAT E(KL) IS USED EXACTLY TWICE.  DIVIDE BY TWO TO GET
+C     THE VALUES APPROPRIATE FOR THE GENERALIZED LAGRANGE MULTIPLIERS.
+C
+C     DO 400 I = 1,L1
+C        KL = 0
+C        DO 330 L = 1,NORB
+C           WRK(L) = ZERO
+C           DO 320 K = 1,NORB
+C              KL = KL + 1
+C              WRK(L) = WRK(L) - V(I,K)*E(KL)
+C 320       CONTINUE
+C 330    CONTINUE
+C        DO 340 L = 1,NORB
+C           WRK(L) = WRK(L)*HALF
+C 340    CONTINUE
+C
+C        DO 380 J = 1,L1
+C           IJ = IA(I) + J
+C           IF(J .GT. I) IJ = IA(J) + I
+C           DO 360 L = 1,NORB
+C              EPS(IJ) = EPS(IJ) + WRK(L)*V(J,L)
+C 360       CONTINUE
+C 380    CONTINUE
+C 400 CONTINUE
+C
+C     ELSE
+C
+C     --- FOR CI THE LAGRANGIAN -ECI- IS NOT SYMMETRIC ---
+C
+C     DO 500 I = 1,L1
+C        DO 430 L = 1,NORB
+C           WRK(L) = ZERO
+C           DO 420 K = 1,NORB
+C              IF(K.LE.L) THEN
+C                 WRK(L) = WRK(L) - V(I,K)*ECI(K,L)
+C              ELSE
+C                 WRK(L) = WRK(L) - V(I,K)*ECI(L,K)
+C              END IF
+C 420       CONTINUE
+C 430    CONTINUE
+C        DO 440 L = 1,NORB
+C           WRK(L) = WRK(L)*HALF
+C 440    CONTINUE
+C
+C        DO 480 J = 1,L1
+C           IJ = IA(I) + J
+C           IF(J .GT. I) IJ = IA(J) + I
+C           DO 460 L = 1,NORB
+C              EPS(IJ) = EPS(IJ) + WRK(L)*V(J,L)
+C 460       CONTINUE
+C 480    CONTINUE
+C 500 CONTINUE
+C
+C     END IF
+C
+      RETURN
+      END
+C*MODULE NEOGRD  *DECK SDERNU
+      SUBROUTINE SDERNU(EPS,DSINT,L1,L2)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      LOGICAL DBG,NORM,OUT
+      LOGICAL GOPARR,DSKWRK,MASWRK,NXT,SVDSKW
+C
+      PARAMETER (MXGTOT=20000, MXSH=5000, MXAO=8192)
+      PARAMETER (MXATM=2000)
+C
+      DIMENSION EPS(L2),DSINT(L2,3,NAT)      ! NAT = NQMNUC FOR NEO NOT USED
+      DIMENSION DIJ(225), DIJINT(225), IJX(35), IJY(35),IJZ(35),
+     *           XS(6,5), YS(6,5), ZS(6,5),
+     *          DXS(5,5),DYS(5,5),DZS(5,5)
+C
+      COMMON /DSTV  / XINT,YINT,ZINT,T,X0,Y0,Z0,XI,YI,ZI,
+     *                XJ,YJ,ZJ,NI,NJ,CX,CY,CZ
+C     COMMON /GRAD  / DE(3,MXATM)
+      COMMON /GRDNEO/ DERNEO(3,MXATM)
+      COMMON /IJPAIR/ IA(MXAO)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IJK,IPK,IDAF,NAV,IODA(950)
+      COMMON /NEOSHL/ NGAUSS,NGAUSE,NGAUSN,NTSHEL,NNUCSH
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+      COMMON /RELWFN/ RMETHOD,QRQMT,CLIG,CLIG2,QRTOL,IQRORD,MODQR,NESOC,
+     *                NRATOM,NUMU,NQMTR,NQRDAF,MORDA,NDARELB
+      COMMON /FMCOM / X(1)
+C
+      PARAMETER (SQRT3=1.73205080756888D+00)
+      PARAMETER (SQRT5=2.23606797749979D+00, SQRT7=2.64575131106459D+00)
+      PARAMETER (ONE=1.0D+00)
+      PARAMETER (RLN10=2.30258D+00)
+C
+      DATA DEBUG/8HDEBUG   /, DBUGME/8HSDER    /, GRD1/8HGRD1    /,
+     *     RESC/8HRESC    /
+C
+      DATA IJX / 1, 2, 1, 1, 3, 1, 1, 2, 2, 1,
+     *           4, 1, 1, 3, 3, 2, 1, 2, 1, 2,
+     *           5, 1, 1, 4, 4, 2, 1, 2, 1, 3,
+     *           3, 1, 3, 2, 2/
+      DATA IJY / 1, 1, 2, 1, 1, 3, 1, 2, 1, 2,
+     *           1, 4, 1, 2, 1, 3, 3, 1, 2, 2,
+     *           1, 5, 1, 2, 1, 4, 4, 1, 2, 3,
+     *           1, 3, 2, 3, 2/
+      DATA IJZ / 1, 1, 1, 2, 1, 1, 3, 1, 2, 2,
+     *           1, 1, 4, 1, 2, 1, 2, 3, 3, 2,
+     *           1, 1, 5, 1, 2, 1, 2, 4, 4, 1,
+     *           3, 3, 2, 2, 3/
+C
+C     ----- CALCULATE DERIVATIVES OF THE NUCLEAR OVERLAP MATRIX -----
+C     THIS TERM RESULTS FROM DERIVATIVES OF THE DENSITY MATRIX,
+C     WHICH CAN IN THE CASE OF A SYMMETRIC LAGRANGIAN MATRIX, CAN
+C     BE CONVERTED INSTEAD INTO DERIVATIVES OF OVERLAP INTEGRALS.
+C     RESC RUNS NEED BOTH CONTRACTION OF THE INTEGRALS WITH DENSITY
+C     AND THE INTEGRALS THEMSELVES.
+C
+      DBG = (EXETYP.EQ.DEBUG  .OR.  EXETYP.EQ.DBUGME)  .AND.  MASWRK
+      OUT = (EXETYP.EQ.DEBUG  .OR.  EXETYP.EQ.DBUGME  .OR.
+     *       EXETYP.EQ.GRD1   .OR.  NPRINT.EQ.-3)
+      IF(DBG) WRITE(IW,9000)
+C
+      TOL = RLN10*ITOL
+      NORM = NORMF .NE. 1 .OR. NORMP .NE. 1
+      IF(RMETHOD.EQ.RESC) CALL VCLR(DSINT,1,L2*3*NAT)
+C
+C     INITIALIZE PARALLEL
+C
+      NXT = IBTYP.EQ.1
+      IPCOUNT = ME - 1
+      NEXT = -1
+      MINE = -1
+C
+      IF(DBG) THEN
+         WRITE(IW,9010)
+         CALL PRTRI(EPS,L1)
+      END IF
+C
+C     ----- I SHELL
+C
+      DO 780 II = NSHELL+1, NTSHEL
+C
+C           GO PARALLEL!
+C
+      IF(NXT .AND. GOPARR) THEN
+         MINE = MINE + 1
+         IF(MINE.GT.NEXT) CALL DDI_DLBNEXT(NEXT)
+         IF(NEXT.NE.MINE) GO TO 780
+      END IF
+C
+      IAT = KATOM(II)
+      XI = C(1,IAT)
+      YI = C(2,IAT)
+      ZI = C(3,IAT)
+      I1 = KSTART(II)
+      I2 = I1+KNG(II)-1
+      LIT = KTYPE(II)
+      MINI = KMIN(II)
+      MAXI = KMAX(II)
+      LOCI = KLOC(II)-MINI
+      LITDER = LIT+1
+C
+C     ----- J SHELL
+C
+      DO 760 JJ = NSHELL + 1, II
+C
+C           GO PARALLEL!
+C
+      IF((.NOT.NXT) .AND. GOPARR) THEN
+         IPCOUNT = IPCOUNT + 1
+         IF(MOD(IPCOUNT,NPROC).NE.0) GO TO 760
+      END IF
+C
+      JAT = KATOM(JJ)
+      XJ = C(1,JAT)
+      YJ = C(2,JAT)
+      ZJ = C(3,JAT)
+      J1 = KSTART(JJ)
+      J2 = J1+KNG(JJ)-1
+      LJT = KTYPE(JJ)
+      MINJ = KMIN(JJ)
+      MAXJ = KMAX(JJ)
+      LOCJ = KLOC(JJ)-MINJ
+      RR = (XI-XJ)**2+(YI-YJ)**2+(ZI-ZJ)**2
+      IF(II.EQ.JJ) GO TO 760
+C
+C     ----- I PRIMITIVE
+C
+      DO 640 IG = I1,I2
+        AI = EX(IG)
+        ARRI = AI*RR
+        AXI = AI*XI
+        AYI = AI*YI
+        AZI = AI*ZI
+        CSI=CS(IG)
+        CPI=CP(IG)
+        CDI=CD(IG)
+        CFI=CF(IG)
+        CGI=CG(IG)
+C
+C     ----- J PRIMITIVE
+C
+        DO 620 JG = J1,J2
+          AJ = EX(JG)
+          AA = AI+AJ
+          AA1 = ONE/AA
+          DUM = AJ*ARRI*AA1
+          IF(DUM .GT. TOL) GO TO 620
+          FAC = EXP(-DUM)
+          CSJ = CS(JG)
+          CPJ = CP(JG)
+          CDJ = CD(JG)
+          CFJ = CF(JG)
+          CGJ = CG(JG)
+          AX = (AXI+AJ*XJ)*AA1
+          AY = (AYI+AJ*YJ)*AA1
+          AZ = (AZI+AJ*ZJ)*AA1
+C
+C     ----- DENSITY FACTOR
+C
+          IJ = 0
+          DO 580 I = MINI,MAXI
+            IF(I.EQ.1) DUM1=CSI*FAC
+            IF(I.EQ.2) DUM1=CPI*FAC
+            IF(I.EQ.5) DUM1=CDI*FAC
+            IF(I.EQ.8.AND.NORM) DUM1=DUM1*SQRT3
+            IF(I.EQ.11) DUM1=CFI*FAC
+            IF(I.EQ.14.AND.NORM) DUM1=DUM1*SQRT5
+            IF(I.EQ.20.AND.NORM) DUM1=DUM1*SQRT3
+            IF(I.EQ.21) DUM1=CGI*FAC
+            IF(I.EQ.24.AND.NORM) DUM1=DUM1*SQRT7
+            IF(I.EQ.30.AND.NORM) DUM1=DUM1*SQRT5/SQRT3
+            IF(I.EQ.33.AND.NORM) DUM1=DUM1*SQRT3
+            DO 570 J = MINJ,MAXJ
+              IF(J.EQ.1) DUM2=DUM1*CSJ
+              IF(J.EQ.2) DUM2=DUM1*CPJ
+              IF(J.EQ.5) DUM2=DUM1*CDJ
+              IF(J.EQ.8.AND.NORM) DUM2=DUM2*SQRT3
+              IF(J.EQ.11) DUM2=DUM1*CFJ
+              IF(J.EQ.14.AND.NORM) DUM2=DUM2*SQRT5
+              IF(J.EQ.20.AND.NORM) DUM2=DUM2*SQRT3
+              IF(J.EQ.21) DUM2=DUM1*CGJ
+              IF(J.EQ.24.AND.NORM) DUM2=DUM2*SQRT7
+              IF(J.EQ.30.AND.NORM) DUM2=DUM2*SQRT5/SQRT3
+              IF(J.EQ.33.AND.NORM) DUM2=DUM2*SQRT3
+              IJ=IJ+1
+              NN=IA(LOCI+I)+(LOCJ+J)
+              IF(RMETHOD.EQ.RESC) THEN
+                DIJINT(IJ)=DUM2
+              ENDIF
+              DEN = EPS(NN)
+              DEN=DEN+DEN
+              DIJ(IJ) = DUM2*DEN
+  570       CONTINUE
+  580     CONTINUE
+C
+C     ----- OVERLAP
+C
+      T = SQRT(AA1)
+      X0 = AX
+      Y0 = AY
+      Z0 = AZ
+      DO 590 J = 1,LJT
+        NJ = J
+        DO 590 I = 1,LITDER
+          NI = I
+          CALL VINT
+          XS(I,J)=XINT*T
+          YS(I,J)=YINT*T
+          ZS(I,J)=ZINT*T
+  590 CONTINUE
+C
+      CALL DERI(DXS,DYS,DZS,XS,YS,ZS,LIT,LJT,AI)
+C
+      IJ=0
+      DO 600 I=MINI,MAXI
+        IX=IJX(I)
+        IY=IJY(I)
+        IZ=IJZ(I)
+        DO 600 J=MINJ,MAXJ
+          JX=IJX(J)
+          JY=IJY(J)
+          JZ=IJZ(J)
+          DUMX=DXS(IX,JX)* YS(IY,JY)* ZS(IZ,JZ)
+          DUMY= XS(IX,JX)*DYS(IY,JY)* ZS(IZ,JZ)
+          DUMZ= XS(IX,JX)* YS(IY,JY)*DZS(IZ,JZ)
+          IJ=IJ+1
+          IF(RMETHOD.EQ.RESC) THEN
+            NN=IA(LOCI+I)+(LOCJ+J)
+            DUMINT=DIJINT(IJ)
+            DSINT(NN,1,IAT)=DSINT(NN,1,IAT)+DUMX*DUMINT
+            DSINT(NN,2,IAT)=DSINT(NN,2,IAT)+DUMY*DUMINT
+            DSINT(NN,3,IAT)=DSINT(NN,3,IAT)+DUMZ*DUMINT
+            DSINT(NN,1,JAT)=DSINT(NN,1,JAT)-DUMX*DUMINT
+            DSINT(NN,2,JAT)=DSINT(NN,2,JAT)-DUMY*DUMINT
+            DSINT(NN,3,JAT)=DSINT(NN,3,JAT)-DUMZ*DUMINT
+          ENDIF
+          DERNEO(1,IAT)=DERNEO(1,IAT)+(DUMX*DIJ(IJ))
+          DERNEO(2,IAT)=DERNEO(2,IAT)+(DUMY*DIJ(IJ))
+          DERNEO(3,IAT)=DERNEO(3,IAT)+(DUMZ*DIJ(IJ))
+          DERNEO(1,JAT)=DERNEO(1,JAT)-(DUMX*DIJ(IJ))
+          DERNEO(2,JAT)=DERNEO(2,JAT)-(DUMY*DIJ(IJ))
+          DERNEO(3,JAT)=DERNEO(3,JAT)-(DUMZ*DIJ(IJ))
+  600 CONTINUE
+C
+  620 CONTINUE
+  640 CONTINUE
+C
+C     ----- END OF PRIMITIVE LOOPS -----
+C
+      IF(DBG) THEN
+         WRITE(IW,9100) II,JJ
+         CALL EGOUT(DERNEO,NAT)
+      END IF
+  760 CONTINUE
+  780 CONTINUE
+C
+C     ----- END OF SHELL LOOPS -----
+C
+      IF(OUT) THEN
+         IF(GOPARR) CALL DDI_GSUMF(1501,DERNEO,3*NAT)
+         IF(MASWRK) THEN
+            WRITE(IW,9000)
+            CALL EGOUT(DERNEO,NAT)
+         END IF
+         IF(GOPARR) CALL DSCAL(3*NAT,ONE/NPROC,DERNEO,1)
+      END IF
+      IF(GOPARR .AND. NXT) CALL DDI_DLBRESET
+C
+      IF(RMETHOD.EQ.RESC) THEN
+        IF(GOPARR) CALL DDI_GSUMF(1501,DSINT,L2*3*NAT)
+        SVDSKW=DSKWRK
+        DSKWRK=.TRUE.
+        LREC=0
+C       STARTING RECORD FOR THE S DERIVATIVE INTEGRALS
+        DO I=1,NAT
+          DO J=1,3
+            LREC=LREC+1
+            CALL RAWRIT(NQRDAF,X(MORDA),DSINT(1,J,I),L2,LREC,0)
+          ENDDO
+        ENDDO
+        DSKWRK=SVDSKW
+      ENDIF
+C
+      RETURN
+C
+ 9000 FORMAT(/10X,33(1H-)/10X,'GRADIENT INCLUDING DENSITY FORCES'/
+     *        10X,33(1H-))
+ 9010 FORMAT(1X,'THE LAGRANGIAN IN THE AO BASIS IS')
+ 9100 FORMAT(1X,'SDERNU: SHELLS II,JJ=',2I5)
+      END
+C*MODULE NEOGRD  *DECK HELFNU
+      SUBROUTINE HELFNU(DENAB,HFINT,L2)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      LOGICAL IANDJ,OUT,DBG,NORM,DOUBLE,GOPARR,DSKWRK,MASWRK,NXT,SVDSKW
+C
+C  MAGIC NUMBERS: S(1)+P(3)+D(6)+F(10)+G(15)=35
+C                 BASIS FUNCTION TYPES=5
+C                 MAXIMUM BASIS TYPE SQUARED = (15)**2 = 225
+C
+      PARAMETER (MXGTOT=20000, MXSH=5000, MXAO=8192)
+      PARAMETER (MXATM=2000)
+C
+      DIMENSION DENAB(L2),HFINT(L2,3,NAT)
+      DIMENSION IJX(35),IJY(35),IJZ(35),DIJ(225),
+     *          XIN(5,5,5,2),YIN(5,5,5,2),ZIN(5,5,5,2)
+C
+      COMMON /DSTV  / XINT,YINT,ZINT,T,X0,Y0,Z0,XI,YI,ZI,
+     *                XJ,YJ,ZJ,NI,NJ,CX,CY,CZ
+C     COMMON /GRAD  / DE(3,MXATM)
+      COMMON /GRDNEO/ DERNEO(3,MXATM)
+      COMMON /IJPAIR/ IA(MXAO)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IJK,IPK,IDAF,NAV,IODA(950)
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /NEOSHL/ NGAUSS,NGAUSE,NGAUSN,NTSHEL,NNUCSH
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /ROOT  / XX,U(13),W(13),NROOTS
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+      COMMON /RELWFN/ RMETHOD,QRQMT,CLIG,CLIG2,QRTOL,IQRORD,MODQR,NESOC,
+     *                NRATOM,NUMU,NQMTR,NQRDAF,MORDA,NDARELB
+      COMMON /FMCOM / X(1)
+C
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00)
+      PARAMETER (RLN10=2.30258D+00)
+      PARAMETER (PI212=1.1283791670955D+00)
+      PARAMETER (SQRT3=1.73205080756888D+00)
+      PARAMETER (SQRT5=2.23606797749979D+00)
+      PARAMETER (SQRT7=2.64575131106459D+00)
+C
+      DATA DEBUG/8HDEBUG   /, DBUGME/8HHELFEY  /, GRD1/8HGRD1    /,
+     *     RESC/8HRESC    /
+C
+C  THE IJX, IJY, AND IJZ ARRAYS CONTAIN THE POWERS OF THE CARTESIAN
+C  GAUSSIANS PLUS 1 IN EVERY PLACE.  THE REASON FOR THE PLUS ONE IS
+C  THAT THEY ARE USED TO INDEX AN ARRAY RUNNING FROM 1-5 CORRESPONDING
+C  TO 0-4 IN THE POWER.
+C
+      DATA IJX/ 1, 2, 1, 1, 3, 1, 1, 2, 2, 1,
+     *          4, 1, 1, 3, 3, 2, 1, 2, 1, 2,
+     *          5, 1, 1, 4, 4, 2, 1, 2, 1, 3,
+     *          3, 1, 3, 2, 2/
+      DATA IJY/ 1, 1, 2, 1, 1, 3, 1, 2, 1, 2,
+     *          1, 4, 1, 2, 1, 3, 3, 1, 2, 2,
+     *          1, 5, 1, 2, 1, 4, 4, 1, 2, 3,
+     *          1, 3, 2, 3, 2/
+      DATA IJZ/ 1, 1, 1, 2, 1, 1, 3, 1, 2, 2,
+     *          1, 1, 4, 1, 2, 1, 2, 3, 3, 2,
+     *          1, 1, 5, 1, 2, 1, 2, 4, 4, 1,
+     *          3, 3, 2, 2, 3/
+C
+C     ----- HELMANN-FEYNMAN GRADIENT TERM -----
+C     INTEGRAL TYPE IS <II/H'/JJ> = <II/V'/JJ>
+C     RESC RUNS DO NOT CONTRACT THE INTEGRALS WITH DENSITY
+C
+      DBG = (EXETYP.EQ.DEBUG  .OR.  EXETYP.EQ.DBUGME)  .AND.  MASWRK
+      OUT = (EXETYP.EQ.DEBUG  .OR.  EXETYP.EQ.DBUGME  .OR.
+     *       EXETYP.EQ.GRD1   .OR.  NPRINT.EQ.-3)
+      IF(DBG) WRITE(IW,9000)
+C
+      TOL = RLN10*ITOL
+      NORM = NORMF.NE.1 .OR. NORMP.NE.1
+      IF(RMETHOD.EQ.RESC) CALL VCLR(HFINT,1,L2*3*NAT)
+C
+C     INITIALIZATION FOR PARALLEL
+C
+      NXT = IBTYP.EQ.1
+      IPCOUNT = ME - 1
+      NEXT = -1
+      MINE = -1
+C
+C     ----- I SHELL
+C
+      DO 600 II = NSHELL+1, NTSHEL
+C
+C           GO PARALLEL!
+C
+      IF(NXT .AND. GOPARR) THEN
+         MINE = MINE + 1
+         IF(MINE.GT.NEXT) CALL DDI_DLBNEXT(NEXT)
+         IF(NEXT.NE.MINE) GO TO 600
+      END IF
+C
+      I = KATOM(II)
+      XI = C(1,I)
+      YI = C(2,I)
+      ZI = C(3,I)
+      I1 = KSTART(II)
+      I2 = I1+KNG(II)-1
+      LIT = KTYPE(II)
+      MINI = KMIN(II)
+      MAXI = KMAX(II)
+      LOCI = KLOC(II)-MINI
+C
+C     ----- J SHELL
+C
+      DO 580 JJ = NSHELL+1, II
+C
+C           GO PARALLEL!
+C
+        IF((.NOT.NXT) .AND. GOPARR) THEN
+           IPCOUNT = IPCOUNT + 1
+           IF(MOD(IPCOUNT,NPROC).NE.0) GO TO 580
+        END IF
+C
+        J = KATOM(JJ)
+        XJ = C(1,J)
+        YJ = C(2,J)
+        ZJ = C(3,J)
+        J1 = KSTART(JJ)
+        J2 = J1+KNG(JJ)-1
+        LJT = KTYPE(JJ)
+        MINJ = KMIN(JJ)
+        MAXJ = KMAX(JJ)
+        LOCJ = KLOC(JJ)-MINJ
+        NROOTS = (LIT+LJT+1-2)/2 + 1
+        RR = (XI-XJ)**2+(YI-YJ)**2+(ZI-ZJ)**2
+        IANDJ = II .EQ. JJ
+C
+C     ----- I PRIMITIVE
+C
+        DO 520 IG = I1,I2
+        AI = EX(IG)
+        ARRI = AI*RR
+        AXI = AI*XI
+        AYI = AI*YI
+        AZI = AI*ZI
+        CSI = CS(IG)
+        CPI = CP(IG)
+        CDI = CD(IG)
+        CFI = CF(IG)
+        CGI = CG(IG)
+C
+C     ----- J PRIMITIVE
+C
+        JGMAX = J2
+        IF(IANDJ) JGMAX = IG
+        DO 500 JG = J1,JGMAX
+          AJ = EX(JG)
+          AA = AI+AJ
+          AA1 = ONE/AA
+          DUM = AJ*ARRI*AA1
+          IF(DUM .GT. TOL) GO TO 500
+          FAC = EXP(-DUM)
+          CSJ = CS(JG)
+          CPJ = CP(JG)
+          CDJ = CD(JG)
+          CFJ = CF(JG)
+          CGJ = CG(JG)
+          AX = (AXI+AJ*XJ)*AA1
+          AY = (AYI+AJ*YJ)*AA1
+          AZ = (AZI+AJ*ZJ)*AA1
+C
+C     ----- DENSITY FACTOR
+C
+          DOUBLE=IANDJ.AND.IG.NE.JG
+          JMAX = MAXJ
+          NN = 0
+          DUM1 = ZERO
+          DUM2 = DUM1
+          DO 360 I = MINI,MAXI
+            IF(I.EQ.1) DUM1=CSI*FAC
+            IF(I.EQ.2) DUM1=CPI*FAC
+            IF(I.EQ.5) DUM1=CDI*FAC
+            IF(I.EQ.8.AND.NORM) DUM1=DUM1*SQRT3
+            IF(I.EQ.11) DUM1=CFI*FAC
+            IF(I.EQ.14.AND.NORM) DUM1=DUM1*SQRT5
+            IF(I.EQ.20.AND.NORM) DUM1=DUM1*SQRT3
+            IF(I.EQ.21) DUM1=CGI*FAC
+            IF(I.EQ.24.AND.NORM) DUM1=DUM1*SQRT7
+            IF(I.EQ.30.AND.NORM) DUM1=DUM1*SQRT5/SQRT3
+            IF(I.EQ.33.AND.NORM) DUM1=DUM1*SQRT3
+C
+            IF(IANDJ) JMAX = I
+            DO 360 J = MINJ,JMAX
+              IF(J.EQ.1) THEN
+                DUM2=DUM1*CSJ
+                IF( .NOT. DOUBLE) GO TO 350
+                IF(I .GT. 1) THEN
+                 DUM2 = DUM2+CSI*CPJ*FAC
+                ELSE
+                 DUM2 = DUM2+DUM2
+                END IF
+              ELSE IF(J.EQ.2) THEN
+                DUM2=DUM1*CPJ
+                IF(DOUBLE) DUM2 = DUM2+DUM2
+              ELSE IF(J.EQ.5) THEN
+                DUM2=DUM1*CDJ
+                IF(DOUBLE) DUM2 = DUM2+DUM2
+              ELSE IF(J.EQ.8.AND.NORM) THEN
+                DUM2 = DUM2*SQRT3
+              ELSE IF(J.EQ.11) THEN
+                DUM2=DUM1*CFJ
+                IF(DOUBLE) DUM2=DUM2+DUM2
+              ELSE IF(J.EQ.14.AND.NORM) THEN
+                DUM2=DUM2*SQRT5
+              ELSE IF(J.EQ.20.AND.NORM) THEN
+                DUM2=DUM2*SQRT3
+              ELSE IF(J.EQ.21) THEN
+                DUM2=DUM1*CGJ
+                IF(DOUBLE) DUM2=DUM2+DUM2
+              ELSE IF(J.EQ.24.AND.NORM) THEN
+                DUM2=DUM2*SQRT7
+              ELSE IF(J.EQ.30.AND.NORM) THEN
+                DUM2=DUM2*SQRT5/SQRT3
+              ELSE IF(J.EQ.33.AND.NORM) THEN
+                DUM2=DUM2*SQRT3
+              END IF
+C
+  350         NN = NN+1
+              IF(RMETHOD.EQ.RESC) THEN
+                DIJ(NN)=DUM2*PI212*AA1
+              ELSE
+                NDUM = IA(LOCI+I)+(LOCJ+J)
+                DEN = DENAB(NDUM)
+                IF(.NOT.IANDJ.OR.I.NE.J) DEN=DEN+DEN
+                DIJ(NN)=DUM2*DEN*PI212*AA1
+              ENDIF
+  360     CONTINUE
+C
+C     ..... HELLMANN-FEYNMAN TERM .....
+C
+          AAX = AA*AX
+          AAY = AA*AY
+          AAZ = AA*AZ
+          DO 480 IC = 1,NAT
+            ZNUC = -ZAN(IC)
+            CX = C(1,IC)
+            CY = C(2,IC)
+            CZ = C(3,IC)
+            XX = AA*((AX-CX)**2+(AY-CY)**2+(AZ-CZ)**2)
+            IF(NROOTS.LE.3) CALL RT123
+            IF(NROOTS.EQ.4) CALL ROOT4
+            IF(NROOTS.EQ.5) CALL ROOT5
+            DO 420 K = 1,NROOTS
+              UU = AA*U(K)
+              WW = W(K)*ZNUC
+              WW=WW*(UU+UU)
+              TT = ONE/(AA+UU)
+              T = SQRT(TT)
+              X0 = (AAX+UU*CX)*TT
+              Y0 = (AAY+UU*CY)*TT
+              Z0 = (AAZ+UU*CZ)*TT
+              DO 400 J = 1,LJT
+                NJ = J
+                DO 400 I = 1,LIT
+                  NI = I
+                  CALL VINT
+                  XIN(I,J,K,1) = XINT
+                  YIN(I,J,K,1) = YINT
+                  ZIN(I,J,K,1) = ZINT*WW
+                  CALL DVINT
+                  XIN(I,J,K,2) = XINT
+                  YIN(I,J,K,2) = YINT
+                  ZIN(I,J,K,2) = ZINT*WW
+  400         CONTINUE
+  420       CONTINUE
+           IJ=0
+           DO 460 I=MINI,MAXI
+            IX=IJX(I)
+            IY=IJY(I)
+            IZ=IJZ(I)
+            JMAX=MAXJ
+            IF(IANDJ) JMAX=I
+            DO 460 J=MINJ,JMAX
+             JX=IJX(J)
+             JY=IJY(J)
+             JZ=IJZ(J)
+             DUMX = ZERO
+             DUMY = ZERO
+             DUMZ = ZERO
+             DO 440 K = 1,NROOTS
+              DUMX = DUMX+XIN(IX,JX,K,2)*YIN(IY,JY,K,1)*ZIN(IZ,JZ,K,1)
+              DUMY = DUMY+XIN(IX,JX,K,1)*YIN(IY,JY,K,2)*ZIN(IZ,JZ,K,1)
+  440         DUMZ = DUMZ+XIN(IX,JX,K,1)*YIN(IY,JY,K,1)*ZIN(IZ,JZ,K,2)
+             IJ=IJ+1
+             DUM=DIJ(IJ)
+             IF(RMETHOD.EQ.RESC) THEN
+               NN=IA(LOCI+I)+(LOCJ+J)
+               HFINT(NN,1,IC)=HFINT(NN,1,IC)+DUMX*DUM
+               HFINT(NN,2,IC)=HFINT(NN,2,IC)+DUMY*DUM
+               HFINT(NN,3,IC)=HFINT(NN,3,IC)+DUMZ*DUM
+             ELSE
+C              DERNEO(1,IC) = DERNEO(1,IC)+DUM*DUMX
+C              DERNEO(2,IC) = DERNEO(2,IC)+DUM*DUMY
+C              DERNEO(3,IC) = DERNEO(3,IC)+DUM*DUMZ
+               DERNEO(1,IC) = DERNEO(1,IC)-DUM*DUMX
+               DERNEO(2,IC) = DERNEO(2,IC)-DUM*DUMY
+               DERNEO(3,IC) = DERNEO(3,IC)-DUM*DUMZ
+             ENDIF
+             IF(DBG) WRITE(IW,9100) IC,II,JJ,IJ,DIJ(IJ),DUMX,DUMY,
+     +                     DUMZ,DERNEO(1,IC),DERNEO(2,IC),DERNEO(3,IC)
+  460       CONTINUE
+  480     CONTINUE
+  500 CONTINUE
+  520 CONTINUE
+C
+C     ----- END OF *PRIMITIVE* LOOPS -----
+C
+      IF(DBG) THEN
+         WRITE(IW,9010) II,JJ
+         CALL EGOUT(DERNEO,NAT)
+      END IF
+  580 CONTINUE
+  600 CONTINUE
+C
+C     ----- END OF *SHELL* LOOPS -----
+C
+      IF(OUT) THEN
+         IF(GOPARR) CALL DDI_GSUMF(1502,DERNEO,3*NAT)
+         IF(MASWRK) THEN
+            WRITE(IW,9000)
+            CALL EGOUT(DERNEO,NAT)
+         END IF
+         IF(GOPARR) CALL DSCAL(3*NAT,ONE/NPROC,DERNEO,1)
+      END IF
+      IF(GOPARR .AND. NXT) CALL DDI_DLBRESET
+      IF(RMETHOD.EQ.RESC) THEN
+        IF(GOPARR) CALL DDI_GSUMF(1502,HFINT,L2*3*NAT)
+        SVDSKW=DSKWRK
+        DSKWRK=.TRUE.
+        LREC=3*3*NAT
+C       STARTING RECORD FOR THE HELLMANN-FEYNMAN INTEGRALS
+        DO I=1,NAT
+          DO J=1,3
+            LREC=LREC+1
+            CALL RAWRIT(NQRDAF,X(MORDA),HFINT(1,J,I),L2,LREC,0)
+          ENDDO
+        ENDDO
+        DSKWRK=SVDSKW
+      ENDIF
+C
+      RETURN
+C
+ 9000 FORMAT(/10X,25(1H-)/10X,'NU-HELLMANN-FEYNMAN FORCE'/10X,25(1H-))
+ 9010 FORMAT(1X,'HELFNU: SHELLS II,JJ=',2I5)
+ 9100 FORMAT(1X,'IC',I3,' II, JJ, I',3I5,1P,4E15.7/
+     *       25X,'DERNEO(1,2,3 AND IC)',1P,3E15.7)
+      END
+C*MODULE NEOGRD  *DECK TVDER_NEO
+      SUBROUTINE TVDER_NEO(DENAB,DTINT,DVINT,L2,MODUS)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      LOGICAL OUT,DBG,NORM
+      LOGICAL GOPARR,DSKWRK,MASWRK,NXT,SVDSKW
+C
+      PARAMETER (MXGTOT=20000, MXSH=5000, MXAO=8192)
+      PARAMETER (MXATM=2000)
+      PARAMETER (MXCHRM=1)
+C
+      DIMENSION DENAB(L2),DTINT(L2,3,NAT),DVINT(L2,3,NAT)
+      DIMENSION DIJ(225), IJX(35), IJY(35), IJZ(35),
+     *          XS(6,7), YS(6,7), ZS(6,7), XT(6,5), YT(6,5), ZT(6,5),
+     *          DXS(5,5), DYS(5,5), DZS(5,5),
+     *          DXT(5,5), DYT(5,5), DZT(5,5),
+     *          XV(6,5,5), YV(6,5,5), ZV(6,5,5),
+     *          DXV(5,5,5), DYV(5,5,5), DZV(5,5,5)
+C
+      COMMON /CHMGMS/ XCHM(MXCHRM),YCHM(MXCHRM),ZCHM(MXCHRM),
+     *                DXELMM(MXCHRM),DYELMM(MXCHRM),DZELMM(MXCHRM),
+     *                QCHM(MXCHRM),NCHMAT,KCHRMM
+      COMMON /DSTV  / XINT,YINT,ZINT,T,X0,Y0,Z0,XI,YI,ZI,
+     *                XJ,YJ,ZJ,NI,NJ,CX,CY,CZ
+      COMMON /FMCOM / X(1)
+C     COMMON /GRAD  / DE(3,MXATM)
+      COMMON /GRDNEO/ DERNEO(3,MXATM)
+      COMMON /IJPAIR/ IA(MXAO)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IJK,IPK,IDAF,NAV,IODA(950)
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /NEOSHL/ NGAUSS,NGAUSE,NGAUSN,NTSHEL,NNUCSH
+      COMMON /NUCMOR/ QMNUCM(20)
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+      COMMON /ROOT  / XX,U(13),W(13),NROOTS
+      COMMON /RELWFN/ RMETHOD,QRQMT,CLIG,CLIG2,QRTOL,IQRORD,MODQR,NESOC,
+     *                NRATOM,NUMU,NQMTR,NQRDAF,MORDA,NDARELB
+C
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00,TWO=2.0D+00)
+      PARAMETER (RLN10=2.30258D+00)
+      PARAMETER (PI212=1.1283791670955D+00)
+      PARAMETER (SQRT3=1.73205080756888D+00)
+      PARAMETER (SQRT5=2.23606797749979D+00,SQRT7=2.64575131106459D+00)
+C
+      DATA DEBUG/8HDEBUG   /, DBUGME/8HTVDER   /, GRD1/8HGRD1    /,
+     *     RESC/8HRESC    /,ANESC/8HNESC    /
+C
+      DATA IJX / 1, 2, 1, 1, 3, 1, 1, 2, 2, 1,
+     *           4, 1, 1, 3, 3, 2, 1, 2, 1, 2,
+     *           5, 1, 1, 4, 4, 2, 1, 2, 1, 3,
+     *           3, 1, 3, 2, 2/
+      DATA IJY / 1, 1, 2, 1, 1, 3, 1, 2, 1, 2,
+     *           1, 4, 1, 2, 1, 3, 3, 1, 2, 2,
+     *           1, 5, 1, 2, 1, 4, 4, 1, 2, 3,
+     *           1, 3, 2, 3, 2/
+      DATA IJZ / 1, 1, 1, 2, 1, 1, 3, 1, 2, 2,
+     *           1, 1, 4, 1, 2, 1, 2, 3, 3, 2,
+     *           1, 1, 5, 1, 2, 1, 2, 4, 4, 1,
+     *           3, 3, 2, 2, 3/
+C
+C     ----- BASIS FUNCTION DERIVATIVE CONTRIBUTIONS TO GRADIENT -----
+C     INTEGRALS ARE OF TYPE <II'/H/JJ> = <II'/T+V/JJ>
+C     RESC RUNS STORE THE INTEGRALS WITHOUT CONTRACTING THEM WITH DENSITY
+C
+C     MODUS - USED ONLY WITH NESC METHOD AND ONLY FOR KIN. ENERGY T
+C           = 0 BULK T GRADIENT
+C           = 1 CORRECTION TO S DERIVATIVE (PROPORTIONAL TO T)
+C           = 2 CORRECTION TO T DERIVATIVE 
+C
+      DBG = (EXETYP.EQ.DEBUG  .OR.  EXETYP.EQ.DBUGME)  .AND.  MASWRK
+      OUT = (EXETYP.EQ.DEBUG  .OR.  EXETYP.EQ.DBUGME  .OR.
+     *       EXETYP.EQ.GRD1   .OR.  NPRINT.EQ.-3)
+      IF(DBG) WRITE(IW,9000)
+      IAZ=0
+C
+      TOL = RLN10*ITOL
+      NORM = NORMF .NE. 1 .OR. NORMP .NE. 1
+      IF(RMETHOD.EQ.RESC) THEN
+         FSC=ONE/CLIG
+         FSC2=FSC*FSC/TWO
+         CALL VCLR(DTINT,1,L2*3*NAT)
+         CALL VCLR(DVINT,1,L2*3*NAT)
+      ENDIF
+C     ---- SCALE KINETIC ENERGY BY MASS OF NUCLEUS RELATIVE TO E- ----
+C
+      SCAL = ONE/QMNUCM(1)
+C
+C INITIALIZE PARALLEL
+C
+      NXT = IBTYP.EQ.1
+      IPCOUNT = ME - 1
+      NEXT = -1
+      MINE = -1
+C
+C     -D*ELMM- CONTAINS CONTRIBUTION TO THE FORCES ON THE
+C     EXTERNAL CHARGES WHICH ARE DUE TO QM MOLECULE.
+C
+      IF(NCHMAT.NE.0) THEN
+         DO 100 ICHARM=1,NCHMAT
+            DXELMM(ICHARM)=ZERO
+            DYELMM(ICHARM)=ZERO
+            DZELMM(ICHARM)=ZERO
+  100    CONTINUE
+      END IF
+C
+C     FIRST, LOOP OVER THE GENUINE QM MOLECULE (ICHARM=0 PASS),
+C     AND THEN ANY EXTERNAL CHARGES WHICH CHARMM MAY BE USING.
+C     THE LATTER MAKE A CONTRIBUTION TO THE GRADIENT OF THE ATOMS
+C     IN THE QM MOLECULE, AS WELL AS TO THEMSELVES.
+C
+      DO 2000 ICHARM=0,NCHMAT
+C
+C     ----- I SHELL
+C
+      DO 1400 II = NSHELL+1, NTSHEL
+C
+C           GO PARALLEL!
+C
+        IF(NXT .AND. GOPARR) THEN
+           MINE = MINE + 1
+           IF(MINE.GT.NEXT) CALL DDI_DLBNEXT(NEXT)
+           IF(NEXT.NE.MINE) GO TO 1400
+        END IF
+C
+        IAT = KATOM(II)
+        XI = C(1,IAT)
+        YI = C(2,IAT)
+        ZI = C(3,IAT)
+        I1 = KSTART(II)
+        I2 = I1+KNG(II)-1
+        LIT = KTYPE(II)
+        MINI = KMIN(II)
+        MAXI = KMAX(II)
+        LOCI = KLOC(II)-MINI
+        LITDER = LIT + 1
+C
+C     ----- J SHELL
+C
+        DO 1300 JJ = NSHELL+1, NTSHEL
+C
+C           GO PARALLEL!
+C
+          IF((.NOT.NXT) .AND. GOPARR) THEN
+             IPCOUNT = IPCOUNT + 1
+             IF(MOD(IPCOUNT,NPROC).NE.0) GO TO 1300
+          END IF
+C
+          JAT = KATOM(JJ)
+          XJ = C(1,JAT)
+          YJ = C(2,JAT)
+          ZJ = C(3,JAT)
+          J1 = KSTART(JJ)
+          J2 = J1+KNG(JJ)-1
+          LJT = KTYPE(JJ)
+          MINJ = KMIN(JJ)
+          MAXJ = KMAX(JJ)
+          LOCJ = KLOC(JJ)-MINJ
+          LJTMOD = LJT+2
+          NROOTS = (LIT+LJT-1)/2 + 1
+          RR = (XI-XJ)**2+(YI-YJ)**2+(ZI-ZJ)**2
+C
+C     ----- I PRIMITIVE
+C
+        DO 1100 IG = I1,I2
+          AI = EX(IG)
+          ARRI = AI*RR
+          AXI = AI*XI
+          AYI = AI*YI
+          AZI = AI*ZI
+          CSI=CS(IG)
+          CPI=CP(IG)
+          CDI=CD(IG)
+          CFI=CF(IG)
+          CGI=CG(IG)
+C
+C     ----- J PRIMITIVE
+C
+          DO 1000 JG = J1,J2
+            AJ = EX(JG)
+            AA = AI+AJ
+            AA1 = ONE/AA
+            DUM = AJ*ARRI*AA1
+            IF(DUM .GT. TOL) GO TO 1000
+            FAC = EXP(-DUM)
+            CSJ = CS(JG)
+            CPJ = CP(JG)
+            CDJ = CD(JG)
+            CFJ = CF(JG)
+            CGJ = CG(JG)
+            AX = (AXI+AJ*XJ)*AA1
+            AY = (AYI+AJ*YJ)*AA1
+            AZ = (AZI+AJ*ZJ)*AA1
+C
+C     ----- DENSITY FACTOR
+C
+            IJ = 0
+            DUM1 = ZERO
+            DUM2 = DUM1
+            DO 600 I=MINI,MAXI
+              IF(I.EQ.1) DUM1=CSI*FAC
+              IF(I.EQ.2) DUM1=CPI*FAC
+              IF(I.EQ.5) DUM1=CDI*FAC
+              IF(I.EQ.8.AND.NORM) DUM1=DUM1*SQRT3
+              IF(I.EQ.11) DUM1=CFI*FAC
+              IF(I.EQ.14.AND.NORM) DUM1=DUM1*SQRT5
+              IF(I.EQ.20.AND.NORM) DUM1=DUM1*SQRT3
+              IF(I.EQ.21) DUM1=CGI*FAC
+              IF(I.EQ.24.AND.NORM) DUM1=DUM1*SQRT7
+              IF(I.EQ.30.AND.NORM) DUM1=DUM1*SQRT5/SQRT3
+              IF(I.EQ.33.AND.NORM) DUM1=DUM1*SQRT3
+C
+              DO 600 J = MINJ,MAXJ
+                IF(J.EQ.1) DUM2=DUM1*CSJ
+                IF(J.EQ.2) DUM2=DUM1*CPJ
+                IF(J.EQ.5) DUM2=DUM1*CDJ
+                IF(J.EQ.8.AND.NORM) DUM2=DUM2*SQRT3
+                IF(J.EQ.11) DUM2=DUM1*CFJ
+                IF(J.EQ.14.AND.NORM) DUM2=DUM2*SQRT5
+                IF(J.EQ.20.AND.NORM) DUM2=DUM2*SQRT3
+                IF(J.EQ.21) DUM2=DUM1*CGJ
+                IF(J.EQ.24.AND.NORM) DUM2=DUM2*SQRT7
+                IF(J.EQ.30.AND.NORM) DUM2=DUM2*SQRT5/SQRT3
+                IF(J.EQ.33.AND.NORM) DUM2=DUM2*SQRT3
+C
+                IJ=IJ+1
+                IF(RMETHOD.EQ.RESC) THEN
+                  DEN=ONE
+                  IF(LOCI+I.EQ.LOCJ+J) DEN=TWO 
+                ELSE
+                  NN = IA(MAX0(LOCI+I,LOCJ+J))+MIN0(LOCI+I,LOCJ+J)
+                  DEN = DENAB(NN)
+                  DEN = DEN + DEN
+                  IF(RMETHOD.EQ.ANESC) THEN
+                    IF(MODUS.EQ.1) DEN=DEN*FSC2
+                    IF(MODUS.EQ.2) DEN=-DEN
+                  ENDIF
+                ENDIF 
+                DIJ(IJ)=DUM2*DEN
+  600         CONTINUE
+C
+C     -----  KINETIC ENERGY
+C
+      IF(ICHARM.GT.0) GO TO 700
+C
+      T = SQRT(AA1)
+      X0 = AX
+      Y0 = AY
+      Z0 = AZ
+C
+      DO 660 J = 1,LJTMOD
+        NJ =J
+        DO 660 I = 1,LITDER
+          NI = I
+          CALL VINT
+          XS(I,J)=XINT*T
+          YS(I,J)=YINT*T
+          ZS(I,J)=ZINT*T
+  660 CONTINUE
+      CALL DTXYZ(XT,YT,ZT,XS,YS,ZS,LITDER,LJT,AJ)
+      CALL DERI(DXS,DYS,DZS,XS,YS,ZS,LIT,LJT,AI)
+      CALL DERI(DXT,DYT,DZT,XT,YT,ZT,LIT,LJT,AI)
+      IJ=0
+      DO 680 I=MINI,MAXI
+        IX=IJX(I)
+        IY=IJY(I)
+        IZ=IJZ(I)
+        DO 670 J=MINJ,MAXJ
+          JX=IJX(J)
+          JY=IJY(J)
+          JZ=IJZ(J)
+          DUMX=DXT(IX,JX)* YS(IY,JY)* ZS(IZ,JZ)
+     1        +DXS(IX,JX)* YT(IY,JY)* ZS(IZ,JZ)
+     2        +DXS(IX,JX)* YS(IY,JY)* ZT(IZ,JZ)
+          DUMY= XT(IX,JX)*DYS(IY,JY)* ZS(IZ,JZ)
+     1        + XS(IX,JX)*DYT(IY,JY)* ZS(IZ,JZ)
+     2        + XS(IX,JX)*DYS(IY,JY)* ZT(IZ,JZ)
+          DUMZ= XT(IX,JX)* YS(IY,JY)*DZS(IZ,JZ)
+     1        + XS(IX,JX)* YT(IY,JY)*DZS(IZ,JZ)
+     2        + XS(IX,JX)* YS(IY,JY)*DZT(IZ,JZ)
+          IJ=IJ+1
+          IF(RMETHOD.EQ.RESC) THEN
+             NN=IA(MAX0(LOCI+I,LOCJ+J))+MIN0(LOCI+I,LOCJ+J)
+             DUMINT=DIJ(IJ)
+             DTINT(NN,1,IAT)=DTINT(NN,1,IAT)+DUMX*DUMINT
+             DTINT(NN,2,IAT)=DTINT(NN,2,IAT)+DUMY*DUMINT
+             DTINT(NN,3,IAT)=DTINT(NN,3,IAT)+DUMZ*DUMINT
+          ELSE
+             DERNEO(1,IAT)=DERNEO(1,IAT)+ SCAL*DUMX*DIJ(IJ)
+             DERNEO(2,IAT)=DERNEO(2,IAT)+ SCAL*DUMY*DIJ(IJ)
+             DERNEO(3,IAT)=DERNEO(3,IAT)+ SCAL*DUMZ*DIJ(IJ)
+          ENDIF
+  670     CONTINUE
+  680   CONTINUE
+        IF(RMETHOD.EQ.ANESC.AND.MODUS.NE.0) GOTO 1000
+C
+C     ..... NUCLEAR ATTRACTION
+C
+  700 CONTINUE
+      AAX = AA*AX
+      AAY = AA*AY
+      AAZ = AA*AZ
+      IF(ICHARM.EQ.0) THEN
+         MAXIC=NAT
+      ELSE
+         MAXIC=1
+      END IF
+C
+      DO 790 IC = 1,MAXIC
+         IF(ICHARM.EQ.0) THEN
+            ZNUC = -ZAN(IC)
+            CX = C(1,IC)
+            CY = C(2,IC)
+            CZ = C(3,IC)
+         ELSE
+            ZNUC = -QCHM(ICHARM)
+            CX = XCHM(ICHARM)
+            CY = YCHM(ICHARM)
+            CZ = ZCHM(ICHARM)
+         END IF
+         XX = AA*((AX-CX)**2+(AY-CY)**2+(AZ-CZ)**2)
+         IF(NROOTS.LE.3) CALL RT123
+         IF(NROOTS.EQ.4) CALL ROOT4
+         IF(NROOTS.EQ.5) CALL ROOT5
+         DO 740 K = 1,NROOTS
+            UU = AA*U(K)
+            WW = W(K)*ZNUC
+            TT = ONE/(AA+UU)
+            T = SQRT(TT)
+            X0 = (AAX+UU*CX)*TT
+            Y0 = (AAY+UU*CY)*TT
+            Z0 = (AAZ+UU*CZ)*TT
+            DO 730 J = 1,LJT
+               NJ = J
+               DO 720 I = 1,LITDER
+                  NI = I
+                  CALL VINT
+                  XV(I,J,K) = XINT
+                  YV(I,J,K) = YINT
+                  ZV(I,J,K) = ZINT*WW
+  720          CONTINUE
+  730       CONTINUE
+            CALL DERI(DXV(1,1,K),DYV(1,1,K),DZV(1,1,K),
+     *                 XV(1,1,K), YV(1,1,K), ZV(1,1,K),LIT,LJT,AI)
+  740    CONTINUE
+         IJ=0
+         DO 780 I=MINI,MAXI
+           IX=IJX(I)
+           IY=IJY(I)
+           IZ=IJZ(I)
+           DO 780 J=MINJ,MAXJ
+             JX=IJX(J)
+             JY=IJY(J)
+             JZ=IJZ(J)
+             DUMX=ZERO
+             DUMY=ZERO
+             DUMZ=ZERO
+             DO 770 K=1,NROOTS
+               DUMX=DUMX+DXV(IX,JX,K)* YV(IY,JY,K)* ZV(IZ,JZ,K)
+               DUMY=DUMY+ XV(IX,JX,K)*DYV(IY,JY,K)* ZV(IZ,JZ,K)
+               DUMZ=DUMZ+ XV(IX,JX,K)* YV(IY,JY,K)*DZV(IZ,JZ,K)
+  770        CONTINUE
+             IJ=IJ+1
+             IF((IC.GT.NAT).AND.(IAT.EQ.IAZ)) GOTO 780
+             DUMINT=DIJ(IJ)*AA1*PI212
+             IF(RMETHOD.EQ.RESC) THEN
+                NN=IA(MAX0(LOCI+I,LOCJ+J))+MIN0(LOCI+I,LOCJ+J)
+                DVINT(NN,1,IAT)=DVINT(NN,1,IAT)+DUMX*DUMINT
+                DVINT(NN,2,IAT)=DVINT(NN,2,IAT)+DUMY*DUMINT
+                DVINT(NN,3,IAT)=DVINT(NN,3,IAT)+DUMZ*DUMINT
+C               IE. NO CHARMS NOW WITH RESC
+             ELSE
+                DERNEO(1,IAT)=DERNEO(1,IAT)-DUMX*DUMINT
+                DERNEO(2,IAT)=DERNEO(2,IAT)-DUMY*DUMINT
+                DERNEO(3,IAT)=DERNEO(3,IAT)-DUMZ*DUMINT
+                IF(ICHARM.GT.0) THEN
+                  DXELMM(ICHARM)=DXELMM(ICHARM)+DUMX*DUMINT
+                  DYELMM(ICHARM)=DYELMM(ICHARM)+DUMY*DUMINT
+                  DZELMM(ICHARM)=DZELMM(ICHARM)+DUMZ*DUMINT
+                END IF
+             ENDIF
+  780    CONTINUE
+  790 CONTINUE
+C
+ 1000 CONTINUE
+ 1100 CONTINUE
+C
+C     ----- END OF PRIMITIVE LOOPS -----
+C
+      IF(DBG) THEN
+         WRITE(IW,9100) II,JJ
+         CALL EGOUT(DERNEO,NAT)
+      END IF
+ 1300 CONTINUE
+ 1400 CONTINUE
+C
+C     ----- END OF SHELL LOOPS -----
+C
+ 2000 CONTINUE
+      IF(OUT) THEN
+         IF(GOPARR) CALL DDI_GSUMF(1503,DERNEO,3*NAT)
+         IF(MASWRK) THEN
+            WRITE(IW,9000)
+            CALL EGOUT(DERNEO,NAT)
+         END IF
+         IF(GOPARR) CALL DSCAL(3*NAT,ONE/NPROC,DERNEO,1)
+      END IF
+C
+      IF(GOPARR .AND. NXT) CALL DDI_DLBRESET
+      IF(RMETHOD.EQ.RESC) THEN
+        IF(GOPARR) CALL DDI_GSUMF(1503,DTINT,L2*3*NAT)
+        IF(GOPARR) CALL DDI_GSUMF(1504,DVINT,L2*3*NAT)
+        SVDSKW=DSKWRK
+        DSKWRK=.TRUE.
+         LREC=3*NAT
+C        STARTING RECORD FOR THE T DERIVATIVE INTEGRALS
+        DO I=1,NAT
+          DO J=1,3
+            LREC=LREC+1
+            CALL RAWRIT(NQRDAF,X(MORDA),DTINT(1,J,I),L2,LREC,0)
+C
+C           ADD TWO CONTRIBUTIONS, HELLMANN-FEYMAN AND DV GOT HERE
+C
+            CALL RAREAD(NQRDAF,X(MORDA),DTINT(1,J,I),L2,LREC+6*NAT,0)
+            CALL DAXPY(L2,ONE,DTINT(1,J,I),1,DVINT(1,J,I),1)
+            CALL RAWRIT(NQRDAF,X(MORDA),DVINT(1,J,I),L2,LREC+6*NAT,0)
+          ENDDO
+        ENDDO
+        DSKWRK=SVDSKW
+      ENDIF
+C
+      RETURN
+C
+ 9000 FORMAT(/10X,38(1H-)/10X,'GRADIENT INCLUDING AO DERIVATIVE TERMS'/
+     *        10X,38(1H-))
+ 9100 FORMAT(1X,'TVDENU: SHELLS II,JJ=',2I5)
+      END
