@@ -1,0 +1,336 @@
+#!/bin/csh
+#
+#   Interactive GAMESS submitter - JAB and MWS, 18 May 2004.
+#
+#   This script is specific to the IBM SP located at the
+#   Aeronautical Systems Center (ASC), running the IBM
+#   software product LoadLeveler as the batch scheduler.
+#
+#   Note that other SP systems will have different numbers
+#   of processors per node, different switches, different
+#   system software versions, and of course different queue
+#   politics, and therefore this script must be re-customized
+#   to your SP's specifics.
+#
+#   Moreover, note that the idea of a front end 'llgms' script that
+#   accepts various flags, prompts for missing values, hacks them
+#   into the 'rungms' script via the "sed" command, and finally
+#   submitts the result with a command such as llsubmit or qsub
+#   is a very generic concept.  This script can be modified to
+#   reflect your batch scheduler, and as indicated, the various
+#   system specific "rules" of your data center w/o much trouble.
+#   Thus this serves as an illustration of how to use other batch
+#   schedulers, as well.
+#
+#   ----- parse command line arguments -----
+#   any switch not recognized is taken as input file name.
+#
+while ($#argv > 0)
+   set val=$argv[1]
+   shift
+   switch ($val)
+      case -l:
+        set LOGFILE=$argv[1]
+        shift
+        breaksw
+      case -m:
+        set RAM=$argv[1]
+        shift
+        breaksw
+      case -p:
+        set NCPUS=$argv[1]
+        shift
+        breaksw
+      case -w:
+        set TIMLIM=$argv[1]
+        shift
+        breaksw
+      case -v:
+        set VERNO=$argv[1]
+        shift
+        breaksw
+      default:
+        if ($?JOB == 1) then
+           echo You\'ve given too many input file names, $JOB and $val.
+           exit 4
+        else
+           set JOB=$val
+           if ($JOB =~ *.inp) set JOB=$JOB:r
+        endif
+        breaksw
+   endsw
+end
+#
+if ($?LOGFILE == 0) set LOGFILE=default
+if ($?RAM == 0)     set RAM=default
+if ($?NCPUS == 0)   set NCPUS=default
+if ($?TIMLIM == 0)  set TIMLIM=default
+if ($?VERNO == 0)   set VERNO=01
+if ($?JOB == 0)     set JOB=help
+#
+#    Note that the help screen displays if there are no arguments given,
+#    and is a good place to put the rules of your specific data center.
+#
+if ($JOB == help) then
+   clear
+   echo "The syntax to execute GAMESS under ASC's scheduler is "
+   echo "   gms [-l logfile] [-p ncpus] [-w hh:mm] jjj"
+   echo " "
+   echo "where jjj is the name of your jjj.inp file, and"
+   echo "   -l gives the output/log file name"
+   echo "   -p gives the number of processors, since ASC has 4-way SP nodes"
+   echo "      it is good to ensure that this is a multiple of four."
+   echo "   -w gives the wall clock time limit"
+   echo "You will be prompted for these if you do not give them."
+   echo " "
+   echo "Available queues at ASC, and their time limits:"
+   echo "   Express:      1-  8 CPUs,   15 minutes"
+   echo "   Debug:        1- 32 CPUs,   1 hour"
+   echo "   Background:   1- 32 CPUs,   7 days (120 hours)"
+   echo ""
+   echo "   Default:"
+   echo "      1- 16 CPUs, 7 days (168 hours)"
+   echo "     17- 32 CPUs, 5 days (120 hours)"
+   echo "     33-256 CPUs, 2 days ( 48 hours)"
+   echo " "
+   echo "Other options, which are almost never given, are"
+   echo "   -v to choose a version number (default=latest version)."
+   echo " "
+   echo "Using 'setenv LL_NOTIFY myname@my.home.computer' prior to 'llgms'"
+   echo "will cause you to get an E-mail when your job ends."
+   echo " "
+   exit
+endif
+#
+#   ----- tests to see if necessary files/directories exist -----
+#
+#     The input file must be where the user is submitting, and the
+#     batch job has to find its way back to that directory too in
+#     order to find the input file.  The output file will eventually 
+#     be put in this directory too, so memorize its value.
+#
+set INITDIR=`pwd`
+#
+if (-e $JOB.inp) then
+else
+   echo I could not find $JOB.inp in your current directory.
+   echo Bombing out...
+   exit 4
+endif
+#
+#     The 'scr' subdirectory is used for supplementary ASCII output
+#     by the main 'rungms' script, and this front end script uses it
+#     as a place to dump the batch script being created.
+#
+set SAVDIR=~$USER/scr
+if (-e $SAVDIR) then
+else
+   echo You do not have a $SAVDIR subdirectory at present.
+   echo This is needed to store the jjj.dat and possible jjj.irc files.
+   echo These files have data possibly useful for subsequent runs.
+   echo I am creating this directory for you...
+   mkdir $SAVDIR
+   sleep 5
+endif
+#
+#  tests to avoid overwriting data that might exist from earlier runs...
+#
+if (-e $SAVDIR/$JOB.dat) then
+   echo You presently have a file named $SAVDIR/$JOB.dat.
+   echo You must save this data, or delete it, before submitting the next job.
+   echo Bombing out...
+   exit 4
+endif
+#
+if (-e $SAVDIR/$JOB.irc) then
+   echo You presently have a file named $SAVDIR/$JOB.irc.
+   echo You must save this data, or delete it, before submitting the next job.
+   echo Bombing out...
+   exit 4
+endif
+#
+#     ----- get any required options that the user did not provide -----
+#
+if ($?ACCOUNT) then
+else
+   echo 'Please set the ACCOUNT variable in your .login/.profile to'
+   echo 'your ASC project number, for proper billing.'
+endif
+#
+#   The output will be placed in the same directory as the input file.
+#
+if ($LOGFILE == default) then
+   set LOGFILE=$JOB.log
+   echo -n "output file name? [$LOGFILE] "
+   set ans=$<
+   if (null$ans != null) set LOGFILE=$ans
+endif
+#
+#  If $NCPUS is defined, set CLASS acccordingly
+#
+if ($NCPUS == default) then
+   set CLASS=Default
+else
+   if ($NCPUS <= 256) set CLASS=Default
+   if ($NCPUS <=  32) set CLASS=Debug
+   if ($NCPUS <=  16) set CLASS=Default
+   if ($NCPUS <=   8) set CLASS=Express
+endif
+#
+if ($NCPUS == default) then
+   echo "Available queues and time limits:"
+   echo "   Express:      1-  8 CPUs,   15 minutes"
+   echo "   Debug:        1- 32 CPUs,   1 hour"
+   echo "   Background:   1- 32 CPUs,   7 days (120 hours)"
+   echo ""
+   echo "   Default:"
+   echo "      1- 16 CPUs, 7 days (168 hours)"
+   echo "     17- 32 CPUs, 5 days (120 hours)"
+   echo "     33-256 CPUs, 2 days ( 48 hours)"
+   echo " "
+   choose_queue:
+   echo -n "Which queue do you want? [$CLASS] "
+   set ans=$<
+   if (null$ans != null) set CLASS=$ans 
+   switch ($CLASS)
+      case Express:
+        set NCPUS=8
+        breaksw
+      case Debug:
+        set NCPUS=32
+        breaksw
+      case Default:
+        set NCPUS=256
+        breaksw
+      case Background:
+        set NCPUS=32
+        breaksw
+      default:
+        echo "Invalid queue $CLASS given; please try again"
+        set CLASS=" "
+        goto choose_queue
+        breaksw
+   endsw
+   echo "The maximum number of CPUs permitted in $CLASS is $NCPUS."
+   echo -n "How many CPUs (not to exceed $NCPUS) do you want? [$NCPUS] "
+   set ans=$<
+   if (null$ans != null) set NCPUS=$ans
+endif
+#
+#  set default time limit to maximum allowed by the CPU count,
+#  then allow the user the option of specifying less time.
+#
+if ($TIMLIM == default) then
+   if ($CLASS == Express)    set TIMLIM=00:15
+   if ($CLASS == Debug)      set TIMLIM=01:00
+   if ($CLASS == Background) set TIMLIM=120:00
+   if ($CLASS == Default) then
+       if ($NCPUS <= 256)    set TIMLIM=48:00
+       if ($NCPUS <=  32)    set TIMLIM=120:00
+       if ($NCPUS <=  16)    set TIMLIM=168:00
+   endif
+   echo -n "wall clock time limit (not to exceed $TIMLIM), as hh:mm? [$TIMLIM] "
+   set ans=$<
+   if (null$ans != null) set TIMLIM=$ans
+endif
+#
+#  append the seconds field, to become hh:mm:ss
+#
+set TIMLIM=$TIMLIM":00"   
+#
+#  The ASC's IBM SP is 4-way SMP nodes (Tasks Per Node, in LoadLeveler-speak)
+#  Of course, other SP systems might have a different number of CPUS/node!
+#
+set TPN=4
+if ($NCPUS < $TPN) set TPN=$NCPUS
+#
+#  The LoadLeveler scheduler wants to know how many nodes are being requested,
+#  so compute this from the desired number of CPUs, and the SMP size.
+#
+@ NNODES = ($NCPUS - 1) / $TPN + 1
+#
+#              ----- now prepare the job script -----
+#
+#    LoadLeveler requires a lot of '#@' directives, which are not
+#    normally kept at the top of 'rungms'.  Stick them in first.
+#
+#    If your IBM SP is newer than ASC's, then you may prefer to stripe
+#    your network connections across more than one switch card, by
+#    changing the two network directives to 'csss' rather than 'css0'.
+#
+#    Also, a newer switch and/or newer POE (e.g. v4.1) and LL (e.g. v3.2)
+#    may allow you to place both MPI and LAPI messages into User Space:
+#          "#@ network.MPI_LAPI  = csss,not_shared,US,HIGH"
+#    Use of two separate network directives below results in MPI being
+#    run in IP mode (slower), with LAPI in US (faster).  There will be
+#    a warning message 0031-374 issued, which refers to the MPI part
+#    of GAMESS messages, only, so don't panic about that warning.
+#
+#    Many sites will have memory or disk or other 'requirements' to specify
+#    the quality of the nodes assigned, unlike the ASC machine, for example:
+#          "#@ requirements = (Memory >= $RAM, ...)"
+#
+echo "#\!/bin/csh"                                  > $SAVDIR/$JOB.cmd
+echo "#"                                           >> $SAVDIR/$JOB.cmd
+echo "#@ job_name           = $JOB"                >> $SAVDIR/$JOB.cmd
+echo "#@ job_type           = parallel"            >> $SAVDIR/$JOB.cmd
+if ($CLASS != Default) then
+   echo "#@ class              = $CLASS"              >> $SAVDIR/$JOB.cmd
+endif
+echo "#@ account_no         = $ACCOUNT"            >> $SAVDIR/$JOB.cmd
+echo "#"                                           >> $SAVDIR/$JOB.cmd
+echo "#@ node               = $NNODES,$NNODES"     >> $SAVDIR/$JOB.cmd
+echo "#@ tasks_per_node     = $TPN"                >> $SAVDIR/$JOB.cmd
+echo "#@ wall_clock_limit   = $TIMLIM"             >> $SAVDIR/$JOB.cmd
+echo "#@ network.MPI        = css0,not_shared,IP"       >> $SAVDIR/$JOB.cmd
+echo "#@ network.LAPI       = css0,not_shared,US,HIGH"  >> $SAVDIR/$JOB.cmd
+echo "#"                                           >> $SAVDIR/$JOB.cmd
+echo "#@ shell              = /bin/csh"            >> $SAVDIR/$JOB.cmd
+echo "#@ environment        = COPY_ALL; ENVIRONMENT=BATCH" >> $SAVDIR/$JOB.cmd
+echo "#@ input              = /dev/null"           >> $SAVDIR/$JOB.cmd
+echo "#@ output             = $INITDIR/$LOGFILE"   >> $SAVDIR/$JOB.cmd
+echo "#@ error              = $INITDIR/$LOGFILE"   >> $SAVDIR/$JOB.cmd
+echo "#"                                           >> $SAVDIR/$JOB.cmd
+echo "#@ restart            = no"                  >> $SAVDIR/$JOB.cmd
+echo "#@ checkpoint         = no"                  >> $SAVDIR/$JOB.cmd
+#
+# Do not bother sending email for Express jobs
+#
+if (($?LL_NOTIFY) && ($CLASS != Express)) then
+   echo "#@ notification       = complete"            >> $SAVDIR/$JOB.cmd
+   echo "#@ notify_user        = $LL_NOTIFY"          >> $SAVDIR/$JOB.cmd
+else
+   echo "#@ notification       = never"               >> $SAVDIR/$JOB.cmd
+   echo "#@ notify_user        = nobody@bit.bucket"   >> $SAVDIR/$JOB.cmd
+endif
+#
+echo "#"                                           >> $SAVDIR/$JOB.cmd
+echo "#@ queue"                                    >> $SAVDIR/$JOB.cmd
+echo "#"                                           >> $SAVDIR/$JOB.cmd
+#
+#   2 more settings are needed by the normal GAMESS batch script:
+#   The tasks/node TPN is needed in the 'ibm-sp' execution section.
+#   LoadLeveler does not support a -cwd flag to define the working
+#   directory, so the script must specifically change directory.
+#
+echo "set TPN=$TPN"                                >> $SAVDIR/$JOB.cmd
+echo "chdir $INITDIR"                              >> $SAVDIR/$JOB.cmd
+echo "#"                                           >> $SAVDIR/$JOB.cmd
+#
+#   now append the regular GAMESS batch script,
+#   hacking in its three standard input values.
+#
+sed -e /JOB=\$1/s//JOB=$JOB/ \
+    -e /VERNO=\$2/s//VERNO=$VERNO/  \
+    -e /NCPUS=\$3/s//NCPUS=$NCPUS/  \
+    /u1/mike/gamess/rungms >> $SAVDIR/$JOB.cmd
+#
+#   now submit the job to the scheduler 
+#
+echo Submitting GAMESS job $JOB.inp to $NCPUS processors on $NNODES nodes,
+echo time limit=$TIMLIM, logfile=$LOGFILE.
+llsubmit $SAVDIR/$JOB.cmd
+#
+sleep 2
+rm $SAVDIR/$JOB.cmd
+exit
