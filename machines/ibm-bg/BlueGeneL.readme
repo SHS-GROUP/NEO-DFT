@@ -1,0 +1,154 @@
+Blue Gene/L nodes have two processors and two modes of execution are
+supported: co-processor (CO) and virtual node (VN) modes.  In CO mode the
+first processor runs the program and the second processor handles I/O and
+communication on behalf of the first processor.  In virtual node mode, both
+processors run the program.  In CO mode all node memory is allocated to the
+first processor, in VN mode, the node memory is shared between the two
+processors.  Therefor a single rack system can provide a maximum of 1024
+processors with 512 MB of RAM each or 2048 processors with 256MB or RAM each.
+Which mode is better depends on a job.  Generally single rack jobs will run
+faster in VN mode because more processors are available but with less memory
+available to a program than in CO mode.  However MP2 jobs running on multiple
+racks perform better timewise in CO mode rather than in VN mode.
+
+Installing
+==========
+
+The memory footprint of default GAMESS binary size is over 100MB which is a
+big penalty on Blue Gene/L which only has 512MB of RAM.  The memory footprint
+can be reduced by making the size of statically allocated arrays smaller.
+The bgl.size script reduces the size of arrays used for EFP and PCM to a 
+minimum, resulting in memory footprint of only 35MB.  You must recompile 
+GAMESS (the 'compall' step) after running the bgl.size script.
+
+The script 'compddi' may need to have your number of nodes typed in.
+Each Blue Gene is a different size, after all.
+
+The standard 'compddi' and 'lked' scripts assume that the ARMCI library
+is already installed, as part of GA.  These scripts may need to be
+edited for the path leading to the software.
+
+BLAS math library
+=================
+
+MP2 and DFT greatly benefit from optimized BLAS library.  Expect 30%-50%
+improvement over the generic BLAS supplied with GAMESS.  On Blue Gene/L
+you have two choices of optimized BLAS: ESSL and GotoBLAS.  Their performance
+differs by 7%-8% with ESSL performing better at larger jobs and GotoBLAS
+performing better at smaller jobs.
+
+ESSL can be obtained from IBM for a fee.  If installed in its default location
+in /opt/ibmmath/lib it will be found by linker script.
+
+GotoBLAS is distributed for free and can be downloaded from
+http://www.tacc.utexas.edu/resources/software/.  
+Your Blue Gene may already have the Goto BLAS library, check 'lked' 
+for the path name locating this library.
+
+If you decide that you must build GotoBLAS for Blue Gene/L, here is some
+information about that.  Some source editing is required, so a patch for 
+GotoBLAS 1.09 is supplied with GAMESS.  To build GotoBLAS for Blue Gene/L, 
+do the following:
+% tar -xzf GotoBLAS-1.09.tar.gz
+% patch -p0 < GotoBLAS.ppc440FP2-r1.09.patch
+% cd GotoBLAS
+% make
+The default GotoBLAS distribution allocates 64MB for buffers in
+common_power.h header file.  Since GAMESS has pretty hefty memory requirements
+itself and since Blue Gene/L memory is at premium, the patch changes buffer
+size to 4MB.  Three different test runs did not show imporvement over higher
+buffer sizes, so 4MB should be enough.  However decreasing buffer size below
+4MB may result in SEGV errors during the run.  The linker script looks for the
+libgoto.a in the GAMESS directory by default so once you have the library
+build, you can copy or create symlink to GAMESS directory or edit the linker
+script.
+
+Execution
+=========
+
+To submit GAMESS jobs on Blue Gene/L gms.bgl.py Python program is available.
+It allows to submit GAMESS jobs on Blue Gene/L via Cobalt queueing system or
+via mpirun.  Before using the program, open it in the text editor and edit
+the variables that define your system and GAMESS installation.
+To see the list of program options, type gms.bgl.py -h or gms.bgl.py --help.
+One useful option is -e which passes environmental variables to Blue Gene/L
+runtime.  Blue Gene/L has a number of various environmental variables to tune
+the performance of Blue Gene/L, for example BGLMPI_MAPPING and BGLMPI_EAGER.
+Refer to the Blue Gene/L manual for the list and description of options.
+Another option, useful during benchmarking, is -H which causes Blue Gene/L
+topology and I/O configuration to be printed to standard output at the
+beginning of GAMESS execution.
+
+How this script was used on the Blue Gene at Argonne (thanks to Yolanda
+Small for providing this feedback):
+         1. copy GAMESS binary and data files to the same place,
+         mkdir ~/bin
+         cp -r gamess.01.x ericfmt.dat mcpdata ~/bin
+         cp misc/bgl/gms.bgl.py ~/bin
+         ln -s ~/bin/gms.bgl.py ~/bin/gms
+         chmod 755 ~/bin/gms.bgl.py
+         mkdir ~/scr
+         2. Here is a diff of the original and modified 'gms.bgl.py' files
+         21,22c21,22
+         < exe="gamess.00.x"                       # GAMESS executable
+         < cwd="~/scr"                             # Scratch directory
+         ---
+         > exe="gamess.01.x"                       # GAMESS executable
+         > cwd="/pvfs/ysmall"                      # Scratch directory
+         24,25c24,25
+         < envGamessERICFMT = "~/bin/ericfmt.dat"  # ERIC formatted data
+         < envGamessMCPPATH = "~/bin/mcpdata"      # MCP data
+         ---
+         > envGamessERICFMT = "/bgl/home1/ysmall/gamess/ericfmt.dat"
+         > envGamessMCPPATH = "/bgl/home1/ysmall/gamess/mcpdata"
+         
+         3. Use the following at the command line to run example 8:
+               ~/bin/gms -d queueName -n 32 -t 30 exam08.inp
+         NOTE: for jobs that request less than 30min of time, use
+               the queueName=short on bgl.mcs.anl.gov
+
+
+Instead of passing GAMESS runtime options via environmental variables, Blue
+Gene/L GAMESS port uses a text file to look up environmental variables.  The
+file path is supplied to GAMESS via an environmental variable.  The gms.bgl.py
+program automatically create files and pass corresponding environmental
+variable to GAMESS.  However you can override automatically generated runtime
+options by explicitly passing the option as an environmental variable.
+
+Other notes
+===========
+
+See the Blue Gene/L red books for the description of Blue Gene/L hardware.
+Setting environmental variable DDI_HEADER=RUNTIME will print Blue Gene/L
+hardware configuration for the job: memory, topology, nodes, processors,
+etc. while you are running.
+
+Blue Gene/L I/O subsystem is not designed for heavy individual I/O access.
+While you may get away with using conventional SCF for AO integrals on few
+processors, large scale GAMESS job on Blue Gene/L are only possible when AO
+integrals are computed directly (direct SCF) or stored in memory.  To enable
+direct SCF, specify DIRSCF=.TRUE. in $SCF group in GAMESS input file.  To
+store AO integrals in memory, specify a negative value for NINTIC parameter in
+$INTGRL in GAMESS inpu file.  Refer GAMESS input documentation for a complete
+description of the above options.
+
+Currently grid based DFT and FMO make heavy use of I/O and are not feasible on
+large Blue Gene/L GAMESS jobs.  However new parallel I/O implementations are
+ready but have not made it into the current release.  Contact Andrey Asadchev
+at andrey@si.fi.ameslab.gov if you are interested in using those methods on
+Blue Gene/L or wait until the next GAMESS release.
+
+The current Blue Gene/L GAMESS port is a big improvement over the initial
+port.  ARMCI DDI implementation allows full use of processors and memory.
+Large number of processors and large aggregate memory of Blue Gene/L allow to
+run RHF, DFT, and MP2 jobs with very large number of basis functions fast.
+For example, MP2 gradient job with 943 basis functions takes 38 minutes to
+complete on two rack system. Although most RHF jobs will not scale well past
+2048 processors, MP2 jobs will scale beyond 4098 processors.  FMO should scale
+well beyond that.
+
+While MCSCF and CI jobs will run on Blue Gene/L, they will not scale because
+of the limited replicated memory and the Coupled-Cluster will not run due to
+changes in DDI.  However upcoming Blue Gene/P supercomputer with SMP support
+and larger node memory will allow efficient use of MCSCF, CI, and coupled
+cluster methods.

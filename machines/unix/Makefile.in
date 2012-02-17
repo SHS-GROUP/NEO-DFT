@@ -1,0 +1,227 @@
+#BASH allows the pipeline to return a fail if any command fails
+#Since the $(COMP) command below outputs "module.f" in warnings and errors
+#replacing this string with the path to the real source file will make special
+#features of VIM and EMACS work.
+SHELL=bash -o pipefail
+
+
+#These objects are not always necessary but it may be a good idea to compile them anyway
+#LINK will determine if they are necessary
+AUX = blaswrap vector blas
+
+COMP       = $(GMS_PATH)/comp
+COMPALL    = $(GMS_PATH)/compall
+LINK       = $(GMS_PATH)/lked
+OBJ_DIR    = $(GMS_BUILD_PATH)/object
+OBJ        = $(patsubst %,$(OBJ_DIR)/%.o,$(MODULES))
+LIS        = $(patsubst %,$(OBJ_DIR)/%.lis,$(MODULES))
+ACT        = $(patsubst %,$(OBJ_DIR)/%.f,$(MODULES))
+OBJ_AUX    = $(patsubst %,$(OBJ_DIR)/%.o,$(AUX))
+SRC_DIR    = $(GMS_PATH)/source
+DDI_DIR    = $(GMS_BUILD_PATH)/ddi
+DDI_LIB    = $(DDI_DIR)/libddi.a
+DDIKICK    = $(GMS_BUILD_PATH)/ddikick.x
+DDITEST    = $(GMS_BUILD_PATH)/ddi_test.x
+DATASERVER = $(GMS_BUILD_PATH)/data_server.x
+ACTVTE     = $(GMS_BUILD_PATH)/tools/actvte.x
+EXE        = gamess
+GAMESS     = $(GMS_BUILD_PATH)/$(EXE).$(GMS_VERSION).x
+CTAGS      = ctagsf
+FTNCHEK    = ftnchek
+FTNCHEK_OPT= -noextern -common=2 -arguments=1 -array=0 -calltree=0 -nocrossref -portability=tab -f77=automatic-array,relops,cycle-exit,case-construct -nonovice
+FTNCHEK_OPT2= -noextern -common=2 -arguments=1 -array=0 -calltree=0 -nocrossref -resources=yes -f77=automatic-array,relops -portability=tab -nonovice
+
+SEDSRC     = 's%\([a-z0-9]*\)\.f%$(SRC_DIR)\/\1\.src%'
+SEDSRC2    = 's%$(OBJ_DIR)/\([a-z0-9]*\)\.f%$(SRC_DIR)/\1\.src%'
+
+#All MODULES will be read from $(COMPALL)
+MODULES := $(shell sed -n '/source files/,/TINKER/p' $(COMPALL) | grep "\.\/comp" | awk '{printf "%s ",$$2}')
+
+#GAMESS executable
+gamess : $(GAMESS)
+$(GAMESS) : $(DDI_LIB) $(OBJ) $(OBJ_AUX) $(OBJ_DIR)/zunix.o
+	@$(LINK) $(EXE) $(GMS_VERSION) >/dev/null
+
+#Compile any module (I can't quite do "make $(module)" yet)
+$(OBJ_DIR)/%.o :$(ACTVTE) $(SRC_DIR)/%.src 
+	@if [ -e $(OBJ_DIR)/$(notdir $(basename $@)).f ]; then rm $(OBJ_DIR)/$(notdir $(basename $@)).f;fi
+	@$(COMP) $(notdir $(basename $@)) 2>&1 1>/dev/null | sed -e $(SEDSRC)
+modules : $(OBJ)
+
+#I like to keep the activated source in the OBJ_DIR for use with FTNCHEK
+$(OBJ_DIR)/%.f :$(ACTVTE) $(SRC_DIR)/%.src
+	@if [ -e $(OBJ_DIR)/$(notdir $(basename $@)).f ]; then rm $(OBJ_DIR)/$(notdir $(basename $@)).f;fi
+	@$(COMP) $(notdir $(basename $@)) true
+$(OBJ_DIR)/%.lis :$(ACTVTE) $(SRC_DIR)/%.src $(OBJ_DIR)/%.f
+	$(FTNCHEK) $(FTNCHEK_OPT) $(OBJ_DIR)/$(notdir $(basename $@)).f 2>&1 | sed -e $(SEDSRC2) > $@
+$(ACTVTE) :
+	 Compilation of $(ACTVTE) requires running $(GMS_PATH)/config
+
+#zunix is always required
+$(OBJ_DIR)/zunix.o : $(SRC_DIR)/zunix.c
+	@$(COMPALL) 1 2>&1 1>/dev/null
+
+#compall is parsed to determine which MODULES are to be compiled.
+#These extra files may be necessary and LKED will determine that so
+#I think it is best just to make sure they are compiled anyway.
+$(OBJ_DIR)/blaswrap.o : $(GMS_PATH)/misc/blaswrap.src
+	@if [ -e $(OBJ_DIR)/blaswrap.f ]; then rm $(OBJ_DIR)/blaswrap.f;fi
+	@$(COMP) blaswrap 2>&1 1>/dev/null | sed -e $(SEDSRC)
+$(OBJ_DIR)/blas.o : $(SRC_DIR)/blas.src
+	@if [ -e $(OBJ_DIR)/blas.f ]; then rm $(OBJ_DIR)/blas.f;fi
+	@$(COMP) blas 2>&1 1>/dev/null | sed -e $(SEDSRC)
+$(OBJ_DIR)/vector.o : $(SRC_DIR)/vector.src
+	@if [ -e $(OBJ_DIR)/vector.f ]; then rm $(OBJ_DIR)/vector.f;fi
+	@$(COMP) vector 2>&1 1>/dev/null | sed -e $(SEDSRC)
+
+
+#I don't yet try to micro manage DDI compilation.
+#Compilation is very quick anyway.
+ddi : $(DDI_LIB) $(DDIKICK)
+$(DDI_LIB) $(DDIKICK) :
+	$(GMS_PATH)/ddi/compddi
+	@if [ -e $(GMS_PATH)/ddi/ddikick.x ]; then mv $(GMS_PATH)/ddi/ddikick.x $(DDIKICK);fi
+	@if [ -e $(GMS_PATH)/ddi/ddi_test.x ]; then mv $(GMS_PATH)/ddi/ddi_test.x $(DDITEST);fi
+	@if [ -e $(GMS_PATH)/ddi/data_server.x ]; then mv $(GMS_PATH)/ddi/data_server.x $(DATASERVER);fi
+	@if [ -e $(GMS_PATH)/ddi/libddi.a ] && [ "$(GMS_PATH)/ddi/libddi.a" != "$(DDI_LIB)" ]; then mv $(GMS_PATH)/ddi/libddi.a  $(DDI_LIB);fi
+
+
+#### Auxillary targets ####
+
+#at runtime, extra flags can be added (like -e to make emacs compitable tags)
+tags : $(SRC_DIR)/*.src
+	$(CTAGS) $(CTAGS_FLAGS) --langmap=fortran:.src $(SRC_DIR)/* $(GMS_PATH)/ddi/src/*
+
+#FTNCHEK: a summary is printed to STDOUT along with the gamess.lis and individual lis files in OBJ_DIR
+gamess.lis : $(ACT) $(LIS)
+	$(FTNCHEK) $(FTNCHEK_OPT2) $(ACT) 2>&1 | sed -e $(SEDSRC2) > gamess.lis
+check : gamess.lis
+	@awk '{if($$0 ~ "[1-9]+ syntax errors") print "------\n",$$0,"\n------"}' gamess.lis
+	@awk '{if($$0 ~ "[1-9]+ warning[s]* issued") print $$0}' gamess.lis
+
+#Build a tarball based on a git commit or tag
+COMMIT=HEAD
+TAR_VERSION=$(GMS_VERSION)
+dist :
+	@echo "Creating $(GMS_BUILD_PATH)/gamess-$(TAR_VERSION).tar.gz for commit $(COMMIT) in branch `git name-rev --name-only $(COMMIT)`"
+	@cd $(GMS_PATH) && git archive --format=tar --prefix=gamess-$(TAR_VERSION)/ $(COMMIT) | gzip >$(GMS_BUILD_PATH)/gamess-$(TAR_VERSION).tar.gz
+
+clean :
+	rm -rf $(OBJ)
+	rm -rf $(ACT)
+	rm -rf $(LIS)
+	rm -rf $(GAMESS)
+	rm -rf gamess.lis
+
+clean_ddi :
+	rm -rf $(DDI_LIB)
+	rm -rf $(DDIKICK)
+	rm -rf $(DDITEST)
+	rm -rf $(DATASERVER)
+
+
+
+
+############ The new CHECKTEST ##################
+# Exam inputs are divided into subdirectory collections.  The inputs in the
+# "standard" directory are default.
+# More directories can be added to easily run all tests of a certain classification
+# such as "mp2" or "gradient".  Soft links can be used if one wishes to place the same
+# input file in two classifications.
+# To run a different subdirectory, specify the name on the command line
+#
+# make checktest EXAM_PATH=mp2
+#
+# The target "checktest" will run the exam inputs and perform the error checking.
+# If an examXX.log file exists, it will not be rerun but only check.  If the
+# user wishes to only a few of the exams with in the chosen $(EXAM_PATH):
+#
+# make checktest EXAMS=exam05
+# make checktest EXAMS="exam05 exam30"
+# 
+# To add new exam, two files are required.  The chkabs script in the standard
+# subdirectory is used by default.  It is recommended that names of your input 
+# files do not exceed 10 characters.  Any further characters will be dropped from
+# the output of make checktest.
+#
+# The input
+#    $(GMS_PATH)/tests/$(EXAM_PATH)/mytest.inp
+# The script (use already standard/scripts/examXX scripts as templates)
+#    $(GMS_PATH)/tests/$(EXAM_PATH)/scripts/mytest
+#
+# The new exam can be run and tested by itself
+#    make checktest EXAM_PATH=mytests EXAMS=mytest
+#
+#
+
+RUNGMS=$(GMS_PATH)/tools/localgms
+NCPUS=1
+
+EXAM_PATH = standard
+
+GMS_EXT = log
+
+EXAM_INPUTS := $(wildcard $(GMS_PATH)/tests/$(EXAM_PATH)/*.inp) 
+EXAMS = $(patsubst $(GMS_PATH)/tests/$(EXAM_PATH)/%.inp,%,$(EXAM_INPUTS))
+
+EXAM_OUTPUT_DIR = $(GMS_BUILD_PATH)/tests/$(EXAM_PATH)
+EXAM_LOG = $(patsubst %,$(EXAM_OUTPUT_DIR)/%.$(GMS_EXT),$(EXAMS))
+EXAM_RST = $(patsubst %,$(EXAM_OUTPUT_DIR)/%.rst,$(EXAMS))
+EXAM_DAT = $(patsubst %,$(EXAM_OUTPUT_DIR)/%.dat,$(EXAMS))
+EXAM_TRJ = $(patsubst %,$(EXAM_OUTPUT_DIR)/%.trj,$(EXAMS))
+#This is a dummy file that is never created, but allows all tests to be checked all the time.
+EXAM_CHK = $(patsubst %,$(EXAM_OUTPUT_DIR)/%.chk,$(EXAMS))
+
+export GMSPATH=$(GMS_PATH)
+export EXEPATH=$(GMS_BUILD_PATH)
+
+$(EXAM_OUTPUT_DIR)/%.$(GMS_EXT) : $(GAMESS) $(GMS_PATH)/tests/$(EXAM_PATH)/%.inp
+	@mkdir -p $(EXAM_OUTPUT_DIR)
+	@cd $(EXAM_OUTPUT_DIR) && cp $(GMS_PATH)/tests/$(EXAM_PATH)/$(notdir $(basename $@)).inp $(notdir $(basename $@)).F05
+	@cd $(EXAM_OUTPUT_DIR) && if [ -e $(EXAM_OUTPUT_DIR)/$(notdir $(basename $@)).dat ]; then rm $(EXAM_OUTPUT_DIR)/$(notdir $(basename $@)).dat;fi
+	@cd $(EXAM_OUTPUT_DIR) && if [ -e $(EXAM_OUTPUT_DIR)/$(notdir $(basename $@)).rst ]; then rm $(EXAM_OUTPUT_DIR)/$(notdir $(basename $@)).rst;fi
+	@cd $(EXAM_OUTPUT_DIR) && if [ -e $(EXAM_OUTPUT_DIR)/$(notdir $(basename $@)).trj ]; then rm $(EXAM_OUTPUT_DIR)/$(notdir $(basename $@)).trj;fi
+	@cd $(EXAM_OUTPUT_DIR) && if [ -e $(EXAM_OUTPUT_DIR)/$(notdir $(basename $@)).$(GMS_EXT) ]; then rm $(EXAM_OUTPUT_DIR)/$(notdir $(basename $@)).$(GMS_EXT);fi
+	cd $(EXAM_OUTPUT_DIR) && $(RUNGMS) $(notdir $(basename $@)) $(GMS_VERSION) $(NCPUS) > $(notdir $(basename $@)).$(GMS_EXT) 2>&1
+
+exams : $(EXAM_LOG)
+
+
+#These environment variables are required to run the 
+# the checking scripts in $(GMS_PATH)/tests/$(EXAM_PATH)/scripts
+#Tolerances can be changed on the command line
+#  make checktest tolE=6e-5
+export tolC=0.3
+export tolD=0.0001
+export tolE=0.00000001
+export tolG=0.00001
+export tolH=0.0001
+export tolI=0.0001
+export tolL=0.1
+export tolO=0.0001
+export tolP=0.0001
+export tolR=0.0001
+export tolS=0.01
+export tolT=0.000001
+export tolV=0.00000001
+export tolW=0.1
+export tolX=0.00001
+#If using chkabs, only one needs to be supplied for all tests
+export chkabs=$(GMS_PATH)/tests/standard/scripts/chkabs
+
+CHK_PATH=$(GMS_PATH)/tests/$(EXAM_PATH)/scripts
+
+#print the restuls of the examXX script
+CHK_AWK = -v exam=$(notdir $(basename $@)) '{ printf "%-10s %-63s",exam,$$0 }';if [ $$? != 0 ]; then echo "!!Failed";else echo Passed;fi 
+#determine that the exam finished
+GREP_TERM = grep -q "TERMINATED NORMALLY" $(EXAM_OUTPUT_DIR)/$(notdir $(basename $@)).$(GMS_EXT);if [ $$? != 0 ]; then echo "$(notdir $(basename $@))     !!! TERMINATED ABNORMALLY !!!";exit;fi
+
+#check in single exam
+$(EXAM_OUTPUT_DIR)/%.chk : $(EXAM_OUTPUT_DIR)/%.$(GMS_EXT)
+	@cd $(EXAM_OUTPUT_DIR) && $(GREP_TERM) && $(CHK_PATH)/$(notdir $(basename $@)) $(notdir $(basename $@)).$(GMS_EXT) | awk $(CHK_AWK)
+	
+#since .chk files are never created make will always check all entries in EXAMS.
+test checktest: $(EXAM_LOG) $(EXAM_CHK)
+
+clean_exams :
+	rm -rf $(EXAM_RST) $(EXAM_DAT) $(EXAM_LOG) $(EXAM_TRJ)
