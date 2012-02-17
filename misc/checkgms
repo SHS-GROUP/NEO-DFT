@@ -1,0 +1,135 @@
+#!/bin/csh
+#
+#   Run FTNCHEK, a FORTRAN syntax checker, on GAMESS.
+#
+#   Option 1 is to test individual source code in the directory TestDir,
+#   by the command 'checkgms'.
+#
+#   Option 2 is to test source code in the directory TestDir, plus the
+#   remaining parts of GAMESS in the production code directory ProdDir,
+#   as a total program, by the command 'checkgms all'.  In order to
+#   run the second option, you must redimension a table in FTNCHEK,
+#   namely, raise HASHSZ from 20930 to 40930 in ftnchek.h, as GAMESS
+#   is now too big to fit in the default space.
+#
+#   FTNCHEK is available from its point of origin, Fordham University,
+#   by anonymous FTP to ftp.dsm.fordham.edu, directory /pub/ftnchek.
+#   or see http:/www.dsm.fordham.edu/~ftnchek/ftp-index.html
+#   This program is also available at netlib and sunsite, typically.
+#   The author, Robert Moniot, is a hero!
+#
+#   Note that in addition to the dimension change just noted, we suppress
+#   a few of the warning messages issued by FTNCHEK for argument testing.
+#   A list of these modifications can be sent to you, if you wish.
+#
+#   The user needs to set two directories:
+#
+set TestDir='/u1/mike/testgms/source'
+set ProdDir='/u1/mike/gamess/source'
+#
+if ($1 == all) goto do_it_all_together
+#
+#   ----- this section tests each module separately -----
+#
+#   The 2nd argument to "comp" causes source activation only,
+#   placing the pure FORTRAN in your ~/scr directory for checking.
+#   -noextern suppresses messages about unresolved references
+#   -common=2 ensures commons agree in type and length
+#   -arguments=1 checks only number of args
+#   -arguments=2 also ensures arguments agree in data type
+#   -array=0 suppresses most array dimension checking
+#   -calltree=1 generates who calls whom list, 0 disables this.
+#   -crossref generates who is called by whom list, including commons
+#
+chdir $TestDir
+foreach file (*.src)
+   set file=$file:r
+   if ($file == ddi)    continue
+   if ($file == ddishm) continue
+   if ($file == ddio3k) continue
+   if ($file == unport) continue
+   if ($file == vector) continue
+   ../comp $file true
+   ftnchek -noextern -common=2 -arguments=1 -array=0 \
+           -calltree=0 -nocrossref -portability=tab \
+           -f77=automatic-array,relops,cycle-exit,case-construct \
+       ~/scr/$file.f >& ~/scr/$file.lis
+   echo FTNCHEK output for this module is now in ~/scr/$file.lis
+   rm ~/scr/$file.f
+end
+exit
+#
+#   ----- this section tests the entire program -----
+#
+do_it_all_together:
+#
+#   Here, we will analyze all sources, together.
+#
+#   Any source found in the working directory is taken as a priority,
+#   otherwise we use a standard copy from the production code directory.
+#   If new source module names are being developed, you must expand
+#   the list of all GAMESS source modules as shown.
+#
+#         a) get a complete list of the production code, including NEO
+chdir $ProdDir
+set module_list=(*.src)
+chdir $ProdDir:h/qmnuc/neo
+set module_list=($module_list *.src)
+#         b) optionally, add new module names under development to the list
+#--set module_list=(xxx.src yyy.src $module_list)
+#         c) check new version if found in the development directory,
+#            else make a temporary copy of the standard file to check.
+chdir $TestDir
+#
+foreach file ($module_list)
+   set file=$file:r
+   if ($file == blas)   continue
+   if ($file == neostb) continue
+   if ($file == vector) continue
+   if (-e $file.src) then
+      ../comp $file true
+   else
+      switch ($file)
+         case neo:
+         case neobas:
+         case neocas:
+         case neoden:
+         case neofci:
+         case neog2a:
+         case neog2b:
+         case neog2c:
+         case neogrd:
+         case neohf:
+         case neohss:
+         case neoint:
+         case neomp2:
+         case neonci:
+         case neoopt:
+         case neopos:
+         case neoprp:
+         case neosym:
+         case neotrn:
+         case neovib:
+         cp $ProdDir:h/qmnuc/neo/$file.src .
+         breaksw
+      default:
+         cp $ProdDir/$file.src .
+         breaksw
+      endsw
+      ../comp $file true
+      rm $file.src
+   endif
+end
+#
+echo " "
+echo Beginning FTNCHEK of the entire program, stand by...
+date
+chdir ~/scr
+ftnchek -noextern -common=2 -arguments=1 -array=0 \
+        -calltree=0 -nocrossref -resources=yes \
+        -f77=automatic-array,relops -portability=tab \
+        *.f >& gamess.lis
+echo FTNCHEK diagnostic messages are now in ~/scr/gamess.lis
+rm *.f
+date
+exit
