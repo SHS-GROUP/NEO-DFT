@@ -304,3 +304,14 @@ setenv BONDDPF $SCR/$JOB.F299
 #    Next value is used only within the VB2000 add-on code
 setenv GMSJOBNAME $JOB
 
+
+#    Next files are used only during explicitly correlated methods 
+set pt2r12=`egrep -i '(PTR12=.TRUE.|PT2R12=.T.)' $SCR/$JOB.F05 | wc -l`
+if ($pt2r12 > 0) then
+ set echo
+ setenv PT2INT ~$USER/scr/$JOB
+ setenv PT2RDM ~$USER/scr/$JOB
+ setenv PT2BAS $SCR/$JOB.F300
+ unset echo
+endif
+

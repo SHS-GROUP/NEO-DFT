@@ -1,0 +1,2854 @@
+C  2 Mar 12 - LBR - ADD PT2R12 BSIE CORRECTION
+C                     COMPUTE REAL SPIN-FREE 2PDM
+C                     GENERATE INPUTS FOR MPQC
+C
+!*MODULE EXCORR  *DECK R12_F_NAME
+      SUBROUTINE R12_F_NAME(FNAME,FILENM2)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      CHARACTER*(*) FNAME,FILENM2
+      CHARACTER*256 FILNUM,FILENM
+      CHARACTER*8 RUNTYPE
+      COMMON /CSURF / DISP(2),ORIG(2),NDISP(2),IVEC1(2),IVEC2(2),
+     *                NG1,NG2,SCFTYPE(2),RUNTYPE(2),CITYPE(2),
+     *                CCTYPE(2),MPLEVEL(2),DFTTYPE(2),
+     *                SFGRID1(100),SFGRID2(100),NUMDIM,NPOINT
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+
+! GENERATE UNIQUE FILES NAMES FOR META DATA : GOOD FOR PES SCANS.
+!    DO NOT CHANGE THE CASE ON THE FILENAME EXTENSION.
+
+      IF(RUNTYPE(1).NE.'ENERGY  ')NPOINT = 1
+
+      WRITE(FILNUM,*)NPOINT
+      FILENM=' '
+      IF (MASWRK) CALL GMS_GETENV(FNAME,FILENM)                                           
+
+      IF(NPOINT.LT.10)THEN
+
+         IF(FNAME.EQ.'PT2RDM')THEN
+            FILENM2=TRIM(FILENM)//'.0'//TRIM(ADJUSTL(FILNUM))//
+     $           '.input.pt2r12.rdm2.dat'
+         ELSE
+            FILENM2=TRIM(FILENM)//'.0'//TRIM(ADJUSTL(FILNUM))//
+     $           '.input.pt2r12.dat'
+         ENDIF
+         
+      ELSE                      !(NPOINT.LT.10)                                           
+         
+         IF(FNAME.EQ.'PT2RDM')THEN
+            FILENM2=TRIM(FILENM)//'.'//TRIM(ADJUSTL(FILNUM))//
+     $           '.input.pt2r12.rdm2.dat'
+         ELSE
+            FILENM2=TRIM(FILENM)//'.'//TRIM(ADJUSTL(FILNUM))//
+     $           '.input.pt2r12.dat'
+         ENDIF
+         
+      ENDIF                     !(NPOINT.LT.10)                                           
+      
+      RETURN
+      END SUBROUTINE R12_F_NAME
+!------------------------------------------------------------------------
+!========================================================================
+!------------------------------------------------------------------------
+!*MODULE EXCORR  *DECK GET_PT2R12_INFO
+      SUBROUTINE GET_PT2R12_INFO(NFRZCR12,NINACTR12,NACTR12,NFRZVR12,
+     $     RDM2TOL,NCORR_R12)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+
+      LOGICAL GOPARR,DSKWRK,MASWRK,SVDSKW
+      PARAMETER (MXATM=2000, MXRT=100)
+      COMMON /CSURF / DISP(2),ORIG(2),NDISP(2),IVEC1(2),IVEC2(2),
+     *                NG1,NG2,SCFTYPE(2),RUNTYPE(2),CITYPE(2),
+     *                CCTYPE(2),MPLEVEL(2),DFTTYPE(2),             
+     *                SFGRID1(100),SFGRID2(100),NUMDIM,NPOINT
+      COMMON /IOFILE/ IR,IW,IP,IS,IJKT,IDAF,NAV,IODA(950)
+      COMMON /FMCOM / X(1)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /DETWFN/ WSTATE(MXRT),SPINS(MXRT),CRIT,PRTTOL,S,SZ,
+     *                GRPDET,STSYMPRINT,GLIST,
+     *                NFLGDM(MXRT),IWTS(MXRT),NCORSV,NCOR,NACT,NORB,
+     *                NA1,NB1,K,KST,IROOT,IPURES,MAXW1,NITER,MAXP,NCI,
+     *                IGPDET,KSTSYM,NFTGCI,DWEIGH,DWPARM
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      CHARACTER*120 BASISINFO
+      CHARACTER*256 FILENM2
+      DATA C1/8HC1      /,Ci/8HCI      /,CS/8HCS      /,C2/8HC2      /,
+     *    D2/8HD2      /,C2V/8HC2V     /,C2H/8HC2H     /,D2H/8HD2H     /
+
+! CURRENTLY: THIS ROUNTINE IS CALLED FROM ORMAS.SRC (ORDET)
+! INPUTA.SRC: SEVERAL MODIFICATIONS MADE TO TAKE CARE OF THE BASIS SET INFORMATION NEEDED FOR R12
+
+      CALL R12_F_NAME('PT2INT',FILENM2)
+      CALL SEQOPN(97,'PT2BAS', 'UNKNOWN',.TRUE.,'FORMATTED')
+
+! MEMORY FOR ORBITALS AND SYMETRY INFO
+      L1 = NUM
+      L2 = NUM*NUM
+      CALL VALFM(LOADFM)
+      MO_MEM = LOADFM +1
+      ISYM_MEM = MO_MEM + L2 + 1
+      LAST = ISYM_MEM + NQMT +1
+      NEED = LAST - LOADFM 
+      CALL GETFM(NEED)
+
+! ORBITAL SYMETRIES AND LCAO COEFFICIENTS
+      CALL DAREAD(IDAF,IODA,X(MO_MEM),L2,15,0)
+      CALL DAREAD(IDAF,IODA,X(ISYM_MEM),NQMT,262,1)
+
+      OPEN(UNIT=99,FILE=TRIM(FILENM2),STATUS='UNKNOWN')
+
+      IF(ME.EQ.MASTER)THEN
+
+! WRITE COORDINATES TO FILE 'PT2INT'
+      DO I = 1,NAT
+         WRITE(99,'(F5.1,3E36.25)')ZAN(I),(C(J,I), J=1,3)
+      ENDDO
+      WRITE(99,'(F5.1,3F36.25)')-1.,-1.,-1.,-1.
+      WRITE(99,'(A8)')GRPDET    !POINT GROUP
+! MUST APPEND THE FOLLOWING IRREP INFO FOR C2H POINT GROUP
+      if(GRPDET.EQ.C2H)WRITE(99,'(A11)')'Ag Bg Bu Au'
+      WRITE(99,'(I2)')-1        !DELIMITER
+
+! APPEND BASIS SET FROM FILE PT2BAS TO FILE 'PT2INT'
+ 8080 CONTINUE 
+c$$$      READ(97,'(a)',END=8090)BASISINFO
+c$$$      WRITE(99,'(a)')trim(adjustl(BASISINFO))
+      READ(97,'(a120)',END=8090)BASISINFO
+      WRITE(99,'(a120)')BASISINFO
+      GOTO 8080
+ 8090 CONTINUE 
+
+! APPEND INFO SPECIFIC TO ORBITALS TO FILE TEST.PT2R12.DAT
+      WRITE(99,'(I6)')NQMT   !TOTAL NUMBER OF VARIATIONAL MOS
+
+! APPEND LCAO COEFFICIENTS TO FILE 'PT2INT'
+      DO I = 1,NQMT
+         DO J = 1,NUM
+            ISHIFT = (I-1)*NUM +J
+            WRITE(99,'(2I6,4X,E36.25)')J,I,X(MO_MEM +ISHIFT-1)
+         ENDDO
+      ENDDO
+      WRITE(99,'(2I6,4X,E36.25)')-1,-1,-1. !DELIMITER
+
+! APPEND ORBITAL SYMETRIES TO FILE 'PT2INT'
+      CALL ORB_SYM_WRITER(X(ISYM_MEM),NQMT)
+
+! APPEND SOME MORE INFO FOR PT2R12
+      WRITE(99,'(I6)')NFRZCR12  ! NUMBER OF FROZEN CORE ORBITALS
+      WRITE(99,'(I6)')NINACTR12 ! NUMBER OF CORE ORBITALS THAT ARE NOT FROZEN
+      WRITE(99,'(I6)')NACTR12   ! NUMBER OF ACTIVE ORBITALS
+      WRITE(99,'(I6)')NCORR_R12 ! NUMBER OF ORBITALS TO BE CORRELATED
+      WRITE(99,'(I6)')NFRZVR12  ! NUMBER OF FROZEN VALENCE ORITALS
+      WRITE(99,'(I2)')-1        !DELIMITER
+
+      ENDIF                     !(ME.EQ.MASTER)
+
+      IF(ME.EQ.MASTER)CLOSE(99,STATUS='KEEP')
+      IF(ME.NE.MASTER)CLOSE(99,STATUS='DELETE')
+
+      REWIND(97)
+      CALL SEQCLO(97,'KEEP')
+
+!RETURN MEMORY
+      CALL RETFM(NEED)
+
+      RETURN
+      END SUBROUTINE GET_PT2R12_INFO
+!------------------------------------------------------------------------
+!========================================================================
+!------------------------------------------------------------------------
+!*MODULE EXCORR  *DECK ORB_SYM_WRITER
+      SUBROUTINE ORB_SYM_WRITER(IOB,NQMT)
+      IMPLICIT NONE
+      INTEGER IOB(*),NQMT
+      WRITE(99,'(1000I2)')IOB(1:NQMT)
+      RETURN
+      END SUBROUTINE ORB_SYM_WRITER
+!------------------------------------------------------------------------
+!========================================================================
+!------------------------------------------------------------------------
+!*MODULE EXCORR  *DECK GET_EXCORR_INPUT
+      SUBROUTINE GET_EXCORR_INPUT(TO_OUTPUT,R12CORR,NFRZC_R12,
+     $     NINACT_R12,NACT_R12,NFRZV_R12,PUNTOL,NCORR_R12)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      PARAMETER (MXRT=100)
+      COMMON /DETWFN/ WSTATE(MXRT),SPINS(MXRT),CRIT,PRTTOL,S,SZ,
+     *                GRPDET,STSYMPRINT,GLIST,
+     *                NFLGDM(MXRT),IWTS(MXRT),NCORSV,NCOR,NACT,NORB,
+     *                NA1,NB1,K,KST,IROOT,IPURES,MAXW1,NITER,MAXP,NCI,
+     *                IGPDET,KSTSYM,NFTGCI,DWEIGH,DWPARM
+      COMMON /IOFILE/ IR,IW,IP,IS,IJKT,IDAF,NAV,IODA(950)
+
+      LOGICAL PT2R12,TO_OUTPUT,CCR12,R12CORR
+
+      PARAMETER (NNAM=8)
+      DIMENSION QNAM(NNAM),KQNAM(NNAM)
+      DATA QNAM/8HPT2R12  ,8HNFRZV   ,8HNFRZC   ,8HNINACT  ,8HNACT    ,
+     $     8HNCORR   ,8HPUNTOL  ,8HCCR12   /
+      DATA KQNAM/0,1,1,1,
+     $           1,1,3,0 /
+
+      DATA EXCORR/8HEXCORR  /
+!
+      PT2R12 = .FALSE.
+      CCR12 = .FALSE.
+      R12CORR=.FALSE.
+      NFRZC = NCORSV
+      NINACT  = 0
+      NACT  = NACT
+      NFRZV = 0
+      NCORR = NACT
+      PUNTOL = 1.00D-11
+!
+      CALL NAMEIO(IR,JRET,EXCORR,NNAM,QNAM,KQNAM,
+     *     PT2R12,NFRZV,NFRZC,NINACT,
+     *     NACT,NCORR,PUNTOL,CCR12,0,
+     *     0,0,0,0,0,    0,0,0,0,0,    0,0,0,0,0,
+     *     0,0,0,0,0,    0,0,0,0,0,    0,0,0,0,0,    0,0,0,0,0,
+     *     0,0,0,0,0,    0,0,0,0,0,    0,0,0,0,0,    0,0,0,0,0)
+      IF(PT2R12.AND.JRET.NE.0)THEN
+         WRITE(6,'("ERROR IN $EXCORR INPUT GROUP")')
+         CALL ABRT
+      ENDIF 
+!
+      IF(.NOT.PT2R12)RETURN
+!
+      NFRZC_R12 = NFRZC
+      NINACT_R12 = NINACT
+      NACT_R12 = NACT
+      NCORR_R12 =  NCORR
+      NFRZV_R12 = NFRZV
+
+      IF(PT2R12)R12CORR=.TRUE.
+      IF(CCR12)R12CORR=.TRUE.
+
+      IF(PT2R12.AND.TO_OUTPUT)THEN
+         WRITE(6,1000)NFRZC_R12,NINACT_R12,NACT_R12,NFRZV_R12,NCORR_R12,
+     $        PUNTOL
+      ELSEIF(CCR12.AND.TO_OUTPUT)THEN
+         WRITE(6,1100)NFRZC_R12,NINACT_R12,NACT_R12,NFRZV_R12,NCORR_R12,
+     $        PUNTOL
+      ENDIF  
+!     
+      RETURN
+!
+ 1000 FORMAT(/5X,60(1H-)/
+     $     15X,'CREATING INPUTS FOR MPQC PT2R12 CORRECTION',/
+     $     5X,60(1H-)/
+     $     /8X,16(1H-),X,'PT2R12 SPECIFICATION',X,16(1H-)/
+     $    12X, 'NUMBER OF FROZEN CORE ORBITALS:     ',X,I6/
+     $    12X, 'NUMBER OF INACTIVE ORBITALS:        ',X,I6/
+     $    12X, 'NUMBER OF ACTIVE ORBITALS:          ',X,I6/
+     $    12X, 'NUMBER OF FROZEN VIRTUAL ORBITALS:  ',X,I6/
+     $    12X, 'TOTAL ORBITALS TO BE CORRELATED:    ',X,I6//
+     $    12X, 'TWO-RDM PUNCH TOLERANCE:            ',2X,D8.2/
+     $     8X,54(1H-))
+ 1100  FORMAT(/5X,60(1H-)/
+     $     12X,'CREATING INPUTS FOR MPQC CCSD(T)-R12 CORRECTION',/
+     $     5X,60(1H-)/
+     $     /8X,13(1H-),X,'CCSD(T)-R12 SPECIFICATION',X,14(1H-)/
+     $    12X, 'NUMBER OF FROZEN CORE ORBITALS:     ',X,I6/
+     $    12X, 'NUMBER OF INACTIVE ORBITALS:        ',X,I6/
+     $    12X, 'NUMBER OF ACTIVE ORBITALS:          ',X,I6/
+     $    12X, 'NUMBER OF FROZEN VIRTUAL ORBITALS:  ',X,I6/
+     $    12X, 'TOTAL ORBITALS TO BE CORRELATED:    ',X,I6//
+     $    12X, 'T1 AND T2 PUNCH TOLERANCE:          ',2X,D8.2/
+     $     8X,54(1H-))
+      END SUBROUTINE GET_EXCORR_INPUT
+!------------------------------------------------------------------------
+!========================================================================
+!------------------------------------------------------------------------
+!*MODULE EXCORR  *DECK MAKE_PT2R12_2RDM
+      SUBROUTINE MAKE_PT2R12_2RDM(RDM2TOL)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      LOGICAL CLABEL,DDITRF,SOME,PACK2E,GOPARR,DSKWRK,MASWRK,FDIRCT,
+     *        QCORR,JACOBI,CEECHK
+      PARAMETER (MXRT=100, MXATM=2000)
+      COMMON /CEEIS3/ NEEDCI, CEECHK
+      COMMON /CIFILS/ NFT11,NFT12,NFT13,NFT14,NFT15,NFT16,IDAF20,NEMEMX
+      COMMON /DETWFN/ WSTATE(MXRT),SPINS(MXRT),CRIT,PRTTOL,S,SZ,
+     *                GRPDET,STSYM,GLIST,
+     *                NFLGDM(MXRT),IWTS(MXRT),NCORSV,NCOR,NACT,NORB,
+     *                NA,NB,K,KST,IROOT,IPURES,MAXW1,NITER,MAXP,NCI,
+     *                IGPDET,KSTSYM,NFTGCI,DWEIGH,DWPARM
+      COMMON /ENRGYS/ ENUCR,EELCT,ETOT,STOT,SZZ,ECORE,ESCF,EERD,E1,E2,
+     *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2),EDISP
+      COMMON /FCCWFN/ NSPACE,MSTA(51),MNUM(51),MINI(51),MAXI(51),
+     *                IAMI(51),IAMA(51),IBMI(51),IBMA(51),IDIM(51),
+     *                LBST(51),NREF0,FDIRCT,QCORR,C0SQ
+      COMMON /FMCOM / X(1)
+      COMMON /FUNCT / E,EGRAD(3,MXATM)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,MA,MB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /INTFIL/ NINTMX,NHEX,NTUPL,PACK2E,INTTYP,IGRDTYP
+      COMMON /IOFILE/ IR,IW,IP,IS,IJKT,IDAF,NAV,IODA(950)
+      COMMON /JACOBI/ JACOBI,NJAOR,ELAST,ISTAT
+      COMMON /MACHIN/ NWDVAR,MAXFM,MAXSM,LIMFM,LIMSM
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PSILVL/ IPSI,ISKPRP
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+      COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
+     *                MPLEVL,MPCTYP
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00)
+      DATA AMCSCF/8HMCSCF   /
+      DATA CHECK/8HCHECK   /
+      DATA CIDET /8HCIDET   /
+      DATA ORMAS /8HORMAS   /
+
+!        ----- READ INPUT DEFINING THE FULL CLASS CI DIMENSIONS -----
+
+      CALL FCINPUT(-5,CIDET,ORMAS)
+!
+!     ----- DRIVER FOR FULL CLASS CI COMPUTATION -----
+!
+      SOME = MASWRK  .AND.  NPRINT.NE.-5
+!
+      NTOT = NACT + NCORSV
+      NTCO = NCORSV
+      NORB = NACT
+      NCOR = 0
+      NSYM = 2**IGPDET
+!
+!  MODIFY MSTA TO GET RID OF CORE.
+!
+      DO II=1,NSPACE+1
+         MSTA(II) = MSTA(II) - NCORSV
+      ENDDO
+!
+!        COMPUTE THE TOTAL NUMBER OF DETERMINANTS IN THIS FULL CLASS CI.
+!        DECIDE NECESSARY DOUBLE/INTEGER WORKING STORAGE -IDS- AND -IIS-
+!
+!     FIRST NEED TO STORE NSPACE SETS OF BINOMIAL COEFFICIENTS FOR EACH
+!     SUB-SPACE.  THERE IS REASON BEHIND THIS, TRUST ME.  JUST ASK ME.
+!     LBST(I) WILL STORE WHERE IN X BINOMIAL ARRAYS FOR SPACE I START.
+!     IDIM(I) WILL STORE THE MAXIMUM NUMBER OF ALPHA OR BETA ELECTRONS.
+!
+!
+      CALL VALFM(LOADFM)
+      LBST(1)  = LOADFM + 1
+      DO II=2,NSPACE
+         IDIM(II-1) = MAX(IAMA(II-1),IBMA(II-1))
+         LBST(II) = LBST(II-1)+((MNUM(II-1)+1)*(IDIM(II-1)+1))
+      ENDDO
+      IDIM(NSPACE) = MAX(IAMA(NSPACE),IBMA(NSPACE))
+      LAST = LBST(NSPACE)+((MNUM(NSPACE)+1)*(IDIM(NSPACE)+1))
+      NEED1 = LAST - LOADFM - 1
+      CALL GETFM(NEED1)
+!
+      DO II=1,NSPACE
+         CALL BINOM8(X(LBST(II)),MNUM(II),IDIM(II))
+      ENDDO
+!
+!     NOW TO MAKE TABLES FOR THE ORMAS PROBLEM.
+!     MAKE MEMORY AVAILABLE FOR TABLE INFO AND
+!     TABLES THEMSELVES.
+!
+      CALL VALFM(LOADFM)
+      LBOX1 = LOADFM + 1
+      LBOX2 = LBOX1 + NSPACE/NWDVAR + 1
+      LBOX3 = LBOX2 + NSPACE/NWDVAR + 1
+      LBOX4 = LBOX3 + NSPACE/NWDVAR + 1
+      LBOX5 = LBOX4 + NSPACE/NWDVAR + 1
+      LIBO = LBOX5 + NSPACE/NWDVAR + 1
+      LAST = LIBO + NTOT/NWDVAR + 1
+      NEED2 = LAST - LOADFM - 1
+      CALL GETFM(NEED2)
+!
+!    READ ORBITALS LABELS AND GET RID OF THE CORE PART.
+!
+      CALL DAREAD(IDAF,IODA,X(LIBO),NTOT,262,1)
+      CALL CORTRA(X(LIBO),NTOT,NTCO)
+!
+!    WORK OUT HOW MANY ALPHA AND BETA GROUPS THERE ARE.
+!
+      CALL TOTALCO(X(LBOX1),NSPACE,NA,IAMA,IAMI,X(LBOX2),ITGA)
+      CALL TOTALCO(X(LBOX1),NSPACE,NB,IBMA,IBMI,X(LBOX2),ITGB)
+!
+!    DETERMINE THE TOTAL NUMBER OF ALPHA AND BETA STRINGS.
+!
+      CALL RESETCO(X(LBOX1),NSPACE,NA,IAMA,IAMI,X(LBOX2))
+      IAST = 0
+      DO II=1,ITGA
+      CALL TOTDETG(X(LBOX1),NSPACE,LBST,X(LBST(1)),NEED1,
+     *    MNUM,IDIM,ITOT)
+      IAST = IAST + ITOT
+      CALL PUSHCO(X(LBOX1),NSPACE,NA,IAMA,IAMI,X(LBOX2),IEND)
+      ENDDO
+!
+      CALL RESETCO(X(LBOX1),NSPACE,NB,IBMA,IBMI,X(LBOX2))
+      IBST = 0
+      DO II=1,ITGB
+      CALL TOTDETG(X(LBOX1),NSPACE,LBST,X(LBST(1)),NEED1,
+     *    MNUM,IDIM,ITOT)
+      IBST = IBST + ITOT
+      CALL PUSHCO(X(LBOX1),NSPACE,NB,IBMA,IBMI,X(LBOX2),IEND)
+      ENDDO
+!
+!    MAKE STORAGE TO HOLD SYMMETRY INFORMATION OF STRINGS.
+!    THE LABELS BELOW APPEAR THE SAME IN ROUTINE MAKTABS
+!    AND THIS ROUTINE ALSO EXPLAINS WHAT THEY ARE USED FOR.
+!
+      CALL VALFM(LOADFM)
+      LWRK   = LOADFM + 1
+      LCOA   = LWRK   + 43/NWDVAR + 1
+      LCOB   = LCOA   + (NSYM*ITGA)/NWDVAR + 1
+      LGMUL  = LCOB   + (NSYM*ITGB)/NWDVAR + 1
+      LKTAB  = LGMUL  + (NSYM*NSYM)/NWDVAR + 1
+      LCON   = LKTAB  + NSYM/NWDVAR + 1
+      LCON1  = LCON   + NA/NWDVAR + 1
+      LCON2  = LCON1  + NA/NWDVAR + 1
+      LCON3  = LCON2  + NA/NWDVAR + 1
+      LANDET = LCON3  + NA/NWDVAR + 1
+      LBNDET = LANDET + (ITGA*NSPACE)/NWDVAR + 1
+      NAST   = LBNDET + (ITGB*NSPACE)/NWDVAR + 1
+      NBST   = NAST   + (ITGA+1)/NWDVAR + 1
+      LSYMA  = NBST   + (ITGB+1)/NWDVAR + 1
+      LSYMB  = LSYMA  + IAST/NWDVAR + 1
+      LGCOM  = LSYMB  + IBST/NWDVAR + 1
+      LSPA   = LGCOM  + (ITGA*ITGB)/NWDVAR + 1
+      LSPB   = LSPA   + IAST/NWDVAR + 1
+      LDISB  = LSPB   + IBST/NWDVAR + 1
+      LSAS   = LDISB  + (NSYM*ITGB*ITGA)/NWDVAR + 1
+      LSBS   = LSAS   + ((NSYM+1)*ITGA)/NWDVAR + 1
+      LSAC   = LSBS   + ((NSYM+1)*ITGB)/NWDVAR + 1
+      LSBC   = LSAC   + IAST/NWDVAR + 1
+      LAST   = LSBC   + IBST/NWDVAR + 1
+      NEED3 = LAST - LOADFM - 1
+
+      CALL GETFM(NEED3)
+!
+!    MAKE INTEGER TABLES FOR ORMAS. GET NUMBER OF DETS, ETC.
+!
+      IF (SOME) CALL TSECND(E0)
+!
+      CALL MAKTABS(IW,.FALSE.,X(LBOX1),X(LBOX2),X(LBOX3),NSPACE,
+     *             NA,NB,LBST,X(LBST(1)),NEED1,
+     *             IAMA,IAMI,IBMA,IBMI,MNUM,IDIM,MSTA,
+     *             X(LIBO),IGPDET,KSTSYM,NSYM,
+     *             NACT,X(LWRK),X(LKTAB),X(LGMUL),
+     *             X(LCON),X(LCOA),X(LCOB),X(LANDET),X(LBNDET),
+     *             X(NAST),X(NBST),X(LSYMA),X(LSYMB),X(LGCOM),
+     *             MINI,MAXI,X(LSPA),X(LSPB),X(LDISB),
+     *             X(LSAS),X(LSBS),X(LSAC),X(LSBC),
+     *             ITGA,ITGB,IAST,IBST,NCI,NA1EX,NB1EX,FDIRCT)
+!
+!   END OF INTEGER TABLES.  NOW TO DETERMINE THE EXTRA MEMORY
+!   REQUIREMENTS, DOUBLE PRECISION AND INTEGER.
+!   USED TO DO THIS BY CALLING MEMCI OR SOMETHING SIMILAR, I AM
+!   JUST GOING TO DO IT HERE.
+!
+      M1 = NACT
+      M2 = (M1*M1+M1)/2
+      M4 = (M2*M2+M2)/2
+      L0 = NQMT
+      L1 = NUM
+      L2 = (L1*L1+L1)/2
+      L3 = L1*L1
+!
+!   ORMAS DOUBLE PRECISION NEXT.
+!
+      CALL VALFM(LOADFM)
+      KCOEFF = LOADFM +1
+      LAST   = KCOEFF + KST*NCI
+!
+!   ORMAS INTEGER STORAGE IS LAST.
+!
+      IPOSA  = LAST
+      IPERA  = IPOSA  + (NA*(NACT-NA)*NSYM)/NWDVAR + 1
+      IIND1  = IPERA  + (NA*(NACT-NA)*NSYM)/NWDVAR + 1
+      IGROA  = IIND1  + (NA*(NACT-NA)*NSYM)/NWDVAR + 1
+      INDEX  = IGROA  + (NA*(NACT-NA)*NSYM)/NWDVAR + 1
+      IMMC   = INDEX  + ((NACT*(NACT+1))/2+1)/NWDVAR + 1
+      IHMCON = IMMC + NSYM
+!
+!  LEAVE SPACE FOR THE SINGLE EXCITED STORAGE.
+!  NOTE, IF FDIRCT = .TRUE. THEN NB1EX = ITGA.
+!
+      JB1GR = IHMCON + K
+      JB1PE = JB1GR + NB1EX/NWDVAR + 1
+      JB1IN = JB1PE + NB1EX/NWDVAR + 1
+      JB1O1 = JB1IN + NB1EX/NWDVAR + 1
+      JB1O2 = JB1O1 + NB1EX/NWDVAR + 1
+      IND1O1 = JB1O2 + NB1EX/NWDVAR +1
+      IND1O2 =  IND1O1 + (NA*(NACT-NA))*NSYM +1
+      IFDM2  = IND1O2  + (NA*(NACT-NA))*NSYM +1
+      JB1PO = IFDM2  + NACT**4 + 1
+      JB1SY = JB1PO + NB1EX/NWDVAR + 1
+      JB1ST = JB1SY + (NB*(NACT-NB))/NWDVAR + 1
+
+!
+      IF (.NOT.FDIRCT) THEN
+         LAST   = JB1ST + ((IBST+1)*(NSYM+1))/NWDVAR + 1
+         IBST2 = (IBST+1)*(NSYM+1)
+      ELSE
+         LAST = JB1ST + 1
+         NB1EX = ITGA
+         IBST2 =  1
+      ENDIF
+!
+      NEED4  = LAST - LOADFM - 1
+      NEEDCI = NEED1 + NEED2 + NEED3 + NEED4
+      IF (SOME) THEN
+          IFDM = ((NB1EX/NWDVAR) + 1)*4 +
+     *    (((IBST+1)*(NSYM+1))/NWDVAR)+1 + (NB*(NACT-NB))/NWDVAR + 1
+      ENDIF
+!
+      CALL GETFM(NEED4)
+      IF(SOME)WRITE(6,1010)(NEED1+NEED2+NEED3+NEED4)
+ 1010 FORMAT(/10X,'MEMORY REQUIRED FOR SPIN-FREE DENSITY (WORDS)',
+     $     I12)
+!
+      IF(EXETYP.EQ.CHECK)THEN
+         CALL RETFM(NEED4)
+         CALL RETFM(NEED3)
+         CALL RETFM(NEED2)
+         CALL RETFM(NEED1)
+         RETURN
+      ENDIF
+!
+!        ----- COMPUTE FULL CLASS CI WAVEFUNCTION -----
+!
+      CALL GET_CIVECT_TABLES(IW,SOME,NACT,NCI,NA,NB,KST,MAXP,
+     $     X(LBST(1)),NEED1,NSYM,X(LBOX1),X(LBOX2),X(LBOX3),X(LBOX4),
+     $     X(KCOEFF),X(INDEX),X(LCON),X(LCON1),X(LCON2),X(LBNDET),
+     $     X(NBST),X(LSYMB),X(LSPB),ITGB,IAST,IBST,NB1EX,IBST2,
+     $     X(JB1GR),X(JB1PE),X(JB1IN),X(JB1PO),X(JB1ST),X(JB1SY),
+     $     X(JB1O1),X(JB1O2))
+!
+!  DETERMINE IF STATE AVERAGED 1E- AND 2E- DENSITY MATRICES REQUESTED
+!
+      IF (.NOT.FDIRCT) THEN
+         IDIM1 = NSYM+1
+         IDIM2 = IBST+1
+      ELSE
+         IDIM1 = 1
+         IDIM2 = 1
+      ENDIF
+      
+      CALL SPINFREE_2RDM(IW,NPRI6,IWTS,WSTATE,SPINS,IPURES,S,K,
+     *     NACT,NCI,NA,NB,
+     *     X(KCOEFF),
+     *     X(LBST(1)),NEED1,
+     *     X(INDEX),NSYM,X(LIBO),
+     *     X(LBOX1),X(LBOX2),X(LBOX3),X(LBOX4),X(LBOX5),
+     *     X(LGMUL),X(LKTAB),
+     *     X(LCON),X(LCON1),X(LCON2),X(LCON3),
+     *     X(LANDET),X(LBNDET),X(NAST),X(NBST),
+     *     X(LSYMA),X(LSYMB),X(LGCOM),X(LSPA),X(LSPB),
+     *     X(LDISB),X(LSAS),X(LSBS),X(LSAC),X(LSBC),
+     *     ITGA,ITGB,IAST,IBST,
+     *     X(IPOSA),X(IPERA),X(IIND1),X(IGROA),X(IMMC),
+     *     NB1EX,
+     *     X(JB1GR),X(JB1PE),X(JB1IN),X(JB1PO),X(JB1ST),
+     *     IDIM1,IDIM2,
+     *     X(JB1O1),X(JB1O2),X(IND1O1),X(IND1O2),X(IFDM2),RDM2TOL)
+!     
+      CALL RETFM(NEED4)
+      CALL RETFM(NEED3)
+      CALL RETFM(NEED2)
+      CALL RETFM(NEED1)
+
+! RESET MSTA
+
+      DO II=1,NSPACE+1
+         MSTA(II) = MSTA(II) + NCORSV
+      ENDDO
+
+      RETURN
+      END
+!------------------------------------------------------------------------
+!========================================================================
+!------------------------------------------------------------------------
+!*MODULE EXCORR  *DECK SPINFREE_2RDM
+      SUBROUTINE SPINFREE_2RDM(IW,NPRINT,IWTS,WSTATE,SPINS,IPURES,S,K,
+     *     NACT,NCI,NA,NB,AB,
+     *     Y,NX,INDEX,NSYM,IOB,
+     *     LBOX1,LBOX2,LBOX3,LBOX4,LBOX5,
+     *     LGMUL,KTAB,IACON1,IACON2,IBCON1,IBCON2,
+     *     LANDET,LBNDET,NAST,NBST,LSYMA,LSYMB,LGCOM,
+     *     LSPA,LSPB,LDISB,LSAS,LSBS,LSAC,LSBC,
+     *     ITGA,ITGB,IAST,IBST,
+     *     IPOSA,IPERA,IIND1,IGROA,IMMC,
+     *     NB1EX,JB1GR,JB1PE,JB1IN,JB1PO,JB1ST,IDIM1,IDIM2,
+     *     JB1O1,JB1O2,IIND1O1,IIND1O2,FDM2,RDM2TOL)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+!
+      LOGICAL SOME,GOPARR,DSKWRK,MASWRK,FDIRCT,QCORR,PACK2E
+!
+      PARAMETER (MXRT=100, MXATM=2000)
+      PARAMETER (ZERO=0.0D+00)
+!
+      COMMON /CIFILS/ NFT11,NFT12,NFT13,NFT14,NFT15,NFT16,IDAF20,NEMEMX
+      COMMON /ENRGYS/ ENUCR,EELCT,ETOT,STOT,SZZ,ECORE,ESCF,EERD,E1,E2,
+     *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2),EDISP
+      COMMON /FCCWFN/ NSPACE,MSTA(51),MNUM(51),MINI(51),MAXI(51),
+     *                IAMI(51),IAMA(51),IBMI(51),IBMA(51),IDIM(51),
+     *                LBST(51),NREF0,FDIRCT,QCORR,C0SQ
+      COMMON /FUNCT / E,EGRAD(3,MXATM)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,MA,MB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /INTFIL/ NINTMX,NHEX,NTUPL,PACK2E,INTTYP,IGRDTYP
+      COMMON /FMCOM / X(1)
+      COMMON /OUTPUT/ NPRINTX,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCKLAB/ LABSIZ
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+!
+      DIMENSION IWTS(MXRT),WSTATE(MXRT),SPINS(MXRT)
+      DIMENSION AB(NCI,K),Y(NX)
+      DIMENSION INDEX((NACT*(NACT+1))/2+1),IOB(NACT)
+      DIMENSION LBOX1(NSPACE),LBOX2(NSPACE),LBOX3(NSPACE)
+      DIMENSION LBOX4(NSPACE),LBOX5(NSPACE)
+      DIMENSION LGMUL(NSYM,NSYM),KTAB(NSYM)
+      DIMENSION IACON1(NA),IACON2(NA),IBCON1(NA),IBCON2(NA)
+      DIMENSION LANDET(NSPACE,ITGA),LBNDET(NSPACE,ITGB)
+      DIMENSION NAST(ITGA+1),NBST(ITGB+1)
+      DIMENSION LSYMA(IAST),LSYMB(IBST),LGCOM(ITGB,ITGA)
+      DIMENSION LSPA(IAST),LSPB(IBST),LDISB(NSYM,ITGB,ITGA)
+      DIMENSION LSAS(NSYM+1,ITGA),LSBS(NSYM+1,ITGB)
+      DIMENSION LSAC(IAST),LSBC(IBST)
+      DIMENSION IPOSA(NA*(NACT-NA),NSYM)
+      DIMENSION IPERA(NA*(NACT-NA),NSYM)
+      DIMENSION IIND1(NA*(NACT-NA),NSYM)
+      DIMENSION IGROA(NA*(NACT-NA),NSYM)
+      DIMENSION IMMC(NSYM)
+      DIMENSION JB1GR(NB1EX),JB1PE(NB1EX),JB1IN(NB1EX),JB1PO(NB1EX)
+      DIMENSION JB1ST(IDIM1,IDIM2)
+!
+      DATA CHECK/8HCHECK   /
+
+      DOUBLE PRECISION FDM2(NACT,NACT,NACT,NACT)
+
+      INTEGER JB1O1(NB1EX),JB1O2(NB1EX)
+      INTEGER IIND1O1(NA*(NACT-NA),NSYM),IIND1O2(NA*(NACT-NA),NSYM)
+      CHARACTER*256 FILENM2
+
+! INITIALIZE FDM2...
+      DO I = 1,NACT
+         DO II = 1,NACT
+            DO III = 1,NACT
+               DO IV = 1,NACT
+                  FDM2(I,II,III,IV) = 0.0D+00
+               ENDDO
+            ENDDO
+         ENDDO
+      ENDDO
+
+!
+!  ----  STATE-AVERAGED 2E- DENSITY MATRIX  ----
+!
+      SOME = MASWRK  .AND.  NPRINT.NE.-5
+!
+      MXSTAT=0
+      MXNZW=0
+!
+      DO 100 I=MXRT,1,-1
+         IF(WSTATE(I).GT.ZERO) THEN
+            IF(MXSTAT.EQ.0) MXSTAT=I
+            MXNZW=MXNZW+1
+         END IF
+  100 CONTINUE
+!
+      IF(MXSTAT.EQ.0) THEN
+         IF(SOME) THEN
+          WRITE(IW,*) 'OOPS, IN -MASDM2-, SOMETHING HAPPENED TO WSTATE'
+         END IF
+         CALL ABRT
+      END IF
+!
+!
+!        SET STATE AVERAGED ENERGY, PRINT ROOT INFORMATION
+!
+      E = ZERO
+      NXTR=0
+      DO 310 IST=1,K
+         IF(IPURES.EQ.1  .AND.  ABS(SPINS(IST)-S).GT.0.03D+00) GO TO 310
+         NXTR=NXTR+1
+         IF(WSTATE(NXTR).GT.ZERO) THEN
+            E = E + WSTATE(NXTR) * ESTATE(IST)
+            IF(SOME) WRITE(IW,9340) IST,ESTATE(IST),
+     *                              WSTATE(NXTR),SPINS(IST)
+         END IF
+         IF(NXTR.GT.MXSTAT) GO TO 320
+  310 CONTINUE
+!
+!        CROAK THE JOB IF WE DIDN'T CALCULATE ENOUGH ROOTS WITH THE
+!        DESIRED SPIN MULTIPLICITY DURING THE CI DIAGONALIZATION.
+!        IF THIS HAPPENS ON THE 1ST MCSCF ITER, WE'VE ALREADY GOT
+!        THE CI EXPANSIONS PRINTED OUT, AND SHOULD NOT REPEAT IT.
+!
+      IF(NXTR.LT.MXSTAT) THEN
+         IF(MASWRK) WRITE(IW,9350) NXTR,S,MXSTAT
+         IF(MASWRK  .AND.  .NOT.SOME) CALL ORMPRT(IW,NFT12,MASWRK)
+         IF(GOPARR) CALL DDI_SYNC(9205)
+         CALL ABRT
+      END IF
+!
+  320 CONTINUE
+!
+!  COPY CI COEFFICIENTS FOR ALL STATES WITH NON-ZERO WEIGHTS INTO AB
+!
+      NXTW=1
+      NXTR=0
+      DO 620 IST=1,K
+         IF (IPURES.EQ.1) THEN
+            IF (ABS(SPINS(IST)-S).GT.0.03D+00) GO TO 620
+            NXTR=NXTR+1
+         ELSE
+            NXTR=IST
+         ENDIF
+!
+         IF (NXTR.EQ.IWTS(NXTW)) THEN
+!$$$            CALL CICOPY(CI(1,IST),AB(1,NXTW),NCI)
+            CALL CICOPY(AB(1,IST),AB(1,NXTW),NCI)
+            NXTW = NXTW + 1
+         ENDIF
+  620 CONTINUE
+      NXTW = NXTW - 1
+!
+!  ---------  NOW TO DETERMINE STATE AVERAGED DENSITY MATRICES ---------
+!
+!  --- BIG LOOP OVER ALL ALPHA STRINGS. ---
+!
+
+      IF (GOPARR) THEN
+         CALL DDI_DLBRESET()
+         CALL DDI_DLBNEXT(MY_TASK)
+      ENDIF
+!
+      CALL RESETCO(LBOX1,NSPACE,NA,IAMA,IAMI,LBOX5)
+
+      DO 5000 IGA=1,ITGA
+!
+         CALL RESETDE(LBOX1,NSPACE,NA,MSTA,IACON1)
+!
+!  KKA GIVES THE ACTUAL POSITION OF THE ALPHA STRING IACON1 IN
+!  THE FULL ALPHA STRING LIST.
+!
+         DO 4900 KKA=NAST(IGA)+1,NAST(IGA+1)
+            IF (GOPARR.AND.KKA-1.NE.MY_TASK) GOTO 4899
+            JPZA1 = LSPA(KKA)
+            JASYM = LSYMA(KKA)
+            KSYM=KTAB(JASYM)
+            DO II=1,NSYM
+               IMMC(II)=0
+            ENDDO
+!
+            DO II=1,NSPACE
+               LBOX2(II) = LBOX1(II)
+            ENDDO
+!
+!  LOOP OVER SPACES TO EXCITE ELECTRON FROM.
+!
+            IEAS = NA+1
+            DO 4890 ISPA1=NSPACE,1,-1
+               IOC1 = LBOX1(ISPA1)
+               IEAE = IEAS - 1
+               IEAS = IEAS - IOC1
+               IF (IOC1.EQ.0) GO TO 4890
+               LBOX2(ISPA1) = LBOX2(ISPA1)-1
+!
+!  LOOP ELECTRONS IN SPACE ISPA1.
+!  IEAS, IEAE ARE THE ELECTRONS IN SPACE ISPA1.
+!
+               DO 4885 IA1=IEAE,IEAS,-1
+                  IO1 = IACON1(IA1)
+                  IGAE = IEAE - LBOX1(ISPA1)
+                  IS1 = IOB(IO1)
+!
+!  LOOP OVER POSSIBLE SPACES TO EXCITE INTO.
+!
+               DO 4880 ISPA2=ISPA1,NSPACE
+!
+!  IGAS, IGAE ARE ELECTRONS SPECIFYING ISPA2 SPACE ELECTRON LIMITS.
+!
+                  IGAS = IGAE + 1
+                  IGAE = IGAE + LBOX1(ISPA2)
+!
+                  LBOX2(ISPA2) = LBOX2(ISPA2) + 1
+                  IF (LBOX2(ISPA1).LT.IAMI(ISPA1)) GO TO 4870
+!
+!  MAKE GAP INFORMATION HERE.
+!
+                  IGAA = MAX(IA1+1,IGAS)
+                  IF (LBOX1(ISPA2).EQ.0) THEN
+                     ISTA = MSTA(ISPA2)
+                     IEND = MSTA(ISPA2+1)-1
+                  ELSEIF (ISPA2.EQ.ISPA1) THEN
+                     ISTA = IO1+1
+                     IEND = IACON1(IGAA)-1
+                     IF (IA1.EQ.IEAE) IEND=MSTA(ISPA1+1)-1
+                  ELSE
+                     ISTA = MSTA(ISPA2)
+                     IEND = IACON1(IGAA)-1
+                  ENDIF
+!
+!  LOOP OVER GAPS
+!
+                  DO 4860 IGAP=IGAA,IGAE+1
+!
+                     DO 4850 JJ=ISTA,IEND
+                        IS2 = IOB(JJ)
+                        IP1 = LGMUL(IS1,IS2)
+!
+                     IND = INDEX(JJ) + IO1
+!
+              CALL REDE00(IACON1,IACON2,NA,IA1,IGAP-1,JJ,JPERA)
+              IF (LBOX2(ISPA2).GT.IAMA(ISPA2)) GO TO 4800
+!
+!  GET GROUP NUMBER
+!
+           CALL POSITCO(LBOX5,NSPACE,NA,IAMA,IAMI,LBOX4,LBOX2,IGA2)
+           NIAS = NAST(IGA2)
+!
+              CALL IDPOST(IACON2,NA,LBOX2,NSPACE,MSTA,IDIM,Y,NX,LBST,
+     *                  LANDET(1,IGA2),IBCON1,JPOSA)
+              KAPOS = JPOSA + NIAS
+              JPZA2 = LSPA(KAPOS)
+              KASYM = LSYMA(KAPOS)
+              KPER1 = ((-1)**JPERA)*2
+              IMMC(KASYM) = IMMC(KASYM) + 1
+              JSPO = IMMC(KASYM)
+              IPOSA(JSPO,KASYM) = JPZA2
+              IPERA(JSPO,KASYM) = KPER1
+              IIND1(JSPO,KASYM) = IND
+              IGROA(JSPO,KASYM) = IGA2
+!
+              IIND1O1(JSPO,KASYM) = IO1
+              IIND1O2(JSPO,KASYM) = JJ
+!
+!   IF DEOCCUPIED AND NEWLY OCCUPIED ORBITALS ARE OF DIFFERENT SYMMETRY,
+!   SKIP TO DOUBLES.
+!
+              IF (IS1.NE.IS2) GO TO 4800
+!
+!   DETERMINE THE ALPHA STRING CONTRIBUTION TO THE MATRIX ELEMENT.
+!
+              DO 4712 IK=1,NA
+                 IF (IK.EQ.IA1) GO TO 4712
+                 ION = IACON1(IK)
+                 J1 = INDEX(ION+1)
+                 JMA = MAX(J1,IND)
+                 JMI = MIN(J1,IND)
+                 JJ1 = INDEX(JMA) + JMI
+                 JMA = MAX(ION,JJ)
+                 JMI = MIN(ION,JJ)
+                 J1 = INDEX(JMA)+JMI
+                 JMA = MAX(IO1,ION)
+                 JMI = MIN(IO1,ION)
+                 J2 = INDEX(JMA)+JMI
+                 JMA = MAX(J1,J2)
+                 JMI = MIN(J1,J2)
+                 INX = INDEX(JMA)+JMI
+!
+!  LOOP OVER APPROPRIATE BETA DETS AND UPDATE THE 1E DM2
+!
+              DO 1705 IGB=1,ITGB
+              IF (LGCOM(IGB,IGA).NE.1.OR.LGCOM(IGB,IGA2).NE.1) GOTO 1705
+              JCI1 = JPZA1 + LDISB(KSYM,IGB,IGA)
+              JCI2 = JPZA2 + LDISB(KSYM,IGB,IGA2)
+!
+              DO 1685 KKB=LSBS(KSYM,IGB),LSBS(KSYM+1,IGB)-1
+                 JCI1 = JCI1 + 1
+                 JCI2 = JCI2 + 1
+                 F_FC = 0.0D+00
+                 DO KKI=1,NXTW
+              F_FC = F_FC+ WSTATE(IWTS(KKI))*AB(JCI1,KKI)*AB(JCI2,KKI)
+                 ENDDO
+                 F_FC = F_FC*KPER1
+
+!A A2 -> A2 A'  WHERE: A'.GT.A    A2.NE.A
+                 FDM2(JJ,ION,ION,IO1) =FDM2(JJ,ION,ION,IO1) +F_FC/2
+                 FDM2(ION,JJ,IO1,ION) =FDM2(ION,JJ,IO1,ION) +F_FC/2
+                 FDM2(JJ,ION,IO1,ION) =FDM2(JJ,ION,IO1,ION) -F_FC/2
+                 FDM2(ION,JJ,ION,IO1) =FDM2(ION,JJ,ION,IO1) -F_FC/2
+!------------ (DE)EXITE BELOW
+                 FDM2(IO1,ION,ION,JJ) =FDM2(IO1,ION,ION,JJ) +F_FC/2
+                 FDM2(ION,IO1,JJ,ION) =FDM2(ION,IO1,JJ,ION) +F_FC/2
+                 FDM2(IO1,ION,JJ,ION) =FDM2(IO1,ION,JJ,ION) -F_FC/2
+                 FDM2(ION,IO1,ION,JJ) =FDM2(ION,IO1,ION,JJ) -F_FC/2
+
+ 1685         CONTINUE
+!
+ 1705         CONTINUE
+!
+ 4712         CONTINUE
+!
+!  LOOP OVER BETA DETS OF THE RIGHT GROUP AND SYMMETRY.
+!
+              CALL RESETCO(LBOX3,NSPACE,NB,IBMA,IBMI,LBOX4)
+!
+              DO 4700 IGB=1,ITGB
+              IF (LGCOM(IGB,IGA).NE.1.OR.LGCOM(IGB,IGA2).NE.1) GOTO 4690
+              JCI1 = JPZA1 + LDISB(KSYM,IGB,IGA)
+              JCI2 = JPZA2 + LDISB(KSYM,IGB,IGA2)
+!
+              CALL RESETDE(LBOX3,NSPACE,NB,MSTA,IBCON1)
+              ISTB = 1
+              DO 4680 KKB=LSBS(KSYM,IGB),LSBS(KSYM+1,IGB)-1
+                 IENB = LSBC(KKB)
+                 DO IIZ=ISTB,IENB-1
+                    CALL MOVEUP2(LBOX3,NSPACE,NB,MSTA,IBCON1)
+                 ENDDO
+                 ISTB = IENB
+                 JCI1 = JCI1 + 1
+                 JCI2 = JCI2 + 1
+!
+                 F_FC = 0.0D+00
+                 DO KKI=1,NXTW
+              F_FC = F_FC+ WSTATE(IWTS(KKI))*AB(JCI1,KKI)*AB(JCI2,KKI)
+                 ENDDO
+                 F_FC = F_FC*KPER1
+!
+                 DO 4670 IK=1,NB
+                    ION = IBCON1(IK)
+                    J1 = INDEX(ION+1)
+                    JMA = MAX(J1,IND)
+                    JMI = MIN(J1,IND)
+                    JJ1 = INDEX(JMA) + JMI
+
+!A B -> B A'  WHERE: A'.GT.A
+                 FDM2(JJ,ION,ION,IO1) =FDM2(JJ,ION,ION,IO1) +F_FC/2
+                 FDM2(ION,JJ,IO1,ION) =FDM2(ION,JJ,IO1,ION) +F_FC/2
+!$$$!------------- (DE)EXCITE BELOW
+                 FDM2(IO1,ION,ION,JJ) =FDM2(IO1,ION,ION,JJ) +F_FC/2
+                 FDM2(ION,IO1,JJ,ION) =FDM2(ION,IO1,JJ,ION) +F_FC/2
+
+ 4670            CONTINUE
+!
+ 4680         CONTINUE
+!
+ 4690         CALL PUSHCO(LBOX3,NSPACE,NB,IBMA,IBMI,LBOX4,IEND)
+ 4700         CONTINUE
+!
+! --  DOUBLE ALPHA EXCITATIONS START HERE  ---
+!
+ 4800         CONTINUE
+!
+            IF (IA1.EQ.NA) GOTO 4850
+            IF (JJ.EQ.NACT) GOTO 4850
+!
+            DO II=1,NSPACE
+               LBOX3(II) = LBOX2(II)
+            ENDDO
+            IAES3 = 1
+            DO KK=1,ISPA1-1
+               IAES3 = IAES3 + LBOX2(KK)
+            ENDDO
+!
+!  LOOP OVER SPACES TO EXCITE ELECTRONS FROM, MUST BE GE THAN
+!  SPACE OF FIRST EXCITATION, ISPA1.
+!
+            DO 3890 ISPA3 = ISPA1,NSPACE
+               IF (LBOX1(ISPA3).EQ.0) GOTO 3887
+               IF (ISPA3.EQ.ISPA1.AND.IA1.EQ.IEAE) GOTO 3887
+               IOC3 = LBOX2(ISPA3)
+               IF (IOC3.EQ.0) GOTO 3887
+!
+               IAEE3 = IAES3 + LBOX2(ISPA3)-1
+               LBOX3(ISPA3) = LBOX3(ISPA3)-1
+!
+!  LOOP OVER ELECTRONS IN ISPA3, WHICH ARE LARGER THAN IA1,
+!  MAKING SURE IT ISN'T THE ALREADY EXCITED ELECTRON.
+!
+               JSTA3 = IAES3
+               IF (ISPA3.EQ.ISPA1) THEN
+                  JSTA3=IA1
+                  IF (IGAP-1.EQ.IA1) JSTA3=JSTA3+1
+               ENDIF
+!
+               DO 3880 IA3=JSTA3,IAEE3
+                  IF (IA3.EQ.IGAP-1) GOTO 3880
+                  IO3 = IACON2(IA3)
+                  IS3 = IOB(IO3)
+!
+!  LOOP OVER SPACES TO EXCITE ELECTRON INTO.  MUST BE GE THAN
+!  SPACE FIRST ELECTRON WAS EXCITED INTO.
+!
+                  IGAE3 = 0
+                  DO JIK=1,ISPA2-1
+                     IGAE3 = IGAE3 + LBOX2(JIK)
+                  ENDDO
+                  DO 3850 ISPA4=ISPA2,NSPACE
+!
+!  IGAS3, IGAE3 ARE ELECTRONS SPECIFYING ISPA4 SPACE ELECTRON LIMITS.
+!
+                  LBOX3(ISPA4) = LBOX3(ISPA4) + 1
+                  IGAS3 = IGAE3 + 1
+                  IGAE3 = IGAE3 + LBOX2(ISPA4)
+                  IF (LBOX3(ISPA3).LT.IAMI(ISPA3)) GOTO 3840
+                  IF (LBOX3(ISPA4).GT.IAMA(ISPA4)) GOTO 3840
+                  IF (LBOX3(ISPA2).LT.IAMI(ISPA2)) GOTO 3840
+                  IF (LBOX3(ISPA2).GT.IAMA(ISPA2)) GOTO 3840
+!
+             IF (ISPA4.EQ.ISPA2.AND.JJ.EQ.MSTA(ISPA2+1)-1) GOTO 3840
+!
+!  GET GROUP NUMBER
+!
+               CALL POSITCO(LBOX5,NSPACE,NA,IAMA,IAMI,LBOX4,LBOX3,IGA3)
+               NIAS3 = NAST(IGA3)
+!
+!  MAKE GAP INFORMATION HERE.
+!
+                  IGAA3 = MAX(IGAS3,IGAP)
+!
+                  IF (LBOX2(ISPA4).EQ.0) THEN
+                     ISTA3 = MSTA(ISPA4)
+                     IEND3 = MSTA(ISPA4+1)-1
+                  ELSEIF (ISPA4.EQ.ISPA2) THEN
+                     ISTA3 = JJ+1
+                     IEND3 = IACON2(IGAA3)-1
+!
+!  I AM SUSPECT ABOUT THIS NEXT LINE, WE'LL SEE WHAT HAPPENS.......
+!
+                     IF (IGAP-1.EQ.IGAE3) IEND3=MSTA(ISPA2+1)-1
+!
+                  ELSE
+                     ISTA3 = MSTA(ISPA4)
+                     IEND3 = IACON2(IGAA3)-1
+                  ENDIF
+!
+!  LOOP OVER GAPS
+!
+                  DO 3830 IGAP3=IGAA3,IGAE3+1
+!
+                     DO 3820 JJ3=ISTA3,IEND3
+                        IS4 = IOB(JJ3)
+                        IP2 = LGMUL(IS3,IS4)
+                        IF (IP1.NE.IP2) GOTO 3820
+!
+              CALL REDE00(IACON2,IBCON1,NA,IA3,IGAP3-1,JJ3,JPERA3)
+              CALL IDPOST(IBCON1,NA,LBOX3,NSPACE,MSTA,IDIM,Y,NX,LBST,
+     *                  LANDET(1,IGA3),IBCON2,JPOSA3)
+              IPER3 = ((-1)**(JPERA3+JPERA))*2
+              KAPOS3 = JPOSA3 + NIAS3
+              JPZA3 = LSPA(KAPOS3)
+                 JMA=MAX(JJ3,IO3)
+                 JMI=MIN(JJ3,IO3)
+                 I2 = INDEX(JMA) + JMI
+                 INX = INDEX(I2) + IND
+                 II1 = INDEX(JJ3) + IO1
+                 JMA=MAX(IO3,JJ)
+                 JMI=MIN(IO3,JJ)
+                 II2 = INDEX(JMA) + JMI
+                 JMA=MAX(II1,II2)
+                 JMI=MIN(II1,II2)
+                 INX2 = INDEX(JMA) + JMI
+!
+!  LOOP OVER BETA STRINGS OF RIGHT SYMMETRY AND GROUP.
+!
+              DO 3700 IGB=1,ITGB
+              IF (LGCOM(IGB,IGA).NE.1.OR.LGCOM(IGB,IGA3).NE.1) GOTO 3700
+              JCI1 = JPZA1 + LDISB(KSYM,IGB,IGA)
+              JCI3 = JPZA3 + LDISB(KSYM,IGB,IGA3)
+!
+              DO 3680 KKB=LSBS(KSYM,IGB),LSBS(KSYM+1,IGB)-1
+                 JCI1 = JCI1 + 1
+                 JCI3 = JCI3 + 1
+!
+                 F_FC = 0.0D+00
+                 DO KKI=1,NXTW
+              F_FC = F_FC + WSTATE(IWTS(KKI))*AB(JCI1,KKI)*AB(JCI3,KKI)
+                 ENDDO
+                 F_FC = F_FC*IPER3
+
+! A A2 --> A'2 A'    A' > A    A'2 > A2    A2 > A    A'2 > A'
+                 FDM2(JJ,JJ3,IO3,IO1) =FDM2(JJ,JJ3,IO3,IO1) +F_FC/2
+                 FDM2(JJ3,JJ,IO1,IO3) =FDM2(JJ3,JJ,IO1,IO3) +F_FC/2
+                 FDM2(JJ,JJ3,IO1,IO3) =FDM2(JJ,JJ3,IO1,IO3) -F_FC/2
+                 FDM2(JJ3,JJ,IO3,IO1) =FDM2(JJ3,JJ,IO3,IO1) -F_FC/2
+!$$$!--------------- (DE)DOWN BELOW
+                 FDM2(IO1,IO3,JJ3,JJ) =FDM2(IO1,IO3,JJ3,JJ) +F_FC/2
+                 FDM2(IO3,IO1,JJ,JJ3) =FDM2(IO3,IO1,JJ,JJ3) +F_FC/2
+                 FDM2(IO1,IO3,JJ,JJ3) =FDM2(IO1,IO3,JJ,JJ3) -F_FC/2
+                 FDM2(IO3,IO1,JJ3,JJ) =FDM2(IO3,IO1,JJ3,JJ) -F_FC/2
+
+ 3680         CONTINUE
+!
+ 3700         CONTINUE
+!
+ 3820                CONTINUE
+!
+                     ISTA3 = IACON2(IGAP3)+1
+                     IEND3 = IACON2(IGAP3+1)-1
+                     IF (IGAP3.EQ.IGAE3) IEND3=MSTA(ISPA4+1)-1
+ 3830             CONTINUE
+!
+ 3840             LBOX3(ISPA4) = LBOX3(ISPA4) - 1
+ 3850             CONTINUE
+!
+ 3880          CONTINUE
+!
+               LBOX3(ISPA3) = LBOX3(ISPA3)+1
+ 3887          IAES3 = IAES3 + LBOX3(ISPA3)
+ 3890       CONTINUE
+!
+ 4850                CONTINUE
+!
+                  ISTA = IACON1(IGAP)+1
+                  IEND = IACON1(IGAP+1)-1
+                  IF (IGAP.EQ.IGAE) IEND=MSTA(ISPA2+1)-1
+ 4860             CONTINUE
+!
+ 4870             LBOX2(ISPA2) = LBOX2(ISPA2) - 1
+ 4880          CONTINUE
+!
+ 4885          CONTINUE
+!
+               LBOX2(ISPA1) = LBOX2(ISPA1)+1
+ 4890       CONTINUE
+!
+!  DIAGONAL ELEMENTS HERE
+!
+            DO 67 II=1,NA
+               I1 = IACON1(II)
+               IND1 = INDEX(I1+1)
+!
+!  LOOP OVER BETA STRINGS OF RIGHT SYMMETRY AND GROUP.
+!
+              DO 64 JJ=II+1,NA
+                 I2 = IACON1(JJ)
+                 IND2 = INDEX(I2+1)
+                 INDM = IND2 - I2 + I1
+                 J1 = INDEX(INDM+1)
+                 J2 = INDEX(IND2) + IND1
+!
+              DO 3710 IGB=1,ITGB
+              IF (LGCOM(IGB,IGA).NE.1) GOTO 3710
+              JCI1 = JPZA1 + LDISB(KSYM,IGB,IGA)
+!
+              DO 3690 KKB=LSBS(KSYM,IGB),LSBS(KSYM+1,IGB)-1
+                 JCI1 = JCI1 + 1
+!
+                 F_FC = 0.0D+00
+                 DO KKI=1,NXTW
+              F_FC = F_FC + WSTATE(IWTS(KKI))*AB(JCI1,KKI)*AB(JCI1,KKI)
+                 ENDDO
+
+!A A2 -> A A2
+                 FDM2(I2,I1,I1,I2) =FDM2(I2,I1,I1,I2) +F_FC
+                 FDM2(I2,I1,I2,I1) =FDM2(I2,I1,I2,I1) -F_FC
+                 FDM2(I1,I2,I2,I1) =FDM2(I1,I2,I2,I1) +F_FC
+                 FDM2(I1,I2,I1,I2) =FDM2(I1,I2,I1,I2) -F_FC
+
+ 3690         CONTINUE
+!
+ 3710         CONTINUE
+!
+   64         CONTINUE
+!
+!  LOOP OVER BETA DETS OF THE RIGHT GROUP AND SYMMETRY.
+!
+              CALL RESETCO(LBOX3,NSPACE,NB,IBMA,IBMI,LBOX4)
+!
+              DO 4709 IGB=1,ITGB
+              IF (LGCOM(IGB,IGA).NE.1) GOTO 4699
+              JCI1 = JPZA1 + LDISB(KSYM,IGB,IGA)
+!
+              CALL RESETDE(LBOX3,NSPACE,NB,MSTA,IBCON1)
+              ISTB = 1
+              DO 4689 KKB=LSBS(KSYM,IGB),LSBS(KSYM+1,IGB)-1
+                 IENB = LSBC(KKB)
+                 DO IIZ=ISTB,IENB-1
+                    CALL MOVEUP2(LBOX3,NSPACE,NB,MSTA,IBCON1)
+                 ENDDO
+                 ISTB = IENB
+                 JCI1 = JCI1 + 1
+!
+                 F_FC = 0.0D+00
+                 DO KKI=1,NXTW
+              F_FC = F_FC + WSTATE(IWTS(KKI))*AB(JCI1,KKI)*AB(JCI1,KKI)
+                 ENDDO
+!
+                 DO 4679 IK=1,NB
+                    I2 = IBCON1(IK)
+                    IND2 = INDEX(I2+1)
+                    JMI = MIN(IND1,IND2)
+                    JMA = MAX(IND1,IND2)
+                    J2 = INDEX(JMA) + JMI
+! A B -> B A
+                 FDM2(I1,I2,I2,I1) =FDM2(I1,I2,I2,I1) +F_FC
+                 FDM2(I2,I1,I1,I2) =FDM2(I2,I1,I1,I2) +F_FC
+
+ 4679            CONTINUE
+!
+ 4689         CONTINUE
+!
+ 4699         CALL PUSHCO(LBOX3,NSPACE,NB,IBMA,IBMI,LBOX4,IEND)
+ 4709         CONTINUE
+!
+   67       CONTINUE
+!
+!  --- END OF LOOP OVER SINGLE ALPHA EXCITATIONS. ---
+!      NOW TO SORT THEM BY POSITIONS WITHIN SYMMETRIES.
+!
+            DO II=1,NSYM
+               CALL FCCSRT4(IGROA(1,II),IPERA(1,II),IIND1(1,II),
+     *              IPOSA(1,II),IMMC(II),IIND1O1(1,II),IIND1O2(1,II))
+            ENDDO
+!
+!  --- END OF LOOP OVER PURE ALPHA EXCITATIONS.
+!  NOW TO LOOP OVER ALL SIMULTANEOUS AB -> A'B' EXCITATIONS.
+!
+      IF (NSPACE.EQ.1) GOTO 3400
+!
+!  ***** GENERAL CASE OF MORE THAN ONE SPACE !!!!! *******
+!
+      IF (.NOT.FDIRCT) THEN
+!
+!  LOOP OVER SINGLE ALPHA EXCITES WITHIN EACH SYMMETRY.
+!
+      DO 3000 ISAE=1,NSYM
+         KBSYM=KTAB(ISAE)
+         DO 2900 JSAE=1,IMMC(ISAE)
+            JPOSAE=IPOSA(JSAE,ISAE)
+            JPERAE=IPERA(JSAE,ISAE)
+            JINDAE=IIND1(JSAE,ISAE)
+            JGROAE=IGROA(JSAE,ISAE)
+!
+!  IF ISAE.EQ.JASYM THEN SPECIAL CASE.
+!
+       IF (ISAE.EQ.JASYM.AND.IGA.EQ.JGROAE) THEN
+!
+!  LOOP OVER ALL RELEVANT BETAS
+!
+            LABPOS = JPZA1
+            LABPOS2 = JPOSAE
+            DO 2813 IGB=1,ITGB
+               IF (LGCOM(IGB,IGA).NE.1) GOTO 2813
+               NIBS = NBST(IGB)
+               DO 2763 KKB=LSBS(KSYM,IGB),LSBS(KSYM+1,IGB)-1
+                  LABPOS = LABPOS + 1
+                  LABPOS2 = LABPOS2 + 1
+                  IBPOS = NIBS + LSBC(KKB)
+!
+!  LOOP OVER SINGLE BETA EXCITES FROM IBPOS
+!
+               DO 2613 JBINDX=JB1ST(KBSYM,IBPOS),JB1ST(KBSYM+1,IBPOS)-1
+                  IGB2=JB1GR(JBINDX)
+                  IF (LGCOM(IGB2,JGROAE).NE.1) GOTO 2613
+!
+                  JMA=MAX(JINDAE,JB1IN(JBINDX))
+                  JMI=MIN(JINDAE,JB1IN(JBINDX))
+                  IX=INDEX(JMA)+JMI
+                  JCIB=JPOSAE+LDISB(KBSYM,IGB2,JGROAE)+JB1PO(JBINDX)
+                  JCIB2=JPZA1+LDISB(KBSYM,IGB2,JGROAE)+JB1PO(JBINDX)
+
+                  F_FC = 0.0D+00
+                  F_FC1 = 0.0D+00
+                 DO KKI=1,NXTW
+           F_FC = F_FC + WSTATE(IWTS(KKI))*AB(LABPOS,KKI)*AB(JCIB,KKI)
+           F_FC1 =F_FC1+ WSTATE(IWTS(KKI))*AB(LABPOS2,KKI)*AB(JCIB2,KKI)
+                 ENDDO
+
+! NEEDED FOR SPIN-FREE 2RDM
+                  I1_1=IIND1O1(JSAE,ISAE)
+                  I2_1=JB1O1(JBINDX)
+                  I2_2=JB1O2(JBINDX)
+                  I1_2=IIND1O2(JSAE,ISAE)
+
+!A1 B2 -> A'1 B'2  WHERE: A'1 > A1    B'2 > B2
+                  FDM2(I1_2,I2_2,I2_1,I1_1) = 
+     $                 FDM2(I1_2,I2_2,I2_1,I1_1) + F_FC/2
+                  FDM2(I2_2,I1_2,I1_1,I2_1) = 
+     $                 FDM2(I2_2,I1_2,I1_1,I2_1) + F_FC/2
+                  FDM2(I2_1,I1_1,I1_2,I2_2) = 
+     $                 FDM2(I2_1,I1_1,I1_2,I2_2) + F_FC/2
+                  FDM2(I1_1,I2_1,I2_2,I1_2) = 
+     $                 FDM2(I1_1,I2_1,I2_2,I1_2) + F_FC/2
+!EXCHANGE
+                  FDM2(I1_2,I2_1,I2_2,I1_1) = 
+     $                 FDM2(I1_2,I2_1,I2_2,I1_1) + F_FC1/2
+                  FDM2(I2_1,I1_2,I1_1,I2_2) = 
+     $                 FDM2(I2_1,I1_2,I1_1,I2_2) + F_FC1/2
+                  FDM2(I2_2,I1_1,I1_2,I2_1) = 
+     $                 FDM2(I2_2,I1_1,I1_2,I2_1) + F_FC1/2
+                  FDM2(I1_1,I2_2,I2_1,I1_2) = 
+     $                 FDM2(I1_1,I2_2,I2_1,I1_2) + F_FC1/2
+
+ 2613          CONTINUE
+!
+ 2763          CONTINUE
+ 2813       CONTINUE
+!
+       ELSE
+!
+!  LOOP OVER ALL RELEVANT (A-)BETA DETS.
+!
+            LABPOS = JPZA1
+            DO 2800 IGB=1,ITGB
+               IF (LGCOM(IGB,IGA).NE.1) GOTO 2800
+               NIBS = NBST(IGB)
+               DO 2750 KKB=LSBS(KSYM,IGB),LSBS(KSYM+1,IGB)-1
+                  LABPOS = LABPOS + 1
+                  IBPOS = NIBS + LSBC(KKB)
+!
+!  LOOP OVER SINGLE BETA EXCITES FROM IBPOS
+!
+               DO 2600 JBINDX=JB1ST(KBSYM,IBPOS),JB1ST(KBSYM+1,IBPOS)-1
+                  IGB2=JB1GR(JBINDX)
+                  IF (LGCOM(IGB2,JGROAE).NE.1) GOTO 2600
+!
+                  JMA=MAX(JINDAE,JB1IN(JBINDX))
+                  JMI=MIN(JINDAE,JB1IN(JBINDX))
+                  IX=INDEX(JMA)+JMI
+                  JCIB=JPOSAE+LDISB(KBSYM,IGB2,JGROAE)+JB1PO(JBINDX)
+
+                  F_FC = 0.0D+00
+                 DO KKI=1,NXTW
+            F_FC = F_FC + WSTATE(IWTS(KKI))*AB(LABPOS,KKI)*AB(JCIB,KKI)
+                 ENDDO
+                  F_FC = F_FC*JPERAE*JB1PE(JBINDX)
+
+!B1 12 -> B'1 1'2  WHERE: A'1 > A1    B'2 > B2
+                  I1_1=IIND1O1(JSAE,ISAE)
+                  I2_1=JB1O1(JBINDX)
+                  I2_2=JB1O2(JBINDX)
+                  I1_2=IIND1O2(JSAE,ISAE)
+
+!DN,DN->UP,UP
+                  FDM2(I1_2,I2_2,I2_1,I1_1) = 
+     $                 FDM2(I1_2,I2_2,I2_1,I1_1) + F_FC/2
+                  FDM2(I2_2,I1_2,I1_1,I2_1) = 
+     $                 FDM2(I2_2,I1_2,I1_1,I2_1) + F_FC/2
+                  FDM2(I2_1,I1_1,I1_2,I2_2) = 
+     $                 FDM2(I2_1,I1_1,I1_2,I2_2) + F_FC/2
+                  FDM2(I1_1,I2_1,I2_2,I1_2) = 
+     $                 FDM2(I1_1,I2_1,I2_2,I1_2) + F_FC/2
+
+ 2600          CONTINUE
+!
+ 2750          CONTINUE
+ 2800       CONTINUE
+!
+!  LOOP OVER ALL RELEVANT (A'-)BETA DETS.
+!
+            LABPOS = JPOSAE
+            DO 2803 IGB=1,ITGB
+               IF (LGCOM(IGB,JGROAE).NE.1) GOTO 2803
+               NIBS = NBST(IGB)
+               DO 2753 KKB=LSBS(KBSYM,IGB),LSBS(KBSYM+1,IGB)-1
+                  LABPOS = LABPOS + 1
+                  IBPOS = NIBS + LSBC(KKB)
+!
+!  LOOP OVER SINGLE BETA EXCITES FROM IBPOS
+!
+               DO 2603 JBINDX=JB1ST(KSYM,IBPOS),JB1ST(KSYM+1,IBPOS)-1
+                  IGB2=JB1GR(JBINDX)
+                  IF (LGCOM(IGB2,IGA).NE.1) GOTO 2603
+!
+                  JMA=MAX(JINDAE,JB1IN(JBINDX))
+                  JMI=MIN(JINDAE,JB1IN(JBINDX))
+                  IX=INDEX(JMA)+JMI
+                  JCIB=JPZA1+LDISB(KSYM,IGB2,IGA)+JB1PO(JBINDX)
+                  F_FC = 0.0D+00
+                 DO KKI=1,NXTW
+            F_FC = F_FC + WSTATE(IWTS(KKI))*AB(LABPOS,KKI)*AB(JCIB,KKI)
+                 ENDDO
+                  F_FC = F_FC*JPERAE*JB1PE(JBINDX)
+
+!B1 A2 -> A'1 B'2  WHERE: A'1 > A1    B'2 > B2
+                  I1_1=IIND1O1(JSAE,ISAE)
+                  I2_1=JB1O1(JBINDX)
+                  I2_2=JB1O2(JBINDX)
+                  I1_2=IIND1O2(JSAE,ISAE)
+
+!UP,DN->DN,UP
+                  FDM2(I1_2,I2_1,I2_2,I1_1) = 
+     $                 FDM2(I1_2,I2_1,I2_2,I1_1) + F_FC/2
+                  FDM2(I2_1,I1_2,I1_1,I2_2) = 
+     $                 FDM2(I2_1,I1_2,I1_1,I2_2) + F_FC/2
+                  FDM2(I2_2,I1_1,I1_2,I2_1) = 
+     $                 FDM2(I2_2,I1_1,I1_2,I2_1) + F_FC/2
+                  FDM2(I1_1,I2_2,I2_1,I1_2) = 
+     $                 FDM2(I1_1,I2_2,I2_1,I1_2) + F_FC/2
+
+ 2603          CONTINUE
+!
+ 2753          CONTINUE
+ 2803       CONTINUE
+!
+      ENDIF
+!
+ 2900    CONTINUE
+ 3000 CONTINUE
+!
+      ELSE
+!
+!  ***** DIRECT METHOD BELOW *****
+!
+      DO 4000 ISAE=1,NSYM
+         KBSYM = KTAB(ISAE)
+!
+!  ANALYSE EXCITED A' GROUPS FOR COMPATIBILITY WITH B.
+!
+      NGRPS = 0
+      DO 1976 II=1,IMMC(ISAE)
+         ICGR = IGROA(II,ISAE)
+         DO JJ=1,NGRPS
+            IF (JB1GR(JJ).EQ.ICGR) GOTO 1976
+         ENDDO
+         NGRPS = NGRPS + 1
+         JB1GR(NGRPS) = ICGR
+ 1976 CONTINUE
+!
+! FIRST TYPE OF BETAS, KSYM -> KBSYM
+!
+          CALL RESETCO(LBOX2,NSPACE,NB,IBMA,IBMI,LBOX3)
+          DO 7400 IGB=1,ITGB
+             IF (LGCOM(IGB,IGA).NE.1) GOTO 7399
+             LAB1 = JPZA1 + LDISB(KSYM,IGB,IGA)
+!
+             CALL RESETDE(LBOX2,NSPACE,NB,MSTA,IBCON1)
+             NIBS = NBST(IGB)
+             ISTB = 1
+             DO 7300 KKB=LSBS(KSYM,IGB),LSBS(KSYM+1,IGB)-1
+                IENB = LSBC(KKB)
+                DO IIZ=ISTB,IENB-1
+                   CALL MOVEUP2(LBOX2,NSPACE,NB,MSTA,IBCON1)
+                ENDDO
+                ISTB = IENB
+!
+                IBPOS = NIBS + LSBC(KKB)
+                LABPOS = LAB1 + LSPB(IBPOS)
+!
+! LOOP OVER SINGLE BETA EXCITES FROM IBPOS WHICH ARE OF SYMMETRY KBSYM
+!
+                MESYM1 = LGMUL(KSYM,KBSYM)
+                DO II=1,NSPACE
+                   LBOX3(II) = LBOX2(II)
+                ENDDO
+                IEBS = NB + 1
+                DO 7290 ISPB1=NSPACE,1,-1
+                   IOC1 = LBOX2(ISPB1)
+                   IEBE = IEBS - 1
+                   IEBS = IEBS - IOC1
+                   IF (IOC1.EQ.0) GO TO 7290
+                   LBOX3(ISPB1) = LBOX3(ISPB1)-1
+!
+!  LOOP ELECTRONS IN SPACE ISPB1
+!  IEBS, IEBE ARE THE ELECTRONS IN SPACE ISPB1
+!
+                DO 7285 IB1 = IEBE,IEBS,-1
+                   IO1 = IBCON1(IB1)
+                   MESYM2 = LGMUL(MESYM1,IOB(IO1))
+                   IGBE = IEBE - LBOX2(ISPB1)
+!
+!  LOOP OVER POSSIBLE SPACES TO EXCITE INTO.
+!
+                DO 7280 ISPB2=ISPB1,NSPACE
+!
+!  IGBS,IGBE ARE ELECTRONS SPECIFYING ISPB2 SPACE ELECTRON LIMITS.
+!
+                   IGBS = IGBE + 1
+                   IGBE = IGBE + LBOX2(ISPB2)
+!
+                   LBOX3(ISPB2) = LBOX3(ISPB2) + 1
+                   IF (LBOX3(ISPB1).LT.IBMI(ISPB1)) GO TO 7270
+                   IF (LBOX3(ISPB2).GT.IBMA(ISPB2)) GO TO 7270
+!
+!  GET GROUP NUMBER
+!
+          CALL POSITCO(LBOX5,NSPACE,NB,IBMA,IBMI,LBOX4,LBOX3,IGB2)
+          NIAS = NBST(IGB2)
+!
+! CHECK FOR A' GROUP COMPATIBILITY
+!
+             DO II=1,NGRPS
+                IAGRP = JB1GR(II)
+                IF (LGCOM(IGB2,IAGRP).EQ.1) GOTO 7555
+             ENDDO
+             GOTO 7270
+ 7555        CONTINUE
+!
+!  MAKE GAP INFORMATION HERE.
+!
+                  IGBA = MAX(IB1+1,IGBS)
+                  IF (LBOX2(ISPB2).EQ.0) THEN
+                     ISTA = MSTA(ISPB2)
+                     IEND = MSTA(ISPB2+1)-1
+                  ELSEIF (ISPB2.EQ.ISPB1) THEN
+                     ISTA = IO1+1
+                     IEND = IBCON1(IGBA)-1
+                     IF (IB1.EQ.IEBE) IEND=MSTA(ISPB1+1)-1
+                  ELSE
+                     ISTA = MSTA(ISPB2)
+                     IEND = IBCON1(IGBA)-1
+                  ENDIF
+!
+!  LOOP OVER GAPS
+!
+                  DO 7260 IGAP=IGBA,IGBE+1
+!
+                     DO 7250 JJ=ISTA,IEND
+!
+! CHECK TO SEE IF EXCITED BETA IS OF RIGHT SYMMETRY (KBSYM)
+!
+            IF (IOB(JJ).NE.MESYM2) GOTO 7250
+!
+            IND1 = INDEX(JJ) + IO1
+            CALL REDE00(IBCON1,IBCON2,NB,IB1,IGAP-1,JJ,IPER)
+            CALL IDPOST(IBCON2,NB,LBOX3,NSPACE,MSTA,IDIM,Y,NX,LBST,
+     *                  LBNDET(1,IGB2),IACON2,IPOSB)
+            QJPER = ((-1)**IPER)
+            JB1P = LSPB(IPOSB + NIAS)
+!
+            DO 3900 JSAE=1,IMMC(ISAE)
+               JGROAE=IGROA(JSAE,ISAE)
+               IF (LGCOM(IGB2,JGROAE).NE.1) GOTO 3900
+!
+               JPOSAE=IPOSA(JSAE,ISAE)
+               JCIB = JB1P + JPOSAE + LDISB(KBSYM,IGB2,JGROAE)
+!
+               JINDAE=IIND1(JSAE,ISAE)
+               JMA=MAX(JINDAE,IND1)
+               JMI=MIN(JINDAE,IND1)
+               IX=INDEX(JMA)+JMI
+!
+               JPERAE=IPERA(JSAE,ISAE)
+!
+             F_FC = 0.0D+00
+             DO KKI=1,NXTW
+            F_FC = F_FC + WSTATE(IWTS(KKI))*AB(LABPOS,KKI)*AB(JCIB,KKI)
+             ENDDO
+             F_FC = F_FC*JPERAE*QJPER
+
+!B1 12 -> B'1 1'2  WHERE: A'1 > A1    B'2 > B2
+                  I1_1=IO1
+                  I2_1=IIND1O1(JSAE,ISAE)
+                  I2_2=IIND1O2(JSAE,ISAE)
+                  I1_2=JJ
+
+!DN,DN->UP,UP
+                  FDM2(I1_2,I2_2,I2_1,I1_1) = 
+     $                 FDM2(I1_2,I2_2,I2_1,I1_1) + F_FC/2
+                  FDM2(I2_2,I1_2,I1_1,I2_1) = 
+     $                 FDM2(I2_2,I1_2,I1_1,I2_1) + F_FC/2
+                  FDM2(I2_1,I1_1,I1_2,I2_2) = 
+     $                 FDM2(I2_1,I1_1,I1_2,I2_2) + F_FC/2
+                  FDM2(I1_1,I2_1,I2_2,I1_2) = 
+     $                 FDM2(I1_1,I2_1,I2_2,I1_2) + F_FC/2
+!
+ 3900       CONTINUE
+!
+ 7250                CONTINUE
+!
+                  ISTA = IBCON1(IGAP)+1
+                  IEND = IBCON1(IGAP+1)-1
+                  IF (IGAP.EQ.IGBE) IEND=MSTA(ISPB2+1)-1
+ 7260             CONTINUE
+!
+ 7270              LBOX3(ISPB2) = LBOX3(ISPB2) - 1
+ 7280           CONTINUE
+!
+ 7285           CONTINUE
+!
+                   LBOX3(ISPB1) = LBOX3(ISPB1) + 1
+ 7290           CONTINUE
+!
+ 7300        CONTINUE
+!
+ 7399        CALL PUSHCO(LBOX2,NSPACE,NB,IBMA,IBMI,LBOX3,IEND)
+ 7400     CONTINUE
+!
+!
+! SECOND TYPE OF BETAS, KBSYM -> KSYM
+!
+          CALL RESETCO(LBOX2,NSPACE,NB,IBMA,IBMI,LBOX3)
+          DO 7801 IGB=1,ITGB
+!
+! CHECK FOR A' GROUP COMPATIBILITY
+!
+             DO II=1,NGRPS
+                IAGRP = JB1GR(II)
+                IF (LGCOM(IGB,IAGRP).EQ.1) GOTO 7655
+             ENDDO
+             GOTO 7799
+ 7655        CONTINUE
+!
+             CALL RESETDE(LBOX2,NSPACE,NB,MSTA,IBCON1)
+             NIBS = NBST(IGB)
+             ISTB = 1
+!
+             DO 7701 KKB=LSBS(KBSYM,IGB),LSBS(KBSYM+1,IGB)-1
+                IENB = LSBC(KKB)
+                DO IIZ=ISTB,IENB-1
+                   CALL MOVEUP2(LBOX2,NSPACE,NB,MSTA,IBCON1)
+                ENDDO
+                ISTB = IENB
+!
+                IBPOS = NIBS + LSBC(KKB)
+                LAB1 = LSPB(IBPOS)
+!
+! LOOP OVER SINGLE BETA EXCITES FROM IBPOS WHICH ARE OF SYMMETRY KSYM
+!
+                MESYM1 = LGMUL(KSYM,KBSYM)
+                DO II=1,NSPACE
+                   LBOX3(II) = LBOX2(II)
+                ENDDO
+                IEBS = NB + 1
+                DO 7691 ISPB1=NSPACE,1,-1
+                   IOC1 = LBOX2(ISPB1)
+                   IEBE = IEBS - 1
+                   IEBS = IEBS - IOC1
+                   IF (IOC1.EQ.0) GO TO 7691
+                   LBOX3(ISPB1) = LBOX3(ISPB1)-1
+!
+!  LOOP ELECTRONS IN SPACE ISPB1
+!  IEBS, IEBE ARE THE ELECTRONS IN SPACE ISPB1
+!
+                DO 7686 IB1 = IEBE,IEBS,-1
+                   IO1 = IBCON1(IB1)
+                   MESYM2 = LGMUL(MESYM1,IOB(IO1))
+                   IGBE = IEBE - LBOX2(ISPB1)
+!
+!  LOOP OVER POSSIBLE SPACES TO EXCITE INTO.
+!
+                DO 7681 ISPB2=ISPB1,NSPACE
+!
+!  IGBS,IGBE ARE ELECTRONS SPECIFYING ISPB2 SPACE ELECTRON LIMITS.
+!
+                   IGBS = IGBE + 1
+                   IGBE = IGBE + LBOX2(ISPB2)
+!
+                   LBOX3(ISPB2) = LBOX3(ISPB2) + 1
+                   IF (LBOX3(ISPB1).LT.IBMI(ISPB1)) GO TO 7671
+                   IF (LBOX3(ISPB2).GT.IBMA(ISPB2)) GO TO 7671
+!
+          CALL POSITCO(LBOX5,NSPACE,NB,IBMA,IBMI,LBOX4,LBOX3,IGB2)
+          IF (LGCOM(IGB2,IGA).NE.1) GOTO 7671
+          JCIBS = JPZA1 + LDISB(KSYM,IGB2,IGA)
+          NIAS = NBST(IGB2)
+!
+!  MAKE GAP INFORMATION HERE.
+!
+                  IGBA = MAX(IB1+1,IGBS)
+                  IF (LBOX2(ISPB2).EQ.0) THEN
+                     ISTA = MSTA(ISPB2)
+                     IEND = MSTA(ISPB2+1)-1
+                  ELSEIF (ISPB2.EQ.ISPB1) THEN
+                     ISTA = IO1+1
+                     IEND = IBCON1(IGBA)-1
+                     IF (IB1.EQ.IEBE) IEND=MSTA(ISPB1+1)-1
+                  ELSE
+                     ISTA = MSTA(ISPB2)
+                     IEND = IBCON1(IGBA)-1
+                  ENDIF
+!
+!  LOOP OVER GAPS
+!
+                  DO 7660 IGAP=IGBA,IGBE+1
+!
+                     DO 7650 JJ=ISTA,IEND
+!
+! CHECK TO SEE IF EXCITED BETA IS OF RIGHT SYMMETRY (KBSYM)
+!
+            IF (IOB(JJ).NE.MESYM2) GOTO 7650
+!
+            IND1 = INDEX(JJ) + IO1
+            CALL REDE00(IBCON1,IBCON2,NB,IB1,IGAP-1,JJ,IPER)
+            CALL IDPOST(IBCON2,NB,LBOX3,NSPACE,MSTA,IDIM,Y,NX,LBST,
+     *                  LBNDET(1,IGB2),IACON2,IPOSB)
+            QJPER = ((-1)**IPER)
+            JCIB= JCIBS + LSPB(IPOSB + NIAS)
+!
+            DO 4300 JSAE=1,IMMC(ISAE)
+               JGROAE=IGROA(JSAE,ISAE)
+               IF (LGCOM(IGB,JGROAE).NE.1) GOTO 4300
+!
+               JPOSAE=IPOSA(JSAE,ISAE)
+               LABPOS = LAB1 + JPOSAE + LDISB(KBSYM,IGB,JGROAE)
+!
+               JINDAE=IIND1(JSAE,ISAE)
+               JMA=MAX(JINDAE,IND1)
+               JMI=MIN(JINDAE,IND1)
+               IX=INDEX(JMA)+JMI
+!
+               JPERAE=IPERA(JSAE,ISAE)
+               F_FC = 0.0D+00
+               DO KKI=1,NXTW
+            F_FC = F_FC + WSTATE(IWTS(KKI))*AB(LABPOS,KKI)*AB(JCIB,KKI)
+               ENDDO
+               F_FC = F_FC*JPERAE*QJPER
+
+!B1 A2 -> A'1 B'2  WHERE: A'1 > A1    B'2 > B2
+                  I1_1=IO1
+                  I2_1=IIND1O1(JSAE,ISAE)
+                  I2_2=IIND1O2(JSAE,ISAE)
+                  I1_2=JJ
+
+!UP,DN->DN,UP
+                  FDM2(I1_2,I2_1,I2_2,I1_1) = 
+     $                 FDM2(I1_2,I2_1,I2_2,I1_1) + F_FC/2
+                  FDM2(I2_1,I1_2,I1_1,I2_2) = 
+     $                 FDM2(I2_1,I1_2,I1_1,I2_2) + F_FC/2
+                  FDM2(I2_2,I1_1,I1_2,I2_1) = 
+     $                 FDM2(I2_2,I1_1,I1_2,I2_1) + F_FC/2
+                  FDM2(I1_1,I2_2,I2_1,I1_2) = 
+     $                 FDM2(I1_1,I2_2,I2_1,I1_2) + F_FC/2
+!
+ 4300       CONTINUE
+!
+ 7650                CONTINUE
+!
+                  ISTA = IBCON1(IGAP)+1
+                  IEND = IBCON1(IGAP+1)-1
+                  IF (IGAP.EQ.IGBE) IEND=MSTA(ISPB2+1)-1
+ 7660             CONTINUE
+!
+ 7671              LBOX3(ISPB2) = LBOX3(ISPB2) - 1
+ 7681           CONTINUE
+!
+ 7686           CONTINUE
+!
+                   LBOX3(ISPB1) = LBOX3(ISPB1) + 1
+ 7691           CONTINUE
+!
+ 7701        CONTINUE
+!
+ 7799        CALL PUSHCO(LBOX2,NSPACE,NB,IBMA,IBMI,LBOX3,IEND)
+ 7801     CONTINUE
+!
+ 4000 CONTINUE
+!
+      ENDIF
+!
+!  ***** END OF DIRECT OPTION *****
+!
+!  **** END OF GENERAL CASE OF MORE THAN ONE SPACE ******
+!
+      GOTO 4898
+!
+ 3400 CONTINUE
+!
+! ***** SPECIAL CASE OF ONE SPACE !!!!! ******
+!
+!  LOOP OVER SINGLE ALPHA EXCITES WITHIN EACH SYMMETRY.
+!
+       DO 2901 ISAE=1,NSYM
+          KBSYM=KTAB(ISAE)
+          DO 2801 JSAE=1,IMMC(ISAE)
+                JPOSAE=IPOSA(JSAE,ISAE)
+                JPERAE=IPERA(JSAE,ISAE)
+                JINDAE=IIND1(JSAE,ISAE)
+                JGROAE=IGROA(JSAE,ISAE)
+!
+!  IF ISAE.EQ.JASYM THEN SPECIAL CASE.
+!
+       IF (ISAE.EQ.JASYM) THEN
+!
+!  LOOP OVER ALL RELEVANT BETAS
+!
+             LABPOS=JPZA1    !0 ALPHA STRING
+             LABPOS2=JPOSAE  !A->A' STRING
+                DO 2721 KKB=LSBS(KSYM,1),LSBS(KSYM+1,1)-1
+                    LABPOS = LABPOS + 1
+                    LABPOS2 = LABPOS2 + 1
+                    IBPOS =  LSBC(KKB)  !BETA OF CORRECT SYMMETRY
+!
+!  LOOP OVER SINGLE BETA EXCITES FROM IBPOS
+!
+               DO 2621 JBINDX=JB1ST(KSYM,IBPOS),JB1ST(KSYM+1,IBPOS)-1
+                  JMA=MAX(JINDAE,JB1IN(JBINDX))!A->A', B->B'
+                  JMI=MIN(JINDAE,JB1IN(JBINDX))
+                  IX=INDEX(JMA)+JMI
+                  JCIB = JPOSAE+JB1PO(JBINDX)
+                  JCIB2 = JPZA1+JB1PO(JBINDX)
+                  F_FC = 0.0D+00
+                  F_FC1 = 0.0D+00
+                 DO KKI=1,NXTW
+          F_FC = F_FC + WSTATE(IWTS(KKI))*AB(LABPOS,KKI)*AB(JCIB,KKI)
+          F_FC1 =F_FC1+ WSTATE(IWTS(KKI))*AB(LABPOS2,KKI)*AB(JCIB2,KKI)
+                 ENDDO
+                  F_FC = F_FC*JPERAE*JB1PE(JBINDX)
+                  F_FC1 = F_FC1*JPERAE*JB1PE(JBINDX)
+
+                  I1_1=IIND1O1(JSAE,ISAE)
+                  I2_1=JB1O1(JBINDX)
+                  I2_2=JB1O2(JBINDX)
+                  I1_2=IIND1O2(JSAE,ISAE)
+
+!A1 B2 -> A'1 B'2  WHERE: A'1 > A1    B'2 > B2
+                  FDM2(I1_2,I2_2,I2_1,I1_1) = 
+     $                 FDM2(I1_2,I2_2,I2_1,I1_1) + F_FC/2
+                  FDM2(I2_2,I1_2,I1_1,I2_1) = 
+     $                 FDM2(I2_2,I1_2,I1_1,I2_1) + F_FC/2
+                  FDM2(I2_1,I1_1,I1_2,I2_2) = 
+     $                 FDM2(I2_1,I1_1,I1_2,I2_2) + F_FC/2
+                  FDM2(I1_1,I2_1,I2_2,I1_2) = 
+     $                 FDM2(I1_1,I2_1,I2_2,I1_2) + F_FC/2
+!EXCHANGE
+                  FDM2(I1_2,I2_1,I2_2,I1_1) = 
+     $                 FDM2(I1_2,I2_1,I2_2,I1_1) + F_FC1/2
+                  FDM2(I2_1,I1_2,I1_1,I2_2) = 
+     $                 FDM2(I2_1,I1_2,I1_1,I2_2) + F_FC1/2
+                  FDM2(I2_2,I1_1,I1_2,I2_1) = 
+     $                 FDM2(I2_2,I1_1,I1_2,I2_1) + F_FC1/2
+                  FDM2(I1_1,I2_2,I2_1,I1_2) = 
+     $                 FDM2(I1_1,I2_2,I2_1,I1_2) + F_FC1/2
+!
+ 2621          CONTINUE
+!
+ 2721          CONTINUE
+!
+      ELSE
+!
+!  LOOP OVER ALL RELEVANT (A-)BETA DETS.
+!
+                LABPOS = JPZA1
+                DO 2751 KKB=LSBS(KSYM,1),LSBS(KSYM+1,1)-1
+                    LABPOS = LABPOS + 1
+                    IBPOS =  LSBC(KKB)
+!
+!  LOOP OVER SINGLE BETA EXCITES FROM IBPOS
+!
+               DO 2601 JBINDX=JB1ST(KBSYM,IBPOS),JB1ST(KBSYM+1,IBPOS)-1
+!
+                  JMA=MAX(JINDAE,JB1IN(JBINDX))
+                  JMI=MIN(JINDAE,JB1IN(JBINDX))
+                  IX=INDEX(JMA)+JMI
+!$$$  <IIND1O1(JSAE,ISAE) JB1O1(JBINDX)|IIND1O2(JSAE,ISAE) JB1O2(JBINDX)>
+
+                  JCIB=JPOSAE+JB1PO(JBINDX)
+                  F_FC = 0.0D+00
+                 DO KKI=1,NXTW
+              F_FC = F_FC +WSTATE(IWTS(KKI))*AB(LABPOS,KKI)*AB(JCIB,KKI)
+                 ENDDO
+                  F_FC = F_FC*JPERAE*JB1PE(JBINDX)
+
+                  I1_1=IIND1O1(JSAE,ISAE)
+                  I2_1=JB1O1(JBINDX)
+                  I2_2=JB1O2(JBINDX)
+                  I1_2=IIND1O2(JSAE,ISAE)
+
+!A B A' B'  WHERE: A' > A    B' > B
+!DN,DN->UP,UP
+                  FDM2(I1_2,I2_2,I2_1,I1_1) = 
+     $                 FDM2(I1_2,I2_2,I2_1,I1_1) + F_FC/2
+                  FDM2(I2_2,I1_2,I1_1,I2_1) = 
+     $                 FDM2(I2_2,I1_2,I1_1,I2_1) + F_FC/2
+                  FDM2(I2_1,I1_1,I1_2,I2_2) = 
+     $                 FDM2(I2_1,I1_1,I1_2,I2_2) + F_FC/2
+                  FDM2(I1_1,I2_1,I2_2,I1_2) = 
+     $                 FDM2(I1_1,I2_1,I2_2,I1_2) + F_FC/2
+!
+ 2601          CONTINUE
+!
+ 2751          CONTINUE
+!
+!  LOOP OVER ALL RELEVANT (A'-)BETA DETS.
+!
+               LABPOS = JPOSAE
+               DO 2761 KKB=LSBS(KBSYM,1),LSBS(KBSYM+1,1)-1
+                  LABPOS = LABPOS + 1
+                  IBPOS = LSBC(KKB)
+!
+!  LOOP OVER SINGLE BETA EXCITES FROM IBPOS
+!
+               DO 2611 JBINDX=JB1ST(KSYM,IBPOS),JB1ST(KSYM+1,IBPOS)-1
+!
+                  JMA=MAX(JINDAE,JB1IN(JBINDX))
+                  JMI=MIN(JINDAE,JB1IN(JBINDX))
+                  IX=INDEX(JMA)+JMI
+!$$$  <IIND1O1(JSAE,ISAE) JB1O1(JBINDX)|IIND1O2(JSAE,ISAE) JB1O2(JBINDX)>
+                  JCIB=JPZA1+JB1PO(JBINDX)
+                  F_FC = 0.0D+00
+                 DO KKI=1,NXTW
+           F_FC = F_FC + WSTATE(IWTS(KKI))*AB(LABPOS,KKI)*AB(JCIB,KKI)
+                 ENDDO
+                  F_FC = F_FC*JPERAE*JB1PE(JBINDX)
+
+                  I1_1=IIND1O1(JSAE,ISAE)
+                  I2_1=JB1O1(JBINDX)
+                  I2_2=JB1O2(JBINDX)
+                  I1_2=IIND1O2(JSAE,ISAE)
+
+!A B A' B'  WHERE: A' > A    B' > B
+!UP,DN->DN,UP
+                  FDM2(I1_2,I2_1,I2_2,I1_1) = 
+     $                 FDM2(I1_2,I2_1,I2_2,I1_1) + F_FC/2
+                  FDM2(I2_1,I1_2,I1_1,I2_2) = 
+     $                 FDM2(I2_1,I1_2,I1_1,I2_2) + F_FC/2
+                  FDM2(I2_2,I1_1,I1_2,I2_1) = 
+     $                 FDM2(I2_2,I1_1,I1_2,I2_1) + F_FC/2
+                  FDM2(I1_1,I2_2,I2_1,I1_2) = 
+     $                 FDM2(I1_1,I2_2,I2_1,I1_2) + F_FC/2
+!
+ 2611          CONTINUE
+!
+ 2761          CONTINUE
+!
+      ENDIF
+!
+ 2801       CONTINUE
+ 2901   CONTINUE
+!
+!  **** END OF SPECIAL CASE OF ONE SPACE *******
+!
+ 4898       CONTINUE
+            IF (GOPARR) CALL DDI_DLBNEXT(MY_TASK)
+ 4899       CONTINUE
+            CALL MOVEUP2(LBOX1,NSPACE,NA,MSTA,IACON1)
+ 4900    CONTINUE
+!
+         CALL PUSHCO(LBOX1,NSPACE,NA,IAMA,IAMI,LBOX5,IEND)
+ 5000 CONTINUE
+!
+!           --- THIS ENDS LOOP OVER ALPHA STRINGS ---
+!          --- NOW LOOP OVER PURE BETA EXCITATIONS ---
+!
+      IF (GOPARR) THEN
+         CALL DDI_DLBRESET()
+         CALL DDI_DLBNEXT(MY_TASK)
+      ENDIF
+!
+      CALL RESETCO(LBOX1,NSPACE,NB,IBMA,IBMI,LBOX5)
+!
+      DO 8000 IGB=1,ITGB
+!
+         CALL RESETDE(LBOX1,NSPACE,NB,MSTA,IBCON1)
+!
+!  KKB GIVES THE ACTUAL POSITION OF THE BETA STRING IBCON1 IN
+!  THE FULL BETA STRING LIST.
+!
+         DO 7900 KKB=NBST(IGB)+1,NBST(IGB+1)
+            IF (GOPARR.AND.KKB-1.NE.MY_TASK) GOTO 7899
+            JPZB1 = LSPB(KKB)
+            KBSYM = LSYMB(KKB)
+            KSYM=KTAB(KBSYM)
+!
+            DO II=1,NSPACE
+               LBOX2(II) = LBOX1(II)
+            ENDDO
+!
+!  LOOP OVER SPACES TO EXCITE ELECTRON FROM.
+!
+            IEBS = NB+1
+            DO 7890 ISPB1=NSPACE,1,-1
+               IOC1 = LBOX1(ISPB1)
+               IEBE = IEBS - 1
+               IEBS = IEBS - IOC1
+               IF (IOC1.EQ.0) GOTO 7890
+               LBOX2(ISPB1) = LBOX2(ISPB1)-1
+!
+!  LOOP ELECTRONS IN SPACE ISPB1.
+!  IEBS, IEBE ARE THE ELECTRONS IN SPACE ISPB1.
+!
+               DO 7885 IB1=IEBE,IEBS,-1
+                  IO1 = IBCON1(IB1)
+                  IGBE = IEBE - LBOX1(ISPB1)
+                  IS1 = IOB(IO1)
+!
+!  LOOP OVER POSSIBLE SPACES TO EXCITE INTO.
+!
+               DO 7880 ISPB2=ISPB1,NSPACE
+!
+!  IGBS, IGBE ARE ELECTRONS SPECIFYING ISPB2 SPACE ELECTRON LIMITS.
+!
+                  IGBS = IGBE + 1
+                  IGBE = IGBE + LBOX1(ISPB2)
+!
+                  LBOX2(ISPB2) = LBOX2(ISPB2) + 1
+                  IF (LBOX2(ISPB1).LT.IBMI(ISPB1)) GOTO 7870
+!
+!  MAKE GAP INFORMATION HERE.
+!
+                  IGBB = MAX(IB1+1,IGBS)
+                  IF (LBOX1(ISPB2).EQ.0) THEN
+                     ISTA = MSTA(ISPB2)
+                     IEND = MSTA(ISPB2+1)-1
+                  ELSEIF (ISPB2.EQ.ISPB1) THEN
+                     ISTA = IO1+1
+                     IEND = IBCON1(IGBB)-1
+                     IF (IB1.EQ.IEBE) IEND=MSTA(ISPB1+1)-1
+                  ELSE
+                     ISTA = MSTA(ISPB2)
+                     IEND = IBCON1(IGBB)-1
+                  ENDIF
+!
+!  LOOP OVER GAPS
+!
+                  DO 7860 IGAP=IGBB,IGBE+1
+!
+                     DO 7850 JJ=ISTA,IEND
+                        IS2 = IOB(JJ)
+                        IP1 = LGMUL(IS1,IS2)
+                        IND = INDEX(JJ) + IO1
+!
+              CALL REDE00(IBCON1,IBCON2,NB,IB1,IGAP-1,JJ,JPERB)
+                  IF (LBOX2(ISPB2).GT.IBMA(ISPB2)) GOTO 7800
+!
+!   IF DEOCCUPIED AND NEWLY OCCUPIED ORBITALS ARE OF DIFFERENT SYMMETRY,
+!   SKIP TO DOUBLES.
+!
+              IF (IS1.NE.IS2) GOTO 7800
+!
+!  GET GROUP NUMBER
+!
+           CALL POSITCO(LBOX5,NSPACE,NB,IBMA,IBMI,LBOX4,LBOX2,IGB2)
+           NIBS = NBST(IGB2)
+!
+              CALL IDPOST(IBCON2,NB,LBOX2,NSPACE,MSTA,IDIM,Y,NX,LBST,
+     *                  LBNDET(1,IGB2),IACON1,JPOSB)
+              KBPOS = JPOSB + NIBS
+              JPZB2 = LSPB(KBPOS)
+              KPER1 = ((-1)**JPERB)*2
+!
+!  LOOP OVER ALPHA AND UPDATE DM2
+!
+              DO 7712 IK=1,NB
+                 IF (IK.EQ.IB1) GOTO 7712
+                 ION = IBCON1(IK)
+                 J1 = INDEX(ION+1)
+                 JMA = MAX(J1,IND)
+                 JMI = MIN(J1,IND)
+                 JJ1 = INDEX(JMA) + JMI
+                 JMA = MAX(ION,JJ)
+                 JMI = MIN(ION,JJ)
+                 J1 = INDEX(JMA)+JMI
+                 JMA = MAX(IO1,ION)
+                 JMI = MIN(IO1,ION)
+                 J2 = INDEX(JMA)+JMI
+                 JMA = MAX(J1,J2)
+                 JMI = MIN(J1,J2)
+                 INX = INDEX(JMA)+JMI
+!
+              DO 7710 IGA=1,ITGA
+              IF (LGCOM(IGB,IGA).NE.1.OR.LGCOM(IGB2,IGA).NE.1) GOTO 7710
+                 JCIB1 = LDISB(KBSYM,IGB,IGA) + JPZB1
+                 JCIB2 = LDISB(KBSYM,IGB2,IGA) + JPZB2
+                 NIAS = NAST(IGA)
+!
+              DO 7695 KKA=LSAS(KSYM,IGA),LSAS(KSYM+1,IGA)-1
+                 IENA1 = LSAC(KKA)
+                 JCIA = LSPA(NIAS+IENA1)
+                 JCI1 = JCIA + JCIB1
+                 JCI2 = JCIA + JCIB2
+
+                 F_FC = 0.0D+00
+                 DO KKI=1,NXTW
+              F_FC = F_FC + WSTATE(IWTS(KKI))*AB(JCI1,KKI)*AB(JCI2,KKI)
+                 ENDDO
+                 F_FC = F_FC*KPER1
+
+!B,B2,B2,B' WHERE : B' > B 
+                 FDM2(JJ,ION,ION,IO1) = FDM2(JJ,ION,ION,IO1) + F_FC/2
+                 FDM2(ION,JJ,IO1,ION) = FDM2(ION,JJ,IO1,ION) + F_FC/2
+                 FDM2(JJ,ION,IO1,ION) = FDM2(JJ,ION,IO1,ION) - F_FC/2
+                 FDM2(ION,JJ,ION,IO1) = FDM2(ION,JJ,ION,IO1) - F_FC/2
+!$$$ (DE)EXCITE BELOW
+                 FDM2(IO1,ION,ION,JJ) = FDM2(IO1,ION,ION,JJ) + F_FC/2
+                 FDM2(ION,IO1,JJ,ION) = FDM2(ION,IO1,JJ,ION) + F_FC/2
+                 FDM2(IO1,ION,JJ,ION) = FDM2(IO1,ION,JJ,ION) - F_FC/2
+                 FDM2(ION,IO1,ION,JJ) = FDM2(ION,IO1,ION,JJ) - F_FC/2
+
+ 7695         CONTINUE
+!
+ 7710         CONTINUE
+!
+ 7712         CONTINUE
+!
+!  LOOP OVER ALPHA STRINGS OF THE RIGHT GROUP AND SYMMETRY.
+!
+              CALL RESETCO(LBOX3,NSPACE,NA,IAMA,IAMI,LBOX4)
+!
+              DO 7700 IGA=1,ITGA
+              IF (LGCOM(IGB,IGA).NE.1.OR.LGCOM(IGB2,IGA).NE.1) GOTO 7690
+                 JCIB1 = LDISB(KBSYM,IGB,IGA) + JPZB1
+                 JCIB2 = LDISB(KBSYM,IGB2,IGA) + JPZB2
+                 NIAS = NAST(IGA)
+!
+              CALL RESETDE(LBOX3,NSPACE,NA,MSTA,IACON1)
+              ISTA1 = 1
+              DO 7680 KKA=LSAS(KSYM,IGA),LSAS(KSYM+1,IGA)-1
+                 IENA1 = LSAC(KKA)
+                 DO IIZ=ISTA1,IENA1-1
+                    CALL MOVEUP2(LBOX3,NSPACE,NA,MSTA,IACON1)
+                 ENDDO
+                 ISTA1 = IENA1
+                 JCIA = LSPA(NIAS+IENA1)
+                 JCI1 = JCIA + JCIB1
+                 JCI2 = JCIA + JCIB2
+                 F_FC = 0.0D+00
+                 DO KKI=1,NXTW
+              F_FC = F_FC + WSTATE(IWTS(KKI))*AB(JCI1,KKI)*AB(JCI2,KKI)
+                 ENDDO
+                 F_FC = F_FC*KPER1
+!
+                 DO 7670 IK=1,NA
+                    ION = IACON1(IK)
+                    J1 = INDEX(ION+1)
+                    JMA = MAX(J1,IND)
+                    JMI = MIN(J1,IND)
+                    JJ1 = INDEX(JMA) + JMI
+!$$$ <IO1 ION |JJ ION>
+!B,A,A,B'    WHERE: B' > B
+                 FDM2(JJ,ION,ION,IO1) = FDM2(JJ,ION,ION,IO1) + F_FC/2
+                 FDM2(ION,JJ,IO1,ION) = FDM2(ION,JJ,IO1,ION) + F_FC/2
+                 FDM2(IO1,ION,ION,JJ) = FDM2(IO1,ION,ION,JJ) + F_FC/2
+                 FDM2(ION,IO1,JJ,ION) = FDM2(ION,IO1,JJ,ION) + F_FC/2
+
+ 7670            CONTINUE
+!
+ 7680         CONTINUE
+!
+ 7690         CALL PUSHCO(LBOX3,NSPACE,NA,IAMA,IAMI,LBOX4,IEND)
+ 7700         CONTINUE
+!
+!  --- DOUBLE EXCITATIONS START HERE
+!
+ 7800         CONTINUE
+!
+           IF (IB1.EQ.NB) GOTO 7850
+           IF (JJ.EQ.NACT) GOTO 7850
+!
+            DO II=1,NSPACE
+               LBOX3(II) = LBOX2(II)
+            ENDDO
+            IBES3 = 1
+            DO KK=1,ISPB1-1
+               IBES3 = IBES3 + LBOX2(KK)
+            ENDDO
+!
+!  LOOP OVER SPACES TO EXCITE ELECTRONS FROM, MUST BE GE THAN
+!  SPACE OF FIRST EXCITATION, ISPB1.
+!
+            DO 6890 ISPB3 = ISPB1,NSPACE
+               IF (LBOX1(ISPB3).EQ.0) GOTO 6887
+               IF (ISPB3.EQ.ISPB1.AND.IB1.EQ.IEBE) GOTO 6887
+               IOC3 = LBOX2(ISPB3)
+               IF (IOC3.EQ.0) GOTO 6887
+!
+               IBEE3 = IBES3 + LBOX2(ISPB3)-1
+               LBOX3(ISPB3) = LBOX3(ISPB3)-1
+!
+!  LOOP OVER ELECTRONS IN ISPB3, WHICH ARE LARGER THAN IB1,
+!  MAKING SURE IT ISN'T THE ALREADY EXCITED ELECTRON.
+!
+               JSTB3 = IBES3
+               IF (ISPB3.EQ.ISPB1) THEN
+                  JSTB3=IB1
+                  IF (IGAP-1.EQ.IB1) JSTB3=JSTB3+1
+               ENDIF
+!
+               DO 6880 IB3=JSTB3,IBEE3
+                  IF (IB3.EQ.IGAP-1) GOTO 6880
+                  IO3 = IBCON2(IB3)
+                  IS3 = IOB(IO3)
+!
+!  LOOP OVER SPACES TO EXCITE ELECTRON INTO.  MUST BE GE THAN
+!  SPACE FIRST ELECTRON WAS EXCITED INTO.
+!
+                  IGBE3 = 0
+                  DO JIK=1,ISPB2-1
+                     IGBE3 = IGBE3 + LBOX2(JIK)
+                  ENDDO
+                  DO 6850 ISPB4=ISPB2,NSPACE
+!
+!  IGBS3, IGBE3 ARE ELECTRONS SPECIFYING ISPB4 SPACE ELECTRON LIMITS.
+!
+                  LBOX3(ISPB4) = LBOX3(ISPB4) + 1
+                  IGBS3 = IGBE3 + 1
+                  IGBE3 = IGBE3 + LBOX2(ISPB4)
+                  IF (LBOX3(ISPB3).LT.IBMI(ISPB3)) GOTO 6840
+                  IF (LBOX3(ISPB4).GT.IBMA(ISPB4)) GOTO 6840
+                  IF (LBOX3(ISPB2).LT.IBMI(ISPB2)) GOTO 6840
+                  IF (LBOX3(ISPB2).GT.IBMA(ISPB2)) GOTO 6840
+!
+             IF (ISPB4.EQ.ISPB2.AND.JJ.EQ.MSTA(ISPB2+1)-1) GOTO 6840
+!
+!  GET GROUP NUMBER
+!
+               CALL POSITCO(LBOX5,NSPACE,NB,IBMA,IBMI,LBOX4,LBOX3,IGB3)
+               NIBS3 = NBST(IGB3)
+!
+!  MAKE GAP INFORMATION HERE.
+!
+                  IGBB3 = MAX(IGBS3,IGAP)
+!
+                  IF (LBOX2(ISPB4).EQ.0) THEN
+                     ISTA3 = MSTA(ISPB4)
+                     IEND3 = MSTA(ISPB4+1)-1
+                  ELSEIF (ISPB4.EQ.ISPB2) THEN
+                     ISTA3 = JJ+1
+                     IEND3 = IBCON2(IGBB3)-1
+!
+!  I AM SUSPECT ABOUT THIS NEXT LINE, WE'LL SEE WHAT HAPPENS.......
+!
+                     IF (IGAP-1.EQ.IGBE3) IEND3=MSTA(ISPB2+1)-1
+!
+                  ELSE
+                     ISTA3 = MSTA(ISPB4)
+                     IEND3 = IBCON2(IGBB3)-1
+                  ENDIF
+!
+!  LOOP OVER GAPS
+!
+                  DO 6830 IGAP3=IGBB3,IGBE3+1
+!
+                     DO 6820 JJ3=ISTA3,IEND3
+                        IS4 = IOB(JJ3)
+                        IP2 = LGMUL(IS3,IS4)
+                        IF (IP1.NE.IP2) GOTO 6820
+!
+              CALL REDE00(IBCON2,IACON1,NB,IB3,IGAP3-1,JJ3,JPERB3)
+              CALL IDPOST(IACON1,NB,LBOX3,NSPACE,MSTA,IDIM,Y,NX,LBST,
+     *                  LBNDET(1,IGB3),IACON2,JPOSB3)
+              IPER3 = ((-1)**(JPERB3+JPERB))*2
+              KBPOS3 = JPOSB3 + NIBS3
+              JPZB3 = LSPB(KBPOS3)
+!
+                 JMA=MAX(JJ3,IO3)
+                 JMI=MIN(JJ3,IO3)
+                 I2 = INDEX(JMA) + JMI
+                 INX = INDEX(I2) + IND
+                 II1 = INDEX(JJ3) + IO1
+                 JMA=MAX(IO3,JJ)
+                 JMI=MIN(IO3,JJ)
+                 II2 = INDEX(JMA) + JMI
+                 JMA=MAX(II1,II2)
+                 JMI=MIN(II1,II2)
+                 INX2 = INDEX(JMA) + JMI
+!
+!  LOOP OVER ALPHA STRINGS OF RIGHT SYMMETRY AND GROUP.
+!
+              DO 6700 IGA=1,ITGA
+              IF (LGCOM(IGB,IGA).NE.1.OR.LGCOM(IGB3,IGA).NE.1) GOTO 6700
+              JCIB1 = JPZB1 + LDISB(KBSYM,IGB,IGA)
+              JCIB3 = JPZB3 + LDISB(KBSYM,IGB3,IGA)
+              NIAS = NAST(IGA)
+!
+              DO 6680 KKA=LSAS(KSYM,IGA),LSAS(KSYM+1,IGA)-1
+                 IENA3 = LSAC(KKA)
+                 JCIA = LSPA(NIAS+IENA3)
+                 JCI1 = JCIA + JCIB1
+                 JCI3 = JCIA + JCIB3
+                 F_FC = 0.0D+00
+                 DO KKI=1,NXTW
+              F_FC = F_FC + WSTATE(IWTS(KKI))*AB(JCI1,KKI)*AB(JCI3,KKI)
+                 ENDDO
+                 F_FC = F_FC*IPER3
+
+!B B2 -> B'2 B' WHERE: B'2 > B2  B' > B     B2 > B     B'2 > B2' 
+                 FDM2(JJ,JJ3,IO3,IO1) = FDM2(JJ,JJ3,IO3,IO1) + F_FC/2
+                 FDM2(JJ3,JJ,IO1,IO3) = FDM2(JJ3,JJ,IO1,IO3) + F_FC/2
+                 FDM2(JJ,JJ3,IO1,IO3) = FDM2(JJ,JJ3,IO1,IO3) - F_FC/2
+                 FDM2(JJ3,JJ,IO3,IO1) = FDM2(JJ3,JJ,IO3,IO1) - F_FC/2
+!$$$!----(DE)EXCITE BELOW
+                 FDM2(IO1,IO3,JJ3,JJ) = FDM2(IO1,IO3,JJ3,JJ) + F_FC/2
+                 FDM2(IO3,IO1,JJ,JJ3) = FDM2(IO3,IO1,JJ,JJ3) + F_FC/2
+                 FDM2(IO1,IO3,JJ,JJ3) = FDM2(IO1,IO3,JJ,JJ3) - F_FC/2
+                 FDM2(IO3,IO1,JJ3,JJ) = FDM2(IO3,IO1,JJ3,JJ) - F_FC/2
+
+ 6680         CONTINUE
+!
+ 6700         CONTINUE
+!
+ 6820                CONTINUE
+!
+                     ISTA3 = IBCON2(IGAP3)+1
+                     IEND3 = IBCON2(IGAP3+1)-1
+                     IF (IGAP3.EQ.IGBE3) IEND3=MSTA(ISPB4+1)-1
+ 6830             CONTINUE
+!
+ 6840             LBOX3(ISPB4) = LBOX3(ISPB4) - 1
+ 6850             CONTINUE
+!
+ 6880          CONTINUE
+!
+               LBOX3(ISPB3) = LBOX3(ISPB3)+1
+ 6887          IBES3 = IBES3 + LBOX3(ISPB3)
+ 6890       CONTINUE
+!
+!  --- END OF LOOP OVER DOUBLE BETA EXCITATIONS.
+!
+ 7850                CONTINUE
+!
+                  ISTA = IBCON1(IGAP)+1
+                  IEND = IBCON1(IGAP+1)-1
+                  IF (IGAP.EQ.IGBE) IEND=MSTA(ISPB2+1)-1
+ 7860             CONTINUE
+!
+ 7870             LBOX2(ISPB2) = LBOX2(ISPB2) - 1
+ 7880          CONTINUE
+!
+ 7885          CONTINUE
+!
+               LBOX2(ISPB1) = LBOX2(ISPB1)+1
+ 7890       CONTINUE
+!
+! REMAINING DIAGONAL CONTRIBUTIONS HERE
+!
+            DO 69 II=1,NB
+               I1 = IBCON1(II)
+               IND1 = INDEX(I1+1)
+!
+              DO 74 JJ=II+1,NB
+                 I2 = IBCON1(JJ)
+                 IND2 = INDEX(I2+1)
+                 INDM = IND2 - I2 + I1
+!$$$ <I2 I1 |I1 I2>
+
+                 J1 = INDEX(INDM+1)
+                 JMI = MIN(IND1,IND2)
+                 JMA = MAX(IND1,IND2)
+                 J2 = INDEX(JMA) + JMI
+!$$$ <I1 I2 |I1 I2>
+!
+              DO 6710 IGA=1,ITGA
+              IF (LGCOM(IGB,IGA).NE.1) GOTO 6710
+              JCIB1 = JPZB1 + LDISB(KBSYM,IGB,IGA)
+              NIAS = NAST(IGA)
+!
+              DO 6690 KKA=LSAS(KSYM,IGA),LSAS(KSYM+1,IGA)-1
+                 IENA3 = LSAC(KKA)
+                 JCIA = LSPA(NIAS+IENA3)
+                 JCI1 = JCIA + JCIB1
+                 F_FC = 0.0D+00
+                 DO KKI=1,NXTW
+              F_FC = F_FC + WSTATE(IWTS(KKI))*AB(JCI1,KKI)*AB(JCI1,KKI)
+                 ENDDO
+
+!B1 B'2 -> B'2 B1   WHERE: B'2 > B1
+                 FDM2(I1,I2,I2,I1) = FDM2(I1,I2,I2,I1) + F_FC
+                 FDM2(I1,I2,I1,I2) = FDM2(I1,I2,I1,I2) - F_FC
+                 FDM2(I2,I1,I1,I2) = FDM2(I2,I1,I1,I2) + F_FC
+                 FDM2(I2,I1,I2,I1) = FDM2(I2,I1,I2,I1) - F_FC
+
+ 6690         CONTINUE
+!
+ 6710         CONTINUE
+!
+   74         CONTINUE
+!
+   69         CONTINUE
+!
+            IF (GOPARR) CALL DDI_DLBNEXT(MY_TASK)
+ 7899       CONTINUE
+            CALL MOVEUP2(LBOX1,NSPACE,NB,MSTA,IBCON1)
+ 7900    CONTINUE
+!
+         CALL PUSHCO(LBOX1,NSPACE,NB,IBMA,IBMI,LBOX5,IEND)
+ 8000 CONTINUE
+!
+      IF (GOPARR) THEN
+         CALL DDI_DLBRESET()
+         CALL DDI_GSUMF(2901,FDM2,NACT**4)
+      ENDIF
+
+      IF(SOME) WRITE(IW,9390)
+      IF(SOME) CALL TIMIT(1)
+      IF(SOME)CALL FLSHBF(6)
+
+      CALL R12_F_NAME('PT2RDM',FILENM2)
+      OPEN(UNIT=99,FILE=TRIM(FILENM2),STATUS='UNKNOWN')
+
+      IF(ME.EQ.MASTER)THEN
+
+      DO I = 1,NACT
+         DO II = 1,NACT
+            DO III = 1,NACT
+               DO IV = 1,NACT
+                  IF(ABS(FDM2(I,II,III,IV)).LT.RDM2TOL)CYCLE
+                  WRITE(99,'(4I8,F22.16)')I,II,IV,III,FDM2(I,II,III,IV)
+
+               ENDDO
+            ENDDO
+         ENDDO
+      ENDDO
+      WRITE(99,'(4I8,F22.16)')-1,-1,-1,-1,-1.0D+00
+
+      ENDIF                     !(ME.EQ.MASTER)
+
+      REWIND(99)
+      IF(ME.EQ.MASTER)CLOSE(UNIT=99,STATUS='KEEP')
+      IF(ME.NE.MASTER)CLOSE(UNIT=99,STATUS='DELETE') 
+
+      RETURN
+!
+ 9340 FORMAT(1X,'STATE=',I4,'   ENERGY=',F20.10,'   WEIGHT=',F8.5,
+     *           '   S=',F6.2/)
+ 9350 FORMAT(/1X,'***** ERROR *****'/
+     *       1X,'THIS RUN FOUND',I5,' CI EIGENVECTORS WITH S=',F5.2,','/
+     *       1X,'BUT YOU REQUESTED STATE AVERAGING OF',I5,' ROOTS.'/
+     *       1X,'PLEASE EXAMINE YOUR CHOICE OF -NSTATE- INPUT DATA.'/)
+ 9390 FORMAT(1X,'... DONE WITH 2 PARTICLE SPIN-FREE DENSITY MATRIX ...'/
+     $  1X,'... WRITING 2-RDM TO DISK (THIS MAY TAKE A WHILE) ...'/)
+!
+      END
+!
+!------------------------------------------------------------------------
+!========================================================================
+!------------------------------------------------------------------------
+!*MODULE EXCORR  *DECK GET_CIVECT_TABLES
+      SUBROUTINE GET_CIVECT_TABLES(IW,SOME,NACT,NCI,NA,NB,KST,MAXP,X,NX,
+     *     NSYM,LBOX1,LBOX2,LBOX3,LBOX4,CI,INDEX,IACON1,IBCON1,IBCON2,
+     $     LBNDET,NBST,LSYMB,LSPB,ITGB,IAST,IBST,NB1EX,IBST2,
+     $     JB1GR,JB1PE,JB1IN,JB1PO,JB1ST,JB1SY,JB1O1,JB1O2)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      LOGICAL SOME,GOPARR,DSKWRK,MASWRK,DSKSAV,FDIRCT,QCORR
+      COMMON /CIFILS/ NFT11,NFT12,NFT13,NFT14,NFT15,NFT16,IDAF20,NEMEMX
+      COMMON /FCCWFN/ NSPACE,MSTA(51),MNUM(51),MINI(51),MAXI(51),
+     *                IAMI(51),IAMA(51),IBMI(51),IBMA(51),IDIM(51),
+     *                LBST(51),NREF0,FDIRCT,QCORR,C0SQ
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      DIMENSION X(NX)
+      DIMENSION LBOX1(NSPACE),LBOX2(NSPACE),LBOX3(NSPACE),LBOX4(NSPACE)
+      DIMENSION CI(NCI,MAXP)
+      DIMENSION INDEX((NACT*(NACT+1))/2+1)
+      DIMENSION IACON1(NA),IBCON1(NA),IBCON2(NA)
+      DIMENSION LBNDET(NSPACE,ITGB)
+      DIMENSION NBST(ITGB+1)
+      DIMENSION LSYMB(IBST)
+      DIMENSION LSPB(IBST)
+      DIMENSION JB1GR(NB1EX),JB1PE(NB1EX),JB1IN(NB1EX),JB1ST(IBST2)
+      DIMENSION JB1PO(NB1EX),JB1SY(NB*(NACT-NB))
+      DIMENSION JB1O1(NB1EX),JB1O2(NB1EX)
+
+      DO 7 I=1,(NACT*(NACT+1))/2 + 1
+         INDEX(I) = (I*(I-1))/2
+    7 CONTINUE
+
+      DO 20 II=1,KST
+         DO 30 JJ=1,NCI
+            CI(JJ,II) = 0.0D+00
+   30    CONTINUE
+   20 CONTINUE
+
+!   SEE IF WE HAVE INITIAL GUESS VECTORS ON DISK.
+
+      NSTATE=0
+      NVECS =0
+
+      CALL SEQOPN(NFT12,'CIVECTR','UNKNOWN',.FALSE.,'UNFORMATTED')
+      CALL SEQREW(NFT12)
+      IF(MASWRK) READ(NFT12,ERR=2343,END=2343) NSTATE,NVECS
+      GO TO 2344
+
+ 2343 CONTINUE
+      WRITE(6,'("DAFCCI_2.SRC ERROR, NO USABLE CI VECTORS ON DISK")')
+      CALL ABRT
+      STOP
+
+!         LET OTHER NODES KNOW WHAT WAS WAS READ
+
+ 2344 CONTINUE
+      IF (GOPARR) CALL DDI_BCAST(2507,'I',NSTATE,1,MASTER)
+      IF (GOPARR) CALL DDI_BCAST(2508,'I',NVECS ,1,MASTER)
+
+!         IF INCONSISTENCY WITH THE DISK FILE, WE MUST TERMINATE
+
+      IF (NVECS.NE.NCI) THEN
+         IF (SOME) WRITE(IW,9005) NVECS,NCI
+         CALL ABRT
+      ENDIF
+
+!        READ CI EIGENVECTORS
+
+      IF (SOME) WRITE(IW,9007)
+      DO 100 ISTATE = 1,NSTATE
+         CALL SQREAD(NFT12,CI(1,ISTATE),NVECS)
+         IF(NVECS.EQ.0) THEN
+            IF (SOME) WRITE(IW,*)
+     *         'UNEXPECTED END OF FILE ON UNIT',NFT12
+            CALL ABRT
+            STOP
+         END IF
+  100 CONTINUE
+
+! DET UP B->B' INFORMATION IF ORMAS IS SET FDIRCT
+         IF (.NOT.FDIRCT) THEN
+         CALL FCCSUP2(IW,NA,NB,NACT,IACON1,IBCON1,IBCON2,
+     *           INDEX,NBST,LSPB,
+     *           LBOX1,LBOX2,LBOX3,LBOX4,
+     *           X,NX,LBNDET,LSYMB,NSYM,
+     *           ITGB,IBST,
+     *           NB1EX,JB1GR,JB1PE,JB1IN,JB1PO,JB1ST,JB1SY,
+     $           JB1O1,JB1O2)
+         ENDIF
+         RETURN
+!
+      RETURN
+!
+ 9005 FORMAT(/1X,'ERROR, NUMBER OF VECTORS STORED=',I5,
+     *           ' NOT EQUAL TO NCI=',I5/
+     *        1X,'THIS MAY BE DUE TO A GARBAGE -CIVECTR- FILE',
+     *           ' LEFT OVER FROM AN EARLIER RUN.')
+ 9007 FORMAT(/1X,'ORMAS VECTORS READ FROM DISK'/)
+      END
+!------------------------------------------------------------------------
+!========================================================================
+!------------------------------------------------------------------------
+!*MODULE EXCORR  *DECK FCCSRT4
+      SUBROUTINE FCCSRT4(JB1GR,JB1PE,JB1IN,JB1SY,N,IIND1O1,IIND1O2)
+      IMPLICIT INTEGER(A-Z)
+      DIMENSION JB1GR(N),JB1PE(N),JB1IN(N),JB1SY(N),IIND1O1(N),
+     $     IIND1O2(N)
+!
+!    SORTING GARBAGE.
+!
+      IF (N.LT.2) RETURN
+      L=N/2+1
+      IR=N
+!
+   10 CONTINUE
+         IF (L.GT.1) THEN
+            L=L-1
+            IRRA=JB1SY(L)
+            IRRB=JB1GR(L)
+            IRRC=JB1PE(L)
+            IRRD=JB1IN(L)
+            IRRE = IIND1O1(L)
+            IRRF = IIND1O2(L)
+         ELSE
+            IRRA=JB1SY(IR)
+            IRRB=JB1GR(IR)
+            IRRC=JB1PE(IR)
+            IRRD=JB1IN(IR)
+            IRRE = IIND1O1(IR)
+            IRRF = IIND1O2(IR)
+            JB1SY(IR)=JB1SY(1)
+            JB1GR(IR)=JB1GR(1)
+            JB1PE(IR)=JB1PE(1)
+            JB1IN(IR)=JB1IN(1)
+            IIND1O1(IR) = IIND1O1(1)
+            IIND1O2(IR) = IIND1O2(1)
+!
+            IR=IR-1
+            IF (IR.EQ.1) THEN
+               JB1SY(1)=IRRA
+               JB1GR(1)=IRRB
+               JB1PE(1)=IRRC
+               JB1IN(1)=IRRD
+               IIND1O1(1) = IRRE
+               IIND1O2(1) = IRRF
+!
+               GO TO 122
+            ENDIF
+         ENDIF
+         I=L
+         J=L+L
+   20    IF (J.LE.IR) THEN
+            IF (J.LT.IR) THEN
+                   IF (JB1SY(J).LT.JB1SY(J+1)) J=J+1
+            ENDIF
+            IF (IRRA.LT.JB1SY(J)) THEN
+               JB1SY(I)=JB1SY(J)
+               JB1GR(I)=JB1GR(J)
+               JB1PE(I)=JB1PE(J)
+               JB1IN(I)=JB1IN(J)
+               IIND1O1(I) = IIND1O1(J)
+               IIND1O2(I) = IIND1O2(J)
+               I=J
+               J=J+J
+            ELSE
+               J=IR+1
+            ENDIF
+         GO TO 20
+         ENDIF
+         JB1SY(I)=IRRA
+         JB1GR(I)=IRRB
+         JB1PE(I)=IRRC
+         JB1IN(I)=IRRD
+         IIND1O1(I) = IRRE
+         IIND1O2(I) = IRRF
+      GO TO 10
+!
+  122 CONTINUE
+!
+      RETURN
+      END
+!------------------------------------------------------------------------
+!========================================================================
+!------------------------------------------------------------------------
+!*MODULE EXCORR  *DECK FCCSUP2
+      SUBROUTINE FCCSUP2(IW,NA,NB,NACT,IACON1,IBCON1,IBCON2,
+     *           INDEX,NBST,LSPB,
+     *           LBOX1,LBOX2,LBOX3,LBOX4,
+     *           X,NX,LBNDET,LSYMB,NSYM,ITGB,IBST,
+     *           NB1EX,JB1GR,JB1PE,JB1IN,JB1PO,JB1ST,JB1SY,
+     $           JB1O1,JB1O2)
+
+!     ------------------------------------------------------------------
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+!
+      LOGICAL FDIRCT,QCORR
+!
+      COMMON /FCCWFN/ NSPACE,MSTA(51),MNUM(51),MINI(51),MAXI(51),
+     *                IAMI(51),IAMA(51),IBMI(51),IBMA(51),IDIM(51),
+     *                LBST(51),NREF0,FDIRCT,QCORR,C0SQ
+!
+      DIMENSION IACON1(NA),IBCON1(NB),IBCON2(NB)
+      DIMENSION INDEX((NACT*(NACT+1))/2+1)
+      DIMENSION LBOX1(NSPACE),LBOX2(NSPACE),LBOX3(NSPACE)
+      DIMENSION LBOX4(NSPACE)
+      DIMENSION NBST(ITGB+1),LSPB(IBST)
+      DIMENSION X(NX)
+      DIMENSION LBNDET(NSPACE,ITGB),LSYMB(IBST)
+      DIMENSION JB1GR(NB1EX),JB1PE(NB1EX),JB1IN(NB1EX),JB1PO(NB1EX)
+      DIMENSION JB1ST(NSYM+1,IBST+1),JB1SY(NB*(NACT-NB))
+
+      DIMENSION JB1O1(NB1EX),JB1O2(NB1EX)
+
+!
+!  MAKE AND STORE ALL B -> B' DATA, WHERE B' > B.
+!
+      NB1CH = 0
+      INB = 0
+!
+!  LOOP THROUGH ALL BETA GROUPS
+!
+      CALL RESETCO(LBOX1,NSPACE,NB,IBMA,IBMI,LBOX3)
+!
+      DO 1000 IIB = 1,ITGB
+!
+         CALL RESETDE(LBOX1,NSPACE,NB,MSTA,IBCON1)
+!
+         DO 900 KKB=NBST(IIB)+1,NBST(IIB+1)
+            INB = INB + 1
+            DO II=1,NSPACE
+               LBOX2(II) = LBOX1(II)
+            ENDDO
+            JB1ST(1,INB) = NB1CH+1
+            KBST = NB1CH+1
+!
+!  LOOP OVER ALL SINGLE EXCITATIONS, CHECKING TO SEE IF IT IS VALID.
+!
+!  LOOP OVER SPACES TO EXCITE ELECTRON FROM.
+!
+            IEBS = NB+1
+            DO 890 ISPB1=NSPACE,1,-1
+               IOC1 = LBOX1(ISPB1)
+               IEBE = IEBS - 1
+               IEBS = IEBS - IOC1
+               IF (IOC1.EQ.0) GO TO 890
+               LBOX2(ISPB1) = LBOX2(ISPB1)-1
+!
+!  LOOP ELECTRONS IN SPACE ISPB1
+!  IEBS, IEBE ARE THE ELECTRONS IN SPACE ISPB1
+!
+               DO 885 IB1 = IEBE,IEBS,-1
+                  IO1 = IBCON1(IB1)
+                  IGBE = IEBE - LBOX1(ISPB1)
+!
+!  LOOP OVER POSSIBLE SPACES TO EXCITE INTO.
+!
+               DO 880 ISPB2=ISPB1,NSPACE
+!
+!  IGBS,IGBE ARE ELECTRONS SPECIFYING ISPB2 SPACE ELECTRON LIMITS.
+!
+                  IGBS = IGBE + 1
+                  IGBE = IGBE + LBOX1(ISPB2)
+!
+                  LBOX2(ISPB2) = LBOX2(ISPB2) + 1
+                  IF (LBOX2(ISPB1).LT.IBMI(ISPB1)) GO TO 870
+                  IF (LBOX2(ISPB2).GT.IBMA(ISPB2)) GO TO 870
+!
+!  GET GROUP NUMBER
+!
+          CALL POSITCO(LBOX4,NSPACE,NB,IBMA,IBMI,LBOX3,LBOX2,IGB)
+          NIAS = NBST(IGB)
+!
+!  MAKE GAP INFORMATION HERE.
+!
+                  IGBA = MAX(IB1+1,IGBS)
+                  IF (LBOX1(ISPB2).EQ.0) THEN
+                     ISTA = MSTA(ISPB2)
+                     IEND = MSTA(ISPB2+1)-1
+                  ELSEIF (ISPB2.EQ.ISPB1) THEN
+                     ISTA = IO1+1
+                     IEND = IBCON1(IGBA)-1
+                     IF (IB1.EQ.IEBE) IEND=MSTA(ISPB1+1)-1
+                  ELSE
+                     ISTA = MSTA(ISPB2)
+                     IEND = IBCON1(IGBA)-1
+                  ENDIF
+!
+!  LOOP OVER GAPS
+!
+                  DO 860 IGAP=IGBA,IGBE+1
+!
+                     DO 850 JJ=ISTA,IEND
+!
+                        NB1CH = NB1CH + 1
+                        JB1GR(NB1CH) = IGB
+                        JB1IN(NB1CH) = INDEX(JJ)+IO1
+                        JB1O1(NB1CH) = IO1
+                        JB1O2(NB1CH) = JJ
+!
+            CALL REDE00(IBCON1,IBCON2,NB,IB1,IGAP-1,JJ,IPER)
+            CALL IDPOST(IBCON2,NB,LBOX2,NSPACE,MSTA,IDIM,X,NX,LBST,
+     *                  LBNDET(1,IGB),IACON1,IPOSB)
+!
+                        JB1PE(NB1CH) = (-1)**IPER
+                        JB1PO(NB1CH) = LSPB(IPOSB+NIAS)
+                        JB1SY(NB1CH-KBST+1) = LSYMB(IPOSB+NIAS)
+!
+  850                CONTINUE
+!
+                  ISTA = IBCON1(IGAP)+1
+                  IEND = IBCON1(IGAP+1)-1
+                  IF (IGAP.EQ.IGBE) IEND=MSTA(ISPB2+1)-1
+  860             CONTINUE
+!
+  870             LBOX2(ISPB2) = LBOX2(ISPB2) - 1
+  880          CONTINUE
+!
+  885          CONTINUE
+!
+               LBOX2(ISPB1) = LBOX2(ISPB1) + 1
+  890       CONTINUE
+!
+!  ORDER THESE EXCITATIONS FOR BETA INB ACCORDING TO SYMMETRY.
+!
+            KNUM = NB1CH - KBST + 1
+            CALL FCCSRT22(JB1GR(KBST),JB1PE(KBST),JB1IN(KBST),
+     *           JB1PO(KBST),JB1SY,KNUM,
+     *           JB1O1(KBST),JB1O2(KBST))
+!
+!  MAKE THE SYMMETRY STARTING POINTS
+! ----
+            IST=1
+            DO 100 II=1,NSYM
+               DO 200 JJ=IST,KNUM
+                  IF (JB1SY(JJ).NE.II) GO TO 180
+  200          CONTINUE
+  180          JB1ST(II+1,INB) = JJ+KBST-1
+               IST = JJ
+  100       CONTINUE
+! ----
+!
+!  REORDER WITHIN EACH SYMMETRY BY POSITION.
+!
+            IJST=JB1ST(1,INB)
+            DO 300 II=1,NSYM
+               JSTA=JB1ST(II,INB)
+               JEND=JB1ST(II+1,INB)
+               JNUM=JEND-JSTA
+               IF (JNUM.LE.1) GO TO 300
+               CALL FCCSRT22(JB1GR(JSTA),JB1PE(JSTA),JB1IN(JSTA),
+     *              JB1SY(JSTA-IJST+1),JB1PO(JSTA),JNUM,
+     *              JB1O1(JSTA),JB1O2(JSTA))
+ 
+  300       CONTINUE
+!
+            CALL MOVEUP2(LBOX1,NSPACE,NB,MSTA,IBCON1)
+  900    CONTINUE
+!
+         CALL PUSHCO(LBOX1,NSPACE,NB,IBMA,IBMI,LBOX3,IEND)
+!
+ 1000 CONTINUE
+!
+      IF (NB1CH.NE.NB1EX) THEN
+         WRITE(IW,9000)
+         CALL ABRT
+         STOP
+      ENDIF
+      JB1ST(1,IBST+1) = NB1CH+1
+!
+      RETURN
+!
+ 9000 FORMAT(/1X,'ERROR IN CALCULATION OF SINGLE BETA EXCITES !!! ',
+     *           'PANIC !!!!!!'/1X,'CALL JOE AND TELL HIM OFF.')
+!
+      END
+!
+!------------------------------------------------------------------------
+!========================================================================
+!------------------------------------------------------------------------
+!*MODULE EXCORR  *DECK FCCSRT22
+      SUBROUTINE FCCSRT22(JB1GR,JB1PE,JB1IN,JB1PO,JB1SY,N,
+     $     JB1O1,JB1O2)          
+      IMPLICIT INTEGER(A-Z)
+      DIMENSION JB1GR(N),JB1PE(N),JB1IN(N),JB1PO(N),JB1SY(N),
+     $     JB1O1(N),JB1O2(N) 
+!
+!    SORTING GARBAGE.
+!
+      IF (N.LT.2) RETURN
+      L=N/2+1
+      IR=N
+!
+   10 CONTINUE
+         IF (L.GT.1) THEN
+            L=L-1
+            IRRA=JB1SY(L)
+            IRRB=JB1GR(L)
+            IRRC=JB1PE(L)
+            IRRD=JB1IN(L)
+            IRRE=JB1PO(L)
+            IRRF = JB1O1(L)
+            IRRG = JB1O2(L)
+         ELSE
+            IRRA=JB1SY(IR)
+            IRRB=JB1GR(IR)
+            IRRC=JB1PE(IR)
+            IRRD=JB1IN(IR)
+            IRRE=JB1PO(IR)
+            IRRF = JB1O1(IR)
+            IRRG = JB1O2(IR)
+
+            JB1SY(IR)=JB1SY(1)
+            JB1GR(IR)=JB1GR(1)
+            JB1PE(IR)=JB1PE(1)
+            JB1IN(IR)=JB1IN(1)
+            JB1PO(IR)=JB1PO(1)
+            JB1O1(IR) = JB1O1(1)
+            JB1O2(IR) = JB1O2(1)
+!
+            IR=IR-1
+            IF (IR.EQ.1) THEN
+               JB1SY(1)=IRRA
+               JB1GR(1)=IRRB
+               JB1PE(1)=IRRC
+               JB1IN(1)=IRRD
+               JB1PO(1)=IRRE
+               JB1O1(1) = IRRF
+               JB1O2(1) = IRRG
+!
+               GO TO 122
+            ENDIF
+         ENDIF
+         I=L
+         J=L+L
+   20    IF (J.LE.IR) THEN
+            IF (J.LT.IR) THEN
+                   IF (JB1SY(J).LT.JB1SY(J+1)) J=J+1
+            ENDIF
+            IF (IRRA.LT.JB1SY(J)) THEN
+               JB1SY(I)=JB1SY(J)
+               JB1GR(I)=JB1GR(J)
+               JB1PE(I)=JB1PE(J)
+               JB1IN(I)=JB1IN(J)
+               JB1PO(I)=JB1PO(J)
+
+           JB1O1(I) = JB1O1(J)
+           JB1O2(I) = JB1O2(J)
+
+               I=J
+               J=J+J
+            ELSE
+               J=IR+1
+            ENDIF
+         GO TO 20
+         ENDIF
+         JB1SY(I)=IRRA
+         JB1GR(I)=IRRB
+         JB1PE(I)=IRRC
+         JB1IN(I)=IRRD
+         JB1PO(I)=IRRE
+
+         JB1O1(I) = IRRF                                                                
+         JB1O2(I) = IRRG
+
+      GO TO 10
+!
+  122 CONTINUE
+!
+      RETURN
+      END SUBROUTINE FCCSRT22
+!------------------------------------------------------------------------
+!========================================================================
+!------------------------------------------------------------------------
