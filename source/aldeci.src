@@ -1,3 +1,4 @@
+C  7 Mar 12 - LBR - Generalize dynamic mcscf weighting
 C  7 Mar 12 - MWS - align DETWFN common
 C 17 Feb 12 - LBR - DETINP,DETDM2: added dynamic mcscf weighting
 C 15 Feb 12 - MWS - DETINP: defend against N-alpha > N-act
@@ -170,7 +171,7 @@ C
       DOUBLE PRECISION NACME
 C
       LOGICAL SOME,PURES,GOPARR,DSKWRK,MASWRK,ABEL,WTSOK,ANALYS,
-     *        CLOBBR,DWEIGH
+     *        CLOBBR
 C
       PARAMETER (MXATM=2000, MXRT=100, MXAO=8192, MXSH=5000)
 C
@@ -212,10 +213,10 @@ C
      *          8HNSTATE  ,8HNSTGSS  ,8HNHGSS   ,8HMXXPAN  ,
      *          8HITERMX  ,8HCVGTOL  ,8HPRTTOL  ,
      *          8HIROOT   ,8HNFLGDM  ,8HPURES   ,8HWSTATE  ,
-     *          8HWTSOK   ,8HANALYS  ,8HCLOBBR  ,8HDWEIGH  ,
+     *          8HWTSOK   ,8HANALYS  ,8HCLOBBR  ,8HIDWREF  ,
      *          8HDWPARM  /
       DATA KQNAM/5,1,5,      1,1,1,3,   1,1,1,1,   1,3,3,
-     *           1,-1,0,-3,  0,0,0,0,   3/
+     *           1,-1,0,-3,  0,0,0,1,   3/
 C
       DATA DET,CIDET/8HDET     ,8HCIDET   /
       DATA RNONE/8HNONE    /
@@ -330,13 +331,13 @@ C
       WTSOK  = .FALSE.
       ANALYS = .FALSE.
       CLOBBR = .FALSE.
-      DWEIGH = .FALSE.
+      IDWEIGH=0
       DWPARM = 2.0D+00
 C
       CALL NAMEIO(IR,JRET,GPNAME,NNAM,QNAM,KQNAM,
      *            GRPDET,KSTSYM,STSYM,NCORE,NACT,NELS,SZ,NSTATE,NSTGSS,
      *            NHGSS,MXXPAN,ITERMX,CVGTOL,PRTTOL,IROOT,NFLGDM,
-     *            PURES,WSTATE,WTSOK,ANALYS,CLOBBR,DWEIGH,DWPARM,
+     *            PURES,WSTATE,WTSOK,ANALYS,CLOBBR,IDWEIGH,DWPARM,
      *            0,
      *    0,0,0,0,0,    0,0,0,0,0,    0,0,0,0,0,    0,0,0,0,0,
      *    0,0,0,0,0,    0,0,0,0,0,    0,0,0,0,0,    0,0,0,0,0)
@@ -568,11 +569,6 @@ C
       IF(IPSI.EQ.0  .AND.  IROOT.GT.MXSTAT) THEN
          IF(MASWRK) WRITE(IW,9055) IROOT,MXSTAT
          CALL ABRT
-      END IF
-      IF(DWEIGH) THEN
-         IDWEIGH=1
-      ELSE
-         IDWEIGH=0
       END IF
 C
 C        if running silently, return without printing anything
@@ -1946,13 +1942,18 @@ C
 C DETERMINE WHICH STATE IS THE GROUND STATE WE WANT TO USE A THE 
 C REFERENCE TO THE DYNAMICALLY WEIGHTED AVERAGE.
 C
-      ILOW_E = 0
-      DO 151 IST = 1,K
-         IF(IPURES.EQ.1.AND.ABS(SPINS(ILOW_E)-SDET).GT.0.03D+00)
-     *       GO TO 151
-         ILOW_E = ILOW_E + 1
-         IF(WSTATE(ILOW_E).GT.ZERO) GO TO 152
-  151 CONTINUE
+      NXTR=0
+      DO 210 IDWREF=1,K
+         IF(IPURES.EQ.1  .AND.  ABS(SPINS(IDWREF)-SDET).GT.0.03D+00)
+     *        GO TO 210
+         NXTR=NXTR+1
+         IF(NXTR.EQ.IDWEIGH.AND.WSTATE(NXTR).GT.ZERO)THEN
+            IF(SOME)WRITE(IW,9330)IDWREF,DWPARM
+            GOTO 220
+         END IF
+         IF(NXTR.GT.MXSTAT)GOTO 220
+ 210       CONTINUE
+ 220         CONTINUE
 C     
 C DETERMINE THE UNNORMALIZED DYNAMIC WEIGHTS
 C
@@ -1964,7 +1965,7 @@ C
          IF(IPURES.EQ.1.AND.ABS(SPINS(IST)-SDET).GT.0.03D+00) GO TO 153
          NXTR=NXTR+1
          IF(WSTATE(NXTR).GT.ZERO)THEN
-            E_DIFF = ESTATE(IST)-ESTATE(ILOW_E)
+            E_DIFF = ESTATE(IST)-ESTATE(IDWREF)
             WSTATE(NXTR)=1/(DCOSH(E_DIFF/ESHIFT))**2
             WSUM = WSUM + WSTATE(NXTR)
          ENDIF
@@ -1983,7 +1984,7 @@ C
   155 CONTINUE
   156 CONTINUE
 C      
- 200  CONTINUE                  !(.NOT.DWEIGHT)
+ 200  CONTINUE                  !(IDWEIGH.EQ.0)
 C
 C        set state averaged energy, print root information
 C
@@ -2098,6 +2099,9 @@ C
      *       5X,50(1H-))
  9320 FORMAT(/1X,I10,' WORDS WILL BE USED TO FORM THE DENSITIES'/
      *       1X,'THE DENSITIES ARE STATE AVERAGED OVER',I4,' ROOT(S)')
+ 9330  FORMAT(/5X,' STATE WEIGHTS WILL BE CHOSEN DYNAMICALLY '/
+     *       X,'STATE',I4,' IS THE REFERENCE STATE'/
+     *       X,'DYNAMICALLY WEIGHTED ENERGY PARAMETER:',F7.3,' EV'/)
  9340 FORMAT(1X,'STATE=',I4,'   ENERGY=',F20.10,'   WEIGHT=',F8.5,
      *           '   S=',F6.2)
  9350 FORMAT(/1X,'***** ERROR *****'/
