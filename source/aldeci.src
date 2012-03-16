@@ -1,3 +1,4 @@
+C 16 Mar 12 - MWS - DETINP: review and fix checks of SA-GRAD/NACME usage
 C 14 Mar 12 - MWS - DETINP: allow any type SA-gradient runs to proceed
 C  7 Mar 12 - LBR - Generalize dynamic mcscf weighting
 C  7 Mar 12 - MWS - align DETWFN common
@@ -169,6 +170,7 @@ C*MODULE ALDECI  *DECK DETINP
       SUBROUTINE DETINP(NPRINT,GPNAME)
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      DOUBLE PRECISION NACME
 C
       LOGICAL SOME,PURES,GOPARR,DSKWRK,MASWRK,ABEL,WTSOK,ANALYS,
      *        CLOBBR
@@ -221,6 +223,7 @@ C
       DATA DET,CIDET/8HDET     ,8HCIDET   /
       DATA RNONE/8HNONE    /
       DATA HESS/8HHESSIAN /
+      DATA NACME,CONICAL/8HNACME   ,8HCONICAL /
       DATA FANT/8HC1      ,8HCI      ,8HCS      ,8HC2      ,
      *          8HD2      ,8HC2V     ,8HC2H     ,8HD2H     /
       DATA LFANT/1,1,1,1,2,2,2,3/
@@ -573,28 +576,33 @@ C        if running silently, return without printing anything
 C
       IF(NPRINT.EQ.-23) RETURN
 C
-C     THE COMPUTATION OF THE ENERGY GRADIENT REQUIRES A SYMMETRIC
+C     THE COMPUTATION OF ENERGY DERIVATIVES REQUIRES A SYMMETRIC
 C     LAGRANGIAN TO SKIP RESPONSE EQUATIONS, OR ELSE WE HAVE TO
-C     LATER SOLVE FOR THOSE RESPONSES.  ENERGY HESSIAN IS LIMITED
-C     TO STATE-SPECIFIC CASES, ANY STATE-AVERAGED HESSIAN IS FLUSHED.
-C     There is a secret input keyword to avoid being flushed, which
-C     may be reasonable if the states being averaged are degenerate.
+C     LATER SOLVE FOR THOSE RESPONSES.
 C
       CALL DERCHK(MAXDER)
       IF(MXSTAT.GT.1  .AND.  MAXDER.GT.0) THEN
-         IF(MAXDER.EQ.1  .AND.  NGLEVL.NE.1) THEN
+C            analytic gradient is OK, but time consuming, so warn.
+         IF((MAXDER.EQ.1  .AND.  NGLEVL.EQ.0)  .OR.
+     *      (MAXDER.EQ.2  .AND.  NHLEVL.EQ.1)) THEN
             IF (SOME) WRITE(IW,9061) RUNTYP,MXSTAT
          END IF
-         IF(MAXDER.EQ.2  .AND.  NHLEVL.NE.2) THEN
+C           fully analytic hessian requires 2nd order CPMCHF equations!
+C           There is a secret input keyword to avoid being flushed,
+C           which may or may not be reasonable if the states being
+C           averaged are degenerate.
+         IF(MAXDER.EQ.2  .AND.  NHLEVL.EQ.0) THEN
             IF(WTSOK) THEN
-              IF (SOME) WRITE(IW,9065) RUNTYP,MXSTAT
+              IF (SOME) WRITE(IW,9062) RUNTYP,MXSTAT
             ELSE
               IF (SOME) WRITE(IW,9063) RUNTYP,MXSTAT
               CALL ABRT
             ENDIF
          END IF
+C            whether numerical or analytic, most potential surface
+C            runs need to know the specific state IROOT of interest.
          IF(IROOT.EQ.0 .AND.
-     *        (MAXDER.GT.0 .OR. NGLEVL+NHLEVL.GT.0)) THEN
+     *        .NOT.(RUNTYP.EQ.NACME .OR. RUNTYP.EQ.CONICAL)) THEN
             IF(SOME) WRITE(IW,9064)
             CALL ABRT
          END IF
@@ -671,7 +679,7 @@ C
  9050 FORMAT(/1X,'**** ERROR, NEGATIVE VALUE FOR -WSTATE- ???')
  9055 FORMAT(1X,'YOUR INPUT ASKS FOR IROOT=',I4,' BUT ONLY',I4,
      *          ' STATE WEIGHTS GIVEN IN WSTATE')
- 9061 FORMAT(/1X,'RUNTYP=',A8,' INVOLVING A NUCLEAR GRADIENT'/
+ 9061 FORMAT(/1X,'RUNTYP=',A8,' INVOLVING AN ANALYTIC NUCLEAR GRADIENT'/
      *        1X,'HAS BEEN REQUESTED FOR A RUN AVERAGING OVER',I4,
      *           ' STATES.'/
      *        1X,'THIS REQUIRES SOLUTION OF THE MULTI-REFERENCE',
@@ -679,26 +687,28 @@ C
      *        1X,'REQUIRING MORE COMPUTER TIME THAN SINGLE STATE', 
      *           ' GRADIENTS.'/
      *        1X,'PROVIDING $CPMCHF INPUT MAY HELP RESPONSE SOLVING.')
- 9063 FORMAT(/1X,'**** ERROR, RUNTYP=',A8,' REQUIRES NUCLEAR HESSIAN.'/
-     *        1X,'THIS IS IMPOSSIBLE WHILE STATE AVERAGING. NAVG=',I5/
-     *        1X,'A POSSIBLE RECOURSE, FOR VERY SMALL MOLECULES, IS',
-     *           ' TO SELECT'/
-     *        1X,'A SPECIFIC STATE ENERGY TO BE NUMERICALLY',
-     *           ' DIFFERENTIATED:'/
-     *        1X,' $DET  IROOT=NNN'/
-     *        1X,' $HESS METHOD=FULLNUM'//)
+ 9062 FORMAT(/1X,'**** WARNING ****'/
+     *        1X,'RUNTYP=',A8,' INVOLVING AN ANALYTIC NUCLEAR HESSIAN'/
+     *        1X,'HAS BEEN REQUESTED FOR A RUN AVERAGING OVER',I4,
+     *           ' STATES.'/
+     *        1X,'THE RUN IS ALLOWED TO PROCEED BECAUSE THE INPUT'/
+     *        1X,'CONTAINS THE SECRET KEYWORD REQUESTING EXECUTION',/
+     *        1X,'OF THE ANALYTIC MCSCF CODE FOR SINGLE STATES.'/
+     *        1X,'YOUR HESSIAN RESULTS MAY BE MEANINGLESS!'//)
+ 9063 FORMAT(/1X,'**** ERROR ****'/
+     *        1X,'RUNTYP=',A8,' INVOLVING AN ANALYTIC NUCLEAR HESSIAN'/
+     *        1X,'HAS BEEN REQUESTED FOR A RUN AVERAGING OVER',I4,
+     *           ' STATES.'//
+     *        1X,'TWO POSSIBLE RECOURSES ARE:'/
+     *        1X,' $FORCE METHOD=SEMINUM'/
+     *        1X,'USING THE ANALYTIC SA-MCSCF GRADIENTS, OR PERHAPS'/
+     *        1X,' $FORCE METHOD=FULLNUM'/
+     *        1X,'USING ONLY ENERGIES, IF YOUR MOLECULE IS VERY',
+     *           ' SMALL.'//)
  9064 FORMAT(/1X,'**** ERROR, YOUR SA-MCSCF REQUESTS ENERGY',
      *           ' DERIVATIVES, BUT YOU DID'/
      *        1X,'NOT SPECIFY (BY -IROOT-) WHICH SPECIFIC STATE YOU',
      *           ' WANT.')
- 9065 FORMAT(/1X,'**** WARNING ****'/
-     *        1X,'RUNTYP=',A8,' INVOLVING A NUCLEAR HESSIAN'/
-     *        1X,'HAS BEEN REQUESTED FOR A RUN AVERAGING OVER',I4,
-     *           ' STATES.'/
-     *        1X,'THE RUN IS ALLOWED TO PROCEED BECAUSE THE '/
-     *        1X,'USER SHOULD BE REQUESTING A SAMCSCF GRADIENT OR'/
-     *        1X,'NACME CALCULATION.  IF THIS IS NOT THE CASE, YOUR'/
-     *        1X,'HESSIAN RESULTS ARE MEANINGLESS!'//)
  9080 FORMAT(/1X,'ERROR IN ELECTRON COUNTING'/
      *       1X,'NO. ACTIVE ALPHA SPINS=',I4,
      *          ' EXCEEDS NO. ACTIVE ORBITALS=',I4/
