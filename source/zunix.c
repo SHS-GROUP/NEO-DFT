@@ -646,8 +646,6 @@ void memrel_(locmem) FORTINT *locmem;
 void naptime_(nptime) FORTINT *nptime;
    { Sleep((DWORD) *nptime*1000); }
 
-#ifndef WINDOWSAZURE
-
 #include <mpi.h>
 double windowstimer_(double *a) 
 {
@@ -667,6 +665,4 @@ double walltimer_()
 {
   return (MPI_Wtime());
 }
-#endif
-
 #endif

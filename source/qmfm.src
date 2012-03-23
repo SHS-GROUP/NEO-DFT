@@ -1,3 +1,4 @@
+C 23 MAR 12 - CHC - patch FMM gradient bug
 C 28 DEC 11 - DGF - CHANGES FOR FMO 4.2
 C 22 MAY 09 - MWS - SYNCHRONIZE DFGRID COMMON
 C 11 APR 08 - MWS - SYNCHRONIZE DFGRID COMMON BLOCK
@@ -1540,7 +1541,7 @@ C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
       PARAMETER (ONE=1.0D+00)
-      PARAMETER (MAXQATM=100)
+      PARAMETER (MAXQATM=100,maxnp=45)
 C
       LOGICAL DIRSCF,FDIFF,GOPARR,DSKWRK,MASWRK,OK,QFMM,QOPS
       LOGICAL SLQFMM
@@ -1596,11 +1597,13 @@ C     SLQFMM : SPATIAL LOCALIZATION OPTION
 C
       ITGERR=7
       NP=15
-      if(nfg.ne.0) np=20 
+c     if(nfg.ne.0) np=20 
       NS=2
       IWS=2
+c     if(nfg.ne.0) IWS=1 
       IEPS=9
       IDPGD=9
+      if(nfg.ne.0) IDPGD=12 
       ISCUT=5
       METHOD=DISK
       MPMTHD=0
@@ -1660,6 +1663,10 @@ C
          IF (MASWRK) WRITE(IW,9100)
          NERR=NERR+1
       ENDIF
+      IF (np.gt.maxnp) THEN
+         IF (MASWRK) WRITE(IW,9150) np,maxnp
+         NERR=NERR+1
+      ENDIF
 C
 C     NPGP RETURN THE HIGHEST ANGULAR MOMENTUM PRESENT IN THE BASIS.
 C     NOTE KTYPE=1,2,3,4,5,6,7 MEANS S, P(L), D, F, G, H, I FUNCTION.
@@ -1691,6 +1698,8 @@ C
  9100 FORMAT(1X,'*** ERROR *** IN -QFMMIN-'/,
      *  1X,'QFMM ONLY RUNS IN DIRECT SCF MODE. '/,
      *  1X,'INCLUDE DIRSCF=.T. IN $SCF GROUP.'/)
+ 9150 FORMAT(1X,'*** ERROR *** IN -QFMMIN-'/,
+     *  1X,'NP=',I6,' CANNOT EXCEED ',I6)
  9200 FORMAT(/1X,'THE HIGHEST ANGULAR MOMENTUM IS ',A1/,
      *  1X,'QFMM WILL NOT RUN WITH ANGULAR MOMENTUM HIGHER THAN D'/
      *  1X,'FUTURE VERSION WILL REMOVE THIS RESTRICTION'/)
@@ -7054,6 +7063,7 @@ C
       LNP=(NP+1)*(NP+2)/2
       LFG=(NP*(NP+1)*(NP+2)*4/3)+(NP+1)
       LNPGP=(NPGP+1)*(NPGP+2)/2
+      npgG=npgp+1
 C
       EZ(1)=0.0D+00
       EZ(2)=0.0D+00
@@ -7232,18 +7242,18 @@ C
                   CALL MOMAB(LIT,LJT,IB-ILOC+MINI,JB-JLOC+MINJ,
      *               YLM2,PA,PB,AI,AJ,AA,DIJ(JP),0,0,1)
                   CALL FPDER(IB,JB,NPGP,LNPGP,YLM2,YTP2,SUMPZ)
-                  CALL FZDER(IB,JB,NP,YLM,YTP2,CLM,DA(LJN),AI,AJ,
+                  CALL FZDER(IB,JB,npgG,YLM,YTP2,CLM,DA(LJN),AI,AJ,
      *               DFZ,SUM,SUMPZ,DZA,DZB)
 C
                   CALL MOMAB(LIT,LJT,IB-ILOC+MINI,JB-JLOC+MINJ,
      *               YLM2,PA,PB,AI,AJ,AA,DIJ(JP),1,0,0)
                   CALL FPDER(IB,JB,NPGP,LNPGP,YLM2,YTP2,SUMPX)
-                  CALL FXDER(IB,JB,NP,YLM,YTP2,CLM,DA(LJN),AI,AJ,
+                  CALL FXDER(IB,JB,npgG,YLM,YTP2,CLM,DA(LJN),AI,AJ,
      *               DFX,SUM,SUMPX,DXA,DXB)
                   CALL MOMAB(LIT,LJT,IB-ILOC+MINI,JB-JLOC+MINJ,
      *               YLM2,PA,PB,AI,AJ,AA,DIJ(JP),0,1,0)
                   CALL FPDER(IB,JB,NPGP,LNPGP,YLM2,YTP2,SUMPY)
-                  CALL FYDER(IB,JB,NP,YLM,YTP2,CLM,DA(LJN),AI,AJ,
+                  CALL FYDER(IB,JB,npgG,YLM,YTP2,CLM,DA(LJN),AI,AJ,
      *               DFY,SUM,SUMPY,DYA,DYB)
 C
                   DE(1,IATOM)=DE(1,IATOM)+DXA
@@ -7277,8 +7287,9 @@ C     DZB : ENERGY DERIVATIVE WRT Z DIRECTION OF ATOM B
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
       COMPLEX*16 YP, ZP
-      PARAMETER (TWO=2.0D+00)
-      DIMENSION CLM(-NP:NP),ZP((NP+1)*(NP+2)/2),YP((NP+1)*(NP+2)/2)
+      PARAMETER (TWO=2.0D+00,MaxNp=45)
+      DIMENSION CLM(-NP:NP),ZP((MaxNP+1)*(MaxNP+2)/2),
+     *          YP((MaxNP+1)*(MaxNP+2)/2)
 C
       IY=0
       IZ=0
@@ -7305,8 +7316,10 @@ C
       IF (IB.NE.JB) SUMZ=TWO*SUMZ
 C
       GP=GA+GB
-      DZA=DA*(GA/GP*(SUMZ-TWO*GB*DFZ*SUM)+SUMPZ)
-      DZB=DA*(GB/GP*(SUMZ+TWO*GA*DFZ*SUM)-SUMPZ)
+      dfac=abs(dfz)
+      if (dfz.lt.0) dfac=-dfac
+      DZA=DA*(GA/GP*(SUMZ-TWO*GB*dfac*SUM)+SUMPZ)
+      DZB=DA*(GB/GP*(SUMZ+TWO*GA*dfac*SUM)-SUMPZ)
 C
       RETURN
       END
@@ -7316,8 +7329,9 @@ C*MODULE QFMM    *DECK FXDER
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
       COMPLEX*16 YP, ZP, SUMXA,SUMXB
-      PARAMETER (TWO=2.0D+00)
-      DIMENSION CLM(-NP:NP),ZP((NP+1)*(NP+2)/2),YP((NP+1)*(NP+2)/2)
+      PARAMETER (TWO=2.0D+00,MaxNp=45)
+      DIMENSION CLM(-NP:NP),ZP((MaxNP+1)*(MaxNP+2)/2),
+     *          YP((MaxNP+1)*(MaxNP+2)/2)
 C
 C     QFMM DERIVATIVE WRT X DIRECTION
 C
@@ -7387,8 +7401,9 @@ C*MODULE QFMM    *DECK FYDER
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
       COMPLEX*16 YP, ZP, SUMXA,SUMXB
-      PARAMETER (TWO=2.0D+00)
-      DIMENSION CLM(-NP:NP),ZP((NP+1)*(NP+2)/2),YP((NP+1)*(NP+2)/2)
+      PARAMETER (TWO=2.0D+00,MaxNp=45)
+      DIMENSION CLM(-NP:NP),ZP((MaxNP+1)*(MaxNP+2)/2),
+     *          YP((MaxNP+1)*(MaxNP+2)/2)
 C
 C     QFMM DERIVATIVE WRT Y DIRECTION
 C
@@ -7479,8 +7494,9 @@ C*MODULE QFMM    *DECK FPDER
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
       COMPLEX*16 YP, ZP
-      PARAMETER (TWO=2.0D+00)
-      DIMENSION ZP((NP+1)*(NP+2)/2),YP((NP+1)*(NP+2)/2)
+      PARAMETER (TWO=2.0D+00,MaxNp=45)
+      DIMENSION ZP((MaxNP+1)*(MaxNP+2)/2),
+     *          YP((MaxNP+1)*(MaxNP+2)/2)
 C
       SUM=0.0D+00
       SUB=0.0D+00

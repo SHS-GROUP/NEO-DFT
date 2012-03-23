@@ -1,3 +1,5 @@
+C 23 MAR 12 - CHC,DGF - MD improvements and PAD commons
+C 29 Dec 11 - CHC - Add SSBP and umbrellla sampling technique
 C 28 DEc 11 - DGF - PAD COMMONS FOR FMO 4.2
 C 15 Apr 11 - TN  - changes for the FMO analytic gradient
 C 15 Apr 11 - YK  - MDPRTCORVEL: correct printing EFCENT/TORQ
@@ -28,8 +30,9 @@ C
 C
       PARAMETER (MXATM=2000, MXFRG=1050,
      *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
-      PARAMETER (NBIN=1000, MAXRDF=100, MXPAIR=50)
+      PARAMETER (NBIN=1000, MAXRDF=100, MXPAIR=50,NRepca=100)
       PARAMETER (ZERO=0.0D+00)
+      PARAMETER (PI=3.14159265358979323D+00)
 C
       CHARACTER*6 FRGNAM, FRAG1, FRAG2
       CHARACTER*8 PTNAM, RDFNAME
@@ -37,10 +40,11 @@ C
       LOGICAL READ,NVT,MBT,MBR,QRAND,RSRAND,RSTEMP,PBCOUT,PROD,
      *        PBCWRI,IWATER,LVELSET,AXEQ,NVTP,OK,
      *        PRESSR,DIFUSN,DIPOLEP,HTVAP,COORDN,RRELAX,HBLFE,
-     *        GOPARR,DSKWRK,MASWRK
+     *        GOPARR,DSKWRK,MASWRK,ssbp,usamp
       LOGICAL LSCZVFLG
+      logical ISGDDI,PAROUT,INITGDDI,wasgddi
 C
-      DOUBLE PRECISION MD,MDTYP,MDINT
+      DOUBLE PRECISION MD,MDTYP, MDINT
       INTEGER TYPMD,RNDSTEP
 C
 C        next group used only in this routine, to hold input values
@@ -48,6 +52,8 @@ C        next group used only in this routine, to hold input values
      *          QUAT(4,MXFRG), QUAT1D(4,MXFRG), QUAT2D(4,MXFRG),
      *          RMOM(3,MXFRG)
 C
+      COMMON /GDDI/   ISCOPE,NGROUPS,MYGROUP,MEGLOB,npglob,nnglob,JBTYP,
+     *                ISGDDI,PAROUT,INITGDDI,wasgddi
       COMMON /ATMDAT/ VX(MXFRG), VY(MXFRG), VZ(MXFRG),
      *                QW(MXFRG), QX(MXFRG), QY(MXFRG), QZ(MXFRG),
      *                OX(MXFRG), OY(MXFRG), OZ(MXFRG), QW1(MXFRG),
@@ -77,7 +83,8 @@ C
      *                LIODCFMO,LJOB2GRP,LFMOPG,LEMOCDR,LUNTXYZ,LUNTROT,
      *                LSTONEP,LMAPSU,LFRGMUL,LCLMO,LIALMO,LINDLMO,
      *                LATCLMO,LLMOBDF,LFGFLMO,LNFGLMO,LLFGLMO,LPFGLMO,
-     *                LPOPDMAT,LIDMPNT,LIDDPNT,LIVMPNT,LIACTFG,lcrfrg
+     *                LPOPDMAT,LIDMPNT,LIDDPNT,LIVMPNT,LIACTFG,lcrfrg,
+     *                lzlmfrgv
       COMMON /FRAGMT/ XCRD(50,MXFRG),YCRD(50,MXFRG),ZCRD(50,MXFRG),
      *                PTNAM(50,MXFRG),FRGNAM(MXFRG)
       COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
@@ -93,7 +100,7 @@ C
      *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
       COMMON /MACHIN/ NWDVAR,MAXFM,MAXSM,LIMFM,LIMSM
-      COMMON /MDSIM / DT, BATHT, EKINT, EKINR, MDTYP
+      COMMON /MDSIM / DT, BATHTmp, EKINT, EKINR, MDTYP
       COMMON /MDSIM2/ READ
       COMMON /MDSIM3/ NVT,NVTP
       COMMON /MDSIM4/ NSTEPS
@@ -112,9 +119,20 @@ C
      *                AXEQ, INFO_AXEQ(2),NFRG_RDF(MAXRDF,2)
       COMMON /NOSEHO/ GNH(2),VNH(2),XNH(2),QNH(2),EKT0,GFREE0,NVTNH
       COMMON /SCZVEC/ IDFZVEC,LIPTZVEC,LIPTLG
+      common /cstpot/ DROFF,SFORCE,Usamp,uforce(10),rzero(10),dtemp,
+     *                Tmin,uV,batht(NRepca),mdint,ipair(30),iustyp,ncst,
+     *                nrand,nvtoff,jevery,kevery,levery,mremd,
+     *                SSBP,rstemp,rsrand,prod
+c
+      dimension Repca_E(NRepca), Repca_T(NRepca),MyAccept(NRepca),
+     *          MyTPos(NRepca)
+CHC
+      Integer ddi_world,ddi_group
+      Parameter(ddi_world=0,ddi_group=1)
+CHC
 C
 C         set up $MD namelist simulation
-      PARAMETER (NNAM=29)
+      PARAMETER (NNAM=39)
       DIMENSION QNAM(NNAM),KQNAM(NNAM)
       DATA MD/8HMD      /
       DATA QNAM /8HMDINT   ,8HNSTEPS  ,8HTTOTAL  ,8HBATHT   ,
@@ -123,16 +141,20 @@ C         set up $MD namelist simulation
      *           8HREAD    ,8HMBT     ,8HMBR     ,8HQRAND   ,
      *           8HPROD    ,8HPBCOUT  ,8HNVTOFF  ,8HNVTNH   ,
      *           8HTVELQM  ,8HTVEL    ,8HRMOM    ,8HRVEL    ,
-     *           8HQUAT    ,8HQUAT1D  ,8HQUAT2D  ,
-     *           8HNPROP   ,8HNVTP    /
-      DATA KQNAM/5, 1, 3, 3,
+     *           8HQUAT    ,8HQUAT1D  ,8HQUAT2D  ,8HNPROP   ,
+     *           8HNVTP    ,8HSSBP    ,8HDROFF   ,8HSFORCE  ,
+     *           8HUSAMP   ,8HIPAIR   ,8HUFORCE  ,8HRZERO   ,
+     *           8HIUSTYP  ,8HLEVERY  ,8HMREMD   /
+      DATA KQNAM/5, 1, 3, 1003,
      *           3, 3, 1, 1,
      *           0, 3, 0, 1,
      *           0, 0, 0, 0,
      *           0, 0, 1, 1,
      *           -3, -3, -3, -3,
-     *           -3, -3, -3,
-     *           1, 0/
+     *           -3, -3, -3,  1,
+     *           0, 0, 3, 3,
+     *           0, 301, 103, 103,
+     *           1, 1, 1/
 C
       DATA EFP,ABINIT /8HEFP     ,8HABINIT  /
       DATA FROG,VVERL,VVERLET /8HFROG    ,8HVVERL   ,8HVVERLET /
@@ -144,8 +166,30 @@ C         Heather Netzloff, up to 2005 when included in GAMESS
 C             Soohaeng Yoo, 2007-2008
 C    (DRIVER CODE BORROWED HEAVILY FROM GRANT MERRILL)
 C   property calculations due to Lyuda Slipchenko and Jon Mullin
+C         REMD Extention by Cheol Ho Choi, 2012
 C**********************************************************************
 C
+c     Initial REMD setup
+c
+      IEOREMD=1
+      IExchCnt=0
+c     Temperature exchange at LEVERY steps.
+      LEVERY=1000
+cc      if(isgddi) call gddi_scope(ddi_group)
+c     Repca_Factor = J/Eh *1/kB
+      Repca_Factor=4.35974434d-18/1.3806504d-23
+c     MREMD : Set REMD Type
+c     MREMD = 0  : no REMD
+c     MREMD = 1  : 1 Dimension REMD
+c     MREMD = 2  : 2 Dimension REMD
+      MREMD = 0
+c     MyRepca
+      do i=1,NRepca
+         MyTPos(i)=i
+      enddo
+      iseed=7234567
+c
+CHC
       NQMMM = NQMMMATOMS()
       IF(NQMMM.GT.0) THEN
          IF(MASWRK) WRITE(IW,5070)
@@ -173,6 +217,9 @@ C        coordinates, velocities, energies
 C
       IPTRAJ = 4
       CALL SEQOPN( IPTRAJ, 'TRAJECT', 'NEW', .FALSE., 'FORMATTED')
+c     REMD FILE
+      IPREMD=44
+      CALL SEQOPN( IPREMD, 'REMD', 'NEW', .FALSE., 'FORMATTED')
 C
 C  Insert another parameter into input: septol = separation
 C  tolerance between atoms of different molecules--used in
@@ -191,8 +238,15 @@ C       total time completed in previous MD runs, units=seconds
 C       output frequency
       JEVERY = 10
       KEVERY = 100
+c
 C       bath temperature, for possible NVT (also used by MBR/MBT flag)
-      BATHT = 300.00D+00
+c       Now for REMD, we should have multiple temperatures.
+c
+chc
+      do i=1,100
+         batht(i)=300.00d+00
+      enddo
+c      BATHT = 300.00D+00
 C       velocities set in random directions, to BATHT
       RSRAND = .FALSE.
       NRAND = 1000
@@ -218,6 +272,24 @@ C       final output if PBC is used.
 C       these two relate to RDF data collection
       PROD    = .FALSE.
       DELR = 0.02D+00
+c
+c     SSBP Option
+c     SSBP stands for Spherical Solvent Boundary Potential and the SSBP
+c     potential corresponds to a constant temperature and constant pressure
+c     system.
+      ssbp=.false.
+      droff=1.0D+10
+      sforce=0
+c     Umbrella sampling options.
+      usamp=.false.
+      iustyp=0
+      do i=1,10
+         uforce(i)=0
+         ipair(3*i-2)=0
+         ipair(3*i-1)=0
+         ipair(3*i)=0
+         rzero(i)=0
+      enddo
 C
 C       zero out initial velocity data items, set their dimensions
       IBASE=20
@@ -249,8 +321,8 @@ C
      *            RSTEMP,DTEMP,RSRAND,NRAND,
      *            READ,MBT,MBR,QRAND,  PROD,PBCOUT,NVTOFF,NVTNH,
      *            TVELQM,TVEL,RMOM,RVEL,QUAT,QUAT1D,QUAT2D,
-     *            NPROP,NVTP,
-     *            0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,
+     *            NPROP,NVTP,SSBP,DROFF,sforce,usamp,ipair,uforce,
+     *            rzero,iustyp,LEVERY,mremd, 0,0,0,0,0,
      *            0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0)
       IF ( IRET .EQ. 1 .OR. IRET .EQ. 2 ) THEN
          IF(MASWRK) WRITE(IW,*) 'ERROR READING $MD GROUP'
@@ -266,6 +338,40 @@ C
             NVTNH=0
          END IF
       END IF
+c
+c     For REMD
+c     We use GDDI for REMD. Therefore, if ngroups.le.1, we do
+c     regular MD.
+c     Also current REMD is only for NVT runs, 
+c     so IF NVTNH is not 2, abort.
+c     Also we override JEVERY, if JEVERY.gt.LEVERY. 
+c
+      if(isgddi.and.mremd.ne.0) call gddi_scope(ddi_group)
+      Tmin=batht(1)
+      if(isgddi.and.mremd.ne.0) then
+         if (NVTNH.ne.2) then
+            if (maswrk) then
+            WRITE(IW,*)
+            WRITE(IW,*)'ERROR! Current REMD only supports NVT.'
+            WRITE(IW,*)
+            endif
+            CALL ABRT
+         endif
+         if (Ngroups.gt.Nrepca) then
+            if (maswrk) then
+            WRITE(IW,*)
+            WRITE(IW,*)'ERROR! Your ngroups is greater than Nrepca.'
+            WRITE(IW,*)
+            endif
+            CALL ABRT
+         endif
+         bathtmp=batht(mygroup+1)
+c        We override JEVERY, if JEVERY.gt.LEVERY
+         if (JEVERY.gt.LEVERY) JEVERY=LEVERY
+      else
+         bathtmp=batht(1)
+         Levery=nsteps
+      endif
 C
       NERR = 0
 C
@@ -314,15 +420,64 @@ C
 C        *** output $md variable values ***
 C
       IF (MASWRK) THEN
-         WRITE(IW,6000) MDINT, NVTNH, DT, NSTEPS, TTOTAL, BATHT,
+         if (isgddi.and.mremd.ne.0) then
+         WRITE(IW,6100) MDINT, NVTNH, DT, NSTEPS, TTOTAL,
+     *                  JEVERY, KEVERY,LEVERY,
+     *                  READ, MBT, MBR, QRAND, PROD, DELR, PBCOUT,
+     *                  NVTOFF, NPROP,ssbp,sforce,droff,usamp,
+     *                  uforce(1),uforce(2),uforce(3),uforce(4),
+     *                  iustyp,rzero(1),rzero(2),rzero(3),rzero(4)
+         WRITE(IW,6101) 
+         do i=1,ngroups
+            WRITE(IW,6102) i,batht(i)
+         enddo
+            WRITE(IW,*) '  '
+            WRITE(IW,*) '        Replica Exchange MD is turned on...'
+            WRITE(IW,*) '  '
+         else
+         WRITE(IW,6000) MDINT, NVTNH, DT, NSTEPS, TTOTAL, BATHTmp,
      *                  JEVERY, KEVERY,
      *                  READ, MBT, MBR, QRAND, PROD, DELR, PBCOUT,
-     *                  NVTOFF, NPROP
+     *                  NVTOFF, NPROP,ssbp,sforce,droff,usamp,
+     *                  uforce(1),uforce(2),uforce(3),uforce(4),
+     *                  iustyp,rzero(1),rzero(2),rzero(3),rzero(4)
+         endif
          IF(RSTEMP) WRITE(IW,6001) RSTEMP, DTEMP
          IF(RSRAND) WRITE(IW,6002) RSRAND, NRAND
          IF(.NOT.RSTEMP .AND. .NOT.RSRAND) WRITE(IW,6003)
          WRITE(IW,6010) NAT, NFRG
       ENDIF
+c
+      if (ssbp) then
+c
+c        force constant : kcal/mol-A^2 to Eh/Bohr^2
+c        distance : Angstrom to Bohr
+c
+         droff=droff/au2ang
+         sforce=sforce*au2ang**2/au2kcal
+      endif
+      if (usamp) then
+         ncst=0
+         if (iustyp.eq.0) then
+            do while (uforce(ncst+1).gt.0)
+               ncst=ncst+1
+               uforce(ncst)=uforce(ncst)*au2ang**2/au2kcal
+               rzero(ncst)=rzero(ncst)/au2ang
+            enddo
+         elseif (iustyp.eq.1) then
+            do while (ipair(3*(ncst+1)).gt.0)
+               ncst=ncst+1
+               uforce(ncst)=uforce(ncst)*au2ang**2/au2kcal
+               rzero(ncst)=rzero(ncst)/au2ang
+            enddo
+         elseif (iustyp.eq.3) then
+            do while (ipair(4*(ncst+1)).gt.0)
+               ncst=ncst+1
+               uforce(ncst)=uforce(ncst)/au2kcal
+               rzero(ncst)=rzero(ncst)*pi/180.0d+00
+            enddo
+         endif
+      endif
 C
       CALL MDNOSEINIT
 C
@@ -436,14 +591,14 @@ C
 C         ...otherwise we must generate initial conditions
 C         random Maxwell/Boltzmann trans. vel. distribution, or zero
             IF(MBT) THEN
-               CALL NORMT(BATHT,NAT,XX(LSET),LENSET)
+               CALL NORMT(BATHTmp,NAT,XX(LSET),LENSET)
             ELSE
                CALL CLRTVE(NAT,NFRG)
             ENDIF
 C
 C         random Maxwell/Boltzmann   rot. vel. distribution, or zero
             IF(MBR) THEN
-               CALL NORMW(BATHT,XX(LSET),LENSET)
+               CALL NORMW(BATHTmp,XX(LSET),LENSET)
             ELSE
                CALL CLRVEL(NFRG)
             ENDIF
@@ -477,7 +632,7 @@ C
          ELSE
 C              next call is repetive and redundant if NFRG>0,
 C              but invoke it anyway, in case this is a purely QM run.
-            IF(MBT) CALL NORMT(BATHT,NAT,XX(LSET),LENSET)
+            IF(MBT) CALL NORMT(BATHTmp,NAT,XX(LSET),LENSET)
          ENDIF
       ENDIF
 C
@@ -488,7 +643,9 @@ C
       IF(MASWRK) THEN
          WRITE(IW,7010) E
          WRITE(IW,7020) E*AU2KCAL
-         CALL MDPRTCORVEL(0,TTOTAL,INTMD)
+         if ((isgddi.and.mremd.ne.0).and.(bathtmp.eq.tmin)) 
+     *       CALL MDPRTCORVEL(0,TTOTAL,INTMD,ipremd)
+         CALL MDPRTCORVEL(0,TTOTAL,INTMD,iptraj)
          IF(TYPMD.EQ.1) THEN
             CALL MDRPREF(0,TTOTAL,JEVERY)
          ELSE
@@ -497,6 +654,7 @@ C
          CALL TIMIT(1)
       ENDIF
 C
+      LT = 1
       JT = 1
       KT = 1
       RNDSTEP=1
@@ -507,12 +665,15 @@ C
       CALL MDKIN
 C
 C          ekint = half * ek2kcal * totmas * ekint
+c     Ekint : Kinetic energy
+c
       EKINT = EK2KCAL * EKINT
       EKINR = EK2KCAL * EKINR
 C
 C          main loop, computing NSTEPS points on the MD trajectory
 C       note that ISTEP does not include the previous trajectory runs!
 C
+c
       DO 2000 ISTEP=1,NSTEPS
         TTOTAL = TTOTAL + DT
 C
@@ -553,6 +714,123 @@ C
            IF(ISTEP.EQ.1.AND.NFRG.GT.0) CALL TORQMO
            CALL VVERMOVE(INTMD,ISTEP,NPROP)
         ENDIF
+c
+c----------------------------------------------------------------------
+c                  QM/EFP-REMD(Replica-Exchange MD)
+c
+c                       Cheol Ho Choi, 2012
+c----------------------------------------------------------------------
+c     If (ngroups.gt.1) we are doing REMD.
+c     If it is not, we set LEVERY=NSTEPS.
+c     If (LEVERY.eq.NSTEPS), we don't do REMD.
+c     So if you want to turn on the REMD, you should have at least two groups
+c     of GDDI and set proper LEVERY.
+c     Default LEVERY=1000. However, if (ngroups.le.1) LEVERY=NSTEPS.
+c
+c     We First need to go to the world, then exchange temperatures
+c     if conditions are met. Then we come back to groups.
+c
+      if ((lt.eq.LEVERY).and.(isgddi.and.mremd.ne.0)) then
+         IexchCnt=IexchCnt+1
+c        From now on, we are doing REMD by exchanging Temperature.
+C        Also one should know current REMD is only for NVT runs!
+c        Put My group's Energy and Temperature to arrays.
+         call vclr(Repca_E,1,Ngroups)
+         call vclr(Repca_T,1,Ngroups)
+         do i=1,ngroups 
+            MyAccept(i)=0
+         enddo
+         Repca_E(mygroup+1)=E/nproc
+         Repca_T(mygroup+1)=Bathtmp/nproc
+c        Then we go to the world.
+         call gddi_scope(ddi_world)
+         call ddi_gsumf(3000,Repca_E,ngroups)
+         call ddi_gsumf(3001,Repca_T,ngroups)
+c
+c        Now we compute exp(-Repca_D)
+c
+         do iexch=1,ngroups/2
+c          We have to make sure randoms are syncronized across
+c          all nodes.
+           call ranbs(iseed,Repca_rand)
+           if (ieoremd.eq.1) then
+              mT=iexch*2-1
+              nT=iexch*2
+              mR=MyTPos(mT)
+              nR=MyTPos(nT)
+           else
+              mT=iexch*2
+              if (iexch.eq.ngroups/2) then 
+                 nT=1
+              else
+                 nT=iexch*2+1
+              endif
+              mR=MyTPos(mT)
+              nR=MyTPos(nT)
+           endif 
+c          The condition.
+           Repca_D=Repca_Factor
+     *         *(1/Repca_T(nR)-1/Repca_T(mR))
+     *         *(  Repca_E(mR) - Repca_E(nR))
+c       write(IW,*) 'me,mygroup,exp(-D),Rand',mygroup,
+c     *  exp(-Repca_D),Repca_rand
+c
+           if (Repca_D.le.0) then
+              Myaccept(mR)=nR
+              Myaccept(nR)=mR
+              MyTPos(mT)=nR
+              MyTPos(nT)=mR
+           else
+c              Rep_crit=exp(-Repca_D)
+              if (exp(-Repca_D).gt.Repca_rand) then
+                 Myaccept(mR)=nR
+                 Myaccept(nR)=mR
+                 MyTPos(mT)=nR
+                 MyTPos(nT)=mR
+              endif
+           endif
+c
+         enddo
+         IEOREMD=-ieoremd
+c
+c        Print out the exchange results.
+c
+         write(iw,8000) IexchCnt
+         NExch=0
+         do i=1,ngroups
+           if (MyAccept(i).ne.0) then 
+              Write(iw,8100) i,Repca_E(i),Repca_T(i),
+     *          Repca_T(MyAccept(i))
+           elseif (MyAccept(i).eq.0) then 
+              Write(iw,8100) i,Repca_E(i),Repca_T(i),
+     *          Repca_T(i)
+           endif
+           if (Myaccept(i).ne.0) NExch=NExch+1
+         enddo
+         write(IW,8110) real(NExch)/real(ngroups)*100
+c
+c        Now MyAccept has the exchange information!
+c        We go back to group now.
+c
+         call gddi_scope(ddi_group)
+c
+c        Before exit, we should do temperature exchange and rescaling
+c
+         if (Myaccept(mygroup+1).gt.0) then 
+             T_New=Repca_T(MyAccept(mygroup+1))
+c            We rescale the valocity.
+             CALL REMD_V_RESCALE(T_new)
+c            Set new EKT0 and BathTmp
+             EKT0 = 1.987216D-03 * T_New / EK2KCAL
+             BATHTmp=T_New
+         endif
+         lt=0
+      endif
+c
+      Lt=lt+1
+c----------------------------------------------------------------------
+c                              End of REMD 
+c----------------------------------------------------------------------
 C
 C       next comes two types of output, JEVERY and KEVERY.
 C
@@ -602,7 +880,9 @@ C        ***    output g(r)s         ***
 C
         IF (KT.EQ.KEVERY) THEN
 C        output md configurations, velocities, grad, torq, com
-           CALL MDPRTCORVEL(ISTEP,TTOTAL,INTMD)
+           if ((isgddi.and.mremd.ne.0).and.(bathtmp.eq.tmin)) 
+     *         CALL MDPRTCORVEL(ISTEP,TTOTAL,INTMD,ipremd)
+           CALL MDPRTCORVEL(ISTEP,TTOTAL,INTMD,iptraj)
            IF(PROD) THEN
               IF (IWATER) CALL WRIGR
               IF (NRDF.GT.0) CALL WRIG2GR
@@ -622,8 +902,8 @@ C
         IF (RSRAND) THEN
            IF (RNDSTEP.EQ.NRAND) THEN
               IF(MASWRK) WRITE(IW,7040) ISTEP
-              CALL NORMT(BATHT,NAT,XX(LSET),LENSET)
-              CALL NORMW(BATHT,XX(LSET),LENSET)
+              CALL NORMT(BATHTmp,NAT,XX(LSET),LENSET)
+              CALL NORMW(BATHTmp,XX(LSET),LENSET)
               CALL EU2QUT
               CALL INQDOT
               RNDSTEP=0
@@ -638,8 +918,8 @@ C
         IF(RSTEMP) THEN
            EKIN=EKINT+EKINR
            TEMPT=TEMPMD(EKIN)
-           LVELSET = TEMPT .GT. BATHT+DTEMP .OR.
-     *               TEMPT .LT. BATHT-DTEMP
+           LVELSET = TEMPT .GT. BATHTmp+DTEMP .OR.
+     *               TEMPT .LT. BATHTmp-DTEMP
            IF (ISTEP.EQ.1) THEN
               IF(READ) THEN
                  IF(MASWRK) WRITE(IW,7051)
@@ -667,6 +947,7 @@ C
 C
       IF(MASWRK) WRITE(IW,9010)
       CALL TIMIT(1)
+      if(isgddi.and.mremd.ne.0) call gddi_scope(ddi_world)
       RETURN
 C
 C          error messages for input variables
@@ -694,7 +975,10 @@ C          printing of options selected
      *        5X,'READ  = ',L8/
      *        5X,'MBT   = ',L8,9X,'MBR   =',L8,9X,'QRAND =',L8/
      *        5X,'PROD  = ',L8,9X,'DELR  =',F8.2,9X,'PBCOUT=',L8/
-     *        5X,'NVTOFF= ',I8,9X,'NPROP =',I8)
+     *        5X,'NVTOFF= ',I8,9X,'NPROP =',I8/
+     *        5X,'SSBP  = ',L8,9X,'SForce=',F8.2,9X,'DROFF =',F8.2/
+     *        5X,'USAMP = ',L8,9X,'UForce=',4F8.2/
+     *        5X,'IUSTYP= ',I8,9X,'Rzero =',4F8.2)
  6001 FORMAT(5X,'TEMPERATURE RANGE NVT ENSEMBLE CHOSEN: RSTEMP=',L2,
      *          ', DTEMP=',F8.2,' DEGREES')
  6002 FORMAT(5X,'RANDOM NVT ENSEMBLE CHOSEN: RSRAND=',L2,
@@ -702,6 +986,23 @@ C          printing of options selected
  6003 FORMAT(5X,'NVE ENSEMBLE CHOSEN')
  6010 FORMAT(5X,'THIS MD SIMULATION HAS ',I5,' QM ATOMS, AND',
      *       I5,' EFFECTIVE FRAGMENTS')
+ 6100 FORMAT(/10X,'$MD INPUT OPTIONS'/10X,17('-')/
+     *        5X,'MDINT = ',A8,9X,'NVTNH =',I8/
+     *        5X,'DT    = ',1P,E8.2,0P,9X,'NSTEPS=',I8,
+     *            9X,'TTOTAL=',1P,E12.2,0P,' SEC.'/
+     *        5X,'JEVERY= ',I8,9X,'KEVERY=',I8,9x,'LEVERY=',I8/
+     *        5X,'READ  = ',L8/
+     *        5X,'MBT   = ',L8,9X,'MBR   =',L8,9X,'QRAND =',L8/
+     *        5X,'PROD  = ',L8,9X,'DELR  =',F8.2,9X,'PBCOUT=',L8/
+     *        5X,'NVTOFF= ',I8,9X,'NPROP =',I8/
+     *        5X,'SSBP  = ',L8,9X,'SForce=',F8.2,9X,'DROFF =',F8.2/
+     *        5X,'USAMP = ',L8,9X,'UForce=',4F8.2/
+     *        5X,'IUSTYP= ',I8,9X,'Rzero =',4F8.2/)
+ 6101 FORMAT(10X,'*** Replica-Exchange MD Stats ***'/
+     *       10x,'---------------------------------'/
+     *       10x,'     Replica     Temperature     '/
+     *       10x,'---------------------------------')
+ 6102 FORMAT(13X,I5,7X,F10.2,' K')
 C
  7010 FORMAT(5X,'INITIAL POTENTIAL ENERGY = ',F18.10,' AU')
  7020 FORMAT(5X,'INITIAL POTENTIAL ENERGY = ',F18.10,' KCAL/MOL',/)
@@ -712,6 +1013,12 @@ C
  7050 FORMAT(1X,'*** RESCALING VELOCITIES AFTER MD STEP NO.',I8,' ***')
  7051 FORMAT(1X,'*** RESTARTING WITH UN-RESCALED VELOCITIES ***')
  7070 FORMAT(5X,A,F10.2)
+ 8000 FORMAT(5X,'******** Replica Temperature Exchange Results *******'/
+     *       5x,'      The number of Replica Exchanges = ',I5/
+     *       5x,' Replica      Energy      Before       After (Kelvin)'/
+     *       5x,'-----------------------------------------------------')
+ 8100 FORMAT(8X,I5,3X,F11.6,3x,F7.2,2x,'--->',2x,F7.2)
+ 8110 FORMAT(/12X,'REMD Exchange Ratio(%) = ',F7.2/)
 C
  9010 FORMAT(1X,'.... DONE WITH THIS PORTION OF THE MD TRAJECTORY ....')
       END
@@ -743,8 +1050,16 @@ C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
       PARAMETER (MXATM=2000)
+      PARAMETER (PI=3.14159265358979323D+00)
       PARAMETER (MXFGPT=12000, MXFRG=1050,
      *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+      PARAMETER (NRepca=100)
+      double precision mdint
+      logical ssbp,usamp,rstemp,rsrand,prod
+      LOGICAL GOPARR, DSKWRK, MASWRK
+      logical ISGDDI,PAROUT,INITGDDI, ISGDDIs,wasgddi,wasgddis
+      dimension uvec(3),rij(3,30)
+      dimension rijkl(3,4), gijkl(3,4)
 C
       COMMON /CONVMD/ AU2KCAL, EK2KCAL, AU2ANG, AU2SEC, AU2AMU, EK2BAR
       COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
@@ -756,10 +1071,19 @@ C
      *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
       COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
       COMMON /FUNCT / E, EG(3*MXATM)
+      COMMON /GDDI/   ISCOPE,NGROUPS,MYGROUP,MEGLOB,npglob,nnglob,JBTYP,
+     *                ISGDDI,PAROUT,INITGDDI,wasgddi
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
      *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
       COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
       COMMON /VIRPR / VIR(3), PRXX, PRYY, PRZZ
+      common /cstpot/ DROFF,SFORCE,Usamp,uforce(10),rzero(10),dtemp,
+     *                Tmin,uV,batht(NRepca),mdint,ipair(30),iustyp,ncst,
+     *                nrand,nvtoff,jevery,kevery,levery,mremd,
+     *                SSBP,rstemp,rsrand,prod
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /EFPOTD/ METHPOL,INABIO,MOVE,nfrag
       DATA GRDKWD/8HGRADIENT/
 C
 C        ***************************************
@@ -770,7 +1094,16 @@ C     CALL GRADX
       IF (NFG.NE.0) THEN
         RUNTYPS = RUNTYP
         RUNTYP  = GRDKWD
+        isgddis = isgddi
+        wasgddis = wasgddi
+        if(mremd.ne.0.and.isgddi) then
+          isgddi = .false.
+          wasgddi = .true.
+        endif
+c       pretend no GDDI for FMO/REMD.
         CALL FMOX(1)
+        isgddi = isgddis
+        wasgddi= wasgddis
         RUNTYP  = RUNTYPS
       ELSE
         CALL GRADX
@@ -780,6 +1113,138 @@ C
       DO I = 1, NAT*3
          EG(I) = EG(I)*F2F
       ENDDO
+
+c
+c     Constraining quantum atoms for umbrella sampling.
+c     iustyp = 0 : Normal constraining for upto 2 bonds
+c     iustyp = 1 : Asymmetric coordinate requires three values in ipair
+c     iustyp = 3 : Torsional constrain.
+c
+      uV=0.0d+00
+c
+      if (Usamp) then
+        if (maswrk) write(iw,1500)
+        if (iustyp.eq.1) then
+c          This section is for umbrella sampling of atom shift reaction.
+c          atom 1 is moving from atom 2 to 3.
+c          We adopt the asymmetric stretching coordinates of
+c
+           rasym=0
+           sqrt21=1/sqrt(ncst*2.0D+00)
+           do i=1,ncst
+              ia1=ipair(3*i-2)
+              ia2=ipair(3*i-1)
+              ia3=ipair(3*i)
+              r21=0
+              r31=0
+              do j=1,3
+                 rij(j,2*i-1)=c(j,ia2)-c(j,ia1)
+                 rij(j,2*i)=c(j,ia3)-c(j,ia1)
+                 r21=r21+rij(j,2*i-1)**2
+                 r31=r31+rij(j,2*i)**2
+              enddo
+c
+              r21=sqrt(r21)
+              r31=sqrt(r31)
+              if (maswrk) write(iw,2001) ia1,ia2,ia3,
+     *           r21*au2ang,r31*au2ang
+              rasym=rasym+r21-r31
+              do j=1,3
+                 rij(j,2*i-1)=rij(j,2*i-1)/r21
+                 rij(j,2*i)=rij(j,2*i)/r31
+              enddo
+           enddo
+           rasym=rasym*sqrt21
+c          construct (rasym-rzero), and ufactor
+           do i=1,ncst
+              if (uforce(i).ne.0) then
+                 rdisp=rasym-rzero(i)
+                 ufactor=uforce(i)*f2f*rdisp
+                 uV=uV+uforce(i)*rdisp**2/2
+              else
+                 rdisp=rasym-rzero(1)
+                 ufactor=uforce(1)*f2f*rdisp
+                 uV=uV+uforce(i)*rdisp**2/2
+              endif
+c             applying constraints
+              ia1=3*(ipair(3*i-2)-1)
+              ia2=3*(ipair(3*i-1)-1)
+              ia3=3*(ipair(3*i)-1)
+c
+              do j=1,3
+                 eg(ia1+j)=eg(ia1+j)+ufactor*(rij(j,2*i)-rij(j,2*1-1))
+                 eg(ia2+j)=eg(ia2+j)+ufactor*rij(j,2*i-1)
+                 eg(ia3+j)=eg(ia3+j)-ufactor*rij(j,2*i)
+              enddo
+           enddo
+c
+           if (maswrk) write(iw,2002) rasym*au2ang
+c       Bond constraints
+        elseif (iustyp.eq.0) then
+           do icst=1,ncst
+              uvecn=0
+              do i=1,3
+                 uvec(i)=c(i,ipair(icst*2))-c(i,ipair(icst*2-1))
+                 uvecn=uvecn+uvec(i)**2
+              enddo
+c
+              vecn=sqrt(uvecn)
+              rdisp=vecn-rzero(icst)
+              ufactor=-uforce(icst)*rdisp*f2f/vecn
+              uV=uV+uforce(icst)*rdisp**2/2
+c
+              do i=1,3
+                 uvec(i)=ufactor*uvec(i)
+              enddo
+c
+              i1=3*(ipair(icst*2-1)-1)
+              i2=3*(ipair(icst*2)-1)
+c
+              do i=1,3
+                 eg(i1+i)=eg(i1+i)+uvec(i)
+                 eg(i2+i)=eg(i2+i)-uvec(i)
+              enddo
+              if (maswrk) write(iw,2000) ipair(2*icst-1),ipair(2*icst)
+     *           ,vecn*au2ang
+           enddo
+c
+c       Torsional constraint
+c       Journal of Computational Chemistry, Vol. 17, No. 9, 1132-1141 (1996)
+c
+        elseif (iustyp.eq.3) then
+           do icst=1,ncst
+              do i=1,3
+                 rijkl(i,1)=c(i,ipair(icst*4-3))
+                 rijkl(i,2)=c(i,ipair(icst*4-2))
+                 rijkl(i,3)=c(i,ipair(icst*4-1))
+                 rijkl(i,4)=c(i,ipair(icst*4))
+              enddo
+c
+              call csttor(rijkl,gijkl,theta)
+c
+              rdisp=theta-rzero(icst)
+              ufactor=uforce(icst)*rdisp*f2f
+              uV=uV+uforce(icst)*rdisp**2/2
+c
+              i1=3*(ipair(icst*4-3)-1)
+              i2=3*(ipair(icst*4-2)-1)
+              i3=3*(ipair(icst*4-1)-1)
+              i4=3*(ipair(icst*4)-1)
+c
+              do i=1,3
+                 eg(i1+i)=eg(i1+i)+ufactor*gijkl(i,1)
+                 eg(i2+i)=eg(i2+i)+ufactor*gijkl(i,2)
+                 eg(i3+i)=eg(i3+i)+ufactor*gijkl(i,3)
+                 eg(i4+i)=eg(i4+i)+ufactor*gijkl(i,4)
+              enddo
+              if (maswrk) write(iw,2003) theta*180.0d+00/pi
+           enddo
+c
+        endif
+c     Constraint Potential Energy in kcal/mol
+      uV=uV*au2kcal 
+c
+      endif
 C     a.u. ---> K
       VIR(1) = F2F*VIR(1)
       VIR(2) = F2F*VIR(2)
@@ -787,15 +1252,82 @@ C     a.u. ---> K
       IF(NFRG.EQ.0) RETURN
 C                   ******
 C
-      DO I = 1, NFRG
+      if (move.ne.0) then
+       DO I = 1, NFRG
          DEFT(1,I) = F2F * DEFT(1,I)
          DEFT(2,I) = F2F * DEFT(2,I)
          DEFT(3,I) = F2F * DEFT(3,I)
          TORQ(1,I) = F2F * TORQ(1,I)
          TORQ(2,I) = F2F * TORQ(2,I)
          TORQ(3,I) = F2F * TORQ(3,I)
-      ENDDO
+       ENDDO
+      else
+       DO I = 1, NFRG
+         DEFT(1,I) = 0
+         DEFT(2,I) = 0
+         DEFT(3,I) = 0
+         TORQ(1,I) = 0
+         TORQ(2,I) = 0
+         TORQ(3,I) = 0
+       ENDDO
+      endif
+c
+      if (ssbp) call cstssbp(f2f)
 C
+      RETURN
+c1000 format('QM Force     =',3e13.5)
+c1001 format('Usamp Force  =',3e13.5)
+ 1500 format(/5x,'Applying Umbrella Sampling Constraints ...')
+ 2000 format(5x,'Between Atoms',2i5/
+     *       ,5x,'Current Distance (Ang.) = ',F15.10)
+ 2001 format(5x,'Atoms',3i5/
+     *       ,5x,'R21= ',F15.10,5x,'R31=',F15.10)
+ 2002 format(5x,'Current Distance (Ang.) = ',F15.10)
+ 2003 format(5x,'Current Angle (Deg.) = ',F15.10)
+      END
+C*MODULE MDEFP   *DECK csttor
+      SUBROUTINE csttor(rijkl,gijkl,theta)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+c
+      dimension rijkl(3,4), gijkl(3,4)
+      dimension F(3),G(3),H(3),A(3),B(3)
+C
+      do i=1,3
+         F(i)=rijkl(i,1)-rijkl(i,2)
+         G(i)=rijkl(i,2)-rijkl(i,3)
+         H(i)=rijkl(i,4)-rijkl(i,3)
+      enddo
+      A(1)=F(2)*G(3)-F(3)*G(2) 
+      A(2)=F(3)*G(1)-F(1)*G(3) 
+      A(3)=F(1)*G(2)-F(2)*G(1) 
+      B(1)=H(2)*G(3)-H(3)*G(2) 
+      B(2)=H(3)*G(1)-H(1)*G(3) 
+      B(3)=H(1)*G(2)-H(2)*G(1) 
+c
+      FG=F(1)*G(1)+F(2)*G(2)+F(3)*G(3) 
+      HG=H(1)*G(1)+H(2)*G(2)+H(3)*G(3) 
+c     AB=A(1)*B(1)+A(2)*B(2)+A(3)*B(3) 
+      Gn=sqrt(G(1)**2+G(2)**2+G(3)**2)
+      As=A(1)**2+A(2)**2+A(3)**2
+      Bs=B(1)**2+B(2)**2+B(3)**2
+c
+      f1=Gn/As 
+      f2=FG/(As*Gn)
+      f3=HG/(Bs*Gn)
+      f4=Gn/Bs 
+c
+c      theta=acos(AB/(sqrt(As*Bs)))
+      FGH=-(F(1)*B(1)+F(2)*B(2)+F(3)*B(3))
+      FGGH=-(A(1)*B(1)+A(2)*B(2)+A(3)*B(3))
+      theta=atan2(Gn*FGH,-FGGH)
+c
+      do i=1,3
+         gijkl(i,1)=-f1*A(i)
+         gijkl(i,2)=(f1+f2)*A(i)-f3*B(i)
+         gijkl(i,3)=(f3-f4)*B(i)-f2*A(i)
+         gijkl(i,4)=f4*B(i)
+      enddo
+c
       RETURN
       END
 C*MODULE MDEFP   *DECK ENEDEF
@@ -805,9 +1337,15 @@ C       *** Calculate energy and forces                       ***
 C       *********************************************************
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
-      PARAMETER (MXFGPT=12000, MXFRG=1050,
+      PARAMETER (NRepca=100, MXFGPT=12000, MXFRG=1050,
      *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
 C
+      DOUBLE PRECISION MDINT
+      logical ssbp,usamp,rstemp,rsrand,prod
+      common /cstpot/ DROFF,SFORCE,Usamp,uforce(10),rzero(10),dtemp,
+     *                Tmin,uV,batht(NRepca),mdint,ipair(30),iustyp,ncst,
+     *                nrand,nvtoff,jevery,kevery,levery,mremd,
+     *                SSBP,rstemp,rsrand,prod
       COMMON /CONVMD/ AU2KCAL, EK2KCAL, AU2ANG, AU2SEC, AU2AMU, EK2BAR
       COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
      *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
@@ -834,6 +1372,8 @@ C
       VIR(1) = F2F*VIR(1)
       VIR(2) = F2F*VIR(2)
       VIR(3) = F2F*VIR(3)
+c
+      if (ssbp) call cstssbp(f2f)
 C
       RETURN
       END
@@ -1167,16 +1707,23 @@ C        *********************************************************
 C        *** setup convenient conversion factors for MD        ***
 C        *********************************************************
 C        conversion factors taken (where possible) from NIST 1986 values
+C     Hartree/Joule           = 4.3597443400E-18
+C     Boltzman Constant (J/K) = 1.3806488000E-23
+C     Kelvin/kcal/mol         = 1.9871700000E-03
+C     Bohr/Angstrom           = 0.52917721092
 C
       AU2KCAL = 4.359816D-18 / 1.380658D-23 * 1.98721984D-03
       AU2ANG = 0.52917724924D+00
       EK2KCAL = 2.39005738055577D-27 * AU2ANG * AU2ANG
       AU2SEC = 2.41889D-17
 C--hmn (au--kg--amu)
+C     Electron Rest Mass (me)   =9.1093826(16)E−31 kg
+C     Atomic Mass Constant (mu) =1.66053886E-27 kg
       AU2AMU = 9.1091D-31 / 1.6605402D-27
 C     PRESSURE = Eh/Bohr^3 = 2.942 D+13 Pa = 2.942 D+8 Bar
 C     1 BAR    = 1.0D5 PA  = 1.0D5 *  J/M^3
 C                          = 1.0D5 * 1.0D-30  J/A^3
+C     Au2J = Hartree/Joule
       AU2J   = 4.35974394D-18   ! A.U. ---> J
       AU2BAR = 1.0D-5 * AU2J/(AU2ANG*1.0D-10)**3   !  A.U. ---> BAR
 C     EK2KCAL/AU2KCAL : K ---> a.u.
@@ -3968,24 +4515,28 @@ C        *** report formats
       END
 C
 C*MODULE MDEFP   *DECK MDPRTCORVEL
-      SUBROUTINE MDPRTCORVEL(ISTEP,TTOTAL,INTMD)
+      SUBROUTINE MDPRTCORVEL(ISTEP,TTOTAL,INTMD,iptraj)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
-      PARAMETER (MXATM=2000, MXAO=8192,
+      PARAMETER (MXATM=2000, MXAO=8192, NRepca=100,
      *           MXFRG=1050, MXPT=2000, MXFGPT=12000,
      *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
       PARAMETER (ZERO=0.0D+00)
+      PARAMETER (NBIN=1000,MAXRDF=100)
 C
       DOUBLE PRECISION MDTYP
 C
       CHARACTER*6 FRGNAM
       CHARACTER*8 PTNAM,FRGNME,FRCNME
+      character*3 chrout
 C
       LOGICAL PBCOUT,PBCWRI
       LOGICAL GOPARR, DSKWRK, MASWRK
       LOGICAL IFRCPNT
-C
+      double precision mdint
+      logical ssbp,usamp,rstemp,rsrand,prod
+      logical ISGDDI,PAROUT,INITGDDI,wasgddi
       COMMON /ATMDAT/ VX(MXFRG), VY(MXFRG), VZ(MXFRG),
      *                QW(MXFRG), QX(MXFRG), QY(MXFRG), QZ(MXFRG),
      *                OX(MXFRG), OY(MXFRG), OZ(MXFRG), QW1(MXFRG),
@@ -4012,6 +4563,8 @@ C
       COMMON /FRGMSS/ FPMASS(MXPT),FMASS(MXFGPT),
      *                FPNUC(MXPT),FGNUC(MXFGPT)
       COMMON /FUNCT / E, EG(3*MXATM)
+      COMMON /GDDI/   ISCOPE,NGROUPS,MYGROUP,MEGLOB,npglob,nnglob,JBTYP,
+     *                ISGDDI,PAROUT,INITGDDI,wasgddi
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
      *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
       COMMON /IOFILE/ IR,IW,IP,IJK,IJKT,IDAF,NAV,IODA(950)
@@ -4023,12 +4576,21 @@ C
      *                EFDPPB(3,MXFGPT),CREPPB(3,MXFGPT)
       COMMON /PBC/    PBCOUT,PBCWRI
       COMMON /RUNLAB/ TITLE(10),ANAM(MXATM),BNAM(MXATM),BFLAB(MXAO)
+      COMMON /NOSEHO/ GNH(2),VNH(2),XNH(2),QNH(2),EKT0,GFREE0,NVTNH
+      common /cstpot/ DROFF,SFORCE,Usamp,uforce(10),rzero(10),dtemp,
+     *               Tmin,uV,abatht(NRepca),mdint,ipair(30),iustyp,ncst,
+     *                nrand,nvtoff,jevery,kevery,levery,mremd,
+     *                SSBP,rstemp,rsrand,prod
+      COMMON /GOFR  / GOFR(NBIN,3), GENFR(NBIN,MAXRDF), CCRDF(NBIN),
+     *                GEN2FR(NBIN,2),
+     *                DELR, NUMG, NUMSAM1,NUMSAM2,NUMSAM3
 C
 C        output particle coordinates and velocity information
 C                 used for QM, QM/EFP, or EFP runs
 C
       IF(.NOT.MASWRK) RETURN
-      IPTRAJ=4
+      IPREMD=44
+      if (iptraj.ne.ipremd) then
 C
 C        first section is printing particle coordinates to log file
 C
@@ -4078,6 +4640,8 @@ C
             KMASS=KMASS+NMPTS(I)
          ENDDO
       END IF
+c
+      endif
 C
 C        second section is coordinate output, to the trajectory file
 C
@@ -4086,7 +4650,7 @@ C
       ETOT = EPOT+EKIN
       NQMMM=0
       WRITE(IPTRAJ,2000) NAT,NFRG,NQMMM,1.0D+15*TTOTAL,ETOT,
-     *                  EPOT,EKIN,EKINT,EKINR
+     *                  EPOT,batht,EKIN,EKINT,EKINR
 C
       IF(NAT.GT.0) WRITE(IPTRAJ,2001)
       DO I=1,NAT
@@ -4097,6 +4661,7 @@ C
       IAT=0
       KMASS=0
       IF(NFRG.GT.0) WRITE(IPTRAJ,2002)
+      write(IPTRAJ,2012)
       DO I=1,NFRG
          WRITE(IPTRAJ,2020) FRGNAM(I),I
          DO III=1,NMPTS(I)
@@ -4107,6 +4672,8 @@ C
          END DO
          KMASS=KMASS+NMPTS(I)
       ENDDO
+c
+      write(IPTRAJ,2013)
 C
 C         third section is gradient data, to the trajectory file
 C     EFP gradient output is needed for EFP coarse graining.
@@ -4137,6 +4704,64 @@ C
 C         4th section is velocity restart data, to the trajectory file
 C
       WRITE(IPTRAJ,3000) TTOTAL
+      WRITE(IPTRAJ,3001) MDINT,DT,NVTNH,NSTEPS-int(TTOTAL*1.0D+15)
+      write(chrout,'(A3)') '.F.'
+      if (rstemp) write(chrout,'(A3)') '.T.'
+      WRITE(IPTRAJ,3002) chrout,dtemp,levery
+      write(chrout,'(A3)') '.F.'
+      if (rsrand) write(chrout,'(A3)') '.T.'
+      WRITE(IPTRAJ,3003) chrout,nrand,nvtoff,jevery
+      write(chrout,'(A3)') '.F.'
+      if (prod) write(chrout,'(A3)') '.T.'
+      WRITE(IPTRAJ,3004) chrout,kevery,delr
+c
+      if (isgddi) then
+         write(iptraj,'(A)', ADVANCE = "NO") " BathT(1)="
+         do i=1,ngroups
+            if (mod(i,5).ne.0) then
+               if (i.eq.ngroups) then
+                  WRITE(IPTRAJ,"(1x,F6.2)") abatht(i)
+               else
+                  WRITE(IPTRAJ,"(1x,F6.2)",advance="no") abatht(i)
+               endif
+            else
+               WRITE(IPTRAJ,"(1x,F6.2)") abatht(i)
+            endif
+         enddo
+      else
+         WRITE(IPTRAJ,3005) BATHT
+      endif
+C
+      convfac=au2kcal/au2ang**2
+      if(ssbp) write(IPTRAJ,3010) sforce*convfac,droff*au2ang
+      if(usamp) then
+         write(IPTRAJ,3011) uforce(1)*convfac,uforce(2)*convfac,
+     *    uforce(3)*convfac,rzero(1)*au2ang,rzero(2)*au2ang,
+     *    rzero(3)*au2ang
+         write(IPTRAJ,3018) iustyp
+          if (iustyp.eq.0) then
+             if (ncst.eq.1) then
+                WRITE(IPTRAJ,3012) ipair(1),ipair(2)
+             elseif (ncst.eq.2) then
+                WRITE(IPTRAJ,3013) ipair(1),ipair(2),ipair(3),ipair(4)
+             endif
+          elseif (iustyp.eq.1) then
+             if (ncst.eq.1) then
+                WRITE(IPTRAJ,3014) ipair(1),ipair(2),ipair(3)
+             elseif (ncst.eq.2) then
+                WRITE(IPTRAJ,3015) ipair(1),ipair(2),ipair(3),ipair(4),
+     *             ipair(5),ipair(6)
+             elseif (ncst.eq.3) then
+                WRITE(IPTRAJ,3016) ipair(1),ipair(2),ipair(3),ipair(4),
+     *             ipair(5),ipair(6),ipair(7),ipair(8),ipair(9)
+             elseif (ncst.eq.4) then
+                WRITE(IPTRAJ,3017) ipair(1),ipair(2),ipair(3),ipair(4),
+     *             ipair(5),ipair(6),ipair(7),ipair(8),ipair(9),
+     *             ipair(10),ipair(11),ipair(12)
+             endif
+         endif
+      endif
+c
       VFACT = 1.0D-12
       IF(NAT.GT.0) THEN
          WRITE(IPTRAJ,3020)
@@ -4194,18 +4819,37 @@ C
  2000 FORMAT('===== MD DATA PACKET ====='/
      *       'NAT=',I8,' NFRG=',I8,' NQMMM=',I8/
      *       'TTOTAL=',F12.2,' FS    TOT. E=',F20.6,' KCAL/MOL'/
-     *       'POT. E= ',F20.6,' KCAL/MOL'/
+     *       'POT. E= ',F20.6,' KCAL/MOL  BATHT= ',F20.6/
      *       'KIN. E= ',F20.6,'  TRANS KE=',F11.6,
      *       '  ROT KE=',F11.6,' KCAL/MOL')
  2001 FORMAT('----- QM PARTICLE COORDINATES FOR $DATA GROUP -----')
  2002 FORMAT('----- EFP PARTICLE COORDINATES FOR $EFRAG GROUP -----')
  2010 FORMAT(A8,A2,F5.1,3F20.10)
+ 2012 FORMAT(' $EFRAG'/
+     *       'COORD=CART ','POSITION=OPTIMIZE')
+ 2013 FORMAT(' $END')
  2020 FORMAT('FRAGNAME=',A6,'  !',I4)
  2030 FORMAT(A8,7X,3F20.10)
 C
  3000 FORMAT('----- RESTART VELOCITIES FOR $MD GROUP -----'/
      *       ' $MD READ=.TRUE. MBT=.FALSE. MBR=.FALSE.',
      *       ' TTOTAL=',1P,E12.2,0P)
+ 3001 FORMAT(' MDINT= ',A8,4x,'DT= ',E8.2,' NVTNH= ',I1,2x,'NSTEPS=',I8)
+ 3002 FORMAT(' RSTEMP=',A3,1x,'DTEMP= ',F8.2, ' LEVERY=',I6)
+ 3003 FORMAT(' RSRAND=',A3,1x,'NRAND=',I6,1x,'NVTOFF=',I3,1x,
+     *      'JEVERY=',I6)
+ 3004 FORMAT(' PROD=',A3,3x,'KEVERY=',I6,1x,'DELR=',F8.3)
+ 3005 format('Batht(1)=',F6.2)
+ 3010 FORMAT(' SSBP=.T.   SFORCE= ',F5.1,' DROFF=',F5.1)
+ 3011 FORMAT(' USAMP=.T.  UFORCE(1)=',3F5.1/
+     *     10x,'  RZERO(1)= ',3F5.1)
+ 3012 FORMAT(' ipair(1)=',2I3)
+ 3013 FORMAT(' ipair(1)=',4I3)
+ 3014 FORMAT(' ipair(1)=',3I3)
+ 3015 FORMAT(' ipair(1)=',6I3)
+ 3016 FORMAT(' ipair(1)=',9I3)
+ 3017 FORMAT(' ipair(1)=',12I3)
+ 3018 FORMAT(' IUSTYP=',I3)
  3020 FORMAT('TVELQM(1)=',5X,'! QM ATOM TRANS. VELOCITIES (BOHR/PS) !')
  3030 FORMAT(2X,1P,E16.9,2X,E16.9,2X,E16.9)
  3040 FORMAT(2X,1P,E16.9,2X,E16.9,2X,E16.9,2X,E16.9)
@@ -6116,3 +6760,140 @@ C--   EKIN  = EKINT + EKINR
 C--   WINT  = (VIR(1) + VIR(2) + VIR(3))/(3.0D+00*VOL)
       RETURN
       END
+C*MODULE MDEFP   *DECK cstssbp
+      SUBROUTINE cstssbp(f2f)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      double precision mdint
+      PARAMETER (MXATM=2000,NRepca=100)
+      PARAMETER (MXFGPT=12000, MXFRG=1050,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      logical goparr,maswrk,dskwrk,ssbp,usamp,rstemp,rsrand,prod
+c     COMMON /CONVMD/ AU2KCAL, EK2KCAL, AU2ANG, AU2SEC, AU2AMU, EK2BAR
+      COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
+     *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
+     *                ATORQ(3,MXFRG)
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+c     COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
+      COMMON /FUNCT / E, EG(3*MXATM)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+c     COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+c     COMMON /VIRPR / VIR(3), PRXX, PRYY, PRZZ
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      common /cstpot/ DROFF,SFORCE,Usamp,uforce(10),rzero(10),dtemp,
+     *                Tmin,uV,batht(NRepca),mdint,ipair(30),iustyp,ncst,
+     *                nrand,nvtoff,jevery,kevery,levery,mremd,
+     *                SSBP,rstemp,rsrand,prod
+c     DATA GRDKWD/8HGRADIENT/
+c
+c     Note that we do not support FMO for the moment!
+C
+C     QM
+c
+      do i=1,Nat
+          r=sqrt(c(1,i)**2+c(2,i)**2+c(3,i)**2)
+          rflag=r-droff
+          if(rflag.gt.0) then
+             sfactor=-f2f*sforce*rflag/r
+             idx=3*(i-1)
+             do j=1,3
+                eg(idx+j) =  eg(idx+j) - sfactor*c(j,i)
+             enddo
+          endif
+      enddo
+c
+c     EFP
+c
+      ntotal=0
+      DO I = 1, NFRG
+          r=sqrt(efcent(1,i)**2+efcent(2,i)**2+efcent(3,i)**2)
+          rflag=r-droff
+          if(rflag.gt.0) then
+             sfactor=-f2f*sforce*rflag/r
+             do j=1,3
+                DEFT(j,I) =  DEFT(j,I) - sfactor*efcent(j,i)
+             enddo
+             ntotal=ntotal+1
+          endif
+      ENDDO
+      if (maswrk) write(*,1000) ntotal
+C
+      RETURN
+ 1000 format(/5x,'Applying Solvent Boundary Conditions ...'/
+     *       ,5x,'Total number of waters affected by SSBP = ',i5/)
+      END
+C*MODULE MDEFP   *DECK REMD_V_RESCALE
+      SUBROUTINE REMD_V_RESCALE(T_New)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      DOUBLE PRECISION MDTYP
+C
+      PARAMETER (MXFGPT=12000, MXFRG=1050, MXATM=2000,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+C
+      COMMON /ATMDAT/ VX(MXFRG), VY(MXFRG), VZ(MXFRG),
+     *                QW(MXFRG), QX(MXFRG), QY(MXFRG), QZ(MXFRG),
+     *                OX(MXFRG), OY(MXFRG), OZ(MXFRG), QW1(MXFRG),
+     *                QX1(MXFRG),QY1(MXFRG),QZ1(MXFRG),QW2(MXFRG),
+     *                QX2(MXFRG),QY2(MXFRG),QZ2(MXFRG),
+     *                VXQM(MXATM), VYQM(MXATM), VZQM(MXATM)
+      COMMON /CONVMD/ AU2KCAL, EK2KCAL, AU2ANG, AU2SEC, AU2AMU, EK2BAR
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /FRGTYP/ NDFRG,ISET(MXFRG),NAMIDX(MXDFG)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /MASSES/ ZMASS(MXATM)
+      COMMON /MDSIM / DT, BATHT, EKINT, EKINR, MDTYP
+      COMMON /MDVEL / WX(MXFRG),WY(MXFRG),WZ(MXFRG),TQI(3,MXFRG)
+      COMMON /MODDAT/ AMOM(3,MXDFG), TOTMAS(MXDFG), TOTMAI(MXDFG),
+     *                DRX(MXFGPT), DRY(MXFGPT), DRZ(MXFGPT)
+      COMMON /NOSEHO/ GNH(2),VNH(2),XNH(2),QNH(2),EKT0,GFREE0,NVTNH
+c     COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+c
+      EKT_New = 1.987216D-03 * T_New / EK2KCAL
+      scale1=sqrt(EKT_New/Ekt0)
+c      scale2=scale1
+c      write(IW,*) 'V_Scale scale1',scale1
+c
+c     We need to scale the velocity of Nose-Hoover Thermostat
+c
+      VNH(1)=scale1*VNH(1)
+      VNH(2)=scale1*VNH(2)
+C
+      EKINT = 0.0D+00
+      EKINR = 0.0D+00
+C
+      DO I = 1, NAT
+         VXQM(I) = VXQM(I)*SCALE1
+         VYQM(I) = VYQM(I)*SCALE1
+         VZQM(I) = VZQM(I)*SCALE1
+         EKINT = EKINT + ZMASS(I)*(VXQM(I)**2 + VYQM(I)**2 + VZQM(I)**2)
+      END DO
+C
+      DO I = 1, NFRG
+         VX(I) = VX(I)*SCALE1
+         VY(I) = VY(I)*SCALE1
+         VZ(I) = VZ(I)*SCALE1
+         WX(I) = WX(I)*SCALE1
+         WY(I) = WY(I)*SCALE1
+         WZ(I) = WZ(I)*SCALE1
+        EKINT = EKINT + TOTMAS(ISET(I))*(VX(I)**2 + VY(I)**2 + VZ(I)**2)
+        EKINR = EKINR + AMOM(1,ISET(I))* WX(I)**2 + AMOM(2,ISET(I))
+     *       * WY(I)**2 + AMOM(3,ISET(I)) * WZ(I)**2
+      END DO
+C
+      EKINT = 0.5D+00 * EK2KCAL * EKINT
+      EKINR = 0.5D+00 * EK2KCAL * EKINR
+C
+      RETURN
+      END
+C
+

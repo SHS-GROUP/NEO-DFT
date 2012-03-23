@@ -1,3 +1,4 @@
+C 23 MAR 12 - DGF,CHC - code update to finish FMO 4.2
 C 28 DEC 11 - DGF,TN,CS  - FMO 4.2 and EFMO CHANGES
 C 11 Aug 11 - HL  - fix for LJ term
 C 15 Apr 11 - DGF,TN - frozen domain and analytic gradient related changes
@@ -33,7 +34,8 @@ C*MODULE fmogrd  *DECK optfmox
      *           MXATM=2000, MXAO=8192, MXPT=2000, 
      *           MXDPPT=MXFRG*MXDFG*12, MXSHEF=1000, MXGEFP=4000)
       LOGICAL DOEFPOPT,PACK2E,GOPARR,DSKWRK,MASWRK,CVGED,DSKsav,newp,
-     *        qmmm,mmonly,imomm,simomm,ISGDDI,PAROUT,INITGDDI,DOSCZV
+     *        qmmm,mmonly,imomm,simomm,ISGDDI,PAROUT,INITGDDI,DOSCZV,
+     *        wasgddi
       CHARACTER*8 LJNAME,ELJNAM
       Integer ddi_world,ddi_group
       Parameter(ddi_world=0,ddi_group=1)
@@ -49,7 +51,7 @@ C*MODULE fmogrd  *DECK optfmox
       COMMON /EFPCT / NOCC(MXDFG),NVIR(MXDFG),NAO(MXDFG),NTAO,
      *                CTFOK(MXAO,MXDFG),NCTMO(MXDFG),NTCTMO
       COMMON /EFPFMO/ RUNEFP,REFFMO,REPNUCEFP,IEFPFMO,ISWENUC,EFPEFP
-      COMMON /EFPOTD/ METHOF,ISCCHG,MOVE
+      COMMON /EFPOTD/ METHOF,ISCCHG,MOVE,nfrag
       COMMON /ENRGYS/ ENUCR,EELCT,ETOT,SZ,SZZ,ECORE,ESCF,EERD,E1,E2,
      *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2),EDISP
       COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
@@ -66,7 +68,7 @@ C*MODULE fmogrd  *DECK optfmox
      *                NLJPTS(MXFRG),NLJTTPT,ILJP,NMLJ(2)
       COMMON /FRGTYP/ NDFRG,ISET(MXFRG),NAMIDX(MXDFG)
       COMMON /GDDI/   ISCOPE,NGROUPS,MYGROUP,MEGLOB,npglob,nnglob,JBTYP,
-     *                ISGDDI,PAROUT,INITGDDI
+     *                ISGDDI,PAROUT,INITGDDI,wasgddi
       common /INT2IC/ NINTIC,iNINTIC,nxxic,lbufpic,lixic,labsix,nintix
       COMMON /INTFIL/ NINTMX,NHEX,NTUPL,PACK2E,INTTYP,IGRDTYP
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
@@ -102,7 +104,8 @@ C*MODULE fmogrd  *DECK optfmox
      *                liodcfmo,ljob2grp,lfmopg,lemocdr,luntxyz,luntrot,
      *                lstonep,lmapsu,lfrgmul,lclmo,lialmo,lindlmo,
      *                latclmo,llmobdf,lfgflmo,lnfglmo,llfglmo,lpfglmo,
-     *                LPOPDMAT,lidmpnt,liddpnt,livmpnt,liactfg,lcrfrg
+     *                LPOPDMAT,lidmpnt,liddpnt,livmpnt,liactfg,lcrfrg,
+     *                lzlmfrgv
       COMMON /SCZVEC/ IDFZVEC,LIPTZVEC,LIPTLG
       dimension KQNAM(nnam),QNAM(nnam),dum3(3)
       DATA KQNAM /3,3,1,5,1, 5,5,1,3,3, 3,1,1/
@@ -977,9 +980,9 @@ C*MODULE fmogrd  *DECK esdgrd
       integer ddi_world,ddi_group,ddi_masters
       Parameter(ddi_world=0,ddi_group=1,ddi_masters=2)
       logical isgddi,parout,INITGDDI,GOPARR,DSKWRK,MASWRK,orbxch,
-     *        iodexch,myjob,dodistr,urohf
+     *        iodexch,myjob,dodistr,urohf,wasgddi
       COMMON /GDDI/   ISCOPE,NGROUPS,MYGROUP,MEGLOB,npglob,nnglob,JBTYP,
-     *                ISGDDI,PAROUT,INITGDDI
+     *                ISGDDI,PAROUT,INITGDDI,wasgddi
       COMMON /GRAD  / DE(3,MXATM)
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
      *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
@@ -1215,6 +1218,8 @@ c         CALL PRTRI(da,L1)
         call SDER(fb,fa,L1,L2,.false.)
 c       Not only masters accumulate the gradient here: all nodes have
 c       contributions (no global sum in SDER). 
+c       WRITE(IW,*) 'FMO ES gradient: Lagrangian terms',ifg
+c       CALL EGOUT(DE,NAT)
         call fmodeg(1,fmode(1,1,2),fmopg,iaglob)
         call timit(1)
   200 continue 
@@ -1338,7 +1343,7 @@ c     stop all layer 1 ES dimers except the mixed ones set by mixdim.
       if(jfg.ne.ifg) then
 c       note that distance R(ifg,ifg) is not defined!
         mmdim=0
-        if(modfmm.ne.0) call mmdimer(ifg,jfg,t,radius,ty2z,ratio,mmdim)
+      if(modfmm.ne.0) call mmdist(ifg,0,0,jfg,t,radius,ty2z,ratio,mmdim)
         if((fmodist(ifg,0,0,jfg).gt.resdim.and.layman .or.mixdim)
      *     .and.mmdim.eq.0) znuc2=znuc
         if(nbdfg.ne.0) then
@@ -1363,8 +1368,8 @@ c           (.or. .not..true.); instead, mixdim is used solely.
      *        icurlay.eq.1.and.layfrg(ifg).eq.1.and.iactfg(jfg).eq.1)
             if(ia.eq.iat.and.ifg.ne.jfg) then
               mmdim=0
-              if(modfmm.ne.0) call mmdimer(ifg,jfg,t,radius,ty2z,ratio,
-     *                                     mmdim)
+              if(modfmm.ne.0) call mmdist(ifg,0,0,jfg,t,radius,ty2z,
+     *                                    ratio,mmdim)
               if(((fmodist(ifg,0,0,jfg).le.resdim.or..not.layman).and.
      *           .not.mixdim).or.mmdim.ne.0) then
                 if(znuc2a.ne.0) znuc2=znuc2-1
@@ -2305,7 +2310,8 @@ C
      *                LIODCFMO,LJOB2GRP,LFMOPG,LEMOCDR,LUNTXYZ,LUNTROT,
      *                LSTONEP,LMAPSU,LFRGMUL,LCLMO,LIALMO,LINDLMO,
      *                LATCLMO,LLMOBDF,LFGFLMO,LNFGLMO,LLFGLMO,LPFGLMO,
-     *                LPOPDMAT,lidmpnt,liddpnt,livmpnt,liactfg,lcrfrg
+     *                LPOPDMAT,lidmpnt,liddpnt,livmpnt,liactfg,lcrfrg,
+     *                lzlmfrgv
       COMMON /GRAD  / DE(3,MXATM)
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
      *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
@@ -2523,7 +2529,8 @@ C
      *                liodcfmo,ljob2grp,lfmopg,lemocdr,luntxyz,luntrot,
      *                lstonep,lmapsu,lfrgmul,lclmo,lialmo,lindlmo,
      *                latclmo,llmobdf,lfgflmo,lnfglmo,llfglmo,lpfglmo,
-     *                LPOPDMAT,lidmpnt,liddpnt,livmpnt,liactfg,lcrfrg
+     *                LPOPDMAT,lidmpnt,liddpnt,livmpnt,liactfg,lcrfrg,
+     *                lzlmfrgv
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
       COMMON /SYMTRY/ MAPSHL(MXSH,48),MAPCTR(MXATM,48),
      *                TT(432),INVT(48),NT

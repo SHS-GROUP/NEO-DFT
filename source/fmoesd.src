@@ -1,3 +1,4 @@
+C 23 MAR 12 - DGF,CHC - code update to finish FMO 4.2
 C 28 DEC 11 - TN  - changes for FMO 4.2
 C 15 Apr 11 - TN  - misc changes for FMO 4.1
 C 11 Aug 10 - TN  - CHANGES FOR FMO 4.0 
@@ -11,21 +12,25 @@ C*MODULE FMOESD  *DECK FMOESDER
       SUBROUTINE FMOESDER(L1,L2,DA,LAYFRG,SCFFRG,IDMREC0,DC,WRK1,
      *                    MAPI,MAPJ,MAP3,MAXL1D,IREC00,IDAX,IDAXX,
      *                    ORBXCH1,ENEXCH1,KODEXCH,JODEXCH,IODEXCH,
-     *                    ZVLAG,IPTLG,NQMTFG)
+     *                    ZVLAG,IPTLG,NQMTFG,loadhf,clm,flm,crfrg,
+     *                    Ylmfrgq,Ylmfrgq2)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       PARAMETER (MXATM=2000,MXSH=5000,MXGTOT=20000,MXAO=8192,MXGSH=30,
      *           MXG2=MXGSH*MXGSH,MXRT=100,MAXL=5,
-     *           HALF=0.5D+00,ZERO=0.0D+00)
+     *           HALF=0.5D+00,ZERO=0.0D+00,MaxNp=45)
       LOGICAL DIRSCF,FDIFF,DIRSAV,SCHWRZ,PACK2E,GOPARR,DSKWRK,MASWRK,
      *        OUT,SOME,BSSEDIM,ORBXCH,SAVGOP,ESPPAR,NXT,ESPAP,DODDCOR,
      *        ESDDER,LARGEPRI,LCFLAG,LRINT,LCFLAGS,LRINTS,CAMFLAG,
      *        CAMFLAGs,ESDER
       LOGICAL ORBXCH1,ENEXCH1,KODEXCH,JODEXCH,IODEXCH
-      LOGICAL DOSCZV, DODISTR
+      LOGICAL DOSCZV, DODISTR,QOPS,QFMM
+      complex*16 Ylmfrgq(((NP+1)*(NP+2))/2,nfg)
+      complex*16 Ylmfrgq2(((NP+1)*(NP+2))/2,nfg)
 C
       DIMENSION DA(*),LAYFRG(*),SCFFRG(*),IDMREC0(*),KARTEN(0:MAXL-1)
       DIMENSION DC(*),WRK1(*),MAPI(*),MAPJ(*),MAP3(MAXL1D,3)
-      DIMENSION ZVLAG(*),IPTLG(*),NQMTFG(*)
+      DIMENSION ZVLAG(*),IPTLG(*),NQMTFG(*),crfrg(4,nfg),
+     *          CLM(-maxNP:maxNP),FLM(-maxNP:maxNP)
 C
       COMMON /DFTCAM/ ALPHAC,BETAC,CAMMU,CAMVWN,CAMLYP,CAMFLAG
       COMMON /ENRGYS/ ENUCR,EELCT,ETOT,SZ,SZZ,ECORE,ESCF,EERD,E1,E2,
@@ -45,6 +50,8 @@ C     COMMON /INTOPT/ ISCHWZ,IECP,NECP,IEFLD
       COMMON /OPTSCF/ DIRSCF,FDIFF
       COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /QMFM  / SIZE,EPS1,DPGD,QFMM,NP,NS,IWS,NPGP,MPMTHD,NUMRD,
+     *                ITERMS,QOPS,ISCUT
       COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
       COMMON /RESTAR/ TIMLIM,IREST,NREC,INTLOC,IST,JST,KST,LST
       COMMON /SHLEXC/ NORGSH(3),NORGSP(3),IEXCH,NANGM,NGTH(4)
@@ -69,7 +76,8 @@ C     COMMON /INTOPT/ ISCHWZ,IECP,NECP,IEFLD
      *                LIODCFMO,LJOB2GRP,LFMOPG,LEMOCDR,LUNTXYZ,LUNTROT,
      *                LSTONEP,LMAPSU,LFRGMUL,LCLMO,LIALMO,LINDLMO,
      *                LATCLMO,LLMOBDF,LFGFLMO,LNFGLMO,LLFGLMO,LPFGLMO,
-     *                LPOPDMAT,LIDMPNT,LIDDPNT,LIVMPNT,liactfg,lcrfrg
+     *                LPOPDMAT,LIDMPNT,LIDDPNT,LIVMPNT,liactfg,lcrfrg,
+     *                lzlmfrgv
       COMMON /FMORUN/ ESPSCF,E0SCF(2),EMP2S,IDAFMO,ICURFG,JCURFG,KCURFG,
      *                ICURLAY,ICURUNT,NAT1E,NCURSH,NGAU,ICURPOP,IFMOSTP,
      *                MONCOR,NEEDR,MODRST,NORBPROJ,NUNESP,ISKIPESP,
@@ -95,7 +103,7 @@ C     PARSTAT: GROUPFULL/GROUPNONE
 C
 C     FOR NBSSE=3 MONOMERS AND DIMERS DURING BSSE RUNS ARE IN VACCUUM
       IF(NBSSE.EQ.3.AND.IFMOSTP.EQ.5. OR. IFMOSTP.EQ.1) RETURN
-        IF(MASWRK) WRITE(IW,*) 'ENTER FMOESD'
+c       IF(MASWRK) WRITE(IW,*) 'ENTER FMOESD'
         CALL TIMIT(1)
 C
 C     THIS ROUTINE MUST BE CALLED EITHER IN MONOSCF, EDIMER OR ETRIMER
@@ -161,6 +169,8 @@ CZ
      *     X(LFMOESPA),X(LWRKESP),X(LNUMFRG),MAPI,MAPJ,MAP3,
      *     MAXL1D,IREC00,ORBXCH1,ENEXCH1,
      *     KODEXCH,JODEXCH,IODEXCH,NQMTFG)
+c       IF(MASWRK) WRITE(IW,*) 'Done ESDNSDER'
+c       CALL TIMIT(1)
 CZ
 CZ    IF (MASWRK) WRITE (6,*) 'AFTER DENSITY MATRIX',L1
 CZ    CALL PRTRI(DA,L1)
@@ -194,7 +204,6 @@ C     IF(SCFTYP.EQ.RMC) SCFTYP1=RHF
 C
       CALL VCLR(X(LFMOESPA),1,L2)
 CB    CALL VCLR(X(LFMOESPB),1,L2)
-C
 C
 C     SAVE THE PRISTINE MONOMER(DIMER) CONFIGURATION
 C
@@ -233,13 +242,34 @@ CZ
         LFDE2B = LFMODE + NATF2
         LFDE3B = LFDE2B
       END IF
+c
+      if(iand(modfmm,8).ne.0) then
+        if(lfg.ne.0) call abrt
+        call mmespg(ilay,ifg,jfg,loadhf,x(LLOADM),layfrg,
+     *                  da,clm,flm,crfrg,Ylmfrgq,Ylmfrgq2)
+c       CALL EGOUT(DE,NAT)
+c       Use DE computed in mmespg. 
+        ifmostps=ifmostp 
+        ifmostp=6
+        CALL FMODEG(IDAX,X(LFDE2B),X(LFMOPG),X(LIAGLOB))
+c       add the same for trimers
+        ifmostp=ifmostps
+      endif
 CZ
 CZ    (2). BASIS FUNCTION DERIVATIVES OF 1E INTEGRALS
 CZ    DA IS OBTAINED IN ESDNSDER
 CZ    THE CONTRIBUTIONS ARE DIRECTLY STORED IN FMODE().
 CZ
+      if(iand(modfmm,8).ne.0) modfmm=ior(modfmm,1024)
+c     call dcopy(3*12,X(LFDE2B),1,detmp,1) 
       CALL ESVDER(IDAX,IDAXX,DA,X(LWRKDEN),X(LWRKESP),L2,0,
      *            X(LFDE2B),X(LFDE3B),.FALSE.)
+      if(iand(modfmm,8).ne.0) modfmm=modfmm-1024
+c     call vsub(detmp,1,X(LFDE2B),1,detmp,1,3*12)
+c     write(6,*) 'AO derivatives'
+c     CALL EGOUT(DEtmp,12)
+c       IF(MASWRK) WRITE(IW,*) 'Done ESVDER'
+c       CALL TIMIT(1)
 CZ
 CZ
 CZ    (3). HELMANN-FEYNMAN TERMS
@@ -251,8 +281,16 @@ cz      write(6,'(3F12.8)')
 cz   *  (x(lpopmat+maxnat*nfg*(icurpop-1)+i1),i1=0,80) 
 cz    end if
 czcz
+      if(iand(modfmm,8).ne.0) modfmm=ior(modfmm,1024)
+c     call dcopy(3*9,X(LFDE2B),1,detmp,1) 
       CALL EXTHELFEY(IDAX,IDAXX,DA,X(LWRKDEN),L2,X(LFDE2B),X(LFDE3B),
      *              .FALSE.)
+      if(iand(modfmm,8).ne.0) modfmm=modfmm-1024
+c     call vsub(detmp,1,X(LFDE2B),1,detmp,1,3*9)
+c     write(6,*) 'Hellmann-Feynman'
+c     CALL EGOUT(DEtmp,9)
+c       IF(MASWRK) WRITE(IW,*) 'Done EXTHELFEY'
+c       CALL TIMIT(1)
 
 CZ
 CZ    (4). DERIVATIVES OF MULLIKEN CHARGES IN ESPPC 
@@ -268,6 +306,8 @@ CZ
           call getddijpot(idax,0,DA,L2,X(LDDIJPOT))
         end if
       END IF
+c       IF(MASWRK) WRITE(IW,*) 'Done Mul der'
+c       CALL TIMIT(1)
 CZ
 C
 C     ----- INITIALIZATION FOR PARALLEL WORK -----
@@ -652,8 +692,8 @@ C
 CZ
       IESDPPC    = 0
       LFMOBUF(3) = 0
-        IF(MASWRK) WRITE(IW,*) 'DONE FMOESD'
-        CALL TIMIT(1)
+      IF(MASWRK) WRITE(IW,*) 'DONE FMOESD'
+      CALL TIMIT(1)
 CZ
 C     IF (MASWRK) WRITE(6,*) 'EXIT OF FMOESD',NQMT
       RETURN
@@ -669,7 +709,7 @@ C
 C
       LOGICAL OUT,DBG,NORM
       LOGICAL GOPARR,DSKWRK,MASWRK,NXT,SVDSKW
-      LOGICAL LCPHF
+      LOGICAL LCPHF,fastvesp
 C
       PARAMETER (MXSH=5000, MXGTOT=20000, MXATM=2000, MXAO=8192)
       PARAMETER (MXCHRM=1)
@@ -702,7 +742,8 @@ C
      *                LIODCFMO,LJOB2GRP,LFMOPG,LEMOCDR,LUNTXYZ,LUNTROT,
      *                LSTONEP,LMAPSU,LFRGMUL,LCLMO,LIALMO,LINDLMO,
      *                LATCLMO,LLMOBDF,LFGFLMO,LNFGLMO,LLFGLMO,LPFGLMO,
-     *                LPOPDMAT,LIDMPNT,LIDDPNT,LIVMPNT,liactfg,lcrfrg
+     *                LPOPDMAT,LIDMPNT,LIDDPNT,LIVMPNT,liactfg,lcrfrg,
+     *                lzlmfrgv
       COMMON /FMORUN/ ESPSCF,E0SCF(2),EMP2S,IDAFMO,ICURFG,JCURFG,KCURFG,
      *                ICURLAY,ICURUNT,NAT1E,NCURSH,NGAU,ICURPOP,IFMOSTP,
      *                MONCOR,NEEDR,MODRST,NORBPROJ,NUNESP,ISKIPESP,
@@ -831,6 +872,8 @@ czcz    MAXIC = NAT
 czcz    MAXIC = NAT + NATFMO
 czcz  END IF
 CZ
+      call setatz(1,MAXIC,fastvesp,lfvesp,needfv)
+c     setatz allocates memory. One should be careful in returining it. 
 C
 C     FIRST, LOOP OVER THE GENUINE QM MOLECULE (ICHARM=0 PASS),
 C     AND THEN ANY EXTERNAL CHARGES WHICH CHARMM MAY BE USING.
@@ -925,6 +968,7 @@ C
             IJ = 0
             DUM1 = ZERO
             DUM2 = DUM1
+            dijmax=0 
             DO 600 I=MINI,MAXI
               IF(I.EQ.1) DUM1=CSI*FAC
               IF(I.EQ.2) DUM1=CPI*FAC
@@ -965,7 +1009,9 @@ C
                   ENDIF
                 ENDIF
                 DIJ(IJ)=DUM2*DEN
+                if(abs(DIJ(IJ)).gt.dijmax) dijmax=abs(DIJ(IJ))
   600         CONTINUE
+c             write(6,*) 'wwwD',dijmax
 C
 C     -----  KINETIC ENERGY
 C
@@ -1036,13 +1082,29 @@ CZ       MAXIC=1
 CZ    END IF
 C
       DO 790 IC = 1,MAXIC
-         CALL FMOATFRG(IC,X(LINDAT),X(LINDATG),X(LIAGLOB),
+         if(fastvesp) then
+           icind=lfvesp+(ic-1)*6
+           FRACV=x(icind)
+           FRACESP=x(icind+1)
+           ZNUC=x(icind+2)
+           CX=x(icind+3)
+           CY=x(icind+4)
+           CZ=x(icind+5)
+         else
+           CALL FMOATFRG(IC,X(LINDAT),X(LINDATG),X(LIAGLOB),
      *                 X(LIALOC),X(LIABDFG),X(LJABDFG),
      *                 X(LINDBD),X(LFMOZAN),X(LFMOC),
      *                 NATFMO+NBDFG,X(LUNTXYZ),X(LPOPMAT),
      *                 KATOM(II),KATOM(JJ),FRACV,FRACESP,
      *                 KFG,ZNUC,CX,CY,CZ)
-         IF (FRACESP.EQ.ZERO.AND.FRACV.EQ.ZERO) GOTO 790
+         endif
+         if(lcphf) then
+           IF (FRACESP.EQ.ZERO.AND.FRACV.EQ.ZERO) GOTO 790
+         else
+           IF (FRACESP.EQ.ZERO) GOTO 790
+         endif
+c        IF (FRACESP.EQ.ZERO.AND.FRACV.EQ.ZERO) GOTO 790
+c        WRITE(6,*) 'WWWATOMA',IC,FRACV,FRACESP,lcphf
 
          XX = AA*((AX-CX)**2+(AY-CY)**2+(AZ-CZ)**2)
          IF(NROOTS.LE.3) CALL RT123
@@ -1156,6 +1218,7 @@ C
       END IF
  1300 CONTINUE
  1400 CONTINUE
+      if(fastvesp) call retfm(needfv)
 C
 C     ----- END OF SHELL LOOPS -----
 C
@@ -1575,7 +1638,8 @@ C
      *                LIODCFMO,LJOB2GRP,LFMOPG,LEMOCDR,LUNTXYZ,LUNTROT,
      *                LSTONEP,LMAPSU,LFRGMUL,LCLMO,LIALMO,LINDLMO,
      *                LATCLMO,LLMOBDF,LFGFLMO,LNFGLMO,LLFGLMO,LPFGLMO,
-     *                LPOPDMAT,LIDMPNT,LIDDPNT,LIVMPNT,liactfg,lcrfrg
+     *                LPOPDMAT,LIDMPNT,LIDDPNT,LIVMPNT,liactfg,lcrfrg,
+     *                lzlmfrgv
       COMMON /FMORUN/ ESPSCF,E0SCF(2),EMP2S,IDAFMO,ICURFG,JCURFG,KCURFG,
      *                ICURLAY,ICURUNT,NAT1E,NCURSH,NGAU,ICURPOP,IFMOSTP,
      *                MONCOR,NEEDR,MODRST,NORBPROJ,NUNESP,ISKIPESP,
@@ -1769,7 +1833,8 @@ CZ    COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
      *                LIODCFMO,LJOB2GRP,LFMOPG,LEMOCDR,LUNTXYZ,LUNTROT,
      *                LSTONEP,LMAPSU,LFRGMUL,LCLMO,LIALMO,LINDLMO,
      *                LATCLMO,LLMOBDF,LFGFLMO,LNFGLMO,LLFGLMO,LPFGLMO,
-     *                LPOPDMAT,LIDMPNT,LIDDPNT,LIVMPNT,liactfg,lcrfrg
+     *                LPOPDMAT,LIDMPNT,LIDDPNT,LIVMPNT,liactfg,lcrfrg,
+     *                lzlmfrgv
       COMMON /FMORUN/ ESPSCF,E0SCF(2),EMP2S,IDAFMO,ICURFG,JCURFG,KCURFG,
      *                ICURLAY,ICURUNT,NAT1E,NCURSH,NGAU,ICURPOP,IFMOSTP,
      *                MONCOR,NEEDR,MODRST,NORBPROJ,NUNESP,ISKIPESP,
@@ -2078,7 +2143,7 @@ C
       DIMENSION IJX(35),IJY(35),IJZ(35),DIJ(225),
      *          XIN(5,5,5,2),YIN(5,5,5,2),ZIN(5,5,5,2)
       DIMENSION FMODEX(3,*),FMODEXX(3,*)
-      LOGICAL LCPHF
+      LOGICAL LCPHF,fastvesp
 CZCZ
 C
       COMMON /DSTV  / XINT,YINT,ZINT,T,X0,Y0,Z0,XI,YI,ZI,
@@ -2112,7 +2177,8 @@ C
      *                LIODCFMO,LJOB2GRP,LFMOPG,LEMOCDR,LUNTXYZ,LUNTROT,
      *                LSTONEP,LMAPSU,LFRGMUL,LCLMO,LIALMO,LINDLMO,
      *                LATCLMO,LLMOBDF,LFGFLMO,LNFGLMO,LLFGLMO,LPFGLMO,
-     *                LPOPDMAT,LIDMPNT,LIDDPNT,LIVMPNT,liactfg,lcrfrg
+     *                LPOPDMAT,LIDMPNT,LIDDPNT,LIVMPNT,liactfg,lcrfrg,
+     *                lzlmfrgv
 C
       PARAMETER (ZERO=0.0D+00, ONE=1.0D+00)
       PARAMETER (RLN10=2.30258D+00)
@@ -2165,6 +2231,8 @@ cz      MAXIC = NAT
 cz      MAXIC = NAT + NATFMO
 cz    END IF
 CZCZ
+      call setatz(1,MAXIC,fastvesp,lfvesp,needfv)
+c     setatz allocates memory. One should be careful in returining it. 
 C
 C     INITIALIZATION FOR PARALLEL
 C
@@ -2262,6 +2330,7 @@ C
           NN = 0
           DUM1 = ZERO
           DUM2 = DUM1
+          dijmax=0
           DO 360 I = MINI,MAXI
             IF(I.EQ.1) DUM1=CSI*FAC
             IF(I.EQ.2) DUM1=CPI*FAC
@@ -2320,6 +2389,7 @@ C
                 IF(.NOT.IANDJ.OR.I.NE.J) DEN=DEN+DEN
                 DIJ(NN)=DUM2*DEN*PI212*AA1
               ENDIF
+              if(abs(DIJ(NN)).gt.dijmax) dijmax=abs(DIJ(NN))
   360     CONTINUE
 C
 C     ..... HELLMANN-FEYNMAN TERM .....
@@ -2331,15 +2401,30 @@ C
 CZCZ        HELFEY TERMS FOR FMO ESP USED TO BE CALCULATED IN ES1DER 
 CZCZ        IN THE NEW VERSION, HOWEVER, HELFEY TERMS ARE CALCULATED HERE
 CZCZ        BESIDES, ESD FRACTION IS CALCULATED HERE UTILIZING FMOATFRG 
+            if(fastvesp) then
+              icind=lfvesp+(ic-1)*6
+              FRACV=x(icind)
+              FRACESP=x(icind+1)
+              ZNUC=x(icind+2)
+              CX=x(icind+3)
+              CY=x(icind+4)
+              CZ=x(icind+5)
+            else
             CALL FMOATFRG(IC,X(LINDAT),X(LINDATG),X(LIAGLOB),
      *                    X(LIALOC),X(LIABDFG),X(LJABDFG),
      *                    X(LINDBD),X(LFMOZAN),X(LFMOC),
      *                    NATFMO+NBDFG,X(LUNTXYZ),X(LPOPMAT),
      *                    KATOM(II),KATOM(JJ),FRACV,FRACESP,
      *                    KFG,ZNUC,CX,CY,CZ)
-C           WRITE(6,*) 'WWWATOM',IC,FRACV,FRACESP
-            IF (FRACV.EQ.ZERO.AND.FRACESP.EQ.ZERO) GOTO 480
-czcz       if (lcphf.and.mod(icc,32).eq.0) 
+            endif
+            if(lcphf) then
+              IF (FRACESP.EQ.ZERO.AND.FRACV.EQ.ZERO) GOTO 480
+            else
+              IF (FRACESP.EQ.ZERO) GOTO 480
+            endif
+c           IF (FRACV.EQ.ZERO.AND.FRACESP.EQ.ZERO) GOTO 480
+c           WRITE(6,*) 'WWWATOMH',IC,FRACV,FRACESP,lcphf
+czcz        if (lcphf.and.mod(icc,32).eq.0) 
 czcz *         write(6,*) 'fracesp',znuc 
 CZCZ
             XX = AA*((AX-CX)**2+(AY-CY)**2+(AZ-CZ)**2)
@@ -2444,6 +2529,7 @@ C
       END IF
   580 CONTINUE
   600 CONTINUE
+      if(fastvesp) call retfm(needfv)
 C
 C     ----- END OF *SHELL* LOOPS -----
 C
@@ -2633,7 +2719,8 @@ CZ   *                EGPCM(3,MXATM)
      *                LIODCFMO,LJOB2GRP,LFMOPG,LEMOCDR,LUNTXYZ,LUNTROT,
      *                LSTONEP,LMAPSU,LFRGMUL,LCLMO,LIALMO,LINDLMO,
      *                LATCLMO,LLMOBDF,LFGFLMO,LNFGLMO,LLFGLMO,LPFGLMO,
-     *                LPOPDMAT,LIDMPNT,LIDDPNT,LIVMPNT,liactfg,lcrfrg
+     *                LPOPDMAT,LIDMPNT,LIDDPNT,LIVMPNT,liactfg,lcrfrg,
+     *                lzlmfrgv
       COMMON /FMORUN/ ESPSCF,E0SCF(2),EMP2S,IDAFMO,ICURFG,JCURFG,KCURFG,
      *                ICURLAY,ICURUNT,NAT1E,NCURSH,NGAU,ICURPOP,IFMOSTP,
      *                MONCOR,NEEDR,MODRST,NORBPROJ,NUNESP,ISKIPESP,
@@ -3123,7 +3210,8 @@ CZ   *                MODLMO,NOPDEN,MOFOCK,modfd,modfmm
      *                LIODCFMO,LJOB2GRP,LFMOPG,LEMOCDR,LUNTXYZ,LUNTROT,
      *                LSTONEP,LMAPSU,LFRGMUL,LCLMO,LIALMO,LINDLMO,
      *                LATCLMO,LLMOBDF,LFGFLMO,LNFGLMO,LLFGLMO,LPFGLMO,
-     *                LPOPDMAT,LIDMPNT,LIDDPNT,LIVMPNT,liactfg,lcrfrg
+     *                LPOPDMAT,LIDMPNT,LIDDPNT,LIVMPNT,liactfg,lcrfrg,
+     *                lzlmfrgv
 CZ    COMMON /FMORUN/ ESPSCF,E0SCF(2),EMP2S,IDAFMO,ICURFG,JCURFG,KCURFG,
 CZ   *                ICURLAY,ICURUNT,NAT1E,NCURSH,NGAU,ICURPOP,IFMOSTP,
 CZ   *                MONCOR,NEEDR,MODRST,NORBPROJ,NUNESP,ISKIPESP,
@@ -4120,7 +4208,8 @@ czcz
      *                LIODCFMO,LJOB2GRP,LFMOPG,LEMOCDR,LUNTXYZ,LUNTROT,
      *                LSTONEP,LMAPSU,LFRGMUL,LCLMO,LIALMO,LINDLMO,
      *                LATCLMO,LLMOBDF,LFGFLMO,LNFGLMO,LLFGLMO,LPFGLMO,
-     *                LPOPDMAT,LIDMPNT,LIDDPNT,LIVMPNT,liactfg,lcrfrg
+     *                LPOPDMAT,LIDMPNT,LIDDPNT,LIVMPNT,liactfg,lcrfrg,
+     *                lzlmfrgv
       common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
      *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
      *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
@@ -4717,7 +4806,8 @@ C
      *                liodcfmo,ljob2grp,lfmopg,lemocdr,luntxyz,luntrot,
      *                lstonep,lmapsu,lfrgmul,lclmo,lialmo,lindlmo,
      *                latclmo,llmobdf,lfgflmo,lnfglmo,llfglmo,lpfglmo,
-     *                LPOPDMAT,LIDMPNT,LIDDPNT,LIVMPNT,liactfg,lcrfrg
+     *                LPOPDMAT,LIDMPNT,LIDDPNT,LIVMPNT,liactfg,lcrfrg,
+     *                lzlmfrgv
       common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
      *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
      *                moncor,needr,modrst,norbproj,nunesp,iskipesp,

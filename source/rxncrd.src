@@ -1,3 +1,4 @@
+C 23 Mar 12 - CHC - GEO Constraints are now possible with QM/EFP
 C  7 MAR 12 - MWS - ALIGN DETWFN COMMON
 C 15 APR 11 - MWS - ENSURE MP2'S CODE=IMS CAN BE USED
 C 10 DEC 10 - MWS - FRAGONLY RUNS SHOULD AVOID DOING NUCLEAR REPULSION
@@ -636,6 +637,7 @@ C*MODULE RXNCRD  *DECK IRCGS2
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
       DOUBLE PRECISION K0,K1,K2,K3,LAMDA
+      integer ceiling
 C
       LOGICAL FIRST,LAST,SADDLE,MASWRK,GOPARR,DSKWRK,
      *        STBSKP,GSCHL2,GOTEH,CVGED,EXTPRT,EXTPUN,ALLPUN,
@@ -697,6 +699,7 @@ C
       COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
      *                MPLEVL,MPCTYP
       COMMON /MASSES/ ZMASS(MXATM)
+      COMMON /FROZNC/ IFREEZ(3*MXATM),NFRZ
 C
       PARAMETER (ZERO=0.0D+00, ONE=1.0D+00,
      *           THREE=3.0D+00, HALF=0.5D+00,
@@ -761,6 +764,18 @@ C
             ELSE
                CALL HFGRAD
             END IF
+c
+C           zeroing out gradients of the freezed coordinates
+            if (nfrz.gt.0) then
+               do i=1,nfrz
+                  ifz=ifreez(i)
+                  icx=mod(ifz,3)
+                  if (icx.eq.0) icx=3
+                  icy=ceiling(real(ifz)/3)
+                  EG(ifz)=zero
+               enddo
+            endif
+c
             IF (QMMM) CALL TOYS
             CALL EGMOVE(GA,EG,DEFT,TORQ,NC,NFRG)
          END IF
@@ -868,6 +883,18 @@ C
       DO 500 II = 1,MXOPT
          NCYC=II
          IF(MASWRK) WRITE(IW,9075) II,NPIRC
+c
+C        Freezing the coordinates
+         if (nfrz.gt.0) then
+            do i=1,nfrz
+               ifz=ifreez(i)
+               icx=mod(ifz,3)
+               if (icx.eq.0) icx=3
+               icy=ceiling(real(ifz)/3)
+               QC(ifz)=C(icx,icy)
+            enddo
+         endif
+c
          CALL DCOPY(NC,QC,1,C,1)
 C
          CALL PRATM(IW,2)
@@ -892,6 +919,19 @@ C
             EC = E
             IF(II.EQ.1) ETMP = EC
          END IF
+c
+C        Zeroing out the gradients of freezed coordinates
+         if (nfrz.gt.0) then
+            do i=1,nfrz
+               ifz=ifreez(i)
+               icx=mod(ifz,3)
+               if (icx.eq.0) icx=3
+               icy=ceiling(real(ifz)/3)
+               EG(ifz)=zero
+            enddo
+         endif
+C
+         call egout(eg,nat)
 C
          IF(EXETYP.EQ.CHECK) THEN
              IF(NFRG.GT.0) CALL RETFM(NEEDSV)
@@ -1998,7 +2038,7 @@ C
      *        DSKWRK,GSCHL2,FIRST,LAST,PENULT,CVGED
       LOGICAL FGONLY
 C
-      PARAMETER (NNAM=31)
+      PARAMETER (NNAM=32)
       PARAMETER (MXATM=2000, MXA3=3*MXATM, MXAO=8192,
      *           MXFRG=1050, MXNCF=6*MXFRG,
      *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
@@ -2006,6 +2046,8 @@ C
       DIMENSION QNAM(NNAM),KQNAM(NNAM)
 C
       COMMON /FMCOM / X(1)
+c     COMMON /EFPOTD/ METHOD,INABIO,MOVE
+      COMMON /FROZNC/ IFREEZ(3*MXATM),NFRZ
       COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
      *                NPPTS(MXFRG),NPTTPT,IEFP,
      *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
@@ -2043,9 +2085,9 @@ C
      *          8HREADQB  ,8HEB      ,8HGBNORM  ,8HGB      ,
      *          8HGA0     ,8HGA1     ,8HGA2     ,8HGCUT    ,
      *          8HRCUT    ,8HACUT    ,8HMXOPT   ,8HIHUPD   ,
-     *          8HOPTTOL  ,8HNPRT    ,8HNPUN    /
+     *          8HOPTTOL  ,8HNPRT    ,8HNPUN    ,8HIFREEZ  /
       DATA KQNAM/0,0,0,3,3,3,3,3,3,-3,1,1,5,0,3,-3,0,3,3,-3,
-     *           -3,-3,-3,3,3,3,1,1,3,1,1/
+     *           -3,-3,-3,3,3,3,1,1,3,1,1,1/
 C
       DATA CHECK/8HCHECK   /
       DATA ALINR/8HLINEAR  /, QUAD/8HQUAD    /
@@ -2076,6 +2118,8 @@ C               J.CHEM.PHYS.  90, 2154-2161(1989)
 C               J.PHYS.CHEM.  94, 5523-5527(1990)
 C               J.CHEM.PHYS.  95, 5853-5860(1991)
 C     WHICH WAS IMPLEMENTED BY FRANK JENSEN AND SHUJUN SU.
+c
+      KQNAM(32) = 3*10*MXATM + 1
 C
       NQMMM = NQMMMATOMS()
       IF(NFRG.GT.0  .AND.  NQMMM.GT.0) THEN
@@ -2088,6 +2132,7 @@ C
          IF(KQNAM(I).EQ.-3) KQNAM(I) = 10*(MXA3+MXNCF) + 3
    10 CONTINUE
       NCOORD = 3 * NAT
+c
       NCF=6*NFRG
       NC1=NCOORD + NCF
       CALL VCLR(EA,1,21*(MXA3+MXNCF)+15*MXFRG+35)
@@ -2116,6 +2161,10 @@ C
       MXOPT = 20
       IHUPD = 2
       OPTTOL=0.0001D+00
+c
+      DO I=1,NCOORD
+         IFREEZ(I)=0
+      enddo
 C
       NPRT=0
       NPUN=0
@@ -2126,10 +2175,16 @@ C                      BIS IS USED AS TEMP STORAGE OF CMODE
      *            SAB,STOTAL,FREQ,BIS,NPOINT,NEXTPT,PACE,
      *            TSENGY,ELBOW,GA,STBSKP,EB,GBNORM,GB,
      *            GA0,GA1,GA2,GCUT,RCUT,ACUT,MXOPT,IHUPD,
-     *            OPTTOL,NPRT,NPUN,
-     *            0,0,0,
+     *            OPTTOL,NPRT,NPUN,ifreez,
+     *            0,0,
      *   0,0,0,0,0,   0,0,0,0,0,
      *   0,0,0,0,0,   0,0,0,0,0,   0,0,0,0,0,   0,0,0,0,0)
+c
+      NFRZ=0
+      DO I=1,NCOORD
+         IF(IFREEZ(I) .NE. 0) NFRZ=NFRZ+1
+      ENDDO
+c
       EVIB = ABS(EVIB)
       STRIDE = ABS(STRIDE)
       GSCHL2 = PACE.EQ.GS2
@@ -2377,6 +2432,7 @@ C
       END IF
 C
   600 CONTINUE
+c
       IF(MASWRK) WRITE(IW,9500)
       CALL TIMIT(1)
       RETURN

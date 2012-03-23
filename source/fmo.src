@@ -1,3 +1,4 @@
+C 23 MAR 12 - DGF,CHC,TN - code update to finish FMO 4.2
 C 28 DEC 11 - DGF,TN,CS,SRP,CHC  - FMO 4.2 AND EFMO CHANGES
 C  2 Nov 11 - DGF - INIDFMO: allow FMO3 without $GDDI input
 C  2 Nov 11 - BSD - FMO_MMDER: use complex double precision fxn.
@@ -48,8 +49,8 @@ C
      *       ,TRIPLET,MFRZ,MFRZs,doclmo,doclmo1,dovlmo,dopdc,mepgrid,
      *        SG1,SG1T,projgrad,doexc,doci,totfock,skipesd,DOEFPIEA,
      *        urohf,dodistr,hopgrd,DC,DCCHG,DCABC,dodc,dodimden,
-     *        MCMIN,LGLOE,LGLOEG,mulgeom,dodiff,LSCZVEC,
-     *        TAMMD,dcsav,skipscc,outpune,QOPS,QFMM,vibcoup
+     *        MCMIN,LGLOE,LGLOEG,mulgeom,dodiff,LSCZVEC,wasgddi,
+     *        TAMMD,dcsav,skipscc,outpune,QOPS,QFMM,vibcoup,outesd
       Integer ddi_world,ddi_group
       character*80 fmosym
       Parameter(ddi_world=0,ddi_group=1)
@@ -87,7 +88,7 @@ C
       COMMON /EFMOPO/ LNEFMOPTS,LEFMOPTS,LEFMOPPTS,LEFMODPTS,LEFMODIMG,
      *                LEFMOTOTG,LEFMOIPT,LEFMOIGLOB
       COMMON /EFPFMO/ RUNEFP,REFFMO,REPNUCEFP,IEFPFMO,ISWENUC,EFPEFP
-      COMMON /EFPOTD/ METHOF,ISCCHG,MOVE
+      COMMON /EFPOTD/ METHOF,ISCCHG,MOVE,nfrag
       COMMON /ELPROP/ ELDLOC,ELMLOC,ELPLOC,ELFLOC,
      *                IEDEN,IEMOM,IEPOT,IEFLD,MODENS,
      *                IEDOUT,IEMOUT,IEPOUT,IEFOUT,
@@ -103,7 +104,7 @@ C
      *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
      *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
       COMMON /GDDI/   ISCOPE,NGROUPS,MYGROUP,MEGLOB,npglob,nnglob,JBTYP,
-     *                ISGDDI,PAROUT,INITGDDI
+     *                ISGDDI,PAROUT,INITGDDI,wasgddi
       COMMON /GLOFMO/ MCMIN
       COMMON /GRDPAR/ ORIGIN(3),XVEC(3),YVEC(3),ZVEC(3),UX(3),UY(3),
      *                UZ(3),GRDSIZ,NGRID,IGUNIT,NXG,NYG,NZG,modgrid
@@ -111,7 +112,7 @@ C
      *                LDOCNT,LEFEFPT,LTMPOL,LIEATF,LFGINT,LNPT2FRG
       COMMON /IEACAL/ REMPOL,IEACAL,NFGIEA,NFRGIEA,NFRGI1,NFRGI2,IEADA,
      *                MXEFPT,MAXPOL,NPRIEA,NATFIEA,IEABDY,ITRLVL,
-     *                DOEFPIEA
+     *                LIEACNT,DOEFPIEA
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
      *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
       COMMON /INFOEX/ TDM(3,mxrt),MOCC(mxrt),MVIR(mxrt),MONOC1,MONVR1,
@@ -189,7 +190,8 @@ C
      *                liodcfmo,ljob2grp,lfmopg,lemocdr,luntxyz,luntrot,
      *                lstonep,lmapsu,lfrgmul,lclmo,lialmo,lindlmo,
      *                latclmo,llmobdf,lfgflmo,lnfglmo,llfglmo,lpfglmo,
-     *                LPOPDMAT,lidmpnt,liddpnt,livmpnt,liactfg,lcrfrg
+     *                LPOPDMAT,lidmpnt,liddpnt,livmpnt,liactfg,lcrfrg,
+     *                lzlmfrgv
       common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
      *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
      *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
@@ -326,7 +328,15 @@ c     To force the calculation of Stone analysis that might be else skipped.
       dopdc=iepot.ne.0.and.ELPLOC.EQ.PDC.and.CONSTR.NE.CNONE
 c     if(dopdc) call abrt
 c
+c     write(6,*) 'wwwscope',ISCOPE
+      CALL ERIPRE
+c
       if(isgddi0) call gddi_scope(ddi_group)
+c
+c     In some cases GDDI will call this subroutine for the first time
+c     by some nodes in a group but not all, later in SCF.
+c     Then the broadcasts in ERIPRE will fail.
+c     So call now and avoid a deadlock later.
 c
 c     save integral packing options
 c
@@ -379,7 +389,6 @@ c       It is quite easy to support, just set up nbody properly.
         call abrt
       endif
       idoprop=1
-      if(modfmm.ne.0) call abrt 
 c
 c     This is a weird run, that can be called
 c     FMO3-RHF/FMO2-RHF:MP2, that is, correlated contribution for a part
@@ -465,6 +474,7 @@ c     broadden does not work with MFMO?! -> bug?
       dodiff=iand(modesp,128).ne.0
       if(dodiff.and.dosap) call abrt
       primul=dospc.and.iand(nprfmo,8).ne.0
+      outesd=iand(nprfmo,128).eq.0
       outpune=(.not.mulgeom.or.iand(nprfmo,3).eq.0).and.maswrk
 c     PLEDA runs do not produce meaningful Mulliken populations
 c     however, CT is OK? So stop printing just the charges.
@@ -701,9 +711,14 @@ c
         lenucfg=liactat+(natfmo-1)/nwdvar+1
         last=lenucfg+nfg
       endif
+      if(modfmm.ne.0) call abrt
       lcrfrg=last
       lylmfrg=last
       lzlmfrg=last
+      lylmfrgv=last
+      lzlmfrgv=last
+      lylmfrgq=last
+      lylmfrgq2=last
 c
 c     We should set Np, the highest angular momentum l of multipole
 c     calculation on the basis of accuracy requirements.
@@ -718,11 +733,38 @@ c     If SD/CD is less than 1/2, Np=20 is good enough to have the accuracy
 c     of 1D-10 or less. 
 c
 c     np=20
+      lesdi=last
       if(modfmm.ne.0) then
+        if(resdim.eq.0) then
+          if(maswrk) write(iw,*) 'RESDIM=0 is not implemented.'
+          call abrt
+c         ESDDERZ does not work with it.
+        endif
+        if(iand(modfmm,4).ne.0.and.(respap(1).ne.0.or.resppc(1).ne.0)) 
+     *  then
+          if(maswrk) write(iw,*) 'Set RESPAP=0 and RESPPC=0'
+          call abrt
+        endif
+        if(iand(modfmm,8).ne.0.and.(respap(1).gt.0.or.resppc(1).gt.0)) 
+     *  then
+          if(maswrk) write(iw,*) 'Use uniform RESPAP and RESPPC.'
+          call abrt
+        endif
         call qfmmin
         lylmfrg=lcrfrg+4*nfg
         lzlmfrg=lylmfrg+(NP+1)*(NP+2)*nfg
-        last=lzlmfrg+(NP+1)*(NP+2)*nfg
+        lesdi=lzlmfrg+(NP+1)*(NP+2)*nfg
+        last=lesdi+nfg
+        if(iand(modfmm,4).ne.0) then
+          lylmfrgv=last
+          lzlmfrgv=lylmfrgv+(NP+1)*(NP+2)*nfg
+          last=lzlmfrgv+(NP+1)*(NP+2)*nfg
+        endif
+        if(iand(modfmm,8).ne.0) then
+          lylmfrgq=last
+          lylmfrgq2=lylmfrgq+(NP+1)*(NP+2)*nfg
+          last=lylmfrgq2+(NP+1)*(NP+2)*nfg
+        endif
       endif
 c     Note that ylmfrg is complex-valued.
 c
@@ -769,6 +811,9 @@ c       Pre-computed values.
 c
         CALL GETCLM(CLM)
         CALL GETFLM(FLM)
+        call vclr(x(lesdi),1,nfg)
+        if(iand(modfmm,8).ne.0) 
+     *    call vclr(x(lylmfrgq2),1,(NP+1)*(NP+2)*nfg)
       endif
 c
       call fmominp(2,nder,ifgfmo0,x(lichfg),x(lmulfg),x(lfrgnam),
@@ -1731,7 +1776,8 @@ c       correct.
       endif 
 C
       IF (IEACAL.EQ.1) THEN
-        CALL IEAMEM2(LAST,X(LIOEFP),X(LIOFMO),X(LIEATF),X(LINDAT))
+        CALL IEAMEM2(LAST,X(LIOEFP),X(LIOFMO),X(LIEATF),X(LINDAT),
+     *               X(LIEACNT))
       END IF
 C
       NEED1 = LAST- LOADFM -1
@@ -2454,7 +2500,8 @@ c      endif
      *              X(LABFLDT),X(LDINDF2),X(LDINDDF2),X(LZVLAG),
      *              X(LIPTLG),X(LZVWRK),X(LNQMTFG),hopgrd,dodc,
      *              x(lindtmp),x(lfmohard),x(leaip),X(LVIPOT),nevsav,
-     *              modcnv)
+     *              modcnv,x(lcrfrg),clm,flm,x(lylmfrgv),x(lzlmfrgv),
+     *              x(lylmfrgq),x(lylmfrgq2))
 c       call fmogout(1,maswrk,x(lindat),x(lfmozan),x(lfmode),x(lDEFTF),
 c    *               x(lTORQF))
 c       call fmogout(2,maswrk,x(lindat),x(lfmozan),x(lfmode),x(lDEFTF),
@@ -2552,10 +2599,12 @@ c  95     continue
 c         ifmoqit=ifmoqit+1
           icurit=1
 c
-          if(modfmm.ne.0) call fmmfrg(ilay1,loadhf,x(lloadm),x(llayfrg),
-     *      x(liodfmo),x(lmaxl30),orbxch,x(lscffrg),x(lfmoda),x(lfmodb),
-     *      x(lwrk1),irec0,clm,flm,x(lcrfrg),x(lylmfrg),x(lzlmfrg),
-     *      x(lfmode),x(lfmopg),x(liaglob),x(lisdrec),dodistr)
+          if(modfmm.ne.0) call fmmfrg(ilay1,nder,loadhf,x(lloadm),
+     *      x(llayfrg),x(lscffrg),x(liactfg),x(liodfmo),x(lmaxl30),
+     *      orbxch,x(lfmoda),x(lfmodb),x(lwrk1),irec0,clm,flm,x(lcrfrg),
+     *      x(lylmfrg),x(lzlmfrg),x(lylmfrgq),
+     *      x(lpopmat),x(lfmode+3*natfmo),x(lfmopg),x(liaglob),
+     *      x(lisdrec),x(lesdi),dodistr,savgrd)
 c
           call stopwa(14,0)
           call edimer(ilay1,nder,runtype,loadhf,x(ljobgrp),x(lloadm),
@@ -2593,7 +2642,8 @@ c
      *                dodimden,x(liddpnt),nevsav,x(lindtmp),x(lfmohard),
      *                x(lefmodimg),x(liactfg),x(lemon),outpune,
      *                x(lenucfg),clm,flm,x(lcrfrg),x(lylmfrg),
-     *                x(lfrgnam),x(lefmoiglob),X(LVIPOT),some)
+     *                x(lylmfrgq),x(lylmfrgq2),x(lfrgnam),x(lefmoiglob),
+     *                X(LVIPOT),outesd,some)
 c       call fmogout(1,maswrk,x(lindat),x(lfmozan),x(lfmode),x(lDEFTF),
 c    *               x(lTORQF))
 c       call fmogout(2,maswrk,x(lindat),x(lfmozan),x(lfmode),x(lDEFTF),
@@ -2641,7 +2691,8 @@ c
      *                 X(LFCMWRK),X(LABFLDT),X(LDINDF2),X(LDINDDF2),
      *                 X(LZVLAG),X(LIPTLG),hopgrd,x(lindtmp),x(lfmohard)
      *                ,X(LIDMREC),X(LNQMTFG),X(LLOADM),NGRFMO,X(LMANNOD)
-     *                ,X(LMASTID),NEVSAV,outpune,some)
+     *                ,X(LMASTID),NEVSAV,outpune,clm,flm,x(lcrfrg),
+     *                 x(lYlmfrgq),x(lylmfrgq2),some)
           call stopwa(17,1)
         endif
 c
@@ -2784,6 +2835,10 @@ c         call ddi_gsumf(2415,x(lemon+nfg*2),nfg*2)
           CALL DDI_GSUMF(2415,X(lfmohard),natfmo*nbody)
           ndata=ndata+natfmo*nbody
         endif
+        if(iand(modfmm,2).ne.0) then
+          CALL DDI_GSUMF(2415,X(lesdi),nfg)
+          ndata=ndata+nfg
+        endif
         CALL DDI_GSUMF(2415,X(leaip),nfg*2)
         ndata=ndata+nfg*2
         call gddi_scope(ddi_group)
@@ -2915,6 +2970,7 @@ c
         CALL EFPIEAOUT(X(LINDAT))
       END IF
       IF (IEFPFMO.EQ.2) REPNUCEFP = REPNUCEFP + POLTOT
+      IF (IEACAL.EQ.1.AND.ITRLVL.EQ.2) REPNUCEFP = ZERO
 C     if (maswrk) write(6,*) 'POLTOT', POLTOT
 c
       if(modfd.ne.0) then
@@ -2947,7 +3003,7 @@ c       write(6,*) 'wwwe0bda2=',(x(le0bda-1+i),i=1,4*ne0bda*nlayer)
      *             x(LFZCOR),totfock,x(lnumfrg),m1efmo,x(leigfmo),
      *             x(libfmo),skipesd,urohf,dodc,x(lfmohard),x(leaip),
      *             x(liactfg),x(liactat),modfd.ne.0.and.irststp.ge.2,
-     *             nevsav,prtdst,x(lemocdra))
+     *             nevsav,prtdst,x(lemocdra),x(lesdi))
 c
       if(iterpcm.gt.0) then
         econv=etot-eprev
@@ -3263,11 +3319,11 @@ C*MODULE fmo     *DECK inidfmo
      *        fmodtrf,inirev,correl,parhop,forbconv,conv2mc,ijmc,semidyn
      *       ,semidyno,broadden,densgrid,spargrid,isgddi0,doddcor,
      *        dolat,exclmol,skipc,doclmo,didatc,dopdc,gcorrel,skipscc,
-     *        highdim
+     *        highdim,wasgddi
       COMMON /ENRGYS/ ENUCR,EELCT,ETOT,SZ,SZZ,ECORE,ESCF,EERD,E1,E2,
      *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2),EDISP
       COMMON /GDDI/   ISCOPE,NGROUPS,MYGROUP,MEGLOB,npglob,nnglob,JBTYP,
-     *                ISGDDI,PAROUT,INITGDDI
+     *                ISGDDI,PAROUT,INITGDDI,wasgddi
       COMMON /GRDPAR/ ORIGIN(3),XVEC(3),YVEC(3),ZVEC(3),UX(3),UY(3),
      *                UZ(3),GRDSIZ,NGRID,IGUNIT,NXG,NYG,NZG,modgrid
       COMMON /GSSORD/ IORDER(MXAO),JORDER(MXAO),NORDER
@@ -4074,7 +4130,7 @@ c             raised by 1 (at present MRMP2 is not yet supported).
                 nes=nes+1
                 mmdim=0
                 if(modfmm.ne.0) 
-     *            call mmdimer(ifg,jfg,t,radius,ty2z,ratio,mmdim)
+     *            call mmdist(ifg,0,0,jfg,t,radius,ty2z,ratio,mmdim)
                 if(mmdim.ne.0) nem=nem+1
               endif
               if((rrij.le.rcorsd.or.rcorsd.eq.0).and..not.skipc.and.
@@ -4265,12 +4321,13 @@ C*MODULE fmo     *DECK monoscf
      *                   doddcor,e1efmo,ekinfmo,m1efmo,eigfmo,EFPIEA,
      *                   FGINT,FMOFCM,FCMWRK,ABFLDT,DINDF2,DINDDF2,ZVLAG
      *                  ,IPTLG,ZVWRK,NQMTFG,hopgrd,dodc,potat,fmohard,
-     *                   eaip,VIPOT,nevsav,modcnv)
+     *                   eaip,VIPOT,nevsav,modcnv,crfrg,clm,flm,Ylmfrgv,
+     *                   Zlmfrgv,Ylmfrgq,Ylmfrgq2)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       integer ddi_world,ddi_group
       Parameter(ddi_world=0,ddi_group=1)
       parameter(MXATM=2000,MXAO=8192,MXRT=100,MXGRID=10,maxpst=10,
-     *          zero=0.0D+00,one=1.0D+00,half=0.5D+00)
+     *          zero=0.0D+00,one=1.0D+00,half=0.5D+00,MaxNp=45)
       Parameter(MXFRG=1050,MXDFG=5,MXDPPT=MXFRG*MXDFG*12)
       logical myjob,isgddi,parout,INITGDDI,GOPARR,DSKWRK,MASWRK,conv,
      *        dosap,dospc,docas,primul,orbxch,enexch,atonce,dodistr,
@@ -4282,7 +4339,12 @@ C*MODULE fmo     *DECK monoscf
      *        doscfprp,ext2lay,dolat,addesp,diffesp,lcflag,lrint,lcsav,
      *        corsav,TRIPLET,gopsav,doclmo,doclmo1,MFRZ,dovlmo,dovac,
      *        lcflags,LPOPDFLG,dopdc,SG1,SG1T,gcorrel,doddcor,DOEFPIEA,
-     *        hopgrd,dodc,tammd,CAMFLAG,camsav,CAMFLAGs
+     *       hopgrd,dodc,tammd,CAMFLAG,camsav,CAMFLAGs,QOPS,QFMM,wasgddi
+      character*11 wfnstri
+      complex*16 Ylmfrgv(((NP+1)*(NP+2))/2,nfg),
+     *           Zlmfrgv(((NP+1)*(NP+2))/2,nfg),
+     *           Ylmfrgq(((NP+1)*(NP+2))/2,nfg),
+     *           Ylmfrgq2(((NP+1)*(NP+2))/2,nfg)
       COMMON /DFTCAM/ ALPHAC,BETAC,CAMMU,CAMVWN,CAMLYP,CAMFLAG
       COMMON /DFGRID/ DFTTHR,DFTGTHR,SWOFF,SW0,BSLRD(137),NDFTFG,
      *                NRAD,NTHE,NPHI,NRAD0,NTHE0,NPHI0,
@@ -4307,12 +4369,12 @@ C*MODULE fmo     *DECK monoscf
      *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
      *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
       COMMON /GDDI/   ISCOPE,NGROUPS,MYGROUP,MEGLOB,npglob,nnglob,JBTYP,
-     *                ISGDDI,PAROUT,INITGDDI
+     *                ISGDDI,PAROUT,INITGDDI,wasgddi
       COMMON /GRDPAR/ ORIGIN(3),XVEC(3),YVEC(3),ZVEC(3),UX(3),UY(3),
      *                UZ(3),GRDSIZ,NGRID,IGUNIT,NXG,NYG,NZG,modgrid
       COMMON /IEACAL/ REMPOL,IEACAL,NFGIEA,NFRGIEA,NFRGI1,NFRGI2,IEADA,
      *                MXEFPT,MAXPOL,NPRIEA,NATFIEA,IEABDY,ITRLVL,
-     *                DOEFPIEA
+     *                LIEACNT,DOEFPIEA
       COMMON /INTRFC/ FRIEND,AIMPAC,RPAC,PLTORB,MOLPLT
       common /INT2IC/ NINTIC,iNINTIC,nxxic,lbufpic,lixic,labsix,nintix
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
@@ -4336,6 +4398,8 @@ C*MODULE fmo     *DECK monoscf
       COMMON /PCMPAR/ IPCM,NFT26,NFT27,IRPPCM,IEFPCM,IP_F,nfmopcm
       COMMON /PRPOPT/ ETOLLZ,ILOCAL,IAHARD
       COMMON /PSILVL/ IPSI,ISKPRP
+      COMMON /QMFM  / SIZE,EPS1,DPGD,QFMM,NP,NS,IWS,NPGP,MPMTHD,NUMRD,
+     *                ITERMS,QOPS,ISCUT
       COMMON /RAIOLN/ JRECLN(10),JRECST(10)
       COMMON /RESTAR/ TIMLIM,IREST,NREC,INTLOC,IST,JST,KST,LST
       COMMON /RUNOPT/ pUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
@@ -4388,7 +4452,8 @@ C*MODULE fmo     *DECK monoscf
      *          dafo(*),eigfmo(*),EFPIEA(*),FGINT(*),FMOFCM(*),FCMWRK(*)
      *         ,potat(*),fmohard(natfmo,*),eaip(nfg,2),ABFLDT(*),
      *          DINDF2(*),DINDDF2(*),ZVLAG(*),IPTLG(*),
-     *          ZVWRK(*),NQMTFG(*),VIPOT(MAXNAT,NFG,2)
+     *          ZVWRK(*),NQMTFG(*),VIPOT(MAXNAT,NFG,2),crfrg(4,nfg),
+     *          CLM(-maxNP:maxNP),FLM(-maxNP:maxNP)
 
 c
       data energy/8HENERGY  /,rnone/8HNONE    /,RMC/8HMCSCF   /
@@ -4757,6 +4822,11 @@ c
           enddo
         endif
        if(nfrgmul.gt.0) call vclr(frgmul(1,1,inxtpop),1,nfrgmul*natfmob)
+c
+       if(iand(modfmm,4).ne.0) call fmmfrag(ilay,loadhf,loadm,
+     *   layfrg,scffrg,iodfmo,orbxch,da,wrk1,irec0old,clm,flm,crfrg,
+     *   ylmfrgv,zlmfrgv)
+c
         clrden=.false.
         jbsav=jbtyp
         ngrsav=ngroups
@@ -4878,7 +4948,9 @@ c         else
 c           if(maswrk) write(iw,*) 'Using DFTTYP=',DFTYPE
 c         endif
 c
-          if(maswrk) write(iw,9200) SCFTYP,ifg,iand(numfrg(ifg),65535)
+          call wfnstr(wfnstri)
+          if(maswrk) write(iw,9200) SCFTYP,ifg,wfnstri,
+     *               iand(numfrg(ifg),65535),iand(nqmtfg(ifg),65535)
 c         if(maswrk) CLOSE(UNIT=IDAF,STATUS='DELETE')
           call CLOSDA('DELETE')
           CALL OPENDA(0)
@@ -4899,8 +4971,11 @@ c
           l1=num
           l2=(l1*l1+l1)/2
           l3=l1*l1
-          if(maswrk.and.labsiz.ne.labsix) write(iw,9205) labsiz,labsix
-         if(maswrk.and.NINTIC.ne.0) write(iw,9207) LABSIZ,NINTIC,ININTIC
+          if(maswrk) then
+c           write(iw,9200) SCFTYP,ifg,wfnstr(),l1,nqmt
+            if(labsiz.ne.labsix) write(iw,9205) labsiz,labsix
+            if(NINTIC.ne.0) write(iw,9207) LABSIZ,NINTIC,ININTIC
+          endif
 c         all CI runs generate CI density.
           doddcori=(MPLEVL.gt.0.and.(MPPROP.ne.0.or.nder.gt.0)).or.
      *             cityp.ne.rnone.or.(tddftyp.ne.rnone.and.nder.gt.0)
@@ -5316,9 +5391,9 @@ c             Force convergence if there is only one fragment in this layer
 c             (except PCM!).
               if((aediff.lt.convfg.or.dopleda.or.nextra.lt.nextra0.or.
      *           nfglay.eq.1.and..not.dolat.and.iand(modcha,4).eq.0.and.
-     *           nfmopcm.eq.0.AND.ITRLVL.EQ.0).and.etot.ne.0.OR.
-     *           (ITRLVL.EQ.1).OR.(ITRLVL.EQ.2.AND.JTER.GE.2.AND.
-     *           AEDIFF.LT.CONVFG)) nconv=nconv+1
+     *           nfmopcm.eq.0.AND.NFG.GT.1).and.etot.ne.0.OR.
+     *           (NFG.EQ.1.AND.JTER.GE.2.AND.AEDIFF.LT.CONVFG))
+     *           nconv=nconv+1
 C    *           nfmopcm.eq.0).and.etot.ne.0) nconv=nconv+1
 c             we may violate memory if popmat was not allocated. Lest this
 c             happen point to the first element.
@@ -5503,13 +5578,19 @@ c                 There are two minuses for each term.
               endif
             endif
 C
-C           IF (IEACAL.EQ.1) THEN
-            IF (DOPROP.AND.IEACAL.EQ.1) THEN
-C             IF (IEABDY.EQ.1) IEADA = IDAM
-C             IF (IEABDY.GT.1) IEADA = IDAM + IDAD
-C             IF (IEABDY.GT.2) IEADA = IDAM + IDAD + IDAT
+C           IF (DOPROP.AND.IEACAL.EQ.1) THEN
+            IF (IEACAL.EQ.1) THEN
+              IF (IEABDY.EQ.1) IEADA2 = IDAM
+              IF (IEABDY.GT.1) IEADA2 = IDAM + IDAD
+              IF (IEABDY.GT.2) IEADA2 = IDAM + IDAD + IDAT
               IEADA = 1
-              CALL CALCIEA(L1,L2,DA,1)
+              IF (ITRLVL.EQ.1) THEN
+                CALL READMOND(DA,ORBXCH.AND..NOT.ODEXCH,.FALSE.,NA,NB,
+     *                        L1,IODFMO,IFG+IREC0OLD)
+                CALL CALCIEA(L1,L2,DA,DA,1,IEADA2)
+              ELSEIF (DOPROP) THEN
+                CALL CALCIEA(L1,L2,DA,DA,1,IEADA2)
+              END IF
             END IF
 C 
 C           NEW FMO/EFP
@@ -5673,7 +5754,8 @@ C
                 CALL FMOESDER(L1,L2,DA,LAYFRG,SCFFRG,IDMREC0,DA,DB,
      *                        mdum,mdum,mdum, 1,irec0old, ID2B,ID3B,
      *                       .false.,.false.,.false.,.false.,.false.,
-     *                        ZVLAG,IPTLG,NQMTFG)
+     *                        ZVLAG,IPTLG,NQMTFG,loadhf,clm,flm,crfrg,
+     *                        Ylmfrgq,Ylmfrgq2)
               END IF
             ENDIF
 C
@@ -5878,7 +5960,7 @@ c         or consequent PCM iterations.
 C 
 C       new FMO/EFP
 C 
-        IF (IEFPFMO.EQ.2) THEN
+        IF (IEFPFMO.EQ.2.AND.IEFP.EQ.1) THEN
           if(isgddi0) then
             call gddi_scope(ddi_world)
             CALL EFPPARL
@@ -6080,7 +6162,7 @@ c
      *       F12.9,/1x,78(1H-))
  9120 format(/1x,'Warning: ESPs for all fragments are scaled by the ',
      *           'factor',F9.6)
- 9200 format(/1x,'Running ',A8,' energy for monomer',I5,', L1=',I5,/)
+ 9200 format(/1x,A8,' monomer',I6,' corr= ',A11,', L1=',I6,', L0=',I6/)
  9203 format(1x,'Using tighter ICUT=',I2)
  9205 format(/1x,'Resetting LABSIZ=',2I2,/)
  9207 format(1x,'Int dimensions: LABSIZ=',I1,', NINTIC=',I9,
@@ -6137,8 +6219,9 @@ C*MODULE fmo     *DECK edimer
      *                  FMOFCM,FCMWRK,ABFLDT,DINDF2,DINDDF2,
      *                  ZVLAG,IPTLG,NQMTFG,ZVWRK,hopgrd,dodc,
      *                  dodimden,iddpnt,nevsav,potat,fmohard,efmodimg,
-     *                  iactfg,emon1,outpune,enucfg,clm,flm,
-     *                  crfrg,ylmfrg,frgnam,iefmoiglob,VIPOT,some)
+     *                  iactfg,emon1,outpune,enucfg,clm,flm,crfrg,ylmfrg
+     *                 ,ylmfrgq,ylmfrgq2,frgnam,iefmoiglob,VIPOT,outesd,
+     *                  some)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       parameter(MXATM=2000,MXSH=5000,MXGTOT=20000,MXRT=100,MXGRID=10,
      *         maxpst=10,MaxNp=45,zero=0.0D+00,one=1.0D+00,half=0.5D+00)
@@ -6151,7 +6234,9 @@ C*MODULE fmo     *DECK edimer
      *        exclmol,flipsd,dovpcm,ext2lay,fmoq,dopleda,dolat,addesp,
      *        addesp0,addespij,lcflag,lrint,lcsav,gopsav,dopdc,urohfi,
      *        urohfj,some,SG1,gcorrel,skipesd,dodistr,hopgrd,DOEFPIEA,
-     *        dodc,dodimden,mixdim,outpune,QOPS,QFMM,CAMFLAG,CAMsav
+     *        dodc,dodimden,mixdim,outpune,QOPS,QFMM,CAMFLAG,CAMsav,
+     *        outesd,wasgddi
+      character*11 wfnstri
       character*8 dimdek,end
       character*1 flipch
       integer ddi_world,ddi_group
@@ -6193,12 +6278,12 @@ C*MODULE fmo     *DECK edimer
       COMMON /ENRGYS/ ENUCR,EELCT,ETOT,SZ,SZZ,ECORE,ESCF,EERD,E1,E2,
      *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2),edisp
       COMMON /GDDI/   ISCOPE,NGROUPS,MYGROUP,MEGLOB,npglob,nnglob,JBTYP,
-     *                ISGDDI,PAROUT,INITGDDI
+     *                ISGDDI,PAROUT,INITGDDI,wasgddi
       COMMON /GRDPAR/ ORIGIN(3),XVEC(3),YVEC(3),ZVEC(3),UX(3),UY(3),
      *                UZ(3),GRDSIZ,NGRID,IGUNIT,NXG,NYG,NZG,modgrid
       COMMON /IEACAL/ REMPOL,IEACAL,NFGIEA,NFRGIEA,NFRGI1,NFRGI2,IEADA,
      *                MXEFPT,MAXPOL,NPRIEA,NATFIEA,IEABDY,ITRLVL,
-     *                DOEFPIEA
+     *                LIEACNT,DOEFPIEA
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
      *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
       COMMON /INFOEX/ TDM(3,mxrt),MOCC(mxrt),MVIR(mxrt),MONOC1,MONVR1,
@@ -6247,7 +6332,9 @@ C*MODULE fmo     *DECK edimer
      *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
      *                iddcur,nddleft,ivmfmo
       COMMON /MLTFMO/ Q_MUL,IMLTFMO,ISWPFD,ISWNEW1
-      complex*16 Ylmfrg(((NP+1)*(NP+2))/2,nfg)
+      complex*16 Ylmfrg(((NP+1)*(NP+2))/2,nfg),
+     *           Ylmfrgq(((NP+1)*(NP+2))/2,nfg),
+     *           Ylmfrgq2(((NP+1)*(NP+2))/2,nfg)
       data dimdek/' $FMOEND'/,end/' $END'/,RMC/8HMCSCF   /,
      *     rhf/8HRHF     /,energy/8HENERGY  /,rnone/8HNONE    /,
      *     rohf/8HROHF    /,uhf/8HUHF     /
@@ -6605,7 +6692,7 @@ c           change iilay, irec too
             call esdim(nder,jfrg,ifrg,esd2,rij,jjlay,iilay,irec0j,irec0i
      *                ,idmrec0,layfrg,iodfmo,maxl30,scffrg,wrk,fmoespa,
      *                db,dij,isdrec,orbxch,dodistr,clm,flm,crfrg,ylmfrg,
-     *                fmode(1,1,2),fmopg,iaglob)
+     *                fmode(1,1,2),fmopg,iaglob,mmdim)
             if(totfock) then
               call CLOSDA('DELETE')
               CALL OPENDA(0)
@@ -6631,8 +6718,11 @@ c               call makemol(ifg,jfg,0,ilay,0,0,0,0,0,0,0,.false.)
 
               edim(ijfg,1)=edim(ijfg,1)+esd2+edisnrg
 c             if(nfmopcm.ne.0) esolv(nfg*2+ijfg)=esolv(ifg)+esolv(jfg)
-              write(iw,9020) flipch,ifg,jfg,ll1,edim(ijfg,1)
-              call timit(1)
+              if((modfmm.eq.0.or.mmdim.eq.0.or.iand(modfmm,2).eq.0)
+     *           .and.outesd) then
+                write(iw,9020) flipch,ifg,jfg,ll1,edim(ijfg,1)
+                call timit(1)
+              endif
               if(gcorrel.or.dodc) edim(ijfg,3)=edim(ijfg,1)-edisnrg
               if(ipieda.ne.0) then
                 edim(ijfg,nedimes)=esd2-esd2m
@@ -6705,13 +6795,13 @@ c             308 contains SCF density (0th order)
           irecd=16
           if(doddcori) irecd=308
           if(maswrk) then
+            call wfnstr(wfnstri)
             if(dolat) then
-              write(iw,9002) scftyp0,ifg,jfg,iu,ll1,mplevl,cctyp,cityp
+              write(iw,9002) scftyp0,ifg,jfg,iu,wfnstri,ll1
             else
-              write(iw,9000) scftyp0,ifg,jfg,ll1,mplevl,cctyp,cityp,
-     *                       TDDFTYP
+              write(iw,9000) scftyp0,ifg,jfg,wfnstri,ll1
             endif
-          endif
+          endif 
           call CLOSDA('DELETE')
           CALL OPENDA(0)
           nprsav=nprint
@@ -6738,15 +6828,17 @@ c         fmonad sets norb.
             call fmonad(idum1,idum2)
             naj=nactfmo
           endif
+c         nai and naj for RHF are NA (the number of alpha electrons)
+c         for MCSCF they become the number of occupied orbitals
 c
           l1=num
           l2=(l1*l1+l1)/2
           l3=l1*l1
           if(maswrk) enucfmo=enucfmo+enucr-enuc0ij
-c         nai and naj for RHF are NA (the number of alpha electrons)
-c         for MCSCF they become the number of occupied orbitals
-          if(maswrk.and.labsiz.ne.labsix) write(iw,9005) labsiz,labsix
-         if(maswrk.and.NINTIC.ne.0) write(iw,9007) LABSIZ,NINTIC,ININTIC
+          if(maswrk) then
+            if(labsiz.ne.labsix) write(iw,9005) labsiz,labsix
+            if(NINTIC.ne.0) write(iw,9007) LABSIZ,NINTIC,ININTIC
+          endif
 c
 c       Compute dimer initial density
 c
@@ -7349,6 +7441,7 @@ C
 C
           IF (IEACAL.EQ.1) THEN
 c           CALL daread(IDAF,IODA,DIJ,l2,irecd,0)
+c           avoid destroying NO 16
             CALL daread(IDAF,IODA,DIJ,l2,16,0)
             call diminid(0,jfg,ifg,l1j,l1i,naj,nai,nbj,nbi,l1,DA,db,
      *                   wrk,wrk1,iodfmo,irec0,iabdfg,jabdfg,indat,
@@ -7356,11 +7449,13 @@ c           CALL daread(IDAF,IODA,DIJ,l2,irecd,0)
      *                   iodexch,iu,untrot(1,1,iu),some)
             CALL dawrit(IDAF,IODA,DIJ,l2,16,0)
             call daxpy(l2,-one,da,1,dij,1)
-            CALL daread(IDAF,IODA,DA,l2,16,0)
-C           IF (IEABDY.EQ.2) IEADA = IDAD
-C           IF (IEABDY.GT.2) IEADA = IDAD + IDA
+c           CALL daread(IDAF,IODA,DA,l2,16,0)
+c           always uses the RHF density
+            CALL DAREAD(IDAF,IODA,DA,l2,IRECD,0)
+            IF (IEABDY.EQ.2) IEADA2 = IDAD
+            IF (IEABDY.GT.2) IEADA2 = IDAD + IDA
             IEADA = 1
-            CALL CALCIEA(L1,L2,DIJ,2)
+            CALL CALCIEA(L1,L2,DA,DIJ,2,IEADA2)
           END IF
 C
 C         new FMO/EFP
@@ -7408,7 +7503,8 @@ c           endif
             CALL FMOESDER(l1,l2,da,layfrg,scffrg,idmrec0,da,wrk1,
      *                    mapi,mapj,mapi,1,irec0, IDAD,IESD3B,
      *                    orbxch,enexch,.false.,jodexch,iodexch,
-     *                    ZVLAG,IPTLG,NQMTFG)
+     *                    ZVLAG,IPTLG,NQMTFG,loadhf,clm,flm,crfrg,
+     *                    Ylmfrgq,Ylmfrgq2)
           ENDIF
 C
           IF (IEFPFMO.NE.0.AND.NDER.GT.0) CALL DEFPCLR
@@ -7463,6 +7559,13 @@ c     idmrec0 is not flipped: FMO/FD will not handle MP2 in L1
      *                    fmoespa,fmoespb,wrk,fmode,fmopg,isdrec,
      *                    orbxch,irec0,irec1,dodistr,NQMTFG,IPTLG,ZVLAG,
      *                    ZVWRK)
+      if(iand(modfmm,8).ne.0) then
+        call gddi_scope(ddi_world)
+        call DDI_gsumf(2423,ylmfrgq2,(NP+1)*(NP+2)*nfg)
+        call gddi_scope(ddi_group)
+        call esp1gmm(ilay,clm,flm,crfrg,popmat,ylmfrgq2,FMODE(1,1,2),
+     *               fmopg,iaglob,layfrg,loadhf,loadm)
+      endif
 C
       IF (NDER.GT.0.AND.NBODY.EQ.2) THEN
         if(doddcor.and.iand(ixesp,1024).eq.0) ixesp=ixesp+1024
@@ -7528,10 +7631,8 @@ c       if(nodesper.ne.0) call abrt
       ifmodim=1
       call timit(1)
       return
- 9000 format(/1x,A8,' dimer',2I5,', LL1=',I4,
-     *           ' (MP',I1,', CC=',A8,', CI=',A8,', TD=',A8,').',/)
- 9002 format(/1x,'Running ',A8,' dimer',2I5,'(',I5,')',' LL1=',I4,
-     *           '(MP',I1,',CC=',A8,',CI=',A8,').',/)
+ 9000 format(/1x,A8,' dimer',2I6,' corr= ',A11,', LL1=',I6)
+ 9002 format(/1x,A8,' dimer',2I6,'(',I6,')',' corr= ',A11,' LL1=',I6)
  9005 format(/1x,'Resetting LABSIZ=',2I2,/)
  9007 format(1x,'Int dimensions: LABSIZ=',I1,', NINTIC=',I9,
      *          ' ININTIC=',I9)
@@ -7559,7 +7660,7 @@ C*MODULE fmo     *DECK esdim
       subroutine esdim(nder,iifg,jjfg,edimij,rij,iilay,jjlay,irec0i,
      *                 irec0j,idmrec,layfrg,iodfmo,maxl30,scffrg,da,fa,
      *                 db,fb,isdrec,orbxch,dodistr,clm,flm,crfrg,ylmfrg,
-     *                 fmode,fmopg,iaglob)
+     *                 fmode,fmopg,iaglob,mmdim)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       Parameter(MXRT=100,MXATM=2000,zero=0.0D+00,one=1.0D+00,MaxNp=45)
       LOGICAL dosap,dospc,orbxch,odexch,odexchi,odexchj,full2e,esdder,
@@ -7605,6 +7706,7 @@ c
 c     Before calling FMM, set the maximum error.
 c
 c     EPS=1.0D-10
+      mmdim=0
       if(modfmm.ne.0) then
 c
 c       Ylm are defined elsewhere (as Ylmfrg) with NP used to compute its
@@ -7614,7 +7716,7 @@ c       although one can use a different one for calculations (NPs).
 c
 c       if too short: calculate exactly elsewhere
 c
-        call mmdimer(iifg,jjfg,t,radius,ty2z,ratio,mmdim) 
+        call mmdist(iifg,0,0,jjfg,t,radius,ty2z,ratio,mmdim) 
 c
         if(mmdim.eq.1) then 
 c
@@ -7623,10 +7725,9 @@ c          moment let just nps=np.
 c
 C         USE VERY FAST MULTIPOLE IDEA
 c
-          nps=int(log10(EPS*(ty2z-radius))/log10(ratio)-1+0.5d+00)
-c         write(6,*) 'radius, ty2z Nps, Np',radius,ty2z,nps,np
+          nps=int(log10(EPS*abs(ty2z-radius))/log10(ratio)-1.0d+00)
           if (nps.gt.np) then
-             IF (MASWRK) WRITE(IW,9200) 
+             IF (MASWRK) WRITE(IW,9000) np,nps
              call abrt
           endif
 c
@@ -7762,8 +7863,7 @@ c     epot is deltaEnuc(ij) (cross term).
       ifmostp=3
 c     write(6,*) 'Exit esdim'
       return
- 9200 FORMAT(/1X,'The Nps is higher than Np.'/,
-     *  1X,'The accuracy of multipole calculation is not guaranteed.'/)
+ 9000 FORMAT(/1X,'Increase NP or decrease IEPS in $FMM: NP,NPS=',2I8)
       end
 C*MODULE fmo     *DECK etrimer
       subroutine etrimer(ilay,nder,runtyp,loadhf,loadt,mulfg,layfrg,
@@ -7781,12 +7881,13 @@ C*MODULE fmo     *DECK etrimer
      *                  ,iwhere,gcorrel,e1efmo,ekinfmo,FMOFCM,FCMWRK,
      *                   ABFLDT,DINDF2,DINDDF2,ZVLAG,IPTLG,hopgrd,potat,
      *                   fmohard,IDMREC0,NQMTFG,LOADM,NGRFMO,MANNOD,
-     *                   MASTID,NEVSAV,outpune,some)
-
+     *                   MASTID,NEVSAV,outpune,clm,flm,crfrg,Ylmfrgq,
+     *                   Ylmfrgq2,some)
+c
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       integer ddi_world,ddi_group
       parameter (MXATM=2000,MXRT=100,MXGRID=10,zero=0.0D+00,one=1.0D+00,
-     *           half=0.5D+00)
+     *           half=0.5D+00,MaxNp=45)
       Parameter(ddi_world=0,ddi_group=1)
       logical myjob,isgddi,parout,INITGDDI,GOPARR,DSKWRK,MASWRK,DIRSCF,
      *        FDIFF,AIMPAC,RPAC,PLTORB,MOLPLT,orbxch,primul,enexch,
@@ -7794,8 +7895,11 @@ C*MODULE fmo     *DECK etrimer
      *       needdm,totdens,totfock,densgrid,desperate,despread,forcedir
      *       ,fordir,tightint,exclmol,skipc,doddcor,dovpcm,dopdc,
      *        urohfi,urohfj,urohfk,SG1,gcorrel,hopgrd,outpune,some,
-     *        doddcori
+     *        doddcori,QOPS,QFMM,wasgddi
+      character*11 wfnstri
       character*8 tridek,end
+      complex*16 Ylmfrgq(((NP+1)*(NP+2))/2,nfg)
+      complex*16 Ylmfrgq2(((NP+1)*(NP+2))/2,nfg)
       dimension mulfg(*),layfrg(*),numfrg(*),iodfmo(*),indat(*),
      *          fmoc(3,*),iaglob(*),da(*),db(*),dc(*),wrk(*),wrk1(*),
      *          dij(*),fmoespa(*),etrim(nfg3,*),fmode(3,natfmo,*),
@@ -7808,8 +7912,9 @@ C*MODULE fmo     *DECK etrimer
      *          FMOFCM(*),FCMWRK(*),ABFLDT(*),DINDF2(*),
      *          DINDDF2(*),ZVLAG(*),IPTLG(*),potat(*),fmohard(natfmo,*),
      *          IDMREC0(*),NQMTFG(*),LOADM(*),NGRFMO(*),MANNOD(*),
-     *          MASTID(*)
-
+     *          MASTID(*),CLM(-maxNP:maxNP),FLM(-maxNP:maxNP),
+     *          crfrg(4,nfg)
+c
       COMMON /DFGRID/ DFTTHR,DFTGTHR,SWOFF,SW0,BSLRD(137),NDFTFG,
      *                NRAD,NTHE,NPHI,NRAD0,NTHE0,NPHI0,
      *                NANGPT(MXGRID),NANGPT0(MXGRID),SG1,jans
@@ -7819,7 +7924,7 @@ C*MODULE fmo     *DECK etrimer
       COMMON /ENRGYS/ ENUCR,EELCT,ETOT,SZ,SZZ,ECORE,ESCF,EERD,E1,E2,
      *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2),EDISP
       COMMON /GDDI/   ISCOPE,NGROUPS,MYGROUP,MEGLOB,npglob,nnglob,JBTYP,
-     *                ISGDDI,PAROUT,INITGDDI
+     *                ISGDDI,PAROUT,INITGDDI,wasgddi
       COMMON /GRDPAR/ ORIGIN(3),XVEC(3),YVEC(3),ZVEC(3),UX(3),UY(3),
      *                UZ(3),GRDSIZ,NGRID,IGUNIT,NXG,NYG,NZG,modgrid
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
@@ -7838,6 +7943,8 @@ C*MODULE fmo     *DECK etrimer
       COMMON /PCMPAR/ IPCM,NFT26,NFT27,IRPPCM,IEFPCM,IP_F,nfmopcm
       COMMON /PRPOPT/ ETOLLZ,ILOCAL,IAHARD
       COMMON /PSILVL/ IPSI,ISKPRP
+      COMMON /QMFM  / SIZE,EPS1,DPGD,QFMM,NP,NS,IWS,NPGP,MPMTHD,NUMRD,
+     *                ITERMS,QOPS,ISCUT
       COMMON /RESTAR/ TIMLIM,IREST,NREC,INTLOC,IST,JST,KST,LST
       COMMON /RUNOPT/ pUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
       COMMON /SCFOPT/ CONVHF,MAXIT,MCONV,NPUNCH,npreo(4)
@@ -8000,8 +8107,8 @@ c           check if MOLFRG option further restricts the correlation
               TDDFTYP=tddfti
             endif
           endif
-          if(maswrk) write(iw,9000) scftyp0,ifg,jfg,kfg,ll1,mplevl,
-     *                              cctyp,cityp,TDDFTYP
+          call wfnstr(wfnstri)
+          if(maswrk) write(iw,9000) scftyp0,ifg,jfg,kfg,wfnstri,ll1
 c         if(maswrk) CLOSE(UNIT=IDAF,STATUS='DELETE')
           call CLOSDA('DELETE')
           CALL OPENDA(0)
@@ -8401,7 +8508,8 @@ C
             CALL FMOESDER(l1,l2,da,layfrg,scffrg,idmrec0,dc,wrk1,
      *                    mapi,mapj,map3,maxl1d,irec0, 1,0,
      *                    orbxch,enexch,kodexch,jodexch,iodexch,
-     *                    ZVLAG,IPTLG,NQMTFG)
+     *                    ZVLAG,IPTLG,NQMTFG,loadhf,clm,flm,crfrg,
+     *                    Ylmfrgq,Ylmfrgq2)
           ENDIF
           IF (IEFPFMO.NE.0.AND.NDER.GT.0) CALL DEFPCLR
 C
@@ -8460,8 +8568,7 @@ c       if(nodesper.ne.0) call abrt
       endif
       call timit(1)
       return
- 9000 format(/1x,A8,' trimer ',3I4,', LL1=',I4,
-     *           ' (MP',I1,', CC=',A8,', CI=',A8,', TD=',A8,').',/)
+ 9000 format(/1x,A8,' trimer',3I6,' corr= ',A11,', LL1=',I6)
  9005 format(/1x,'Resetting LABSIZ=',2I2,/)
 c9005 format(/1x,'Running energy for trimer ',3I4,' in vaccuum',/)
 c9010 format(/1x,'Running ',A8,' energy for monomer ',I3,
@@ -8485,11 +8592,12 @@ C*MODULE fmo     *DECK efmoq
       subroutine efmoq(ilay,loadhf,loadd,layfrg,molfrg,IDAcFMO,
      *                 iodcfmo,modmol,exclmol,edimq)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-      logical GOPARR,DSKWRK,MASWRK,ISGDDI,PAROUT,INITGDDI,myjob,exclmol
+      logical GOPARR,DSKWRK,MASWRK,ISGDDI,PAROUT,INITGDDI,myjob,exclmol,
+     *        wasgddi
       Parameter(MXATM=2000)
       dimension loadd(*),layfrg(*),iodcfmo(*),edimq(*),molfrg(*)
       COMMON /GDDI/   ISCOPE,NGROUPS,MYGROUP,MEGLOB,npglob,nnglob,JBTYP,
-     *                ISGDDI,PAROUT,INITGDDI
+     *                ISGDDI,PAROUT,INITGDDI,wasgddi
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
      *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
