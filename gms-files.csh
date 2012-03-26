@@ -20,6 +20,7 @@
 #        2. a BASES subdirectory, containing files of some basis sets
 #        3. a MCP subdirectory, containing files of MCP bases and potentials
 #        4. data sets for the Quantum chemistry Polarizable force field
+#        5. a EFP subdirectory, containing standard EFP2 potentials
 #  b) The EXTBAS file contains any user-supplied basis sets.
 #  c) The NUCBAS or POSBAS files are nuclear or positron basis sets,
 #     used by the NEO method.  See NEO's documentation for more details.
@@ -301,9 +302,9 @@ setenv LHYPWRK $SCR/$JOB.F297
 setenv LHYPWK2 $SCR/$JOB.F298
 setenv BONDDPF $SCR/$JOB.F299
 
-#    Next value is used only within the VB2000 add-on code
+#    Next two values are used only within the VB2000 add-on code
+setenv VB2000PATH $GMSPATH/vb2000
 setenv GMSJOBNAME $JOB
-
 
 #    Next files are used only during explicitly correlated methods 
 set pt2r12=`egrep -i '(PTR12=.TRUE.|PT2R12=.T.)' $SCR/$JOB.F05 | wc -l`
