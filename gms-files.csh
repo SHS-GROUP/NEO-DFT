@@ -310,8 +310,7 @@ setenv GMSJOBNAME $JOB
 set pt2r12=`egrep -i '(PTR12=.TRUE.|PT2R12=.T.)' $SCR/$JOB.F05 | wc -l`
 if ($pt2r12 > 0) then
  set echo
- setenv PT2INT ~$USER/scr/$JOB
- setenv PT2RDM ~$USER/scr/$JOB
+ setenv R12INP ~$USER/scr/$JOB
  setenv PT2BAS $SCR/$JOB.F300
  unset echo
 endif
