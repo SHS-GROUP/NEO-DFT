@@ -76,6 +76,8 @@ set MPQC=false
 #       LDR       - the name of the loader (usually a compiler).
 #       LDOPTS    - options, such as asking for a load map.
 #       LIBRARIES - extra system libraries which must be searched.
+#       LAPACK    - default: set to 'dgeev.o dgesvd.o zheev.o'
+#                 - set to blank to take LAPACK from a math lib
 #       BLAS      - set to blas.o if not using system BLAS.
 #                   set to blank if using system BLAS.
 #       VECTOR    - set to vector.o on a vector processor.
@@ -86,6 +88,8 @@ set MPQC=false
 #   In principle, the 'config' step has captured enough information
 #   about library locations that no user need change anything below.
 
+# for all systems use GAMESS LAPACK (by default)
+   set LAPACK='dgeev.o dgesvd.o zheev.o'
 
 #   Digital/Compaq/HP 64 bit "alpha workstation"
 #   Use the Digital/Compaq eXtended Math Library for BLAS if installed.
@@ -1097,7 +1101,7 @@ set STANDARD_GAMESS_OBJ1=(aldeci.o algnci.o \
       dcscf.o  dctran.o ddilib.o delocl.o demrpt.o  \
       dft.o    dftaux.o dftdis.o dftfun.o dftgrd.o dftint.o  \
       dftxca.o dftxcb.o dftxcc.o dftxcd.o dftxce.o dftxcf.o dftxcg.o  \
-      dgeev.o  dgesvd.o dmulti.o drc.o     \
+      dmulti.o drc.o     \
       eaipcc.o ecp.o    ecpder.o ecplib.o ecppot.o  \
       efchtr.o efdrvr.o efelec.o efgrd2.o efgrda.o efgrdb.o efgrdc.o  \
       efinp.o  efinta.o efintb.o efmo.o   efpaul.o efpcm.o  efpcov.o  \
@@ -1136,7 +1140,8 @@ set STANDARD_GAMESS_OBJ3=(optcix.o ordint.o ormas1.o  \
       tddxca.o tddxcc.o tddxcd.o tdhf.o     \
       tdx.o    tdxio.o  tdxitr.o tdxni.o  tdxprp.o  \
       trans.o  trfdm2.o trnstn.o trudge.o umpddi.o utddft.o  \
-      vibanl.o vscf.o   vvos.o   zapddi.o zheev.o  zmatrx.o)
+      vibanl.o vscf.o   vvos.o   zapddi.o zmatrx.o)
+
 #
 #     unfortunately, the link command has become too long to show it
 #     explicitly (full command line exceeds 2048 bytes).   Show it
@@ -1147,7 +1152,7 @@ echo The name of the linker on this machine is $LDR,
 echo and the linker options are \"$LDOPTS\".
 echo " "
 echo Object code list begins with gamess.o unport.o, followed by
-echo BLAS code=\"$BLAS\", VECTOR code=\"$VECTOR\", quiche=\"$QUICHE\",
+echo BLAS code=\"$BLAS\", LAPACK code=\"$LAPACK\", VECTOR code=\"$VECTOR\", quiche=\"$QUICHE\",
 echo followed by the standard GAMESS object code list,
 echo " "
 echo $STANDARD_GAMESS_OBJ1
@@ -1220,9 +1225,52 @@ endif
 #
 #   MPQC is turned off with mpqcst.o dummy substitute in GAMESS distribution.
 if ($MPQC == true) then
-   set MPQCOBJ="mpqcst.o"
+# Make sure MPQC and LIBINT are present in $GMS_BUILD_DIR
+    if !(-e $GMS_BUILD_DIR/mpqc/lib/libmpqcinit.a || \
+        -e $GMS_BUILD_DIR/libint-gamess/lib/libint1.a) then
+        echo "   ERROR! MPQC AND/OR LIBINT COULD NOT BE FOUND IN THE GAMESS BUILD DIRECTORY: $GMS_BUILD_DIR/"
+        exit
+    endif
+# prepend path to MPQC libraries
+   set MPQCLIBS = "$GMS_BUILD_DIR/mpqc/src/bin/pt2r12/libpt2r12gamess.a"
+   foreach LIB_NAME (libmpqcinit.a libSCmbptr12.a libSClmp2.a libSClibint2.a \
+                     libSCmbpt.a libSCscf.a libSClcao.a libSCdistarray4.a \
+                     libSCwfn.a libSCmmisc.a libSCintv3.a libSCbasis.a \
+                     libSCoint3.a libSCmolecule.a libSCisosurf.a libSCsymmetry.a \
+                     libSCrender.a libSCoptimize.a libSCscmat.a libSCgroup.a \
+                     libSCmisc.a libSCstate.a libSCkeyval.a libSCclass.a \
+                     libSCcontainer.a libSCref.a libSCoptions.a)
+    set MPQCLIBS = "$MPQCLIBS $GMS_BUILD_DIR/mpqc/lib/$LIB_NAME"
+   end
+#LIBINT libraries
+   set LIBINT = "-L$GMS_BUILD_DIR/libint-gamess/lib -lint2 -lm -ldl"
+#LIBRARIES
+   switch ($GMS_MATHLIB)
+   case mkl:
+   set LIBRARIES = "-Wl,--start-group $LIBRARIES -Wl,--end-group -lstdc++"
+       breaksw
+    case acml:
+       echo 'Build GAMESS-MPQC manually.'
+       exit 4
+       breaksw
+    case atlas:
+       echo 'Build GAMESS-MPQC manually.'
+       exit 4
+       breaksw
+    case none:
+       echo 'system math library is required'
+       exit 4
+       breaksw
+    endsw
+# The system math libraries must contain LAPACK: remove GAMESS LAPACK
+   set LAPACK=""
+   set MPQCOBJ=''
+   echo "   MPQC libraries are $MPQCLIBS"
+   echo "   LIBINT2 libraries are $LIBINT"
 else
    set MPQCOBJ='mpqcst.o'
+   set MPQCLIBS=''
+   set LIBINT=''
    echo "   Using $MPQCOBJ, MPQC code is not linked."
 endif
 #
@@ -1258,15 +1306,15 @@ endif
 chdir $GMS_BUILD_DIR/object
 #
 $LDR  $EXTRA_LINK_FLAGS:q -o $GMS_BUILD_DIR/$EXE.$VERNO.x $LDOPTS \
-      gamess.o unport.o $BLAS $VECTOR $QUICHE \
+      gamess.o unport.o $BLAS $LAPACK $VECTOR $QUICHE \
       $STANDARD_GAMESS_OBJ1 \
       $STANDARD_GAMESS_OBJ2 \
       $STANDARD_GAMESS_OBJ3 \
       $QMMMOBJ $VBOBJ $NEOOBJ \
       $GMS_EXTRA_OBJS \
       $GPU_LIBS \
-      $MPQCOBJ \
-      $MSG_LIBRARIES $LIBRARIES $EXTRA_MPI_LIB_FLAGS:q
+      $MPQCOBJ $MPQCLIBS $LIBINT \
+      $MSG_LIBRARIES $LIBRARIES $EXTRA_MPI_LIB_FLAGS:q  
 #
 set rc=$status
 #
