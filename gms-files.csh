@@ -306,12 +306,20 @@ setenv BONDDPF $SCR/$JOB.F299
 setenv VB2000PATH $GMSPATH/vb2000
 setenv GMSJOBNAME $JOB
 
-#    Next files are used only during explicitly correlated methods 
-set pt2r12=`egrep -i '(PTR12=.TRUE.|PT2R12=.T.)' $SCR/$JOB.F05 | wc -l`
+#    Next files are used for explicitly correlated methods 
+set pt2r12=`egrep -i '(PT212=.TRUE.|PT2R12=.T.)' $SCR/$JOB.F05 | wc -l`
 if ($pt2r12 > 0) then
- set echo
- setenv R12INP ~$USER/scr/$JOB
- setenv PT2BAS $SCR/$JOB.F300
- unset echo
+ set interface=`egrep -i  '(RUNR12=.T.|RUNTYP=.TRUE.|SINGLS=.T.|SINGLES=.TRUE)' $SCR/$JOB.F05 | wc -l`
+ if ($interface > 0) then
+  set echo
+  setenv R12INP $SCR/$JOB
+  setenv PT2BAS $SCR/$JOB.F300
+  unset echo
+ else 
+  set echo
+  setenv R12INP $USERSCR/$JOB
+  setenv PT2BAS $SCR/$JOB.F300
+  unset echo
+ endif
 endif
 
