@@ -1,3 +1,4 @@
+C 04 MAY 12 - ND  - STABILITY ANALYSIS OF THE RHF WAVEFUNCTION
 c 23 Mar 12 - DGF - enable locking SCF options for switches
 C  7 MAR 12 - MWS - UHFOP: PASS CORRECT GRADIENT TO ROHF'S SOTRAN
 C  7 FEB 12 - SAN - RUNTYP=COMP CONTROL IN SUBROUTINES RHFCL, AND UHFCL
@@ -1691,7 +1692,8 @@ C
      *        DOMBAS,SOSCF0,SOSCF,EIGAVL,FT15OP,MFRZ,IPCFP,
      *        QOPS,QFMM,SHLOUT,DIISON,ISGDDI,PAROUT,INITGDDI,DOAFO,
      *        FMOEX,FMOPL,LCFLAG,LRINT,LCFLAGS,LRINTS,NEEDTAU,PRTTAU,
-     *        SG1,CAMFLAG,DC,DCCHG,DCABC,DHFUNC,locopt,wasgddi
+     *        SG1,CAMFLAG,DC,DCCHG,DCABC,DHFUNC,locopt,wasgddi,
+     *        UHFCHK
 C
       DOUBLE PRECISION MOROKM, MD, LMOEDA
       CHARACTER*10 METHOD
@@ -1833,6 +1835,7 @@ C
       COMMON /SIMDAT/ NACC,NREJ,IGOMIN,NRPA,IBWM,NACCT,NREJT,NRPAT,
      *                NPRTGO,IDPUNC,IGOFLG
       COMMON /SOLSMX/ SOLA,SOLB,SOLC,SOLG,SOLH,SOLN,ISMX
+      COMMON /STBCHK/ UHFCHK,NHOMO,NLUMO
       COMMON /SVPOPT/ ISVP,NSVP,MTHSVP,NCAV,NVLPL,IQP
       COMMON /VIRIAL/ SCALTE,SCALTT,GVIR,VTCONV,MAXVT,VTSCAL,VIROK,LVCLN
       COMMON /VVOPAR/ IVVOS,NVVOS,BNDDEN
@@ -4118,6 +4121,57 @@ C
      *             X(LWRK1),X(LWRK2),X(LWRK3),X(LSCR),X(LIWRK),
      *             L0,L1,L2,L3,NOCC)
       END IF
+C     
+C     ----- RHF STABILITY ANALYSIS ----
+C
+      IF(SCFTYP.EQ.RHF .AND. UHFCHK) THEN 
+         NOCC=NA   
+         NPRINT = 2
+         LHOMO = NHOMO 
+         LLUMO = NLUMO
+C 
+         IF (LHOMO .LT. -(NOCC-1)) THEN
+             WRITE(IW,9400)
+             CALL ABRT
+         ELSE IF (LHOMO .GT. 0 .OR. LLUMO .LT. 0) THEN
+             WRITE(IW,9410)
+             CALL ABRT
+         ELSE IF ((2 + LLUMO-LHOMO) .GT. L0) THEN
+             WRITE(IW,9420)
+             CALL ABRT
+         END IF
+C
+C     ---- INTEGRAL TRANSFORMATION FROM AO TO MO BASIS ----
+C
+         ICORBS = NOCC - 1 + LHOMO
+         IORBS  = NOCC + 1 + LLUMO
+         IORB   = NOCC + 1 + LLUMO
+         CALL TRFMCX(NPRINT,ICORBS,IORBS,IORB,.FALSE.,
+     *              .FALSE.,.FALSE.,.FALSE.,
+     *              .FALSE.,.FALSE.,.FALSE.,
+     *              .FALSE.,.FALSE.,.TRUE.)
+C
+C     ---- MEMORY ALLOCATION ----
+C
+         CALL VALFM(LOADFM)
+         LXBUF  = LOADFM + 1
+         LIXBUF = LXBUF  + NINTMX
+         LEIG   = LIXBUF + NINTMX
+         LAST   = LEIG   + LL1
+         NEEDC  = LAST   - LOADFM - 1
+         CALL GETFM(NEEDC)
+C
+C     ---- OBTAIN INTEGRALS FOR STABILITY ANALYSIS ----
+C
+         IF (MASWRK) WRITE(IW,9430)
+         CALL STBINTS(IPK,X(LXBUF),X(LIXBUF),
+     *                X(LEIG),LL1,L0,NOCC,NINTMX)
+         IF (MASWRK) WRITE(IW,9440)
+C
+         CALL RETFM(NEEDC)
+      END IF
+C
+C
       IF(EXETYP.EQ.CHECK) GO TO 520
 C
 C     ----- ASSIGN SYMMETRY LABELS, AND PRINT FINAL RESULTS -----
@@ -4353,6 +4407,22 @@ C
      *          'RECOMPUTED.')
  9380 FORMAT(9X,'SWDIIS THRESHOLD HAS BEEN REACHED:',
      *          ' SWITCHING DIIS OFF.')
+ 9400 FORMAT(/1X,'ERROR:',
+     *       /1X,'THE NHOMO VALUE IS LESS THAN',
+     *       /1X,'THE NUMBER OF OCCUPIED ORBITALS',/)
+ 9410 FORMAT(/1X,'ERROR:',
+     *       /1X,'THE NHOMO VALUE MUST BE ZERO OR NEGATIVE',
+     *       /1X,'THE NLUMO VALUE MUST BE ZERO OR POSITIVE',/)
+ 9420 FORMAT(/1X,'ERROR:',
+     *       /1X,'THE NLUMO VALUE IS MORE THAN',
+     *       /1X,'THE NUMBER OF VIRTUAL ORBITALS',/)
+ 9430 FORMAT(/,1X,50('-'),
+     *       /,1X,'STABILITY TEST FOR RHF WAVEFUNCTION AGAINST UHF',
+     *       /,1X,50('-')
+     *      //,1X,'ORBITAL PAIR             ETA           RHF STABILITY',
+     *       /,1X,12('-'),13X,3('-'),11X,13('-'))
+ 9440 FORMAT(/,1X,'END OF THE STABILITY TEST',
+     *       /,1X,50('-'))
 C
  1005 FORMAT(1X,A10,F18.10)
  1000 FORMAT(1X,'CALCULATED ',F10.5,' THEORETICAL ',
@@ -7930,4 +8000,251 @@ C
 C---  CALL DDI_DLBRESET
 C
 *CXX  RETURN
+      END
+C
+C*MODULE RHFUHF  *DECK STBINTS 
+      SUBROUTINE STBINTS(NFT,XBUF,IXBUF,EIG,LL1,L0,NOCC,NINTMX)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL GOPARR,DSKWRK,MASWRK,UHFCHK
+C
+      DIMENSION XBUF(NINTMX),IXBUF(NINTMX) 
+      DIMENSION EIG(LL1)
+C
+      COMMON /IOFILE/ IR,IW,IP,IJKO,IJKT,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PCKLAB/ LABSIZ
+      COMMON /STBCHK/ UHFCHK,NHOMO,NLUMO
+C
+C
+C     ----- READ ORBITAL ENERGIES AND 2E INTEGRALS IN MO BASIS -----
+C  AND COLLECT THE CORRESPONDING INTEGRAL VALUES FOR A SPECIFIC 
+C  PAIR OF ORBITALS (IHOMO AND JLUMO) FOR THE RHF STABILITY ANALYSIS
+C
+C     ----- READ ORBITAL ENERGIES -----
+C
+         DO IHOMO = 0, NHOMO, -1 
+            II = 1 - NHOMO + IHOMO
+            DO JLUMO = 0, NLUMO
+               JJ = 2 - NHOMO + JLUMO
+               CALL DAREAD(IDAF,IODA,EIG,LL1,17,0)
+C
+C     ----- COLLECT IHOMO AND JLUMO ORBITAL ENERGIES -----
+C
+               CALL EPSVAL(EIG,L0,NOCC,IHOMO,JLUMO)
+C
+C     ----- REWIND MO INTEGRAL FILE -----
+C
+               CALL SEQREW(NFT)
+               NUMX = 0
+C
+C     ----- READ 2E INTEGRALS IN MO BASIS -----
+C
+               IF (MASWRK) READ(NFT)
+  500    CONTINUE
+               CALL PREAD(NFT,XBUF,IXBUF,NUMX,NINTMX)
+               MX=ABS(NUMX)
+C
+C     ----- UNPACK LABEL AND PROCESS INTEGRAL -----
+C
+               DO 700 M=1,MX
+               VAL   = XBUF(M)
+C
+                       NPACK = M
+                       IF (LABSIZ .EQ. 2) THEN
+*I32                     LABEL1 = IXBUF( 2*NPACK - 1 )
+*I32                     LABEL2 = IXBUF( 2*NPACK     )
+*I32                     IPACK = ISHFT( LABEL1, -16 )
+*I32                     JPACK = IAND( LABEL1, 65535 )
+*I32                     KPACK = ISHFT( LABEL2, -16 )
+*I32                     LPACK = IAND( LABEL2, 65535 )
+*I64                     LABEL = IXBUF(NPACK)
+*I64                     IPACK = ISHFT( LABEL, -48 )
+*I64                     JPACK = IAND( ISHFT( LABEL, -32 ), 65535 )
+*I64                     KPACK = IAND( ISHFT( LABEL, -16 ), 65535 )
+*I64                     LPACK = IAND( LABEL, 65535 )
+                       ELSE IF (LABSIZ .EQ. 1) THEN
+*I32                     LABEL = IXBUF(NPACK)
+*I32                     IPACK = ISHFT( LABEL, -24 )
+*I32                     JPACK = IAND( ISHFT( LABEL, -16 ), 255 )
+*I32                     KPACK = IAND( ISHFT( LABEL,  -8 ), 255 )
+*I32                     LPACK = IAND( LABEL, 255 )
+*I64                     IF ( MOD(NPACK,2) .EQ. 0 ) THEN
+*I64                       LABEL = IXBUF( NPACK/2 )
+*I64                       IPACK = IAND( ISHFT( LABEL, -24 ), 255 )
+*I64                       JPACK = IAND( ISHFT( LABEL, -16 ), 255 )
+*I64                       KPACK = IAND( ISHFT( LABEL,  -8 ), 255 )
+*I64                       LPACK = IAND( LABEL, 255 )
+*I64                     ELSE
+*I64                       LABEL = IXBUF( (NPACK/2)+1 )
+*I64                       IPACK = ISHFT( LABEL, -56 )
+*I64                       JPACK = IAND( ISHFT( LABEL, -48 ), 255 )
+*I64                       KPACK = IAND( ISHFT( LABEL, -40 ), 255 )
+*I64                       LPACK = IAND( ISHFT( LABEL, -32 ), 255 )
+*I64                     END IF
+                       END IF
+                       K = IPACK
+                       L = JPACK
+                       I = KPACK
+                       J = LPACK
+C
+C
+C     ----- COLLECT THE VJ11,VJ12,VK12, AND VJ22  2E INTEGRALS -----
+C     CORRESPONDING TO THE IHOMO AND JLUMO ORBITAL PAIR
+C
+C
+          IF      ((K .EQ. II) .AND. (L .EQ. II) .AND.
+     *             (I .EQ. II) .AND. (J .EQ. II)) THEN
+                    VJ11 = VAL 
+          ELSE IF ((K .EQ. II) .AND. (L .EQ. II) .AND.
+     *             (I .EQ. JJ) .AND. (J .EQ. JJ)) THEN
+                    VJ12 = VAL 
+          ELSE IF ((K .EQ. JJ) .AND. (L .EQ. II) .AND.
+     *             (I .EQ. JJ) .AND. (J .EQ. II)) THEN
+                    VK12 = VAL 
+          ELSE IF ((K .EQ. JJ) .AND. (L .EQ. JJ) .AND.
+     *             (I .EQ. JJ) .AND. (J .EQ. JJ)) THEN
+                    VJ22 = VAL 
+          END IF
+C
+  700    CONTINUE
+         IF(NUMX.GT.0) GO TO 500
+C
+C
+C     ----- NOW CALL THE RHF STABILITY ANALYSIS ROUTINE -----
+C
+         CALL STBANL(IHOMO,JLUMO,VJ11,VJ12,VK12,VJ22)
+C
+         END DO
+      END DO
+      RETURN
+      END
+C
+C*MODULE RHFUHF  *DECK EPSVAL 
+      SUBROUTINE EPSVAL(E,NMO,NOCC,IHOMO,JLUMO)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL GOPARR,DSKWRK,MASWRK
+C
+      DIMENSION E(NMO)
+C
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PACKOE/ EPS1,EPS2
+C
+C     ----- COLLECT ORBITAL ENERGIES EPS1 AND EPS2 ----
+C      FOR A SPECIFIC PAIR OF ORBITALS (IHOMO AND JLUMO) 
+C            FOR THE STABILITY ANALYSIS ROUTINE.
+C
+      NH = NOCC + IHOMO
+      NL = NOCC + 1 + JLUMO
+      IF (MASWRK) THEN
+         DO I = 1, NMO
+            DO J = NOCC, NH, -1
+              DO K = NOCC,NL, +1
+                 EPS1 = E(J) 
+                 EPS2 = E(K)
+              END DO
+            END DO
+         END DO
+      END IF
+      RETURN
+      END
+C
+C*MODULE RHFUHF  *DECK STBANL
+      SUBROUTINE STBANL(IHOMO,JLUMO,VJ11,VJ12,VK12,VJ22) 
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      CHARACTER*20 RESULT 
+C
+      COMMON /IOFILE/ IR,IW,IP,IJK,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PACKOE/ EPS1,EPS2 
+C
+      PARAMETER (ZERO=0.0D+00, TOL=1.1D+00)
+      PARAMETER (ONE=1.0D+00, TWO=2.0D+00, THREE=3.0D+00, FOUR=4.0D+00)
+C
+C-------------------------------------------------------------------
+C        ----- THE RHF STABILITY ANALYSIS ROUTINE -----
+C-------------------------------------------------------------------
+C  H11  = KINETIC ENERGY AND NUCLEAR ATTRACTION OF AN ELECTRON IN PSI1
+C  H22  = KINETIC ENERGY AND NUCLEAR ATTRACTION OF AN ELECTRON IN PSI2
+C  VJ11 = COULOMB INTERACTION OF THE TWO ELECTRONS IN PSI1
+C  VJ22 = COULOMB INTERACTION OF THE TWO ELECTRONS IN PSI2
+C  VJ12 = COULOMB INTERACTION OF AN ELECTRON IN PSI1 AND
+C                  ANOTHER ELECTRON IN PSI2
+C  VK12 = EXCHANGE INTERACTION BETWEEN AN ELECTRON IN PSI1 AND
+C                  ANOTHER ELECTRON WITH THE SAME SPIN IN PSI2
+C  EPS1 = THE CLOSED-SHELL ORBITAL ENERGY OF ELECTRON 1
+C  EPS2 = THE CLOSED-SHELL ORBITAL ENERGY OF ELECTRON 2
+C  ETA  = COS**2(THETA), WHICH DETERMINES THE EXISTANCE OF AN
+C         UNRESTRICTED SOLUTION
+C  ESD  = THE SECOND DERIVATIVE OF THE ENERGY AT THE RESTRICTED SOLUTION,
+C         WHICH DETERMINES THE NATURE OF THE RESTRICTED SOLUTION,
+C         WHERE THETA = ZERO
+C
+C  REFERENCE - A. Szabo and N. S. Ostlund, Modern Quantum Chemistry: 
+C              Introduction to Advanced Electronic Structure Theory.
+C              McGraw-Hill, New York, 1989.
+C              Pages 221-229 
+C-------------------------------------------------------------------
+C
+      H11 = EPS1 - VJ11
+      H22 = EPS2 - (TWO*VJ12) + VK12
+C 
+C     ---- ETA IN TERMS OF 1E INTEGRALS ----
+C
+C      ETA = (H22 - H11 + VJ22 - VJ12 + (TWO*VK12))
+C     &      /(VJ11 + VJ22 - (TWO*VJ12) + (FOUR*VK12))
+C
+C     ---- ETA IN TERMS OF ORBITAL ENERGIES ----
+C
+      ETA = (EPS2 - EPS1 + VJ11 - (THREE*VJ12) + VJ22 + (THREE*VK12))
+     &      /(VJ11 + VJ22 - (TWO*VJ12) + (FOUR*VK12))
+C
+C      ESD = FOUR*(EPS2 - EPS1 - VJ12 - VK12)
+C
+      IF (ETA .EQ. ONE) THEN
+         RESULT='SADDLE POINT        '
+      ELSE IF (ETA .GT. ONE .AND. ETA .LT. TOL) THEN
+         RESULT='CLOSE TO UNSTABLE   '
+      ELSE IF (ETA .GT. ONE) THEN
+         RESULT='STABLE              '
+      ELSE IF (ETA .GE. ZERO .AND. ETA .LE. ONE) THEN
+         RESULT='UNSTABLE            '
+      END IF
+C
+      IF (IHOMO .EQ. 0 .AND. JLUMO .GT. 0) THEN
+          WRITE(IW,9000) JLUMO, ETA, RESULT
+      ELSE IF (IHOMO .LT. 0  .AND. JLUMO .EQ. 0) THEN
+          WRITE(IW,9010) IHOMO, ETA, RESULT
+      ELSE IF (IHOMO .EQ. 0  .AND. JLUMO .EQ. 0) THEN
+          WRITE(IW,9020) ETA, RESULT
+      ELSE IF (IHOMO .LT. 0  .AND. JLUMO .GT. 0) THEN 
+          WRITE(IW,9030) IHOMO,JLUMO, ETA, RESULT
+      END IF
+C
+      IF (MASWRK) WRITE(IW,9040)
+     *                    H11, H22, VJ11, VJ12, VK12, VJ22,
+     *                    EPS1,EPS2
+C
+ 9000 FORMAT(/,1X,'HOMO   : LUMO+',I2,
+     *         4X,F10.5,9X,A20)
+ 9010 FORMAT(/,1X,'HOMO',I2,' : LUMO',
+     *         7X,F10.5,9X,A20)
+ 9020 FORMAT(/,1X,'HOMO   : LUMO',
+     *         7X,F10.5,9X,A20)
+ 9030 FORMAT(/,1X,'HOMO',I2,' : LUMO+',I2,
+     *         4X,F10.5,9X,A20)
+ 9040 FORMAT (/1X,'      h11       =',E20.12/
+     *         1X,'      h22       =',E20.12/
+     *         1X,'      J11       =',E20.12/
+     *         1X,'      J12       =',E20.12/
+     *         1X,'      K12       =',E20.12/
+     *         1X,'      J22       =',E20.12/
+     *         1X,'      EPS1      =',1P,E20.12,0P/
+     *         1X,'      EPS2      =',1P,E20.12,0P)
       END
