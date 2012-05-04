@@ -24,8 +24,10 @@
 #  b) The EXTBAS file contains any user-supplied basis sets.
 #  c) The NUCBAS or POSBAS files are nuclear or positron basis sets,
 #     used by the NEO method.  See NEO's documentation for more details.
+#  d) there are 3 places where you might want to uncomment a 'set echo',
+#     to see all the file definitions (one is just below).
 #
-
+#---quiet---set echo
 setenv AUXDATA $GMSPATH/auxdata
 setenv  EXTBAS /dev/null
 setenv  NUCBAS /dev/null
@@ -154,8 +156,8 @@ setenv GMCCCS $SCR/$JOB.F99
 #    Next files are used only during closed shell coupled cluster runs.
 #    Display the numerous definitions iff they are going to be used.
 unset echo
-set cctyp=`grep -i 'CCTYP[(=]' $SCR/$JOB.F05 | wc -l`
-if ($cctyp > 0) set echo
+#---quiet---set cctyp=`grep -i 'CCTYP[(=]' $SCR/$JOB.F05 | wc -l`
+#---quiet---if ($cctyp > 0) set echo
 setenv  CCREST $SCR/$JOB.F70
 setenv  CCDIIS $SCR/$JOB.F71
 setenv  CCINTS $SCR/$JOB.F72
@@ -244,8 +246,8 @@ endif
 #    Next files are used only during extended TDHF package runs.
 #    Display the numerous definitions iff they are going to be used.
 unset echo
-set txtyp=`grep -i RUNTYP=TDHFX $SCR/$JOB.F05 | wc -l`
-if ($txtyp > 0) set echo
+#---quiet---set txtyp=`grep -i RUNTYP=TDHFX $SCR/$JOB.F05 | wc -l`
+#---quiet---if ($txtyp > 0) set echo
 setenv  OLI201 $SCR/$JOB.F201
 setenv  OLI202 $SCR/$JOB.F202
 setenv  OLI203 $SCR/$JOB.F203

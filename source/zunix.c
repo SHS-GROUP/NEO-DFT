@@ -36,6 +36,9 @@ long memget_(nwords) long *nwords;
      nbytes = (size_t) (*nwords+2)*8;
      return (long) malloc(nbytes); }
 
+void memrel_(locmem) long *locmem;
+   { free (*locmem); }
+
 #include <unistd.h>
 void naptime_(nptime) int *nptime;
    { unsigned int istat;
@@ -578,6 +581,9 @@ FORTINT memget_(nwords) FORTINT *nwords;
 void memrel_(locmem) FORTINT *locmem;
    { void free();
      free(*locmem); }
+
+FORTINT laddrs_(arg) FORTINT arg;
+   { return(arg); }
 
 #include <unistd.h>
 void naptime_(nptime) FORTINT *nptime;
