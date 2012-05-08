@@ -1,6 +1,6 @@
 #!/bin/csh
 #
-#  22 November 11 - script to "link-edit" a GAMESS executable
+#   4 May 12 - script to "link-edit" a GAMESS executable
 #
 #  Invoke this job by 'lked EXE VERNO >& lked.log &'
 #    EXE is normally 'gamess',
@@ -51,18 +51,27 @@ set TINKER=false
 #
 #   2. optional Valence Bond method, using VB2000 code --or-- XMVB code.
 #      you can link only one (1) VB program, please do not select both!
+#      As of 2012, the source code for VB2000 is distributed with GAMESS,
+#      so the assumption is that VB2000 can be included.
 #
-set VB2000=false
+                        set VB2000=false
+if ($TARGET == linux64) set VB2000=true
+if ($TARGET == linux32) set VB2000=true
+if ($TARGET == mac64)   set VB2000=true
 set XMVB=false
 #
 #   3. optional Nuclear-Electronic Orbital method, using NEO code
 #
 set NEO=false
 #
-#   4. optional Nvidia/CUDA code, for closed shell SCF Fock construction 
+#   4. optional Nvidia/CUDA code, for closed shell SCF Fock construction
 #         see ~/gamess/libcchem/aaa.readme.1st for more information
 #
 set GPUCODE=false
+#
+#   5. optional MPQC interface
+#
+set MPQC=false
 #
 #   choose compiler and math library options for each system
 #   ========================================================
@@ -72,6 +81,8 @@ set GPUCODE=false
 #       LIBRARIES - extra system libraries which must be searched.
 #       BLAS      - set to blas.o if not using system BLAS.
 #                   set to blank if using system BLAS.
+#       LAPACK    - default: set to 'dgeev.o dgesvd.o zheev.o'
+#                 - set to blank to take LAPACK from a math lib
 #       VECTOR    - set to vector.o on a vector processor.
 #                   set to blank on a scalar processor.
 #       QUICHE    - set to zunix.o if using true dynamic memory,
@@ -80,12 +91,14 @@ set GPUCODE=false
 #   In principle, the 'config' step has captured enough information
 #   about library locations that no user need change anything below.
 
+# for all systems use GAMESS LAPACK (by default)
+   set LAPACK='dgeev.o dgesvd.o zheev.o'
 
 #   Digital/Compaq/HP 64 bit "alpha workstation"
 #   Use the Digital/Compaq eXtended Math Library for BLAS if installed.
 #
 if ($TARGET == axp64) then
-   set LDR='f77'
+   set LDR='f90'
    if (`uname` == Linux) set LDR='fort'
    set LDOPTS=''  #  -Wl,-M' shows load map, -non_shared to see libraries
    set LIBRARIES=' '
@@ -373,8 +386,9 @@ if ($TARGET == linux32) then
         set LDOPTS=' '  # add '-Wl,-M' to see load map
         set FORTLIBS='-Vaxlib'
         breaksw
+     case pgfortran
      case pgf77:
-        set LDR='pgf77'
+        set LDR="$GMS_FORTRAN"
         set LDOPTS='-g77libs -Mlfs'
         set FORTLIBS=' '
         breaksw
@@ -480,10 +494,15 @@ if ($TARGET == linux64) then
          set FORTLIBS=' '
          if($GMS_IFORT_VERNO < 10) set FORTLIBS='-Vaxlib'
          breaksw
+      case pgfortran:
       case pgf77:
-         set LDR='pgf77'
-         set LDOPTS='-i8 -i8storage -mcmodel=medium'
-         set LDOPTS="$LDOPTS -fastsse -Mipa=fast,safe -Mprof=func"
+         set LDR="$GMS_FORTRAN"
+         set LDOPTS="$GMS_LIN_FLAGS -i8 -i8storage -mcmodel=medium"
+         if ($GMS_L64_OPT == testing) then
+           set LDOPTS="$LDOPTS $GMS_PGI_OPT $GMS_IPA_OPT"
+         else
+           set LDOPTS="$LDOPTS -fastsse -Mipa=fast,safe"
+         endif
          set FORTLIBS=' '
          breaksw
       case pathf90:
@@ -724,7 +743,7 @@ endif
 #
 if ($TARGET == win32) then
 #
-#  settings which depend on the FORTRAN: pgf77, pgfortran
+#  settings which depend on the FORTRAN: pgfortran
 #
 #  WS2_32.Lib is needed for WinSock
 #
@@ -732,14 +751,13 @@ if ($TARGET == win32) then
 #
    switch ($GMS_FORTRAN)
      case pgfortran:
-     case pgf77:
-        set LDR=$GMS_FORTRAN
-        set LDOPTS="-Bstatic $GMS_WIN_FLAGS $GMS_WIN_TP"
-        if ($GMS_WIN_OPT == baseline) set LDOPTS="$LDOPTS -O0"
-        if ($GMS_WIN_OPT == linux)    set LDOPTS="$LDOPTS -O2"
-        if ($GMS_WIN_OPT == samara)   set LDOPTS="$LDOPTS -O3"
-        if ($GMS_WIN_OPT == fast)     set LDOPTS="$LDOPTS -fast -Mipa=fast,safe"
-        if ($GMS_WIN_OPT == testing)  set LDOPTS="$LDOPTS"
+        set LDR="$GMS_FORTRAN"
+        set LDOPTS="$GMS_WIN_FLAGS -Bstatic"
+        if ($GMS_WIN_OPT == baseline)     set LDOPTS="$LDOPTS -O0  $GMS_WIN_TP"
+        if ($GMS_WIN_OPT == linux)        set LDOPTS="$LDOPTS -O2  $GMS_WIN_TP"
+        if ($GMS_WIN_OPT == samara)       set LDOPTS="$LDOPTS -O3  $GMS_WIN_TP"
+        if ($GMS_WIN_OPT == fast)         set LDOPTS="$LDOPTS -fastsse -Mipa=fast,inline,safe  $GMS_WIN_TP"
+        if ($GMS_WIN_OPT == testing)      set LDOPTS="$LDOPTS $GMS_PGI_OPT $GMS_IPA_OPT  $GMS_WIN_TP"
 #
 #       For more detailed information as to which flags are being used
 #       by the compiler during the build - uncomment the line below.
@@ -767,20 +785,10 @@ if ($TARGET == win32) then
       set BLAS=' '
       breaksw
    case blas:
-      if (-e $PGI\\win32\\11.10\\lib\\libblas.lib) then
-         echo "Using PGI's 32-bit blas version 11.10"
-         set LIBRARIES="$LIBRARIES -lblas"
-         set BLAS=' '
-         breaksw
-      else
-         echo "********************************************"
-         echo "*** PROBLEM IN FINDING YOUR MATH LIBRARY ***"
-         echo "********************************************"
-         echo "You need to change the directory path from '11.10' to the"
-         echo "version 'X.X' that is installed on your system:"
-         echo "$PGI\\win32\\X.X\\lib\\libblas.lib"
-         exit 1
-      endif
+      echo "Using PGI's 32-bit blas"
+      set LIBRARIES="$LIBRARIES -lblas"
+      set BLAS=' '
+      breaksw
    case none:
    default:
       echo "Warning.  No math library was found, you should install one."
@@ -796,9 +804,9 @@ endif
 #
 #   ------ Windows on 64 bit chips -----
 #
-if ($TARGET == win64) then
+if (($TARGET == win64) || ($TARGET == winazure)) then
 #
-#  settings which depend on the FORTRAN: pgf77, pgfortran, ifort
+#  settings which depend on the FORTRAN: pgfortran, ifort
 #
 #  WS2_32.Lib is needed for WinSock
 #
@@ -806,29 +814,27 @@ if ($TARGET == win64) then
 #
    switch ($GMS_FORTRAN)
    case ifort:
-      set LDR = $GMS_FORTRAN
+      set LDR = "$GMS_FORTRAN"
       if (! $?VCINSTALLDIR) then
         echo "Set VCINSTALLDIR to the directory containing VC++ and try again" >&2
         exit 1
       endif
       set EXTRA_LINK_FLAGS="-Qlocation,link,$VCINSTALLDIR/bin"
-      set LDOPTS="-integer-size:64 -Qzero $GMS_WIN_FLAGS $GMS_WIN_TP"
-      if ($GMS_WIN_OPT == baseline)        set LDOPTS="$LDOPTS -Od"
-      if ($GMS_WIN_OPT == linux)           set LDOPTS="$LDOPTS -O2"
-      if ($GMS_WIN_OPT == samara)          set LDOPTS="$LDOPTS -O3"
-      if ($GMS_WIN_OPT == fast)            set LDOPTS="$LDOPTS -fast"
-      if ($GMS_WIN_OPT == testing)         set LDOPTS="$LDOPTS"
+      set LDOPTS="$GMS_WIN_TP -integer-size:64 -Qzero"
+      if ($GMS_WIN_OPT == baseline)        set LDOPTS="$LDOPTS -Od $GMS_WIN_FLAGS"
+      if ($GMS_WIN_OPT == linux)           set LDOPTS="$LDOPTS -O2 $GMS_WIN_FLAGS"
+      if ($GMS_WIN_OPT == samara)          set LDOPTS="$LDOPTS -O3 $GMS_WIN_FLAGS"
+      if ($GMS_WIN_OPT == fast)            set LDOPTS="$LDOPTS -fast $GMS_WIN_FLAGS"
+      if ($GMS_WIN_OPT == testing)         set LDOPTS="$LDOPTS $GMS_INT_OPT $GMS_IPO_OPT $GMS_WIN_FLAGS"
       breaksw
    case pgfortran:
-   case pgf77:
-      set LDR = $GMS_FORTRAN
-#
-      set LDOPTS="-i8 -Bstatic $GMS_WIN_FLAGS $GMS_WIN_TP"
-      if ($GMS_WIN_OPT == baseline)        set LDOPTS="$LDOPTS -O0"
-      if ($GMS_WIN_OPT == linux)           set LDOPTS="$LDOPTS -fastsse -Mipa=fast,safe"
-      if ($GMS_WIN_OPT == samara)          set LDOPTS="$LDOPTS -O3"
-      if ($GMS_WIN_OPT == fast)            set LDOPTS="$LDOPTS -fast    -Mipa=fast,safe"
-      if ($GMS_WIN_OPT == testing)         set LDOPTS="$LDOPTS"
+      set LDR = "$GMS_FORTRAN"
+      set LDOPTS="$GMS_WIN_FLAGS -i8 -Bstatic"
+      if ($GMS_WIN_OPT == baseline)        set LDOPTS="$LDOPTS -O0                             $GMS_WIN_TP"
+      if ($GMS_WIN_OPT == linux)           set LDOPTS="$LDOPTS -fastsse -Mipa=fast,safe        $GMS_WIN_TP"
+      if ($GMS_WIN_OPT == samara)          set LDOPTS="$LDOPTS -O3      -Mipa=fast,safe        $GMS_WIN_TP"
+      if ($GMS_WIN_OPT == fast)            set LDOPTS="$LDOPTS -fastsse -Mipa=fast,inline,safe $GMS_WIN_TP"
+      if ($GMS_WIN_OPT == testing)         set LDOPTS="$LDOPTS $GMS_PGI_OPT $GMS_IPA_OPT       $GMS_WIN_TP"
 #
 #     For more detailed information as to which flags are being used
 #     by the compiler during the build - uncomment the line below.
@@ -837,7 +843,7 @@ if ($TARGET == win64) then
 #
       breaksw
    default:
-      echo "Please spell your win64 compiler correctly."
+      echo "Please spell your win64/winazure compiler correctly."
       exit 4
       breaksw
    endsw
@@ -846,7 +852,7 @@ if ($TARGET == win64) then
 #
    switch ($GMS_MATHLIB)
    case mkl:
-      if (($GMS_FORTRAN == pgf77) || ($GMS_FORTRAN == pgfortran)) then
+      if ($GMS_FORTRAN == pgfortran) then
         set GMS_MATHLIB_DOSPATH=`cygpath -d $GMS_MATHLIB_PATH:q`
         set LIBRARIES="$LIBRARIES -Wl,-libpath:$GMS_MATHLIB_DOSPATH:q mkl_blas95_ilp64.lib mkl_intel_ilp64.lib mkl_sequential.lib mkl_core.lib"
         set BLAS=' '
@@ -859,7 +865,7 @@ if ($TARGET == win64) then
       endif
       breaksw
    case acml:
-      if (($GMS_FORTRAN == pgf77) || ($GMS_FORTRAN == pgfortran)) then
+      if ($GMS_FORTRAN == pgfortran) then
         set LIBRARIES="$LIBRARIES -Bdynamic -Macml"
         set BLAS=' '
         echo "Using ACML blas libraries"
@@ -871,22 +877,14 @@ if ($TARGET == win64) then
       endif
       breaksw
    case blas:
-      if (($GMS_FORTRAN == pgf77) || ($GMS_FORTRAN == pgfortran)) then
+      if ($GMS_FORTRAN == pgfortran) then
         set LIBRARIES="$LIBRARIES -Bstatic -lblas"
         set BLAS=' '
-        echo "Using PGI's 64-bit blas version 11.10"
+        echo "Using PGI's 64-bit blas"
       else if ($GMS_FORTRAN == ifort) then
         set LIBRARIES="$LIBRARIES $GMS_MATHLIB_PATH:q libblas.lib"
         set BLAS=' '
-        echo "Using PGI's 64-bit blas version 11.10"
-      else
-         echo "********************************************"
-         echo "*** PROBLEM IN FINDING YOUR MATH LIBRARY ***"
-         echo "********************************************"
-         echo "You need to change the directory path from '11.10' to the"
-         echo "version 'X.X' that is installed on your system:"
-         echo "$PGI\\win64\\X.X\\lib\\libblas.lib"
-         exit 1
+        echo "Using PGI's 64-bit blas"
       endif
       breaksw
    case none:
@@ -945,8 +943,12 @@ switch ($TARGET)
                set MPILIBS="$MPILIBS -lmpich -lrt"
                breaksw
             case mvapich2:
-               set MPILIBS="-L$GMS_MPI_PATH/lib -lmpich"
-         set MPILIBS="$MPILIBS -L$GMS_OFED_PATH -libverbs -lrdmacm -libumad"
+#      v1.6 does not need opa/mpl, although .a libs by these names exist,
+#           so there's no harm searching them (binary identical either way).
+#      v1.7 requires these two (and -lrt) to be linked in, so we include them.
+#      Note that MVAPICH2 also needs to specifically link OFED software.
+               set MPILIBS="-L$GMS_MPI_PATH/lib -lmpich -lopa -lmpl"
+      set MPILIBS="$MPILIBS -L$GMS_OFED_PATH -libverbs -lrdmacm -libumad -lrt"
                breaksw
             case myrinet:
                # very old information, perhaps not correct anymore.
@@ -1044,7 +1046,7 @@ switch ($TARGET)
 #     have to specify the actual location of the MS-MPI libraries.
 #
       if (($GMS_MPI_LIB == msmpi) && \
-         (($GMS_FORTRAN == pgf77) || ($GMS_FORTRAN == pgfortran))) set MPILIBS="-Mmpi=msmpi"
+          ($GMS_FORTRAN == pgfortran)) set MPILIBS="-Mmpi=msmpi"
       if (($GMS_MPI_LIB == msmpi) && ($GMS_FORTRAN == ifort)) then
          set MPILIBS=""
          if (! $?MSMPI_LIB64) then
@@ -1068,7 +1070,10 @@ switch ($TARGET)
         set MSG_LIBRARIES="c:/cygwin/$GMS_BUILD_DIR/ddi/libddi.a $MPILIBS"
       else
         set MSG_LIBRARIES="$GMS_BUILD_DIR/ddi/libddi.a $MPILIBS"
-   endif
+      endif
+      breaksw
+   case winazure:
+      set MSG_LIBRARIES=serial.o
       breaksw
 #               to get here must be a target typo.
    default:
@@ -1099,14 +1104,14 @@ set STANDARD_GAMESS_OBJ1=(aldeci.o algnci.o \
       dcscf.o  dctran.o ddilib.o delocl.o demrpt.o  \
       dft.o    dftaux.o dftdis.o dftfun.o dftgrd.o dftint.o  \
       dftxca.o dftxcb.o dftxcc.o dftxcd.o dftxce.o dftxcf.o dftxcg.o  \
-      dgeev.o  dgesvd.o dmulti.o drc.o     \
+      dmulti.o drc.o     \
       eaipcc.o ecp.o    ecpder.o ecplib.o ecppot.o  \
       efchtr.o efdrvr.o efelec.o efgrd2.o efgrda.o efgrdb.o efgrdc.o  \
       efinp.o  efinta.o efintb.o efmo.o   efpaul.o efpcm.o  efpcov.o  \
       efpfmo.o eftei.o   \
-      eigen.o  elglib.o elgloc.o elgscf.o eomcc.o  ewald.o  ffield.o  \
-      fmo.o    fmocp.o  fmoesd.o fmogrd.o fmohss.o fmoint.o fmoio.o   \
-      fmolib.o fmopbc.o fmoprp.o )
+      eigen.o  elglib.o elgloc.o elgscf.o eomcc.o  ewald.o  excorr.o \
+      ffield.o fmo.o    fmocp.o  fmoesd.o fmogrd.o fmohss.o fmoint.o \
+      fmoio.o  fmolib.o fmomm.o  fmopbc.o fmoprp.o )
 set STANDARD_GAMESS_OBJ2=(frfmt.o  fsodci.o  \
       g3.o     globop.o gmcpt.o  gradex.o guess.o   \
       grd1.o   grd2a.o  grd2b.o  grd2c.o   \
@@ -1134,23 +1139,28 @@ set STANDARD_GAMESS_OBJ3=(optcix.o ordint.o ormas1.o  \
       scflib.o scfmi.o  scrf.o   sfdft.o  sfgrad.o  \
       sobrt.o  soffac.o solib.o  sozeff.o  \
       statpt.o surf.o   svpchg.o svpinp.o svpleb.o symorb.o symslc.o  \
-      tddft.o  tddefp.o tddfun.o tddfxc.o tddgrd.o tddint.o tddxca.o  \
-      tddxcc.o tddxcd.o tdhf.o     \
+      tddft.o  tddefp.o tddfun.o tddfxc.o tddgrd.o tddint.o tddnlr.o  \
+      tddxca.o tddxcc.o tddxcd.o tdhf.o     \
       tdx.o    tdxio.o  tdxitr.o tdxni.o  tdxprp.o  \
       trans.o  trfdm2.o trnstn.o trudge.o umpddi.o utddft.o  \
-      vibanl.o vscf.o   vvos.o   zapddi.o zheev.o  zmatrx.o)
+      vibanl.o vscf.o   vvos.o   zapddi.o zmatrx.o)
+
 #
 #     unfortunately, the link command has become too long to show it
-#     explicitly (full command line exceeds 2048 bytes).   Show it
-#     piecemeal, taking great care that the order matches the LDR command.
+#     explicitly (full command line below will exceed 2048 bytes).
+#     Show what we will be linking piecemeal,
+#     taking great care that the order matches the actual LDR command.
 #
 echo " "
 echo The name of the linker on this machine is $LDR,
 echo and the linker options are \"$LDOPTS\".
 echo " "
-echo Object code list begins with gamess.o unport.o, followed by
-echo BLAS code=\"$BLAS\", VECTOR code=\"$VECTOR\", quiche=\"$QUICHE\",
-echo followed by the standard GAMESS object code list,
+echo 'Object code list begins "gamess.o unport.o",'
+echo 'followed by   BLAS object code '\"$BLAS\",
+echo 'followed by LAPACK object code '\"$LAPACK\",
+echo 'followed by VECTOR object code '\"$VECTOR\",
+echo 'followed by memory object code '\"$QUICHE\",
+echo 'followed by the standard GAMESS object code list,'
 echo " "
 echo $STANDARD_GAMESS_OBJ1
 echo $STANDARD_GAMESS_OBJ2
@@ -1163,20 +1173,25 @@ echo "Choices for some optional plug-in codes are"
 if ($TINKER == true) then
    set QMMMOBJ="Libtad.o Libteac.o Libtedl.o Libtemo.o Libterx.o Libtfi.o"
    set QMMMOBJ="$QMMMOBJ Libtjo.o Libtpr.o Libtsx.o Tdrive.o Tinkin.o Toys.o"
-   echo "   Tinker/SIMOMM files are $QMMMOBJ"
+   echo "   Tinker/SIMOMM object files are $QMMMOBJ"
 else
    set QMMMOBJ='qmmm.o'
-   echo "   Using $QMMMOBJ, Tinker/SIMOMM code is not linked."
+   echo "   Tinker/SIMOMM code is skipped, using dummy object file $QMMMOBJ"
 endif
 #
 #   VB is turned off with vbdum.o dummy substitute in GAMESS distribution.
 if (($VB2000 == true) || ($XMVB == true)) then
-   if ($VB2000 == true) set VBOBJ='vb2000.o vb2gms.o'
-   if ($XMVB == true)   set VBOBJ='xmvb.o'
-   echo "   valence bond files are $VBOBJ"
+   if ($VB2000 == true) then
+      set VBOBJ='vb2000.o vb2gms.o'
+      echo "   Valence Bond program VB2000 object files are $VBOBJ"
+   endif
+   if ($XMVB == true) then
+      set VBOBJ='xmvb.o'
+      echo "   Valence Bond program XMVB object files are $VBOBJ"
+   endif
 else
    set VBOBJ='vbdum.o'
-   echo "   Using $VBOBJ, neither VB program is linked."
+   echo "   Both VB programs are skipped, using dummy object file $VBOBJ"
 endif
 #
 #   NEO is turned off with neostb.o dummy substitute in GAMESS distribution.
@@ -1189,7 +1204,7 @@ if ($NEO == true) then
    echo "   Nuclear Electron Orbital code files are $NEOOBJ"
 else
    set NEOOBJ='neostb.o'
-   echo "   Using $NEOOBJ, Nuclear Electron Orbital code is not linked."
+   echo "   Nuclear Electron Orbital code skipped, using dummy object $NEOOBJ"
 endif
 #
 #    CUDA (et cetera) libraries below will require editing to match
@@ -1214,11 +1229,61 @@ else
    set GPU_LIBS=""
 endif
 #
+#   MPQC is turned off with mpqcst.o dummy substitute in GAMESS distribution.
+if ($MPQC == true) then
+# Make sure MPQC and LIBINT are present in $GMS_BUILD_DIR
+    if !(-e $GMS_BUILD_DIR/mpqc/lib/libmpqcinit.a || \
+        -e $GMS_BUILD_DIR/libint-gamess/lib/libint1.a) then
+        echo "   ERROR! MPQC AND/OR LIBINT COULD NOT BE FOUND IN THE GAMESS BUILD DIRECTORY: $GMS_BUILD_DIR/"
+        exit
+    endif
+# prepend path to MPQC libraries
+   set MPQCLIBS = "$GMS_BUILD_DIR/mpqc/src/bin/pt2r12/libpt2r12gamess.a"
+   foreach LIB_NAME (libmpqcinit.a libSCmbptr12.a libSClmp2.a libSClibint2.a \
+                     libSCmbpt.a libSCscf.a libSClcao.a libSCdistarray4.a \
+                     libSCwfn.a libSCmmisc.a libSCintv3.a libSCbasis.a \
+                     libSCoint3.a libSCmolecule.a libSCisosurf.a libSCsymmetry.a \
+                     libSCrender.a libSCoptimize.a libSCscmat.a libSCgroup.a \
+                     libSCmisc.a libSCstate.a libSCkeyval.a libSCclass.a \
+                     libSCcontainer.a libSCref.a libSCoptions.a)
+    set MPQCLIBS = "$MPQCLIBS $GMS_BUILD_DIR/mpqc/lib/$LIB_NAME"
+   end
+#LIBINT libraries
+   set LIBINT = "-L$GMS_BUILD_DIR/libint/lib -lint2 -lm -ldl"
+#LIBRARIES
+   switch ($GMS_MATHLIB)
+    case mkl:
+     set LIBRARIES = "-Wl,--start-group $LIBRARIES -Wl,--end-group -lstdc++"
+    breaksw
+    case acml:
+     set LIBRARIES="$GMS_MATHLIB_PATH/libacml.a -lm -lstdc++"
+    breaksw
+    case atlas:
+     set LIBRARIES = "$LIBRARIES  -llapack -lstdc++"
+    breaksw
+    case none:
+     echo 'system math library is required'
+     exit 4
+    breaksw
+   endsw
+# The system math libraries must contain LAPACK: remove GAMESS LAPACK
+   set LAPACK=''
+   set MPQCOBJ=''
+   echo "   MPQC libraries are $MPQCLIBS"
+   echo "   LIBINT2 libraries are $LIBINT"
+else
+   set MPQCOBJ='mpqcst.o'
+   set MPQCLIBS=''
+   set LIBINT=''
+   echo "   MPQC code is skipped, using dummy object file $MPQCOBJ"
+endif
+#
+#
 echo " "
-echo "   message passing libraries are"
+echo "   The message passing libraries searched are"
 echo $MSG_LIBRARIES
 echo " "
-echo "   other libraries to be searched are"
+echo "   Other libraries, including math libraries, to be searched are"
 echo $LIBRARIES
 echo " "
 #
@@ -1238,20 +1303,21 @@ endif
 #   Hence it has been printed out piecemeal, but in order, just above.
 #
 echo "Linker messages (if any) follow..."
-if (($TARGET == win64) || ($TARGET == win32)) then
+if (($TARGET == win32) || ($TARGET == win64) || ($TARGET == winazure)) then
   set GMS_BUILD_DIR_WIN=c:\/cygwin$GMS_BUILD_DIR
   set GMS_BUILD_DIR=$GMS_BUILD_DIR_WIN
 endif
 chdir $GMS_BUILD_DIR/object
 #
 $LDR  $EXTRA_LINK_FLAGS:q -o $GMS_BUILD_DIR/$EXE.$VERNO.x $LDOPTS \
-      gamess.o unport.o $BLAS $VECTOR $QUICHE \
+      gamess.o unport.o $BLAS $LAPACK $VECTOR $QUICHE \
       $STANDARD_GAMESS_OBJ1 \
       $STANDARD_GAMESS_OBJ2 \
       $STANDARD_GAMESS_OBJ3 \
       $QMMMOBJ $VBOBJ $NEOOBJ \
       $GMS_EXTRA_OBJS \
       $GPU_LIBS \
+      $MPQCOBJ $MPQCLIBS $LIBINT \
       $MSG_LIBRARIES $LIBRARIES $EXTRA_MPI_LIB_FLAGS:q
 #
 set rc=$status
