@@ -1,3 +1,5 @@
+C 05 MAY 12 - DPT - CEEIS CODE REDESIGNED TO SUPPORT THE SIMULTANIOUS
+C                   CALCULATION OF MULTIPLE ELECTRONIC STATE ENERGIES
 C  7 MAR 12 - MWS - ALIGN DETWFN COMMON
 C 17 Feb 12 - LBR - updated DETWFN common block
 C 11 AUG 10 - DGF - SYNCH COMMON BLOCK ENRGYS
@@ -7,15 +9,22 @@ C 25 JUN 07 - TN  - IMPLEMENT AN AUTOMATIC CEEIS METHOD
 C
 C*MODULE CEEIS   *DECK CEEISCHK
       SUBROUTINE CEEISCHK
+CCC   -----------------------------------
+CCC   PURPOSE OF CEEISCHK IS TO DETERMINE 
+CCC   IF A CEEIS CALCULATION IS DESIRED.
+CCC   IT DOES THIS BY LOOKING FOR THE
+CCC   $CEEIS KEYWORD IN THE INPUT FILE.
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
       LOGICAL CEECHK
+      CHARACTER*7 CEEIS
 C
       COMMON /CEEIS0/ ICEEIS
       COMMON /CEEIS3/ NEEDCI, CEECHK
-      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /IOFILE/ IR,IW,IP,IS,IJKT,IDAF,NAV,IODA(950)
 C
+      CEEIS = ' $CEEIS'
       CEECHK = .FALSE.
       IEOF = 0
       CALL SEQREW(IR)
@@ -27,671 +36,2559 @@ C
       END IF
       RETURN
       END
-C*MODULE CEEIS   *DECK CEEISIN
-      SUBROUTINE CEEISIN
+CCC   --- END OF CEEISCHK ---
 C
+C
+C*MODULE CEEIS   *DECK CEEISIN
+      SUBROUTINE CEEISIN(INPOLD,IEXCMX,NRNFG,NPFLG)
+CCC   ----------------------------------------
+CCC   PURPOSE OF CEEISIN IS TO READ THE $CEEIS SECTION OF
+CCC   THE INPUT FILE AND TO CONSTRUCT THE FOLLOWING ARRAYS
+CCC
+CCC   M1M2EX(I):       The array that specifies the values for m
+CCC                    that are used to perform the extrapolations
+CCC                    for each state and excitation, x.
+CCC
+CCC   NSTCAL(m,x):     specifies how many states need to be
+CCC                    calculated at each m and x pair in order
+CCC                    to perform every extrapolation that is
+CCC                    requested through the M1M2EX array.
+CCC
+CCC   IAD1(state,x):   Specifies the first point in the M1M2EX
+CCC                    array that describes the extrapolation of a
+CCC                    specific state and x pair.
+CCC
+CCC   IAD1SZ(state,x): Specifies the number of points in the M1M2EX
+CCC                    array that describes the extrapolation of a
+CCC                    specific state and x pair.
+CCC
+CCC   MXEXST(state):   Specifices the number of excitations, x,
+CCC                    performed on each specific state.
+C
+C
+CCC
+CCC   LIST THE COMMON VARIABLES USED IN THIS SUBROUTINE
+CCC
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
-      LOGICAL GOPARR,DSKWRK,MASWRK,SMRCI,RESTRT,CEMEM,CEMXPN
-      LOGICAL FDIRCT,QCORR
+      LOGICAL GOPARR,DSKWRK,MASWRK,SMRCI,RESTRT,CEMEM,CEMXPN,
+     *        FDIRCT,QCORR,TRIPEX,AUTO,REFCAL,FLGEND,FLGFLL
 C
       PARAMETER (MXATM=2000)
       PARAMETER (MXRT=100)
-      PARAMETER (ZERO=0.0D+00)
-      PARAMETER (MMX=500,IEXMX=50)
+      PARAMETER (ZERO=0.0D+00,XTOLPAR=2.0D-04)
+      PARAMETER (MMX=500,IEXMX=49)
+      PARAMETER (MXM1M2=750)
 C
-CZ    CHARACTER*4 ATM
-CZ    CHARACTER*6 BALTYP
-CZ    CHARACTER*10 UATOM
-CZ    DOUBLE PRECISION MOROKM,MAKEFP,MD,LCCD,NMR,MDTYP,METHMC
-CZ    INTEGER DDI_NP,DDI_ME,FLO,CEIL,DIFF
+      DIMENSION IVEC(5)
 C
-CZ    DIMENSION COM(3,MXATM),VMOI(3)
-      DIMENSION IEMAT(MMX,IEXMX)
-C
-CZ    COMMON /INFO  / CDUM(MXATM,3),IZAN(MXATM),NATOMS,IUNTRD,ATM(MXATM)
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NEE,NAA,NBB,
      *                AN(MXATM),C(3,MXATM),IAN(MXATM)
-      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /IOFILE/ IR,IW,IP,IS,IJKT,IDAF,NAV,IODA(950)
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
-CZ
       COMMON /DETWFN/ WSTATE(MXRT),SPINS(MXRT),CRIT,PRTTOL,S,SZ,
      *                GRPDET,STSYM,GLIST,DWPARM,
      *                NFLGDM(MXRT),IWTS(MXRT),NCORSV,NCOR,NACT,NORB,
      *                NA,NB,K,KST,IROOT,IPURES,MAXW1,NITER,MAXP,NCI,
      *                IGPDET,KSTSYM,NFTGCI,IDWEIGH
-      COMMON /CEEIS0/ ICEEIS
-      COMMON /CEEIS1/ MMIN0,MMIN,IDELTM,SMRCI,M1M2EX(MMX),
-     *                XTRTOL(IEXMX),ISCHME,ISTPEX,RESTRT,CEMEM,CEMXPN,
-     *                NSEXT(51),IEXPEMT
-      COMMON /CEEIS2/ ECONT(IEXMX),EMAT(MMX,IEXMX),ENREF,
-     *                MEMCE(MMX,IEXMX),MXPNCE(MMX,IEXMX),
-     *                ISTEX(IEXMX),MEX(IEXMX),MMC
-CZ    SINCE THIS BLOCK IS ADDED, CEEISIN MUST BE CALLED AFTER FCINPUT
+      COMMON /CIFILS/ NFT11,NFT12,NFT13,NFT14,NFT15,NFT16,IDAF20,NEMEMX
+      COMMON /ENRGYS/ ENUCR,EELCT,ETOT,STOT,SZZ,ECORE,ESCF,EERD,E1,E2,
+     *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2),EDISP
+C
+      COMMON /CEEIS1/ M1M2EX(MXM1M2),ENREF(MXRT),ISCHME,RESTRT,
+     *                TRIPEX,ISTPEX,IDELTM,AUTO,NPTAUTO,
+     *                XTRTOL(MXRT*IEXMX),MMIN,MMIN0,IEXPEMT,SMRCI,
+     *                CEMEM,CEMXPN
+      COMMON /CEEIS2/ ECONT(MXRT*IEXMX),MXEXST(MXRT+1),
+     *                IAD1(MXRT+1,IEXMX),IAD1SZ(MXRT+1,IEXMX),
+     *                NSTCAL(MMX,IEXMX),IAD2(IEXMX),MSTRT(IEXMX),
+     *                MEND(IEXMX),MMC,MMAX,ICEDATA
+      COMMON /CEEIS4/ NSEXT(51),MINISV(51),MAXISV(51)
+C
+C  -- SINCE THIS BLOCK IS ADDED, CEEISIN MUST BE CALLED AFTER FCINPUT
       COMMON /FCCWFN/ NSPACE,MSTA(51),MNUM(51),MINI(51),MAXI(51),
      *                IAMI(51),IAMA(51),IBMI(51),IBMA(51),IDIM(51),
      *                LBST(51),NREF0,FDIRCT,QCORR,C0SQ
-C
-C      ----- SET UP NAMELIST $CEEIS TABLES -----
-C
-      PARAMETER (NNAM=13)
+CCC
+CCC
+CCC    ----- SET UP NAMELIST $CEEIS TABLES -----
+CCC
+      PARAMETER (NNAM=17)
       DIMENSION QNAM(NNAM),KQNAM(NNAM)
       DATA CEEIS /8HCEEIS   /
-      DATA QNAM/8HMMIN    ,8HIDELTM  ,8HSMRCI   ,8HM1M2EX  ,
-     *          8HXTRTOL  ,8HISCHME  ,8HISTPEX  ,8HRESTRT  ,
-     *          8HCEMEM   ,8HCEMXPN  ,8HENREF   ,8HNSEXT   ,
-     *          8HIEXPND  /
-      DATA KQNAM /1,1,0,5001,  503,1,1,0,  0,0,3,511, 1/
+      DATA QNAM /8HM1M2EX  ,8HENREF   ,8HISCHME  ,8HRESTRT  ,
+     *           8HTRIPEX  ,8HISTPEX  ,8HIDELTM  ,8HNSEXT   ,
+     *           8HAUTO    ,8HNPAUTO  ,8HXTRTOL  ,8HMMIN    ,
+     *           8HINPOLD  ,8HIEXPND  ,8HSMRCI   ,8HCEMEM   ,
+     *           8HCEMXPN  /
+      DATA KQNAM /-1,-3,1,0,  0,1,1,-1,  0,1,-3,1,
+     *             1,1,0,0,   0/
+      KQNAM(1)=10*MXM1M2 + 1
+      KQNAM(2)=10*MXRT + 3
+      KQNAM(8)=10*51 + 1
+      KQNAM(11)=10*MXRT*IEXMX + 3
 C
-C     ===== CORRELATION ENERGY EXTRAPOLATION BY INTRINSIC SCALING =====
-C      PROGRAMMED BY TAKESHI NAGATA, IOWA STATE UNIVERSITY, JUNE 2007.
-C     METHOD DEVELOPED BY KLAUS RUEDENBERG, LAIMUTIS BYTAUTAS 2004-2007.
+C     ~~~ WRITE THE FOLLOWING HEADER
+C   ---------------------------------------------------------
+C   CEEIS CALCULATION
+C   TAKESHI NAGATA, LAIMUTIS BYTAUTAS, KLAUS RUEDENBERG
+C   AMES LABORATORY USDOE, IOWA STATE UNIVERSITY, 2007
+C   REFERENCES:  L. BYTAUTAS AND K.RUEDENBERG, J. CHEM. PHYS.
+C   121, 10905 (2004); 121, 10919 (2004); 122, 154110 (2005).
+C   ---------------------------------------------------------
+C     ~~~ END OF HEADER
+      IF (MASWRK) WRITE(IW,2000)
 C
 C     ----- INITIALIZE VARIABLES FOR NAMELIST $CEEIS -----
 C
-CZ
-      IF (MASWRK) WRITE (6,9000)
-C
-      NANB = NA + NB
-      MREF  = MSTA(NSPACE) - MSTA(1)
-      MMIN0 = MAX(MREF,NANB)
-      MMIN0 = MMIN0 + NCOR + 1
-      MMIN  = MMIN0
+      NSTATE  = K
+      NELS    = NA + NB
+      MREF    = MSTA(NSPACE) - MSTA(1)
+      MMIN0   = MAX(MREF,NELS) + NCOR + 1
+      MMIN    = MMIN0
+      MMC     = NQMT
       IDELTM  = 1
       ISCHME  = 1
       ISTPEX  = 8
+      NPTAUTO = 6
+      INPOLD  = 0
       IEXPEMT = 0
-      ENREF  = ZERO ! REFERENCE ENERGY
-      SMRCI  = .FALSE.
-      RESTRT = .FALSE.
-      CEMEM  = .FALSE.
-      CEMXPN = .FALSE.
-      DO I = 1, MMX
-        M1M2EX(I) = 0
+      RESTRT  = .FALSE.
+      TRIPEX  = .FALSE.
+      AUTO    = .FALSE.
+      SMRCI   = .FALSE.
+      CEMEM   = .FALSE.
+      CEMXPN  = .FALSE.
+C
+      DO I = 1, MXM1M2
+        M1M2EX(I) = -1
       END DO
-      DO I = 4, ISTPEX
-        XTRTOL(I-3) = 2.0D-04
+C
+      IELE = 1
+      DO IEXC = 1, IEXMX
+        DO I = 1, NSTATE
+          XTRTOL(IELE) = ZERO
+          IELE = IELE + 1
+        END DO
       END DO
-      DO I = ISTPEX+1, IEXMX+3
-        XTRTOL(I-3) = ZERO
-      END DO
+C
       DO I = 1, 51
-        NSEXT(I) = 1
+          NSEXT(I) = 1
       END DO
-CZ
 C
-C        ----- READ NAMELIST $CEEIS  -----
-C
+      DO I = 1, NSTATE
+        ENREF(I) = ZERO
+      END DO
+CCC
+CCC      ----- READ NAMELIST $CEEIS  -----
+CCC
       JRET = 0
       CALL NAMEIO(IR,JRET,CEEIS,NNAM,QNAM,KQNAM,
-     *            MMIN,IDELTM,SMRCI,M1M2EX,XTRTOL,
-     *            ISCHME,ISTPEX,RESTRT,CEMEM,CEMXPN,
-     *            ENREF,NSEXT,IEXPEMT,
-     *                       0,0,   0,0,0,0,0    0,0,0,0,0,
+     *            M1M2EX,ENREF,ISCHME,RESTRT,TRIPEX,
+     *            ISTPEX,IDELTM,NSEXT,AUTO,NPTAUTO,XTRTOL,
+     *            MMIN0,INPOLD,IEXPEMT,SMRCI,CEMEM,CEMXPN,
+     *                                    0,0,   0,0,0,0,0,
      *   0,0,0,0,0,    0,0,0,0,0,   0,0,0,0,0,   0,0,0,0,0,
      *   0,0,0,0,0,    0,0,0,0,0,   0,0,0,0,0,   0,0,0,0,0)
+CCC
+CCC
+CCC   ---- IF $CEEIS ENCOUNTERED AN ERROR WITH ONE OF ----
+CCC   ---- ITS KEY WORDS ABORT                        ----
+CCC
       IF(JRET .EQ. 2) THEN
-         IF (MASWRK) WRITE (IW,9005)
-         CALL ABRT
+        IF (MASWRK) WRITE(IW,*)
+        CALL ABRT
       END IF
-C
-C
-C     ---- IF $CEEIS NOT FOUND, RETURN ----
-C
-      IF(JRET.EQ.1) THEN
-         ICEEIS = 0
-         RETURN
-      END IF
-C
+CCC
+CCC
+CCC   ---- CHECK FOR ANY OTHER TYPES OF ERRORS ----
+CCC
       NERR = 0
       IF (MMIN.LT.MMIN0) THEN
-         IF (MASWRK) WRITE(IW,9010) 'MMIN', MMIN
-         NERR = NERR+1
+        IF (MASWRK) WRITE(IW,'(A,/,A,I2,".")')
+     *      ' A BAD VALUE WAS GIVEN FOR MMIN.',
+     *      ' MMIN MUST BE GREATER THEN OR EQUAL TO ',MMIN0
+        NERR = NERR+1
       END IF
+      MREF    = MMC-1
+      ITMP    = MMX+MMIN-1
+      MMAX    = MIN(MREF,ITMP)
 C
       IF (IDELTM.LE.0) THEN
-         IF (MASWRK) WRITE(IW,9010) 'IDELTM', IDELTM
-         NERR = NERR+1
-      END IF
-C
-      IF (ISTPEX.NE.4.AND.IDELTM.NE.2.AND.SMRCI) THEN
-         IF (MASWRK) WRITE(IW,*)
-     *   'IF SMRCI IS TRUE, IDELTM AND ISTPEX MUST BE 2 AND 4'
-         NERR = NERR+1
+        IF (MASWRK) WRITE(IW,'(A,A,I2,".")')
+     *    ' ERROR: $CEEIS KEYWORD IDELTM WAS',
+     *    ' GIVEN AN ILLEGAL VALUE ', IDELTM
+        NERR = NERR+1
       END IF
 C
       IF (ISCHME.NE.1.AND.ISCHME.NE.2) THEN
-         IF (MASWRK) WRITE(IW,*) 'ISCHME MUST BE 1 OR 2',ISCHME
-         NERR = NERR+1
+        IF (MASWRK) WRITE(IW,'(A)')
+     *     ' ISCHME MUST BE 1 OR 2.'
+        NERR = NERR+1
       END IF
 C
+      ISTPEX = ISTPEX - 1
       IF (ISTPEX.GT.IEXMX) THEN
-         IF (MASWRK) WRITE(IW,*)
-     *               'ISTPEX MUST BE LESS THAN ',IEXMX
-         NERR = NERR+1
-      END IF
-      IF (ISTPEX.LT.4) THEN
-         IF (MASWRK) WRITE(IW,*)
-     *               'ISTPEX IS AT LEAST 4, QUADRUPLE'
-         NERR = NERR+1
+        IF (MASWRK) WRITE(IW,'(A,I2,".")')
+     *    ' ISTPEX MUST BE LESS THAN OR EQUAL TO ', IEXMX+1
+        NERR = NERR+1
       END IF
 C
-      IF (ENREF.GT.ZERO) THEN
-         IF (MASWRK) WRITE(IW,9015) 'ENREF', ENREF
-         NERR = NERR+1
+      IF (ISTPEX.LT.3) THEN
+        IF (MASWRK) WRITE(IW,'(A,A)')
+     *     ' ISTPEX MUST BE GREATER THEN',
+     *     ' OR EQUAL TO 4.'
+        NERR = NERR+1
       END IF
 C
-      DO I = 4, ISTPEX
-        IF (XTRTOL(I-3).EQ.ZERO) THEN
-          IF (MASWRK) WRITE(IW,9015) 'XTRTOL', XTRTOL(I-3)
-          NERR = NERR+1
-          GOTO 100
-        END IF
-      END DO
-  100 CONTINUE
+      IF (NPTAUTO.LT.2) THEN
+        IF (MASWRK) WRITE(IW,'(A,A)')
+     *     ' NPTAUTO MUST BE GREATER THEN',
+     *     ' OR EQUAL TO 2.'
+        NERR = NERR+1
+      END IF
+C
+      IF ((ISTPEX.NE.3.OR.IDELTM.NE.2) .AND. SMRCI) THEN
+        IF (MASWRK) WRITE(IW,'(A,A)')
+     *    ' IF SMRCI IS TRUE, IDELTM AND ISTPEX',
+     *    ' MUST BE 2 AND 4.'
+        NERR = NERR+1
+      END IF
 C
       IF (CEMEM.OR.CEMXPN) THEN
-         IF (MASWRK) WRITE(IW,9015)
-     *      'CURRENTLY CEMEM AND CEMXPN ARE NOT AVAILABLE'
-         NERR = NERR+1
+        IF (MASWRK) WRITE(IW,'(A)')
+     *    ' CURRENTLY CEMEM AND CEMXPN ARE NOT AVAILABLE.'
+        NERR = NERR+1
       END IF
 C
-CZ
-CZ    IEXC: INDICATES WHICH EXCITATION
-CZ    IELE: THE NUMBER OF ELEMENTS IN THE EXCITATION
-CZ
-      IEXC  = 0
-      IELE  = 0
-      IPREV = 0
-      ISTEX(1) = 2
-      DO I = 1, 500
-C
-        M1M2 = M1M2EX(I)
-        IF (IELE.EQ.0) THEN
-          IEXC = IEXC + 1
-          IF (M1M2.EQ.0) THEN
-            IELE = 1
-          ELSE
-            IF (MASWRK) WRITE(IW,*) 'DELIMITER MUST BE 0 ',
-     *                              'IN',IEXC+2,'-PULE EXC'
-            NERR = NERR+1
-          END IF
-        ELSEIF (IELE.EQ.1) THEN
-          IF (M1M2.EQ.0.OR.M1M2.GE.MMIN) THEN
-            IELE  = IELE + 1
-            IPREV = M1M2EX(I)
-          ELSE
-            IF (MASWRK) WRITE(IW,*) M1M2
-            IF (MASWRK) WRITE(IW,*) 'FIRST ELEMENT MUST BE MORE THAN ',
-     *                         MMIN-1,'OR ZERO IN',IEXC+1,'-PULE EXC'
-            NERR = NERR+1
-          END IF
-        ELSEIF (IELE.EQ.2) THEN
-          IF (M1M2.EQ.0) THEN
-            IF (IPREV.EQ.0) THEN
-              MEX(IEXC) = IELE
-              ISTEX(IEXC+1)  = I + 2
-              IELE  = 0
-            ELSE
-              IF (MASWRK) WRITE(IW,*) 'VALUE IN ELEMENT ',I,
-     *           ' IS 0 THOUGH PREV VALUE IS OTHER THAN 0'
-              NERR = NERR+1
-            ENDIF
-          ELSEIF (M1M2.GE.MMIN) THEN
-            ! FOR IELE=2, M1M2EX > MMIN
-            IF (IPREV.EQ.0) THEN
-              IF (MASWRK) WRITE(IW,*) 'VALUE IN ELEMENT ',I,
-     *           ' IS OTHER THAN 0 THOUGH PREV VALUE IS 0'
-              NERR = NERR+1
-            ELSEIF (M1M2.GT.IPREV) THEN
-              IELE  = IELE + 1
-              IPREV = M1M2
-            ELSE
-              IF (MASWRK) WRITE(IW,*) 'ELEMENTS MUST BE ',
-     *           'INCREMENTAL NUMBERS'
-              NERR = NERR+1
-            ENDIF
-          ELSEIF (M1M2.LT.0) THEN
-            IF (IPREV.EQ.0) THEN
-              IF (MASWRK) WRITE(IW,*) 'VALUE IN ELEMENT ',I,
-     *           ' IS NEGATIVE THOUGH PREV VALUE IS 0'
-              NERR = NERR+1
-            ELSEIF (-M1M2.GT.IPREV) THEN
-              IELE  = IELE + 1
-              IPREV = M1M2
-            ELSE
-              IF (MASWRK) WRITE(IW,*) 'ABSOLUTE VALUE IN ELEMENT ',
-     *           I, ' IS SMALLER THAN THE PREVIOUS VALUE'
-              NERR = NERR+1
-            ENDIF
-          ENDIF
-        ELSEIF (IELE.GE.3) THEN
-          IF (M1M2.EQ.0) THEN
-            MEX(IEXC) = IELE - 1
-            IEXC = IEXC + 1
-            ISTEX(IEXC) = I + 1
-            IELE  = 1
-            IPREV = 0
-          ELSEIF (M1M2.GT.MMIN) THEN
-            IELE  = IELE + 1
-            IPREV = M1M2
-          ELSEIF (M1M2.LT.0) THEN
-            IF (IPREV.GT.0.AND.-M1M2.GT.IPREV) THEN
-              IELE  = IELE + 1
-              IPREV = M1M2
-            ELSE
-              IF (MASWRK) WRITE(IW,*) 'VALUE IN ELEMENT ',I-1,
-     *           ' MUST BE CHANGED'
-              NERR = NERR+1
-            ENDIF
-          ELSE
-            IF (MASWRK) WRITE(IW,*) 'VALUE IN ELEMENT ',I,
-     *         ' IS LESS THAN ', MMIN
-            NERR = NERR+1
-          ENDIF
-        ENDIF
-C
-        IF (IEXC+2.GT.ISTPEX) GOTO 101
-      END DO
-  101 CONTINUE
-C
-CZ
-CZ    PUT RISTRICTION FOR RECURSIVE CEEIS
-CZ    EX: M1M2EX(1)=0,0,0,0,0,0,0,0,0,0 --> OK
-CZ        M1M2EX(1)=0,?,?,0,0,0,0,0,0,0 --> OK
-CZ        M1M2EX(1)=0,?,?,0,0,0,0,%,%,0 --> KILLED
-CZ        M1M2EX(1)=0,0,0,0,%,%,0,0,0,0 --> KILLED
-CZ        ? AND % ARE NUMBERS
-CZ
-      ICUNT = 0
-      NCUNT = 0
-      DO III = 2, ISTPEX - 2
-        IF (III.EQ.2.OR.ISCHME.EQ.1) THEN
-          NCUNT = NCUNT + 1
-        ELSEIF (III.GE.3) THEN
-          IF (MOD(III,2).EQ.0) THEN
-            NCUNT = NCUNT + 1
-          ELSE
-            GOTO 105
-          END IF
+      IF (INPOLD.NE.0) THEN
+        IF (RESTRT.AND.(NSTATE.NE.1)) THEN
+          IF (MASWRK) WRITE(IW,'(A,A,A)')
+     *      ' THE PREVIOUSLY CALCULATED ENERGIES CAN',
+     *      ' ONLY SUBMITTED USING THE $CEDATA SECTION',
+     *      ' OF THE INPUT FILE IF NSTATE=1 IN $CIDET.'
+          NERR = NERR+1
         END IF
-        IF (M1M2EX(ISTEX(III)).EQ.0) THEN
-          ICUNT = ICUNT + 1
-        ENDIF
-  105   CONTINUE
-      END DO
-      IF (ICUNT.GT.0.AND.ICUNT.NE.NCUNT) THEN
-        IF (MASWRK) THEN
-        WRITE(6,*) 'IF YOU USE RECURSIVE CEEIS, M1M2EX(1) ',
-     *            'MUST BE ALL ZEROS EXCEPT FOR TRIPLE EXC'
-        WRITE(6,*) 'ISTPEX MUST BE CHOSEN EQUAL TO HIGHEST ',
-     *         'SPECIFIED EXCITATION LEVEL IN M1M2EX(1)'
-        ENDIF
-        NERR = NERR + 1
-      ENDIF
-      IF (ICUNT.EQ.0.AND.SMRCI) THEN
-        IF (MASWRK) WRITE(6,*) 'SMRCI MUST BE RECURSIVE CEEIS'
-        NERR = NERR + 1
-      ENDIF
-      DO I = 1, 51
-        IF (NSEXT(I).NE.1.AND.NSEXT(I).NE.0) THEN
-          IF (MASWRK) WRITE(6,*) 'NSEXT(1) MUST BE 0 OR 1'
-          NERR = NERR + 1
-        END IF
-      END DO
-      IF (IEXPEMT.LT.0) THEN
-        IF (MASWRK) WRITE(6,*) 'IEXPEMT MUST BE POSITIVE'
-        NERR = NERR + 1
       END IF
-CZ
-CZ    READ $CEEIS GROUP
-CZ
-CZ    THE NUMBER OF CORRELATING ORBITALS
-CZ    MMC = NQMT - NCOR - (NA+NB)/2
-      MMC = NQMT
-      IF (RESTRT) CALL RDCEEIS
-CZ
-      DO J = 1, ISTPEX - 1
-        DO I = 1, MMC - MMIN + 1
-          IEMAT(I,J) = 0
-          IF (EMAT(I,J).LT.ZERO) THEN
-            IEMAT(I,J) = 1
+C
+      IF (AUTO .EQV. .FALSE.) THEN
+        IF (INPOLD.EQ.2) THEN
+          TRIPEX = .TRUE.
+          IF ((M1M2EX(1).EQ.0).AND.(M1M2EX(2).EQ.0)) THEN
+            IF ((M1M2EX(3).EQ.0).AND.(M1M2EX(4).EQ.0)) THEN
+              TRIPEX = .FALSE.
+              DO I = 4, MXM1M2
+                M1M2EX(I-3) = M1M2EX(I)
+              END DO
+              M1M2EX(MXM1M2-2) = -1
+              M1M2EX(MXM1M2-1) = -1
+              M1M2EX(MXM1M2)   = -1
+            END IF
           END IF
+        END IF
+      END IF
+CCC
+CCC
+CCC   Initial creation of the NSTCAL(m,x); IAD1(state,x);
+CCC   IAD1SZ(state,x); and MXEXST(state) matrices.
+CCC
+CCC   Definition of Terms
+CCC   ------------------------------------------------------
+CCC   I:      Specifices the current position within M1M2EX.
+CCC
+CCC   MXM1M2: Specifies the number of elements in M1M2EX.
+CCC
+CCC   IELE:   Specifices the current number of elements are
+CCC           associated with the current state and
+CCC           excitation, x.
+CCC
+CCC   IEXC:   Indicates the current excitation that is being
+CCC           specified by the M1M2EX array.
+CCC
+CCC   IEXMX:  Specifies the largest possible value for IEXC.
+CCC           (which is actually IEXMX+1)
+CCC
+CCC   MMIN:   The smallest possible value of m.
+CCC
+CCC   MMAX:   The largest possible value of m.
+CCC
+CCC   ISTCUR: Indicates the current state that is being
+CCC           specified by the M1M2EX array.
+CCC           ISTCUR must be less then or equal to NSTATE.
+CCC           ISTCUR Also helps identify the values that
+CCC           belong in the NSTCAL(x,m) matrix.
+CCC           If ISTCUR=0, then the infomation will describe
+CCC           any state that is not given a unique set of
+CCC           extrapolation points.
+CCC
+CCC   NSTATE: Specifies the largest number of states that can
+CCC           be calculated.
+CCC
+CCC   IEXCST: The maximum number of x values that will be
+CCC           considered for a specific state.
+CCC
+CCC   IEXCMX: The maximum number of x values that is considered
+CCC           for any state.
+CCC
+CCC   ISTPEX: The default number of x values that will be
+CCC           considered when a specific value for IEXCST is not
+CCC           specified.
+CCC
+CCC   FLGEND: A logical variable that determines when to exit the
+CCC           main do loop.  When FLGEND == TRUE, exit the do loop.
+CCC
+CCC   FLGFLL: A logical variable that is set to true when ISTCUR=0
+CCC           and is false when ISTCUR does not equal 0.
+CCC
+C
+C     *** INITALIZE THE ARRAYS ***
+C
+      III = MXRT + 1
+      DO I = 1, III
+        MXEXST(I) = 0
+        DO IEXC = 1, IEXMX
+          IAD1(I,IEXC) = 0
+          IAD1SZ(I,IEXC) = 0
         END DO
       END DO
-CZ
-CZ
-CZ    I-PLE EXC MUST CONTAINE SOME OF ORBITALS FOR I+1(I+2)-PLE EXC
-CZ
-      DO III = 1, ISTPEX-3
-        IEX1 = ISTEX(III)
-        IF (III.GE.2.AND.ISCHME.EQ.2) THEN
-          IF (MOD(III,2).EQ.0) THEN
-            NEX  = III + 2
-            IEX2 = ISTEX(III+2)
+C
+      DO KJ = 1, MMX
+        DO IEXC = 1, IEXMX
+          NSTCAL(KJ,IEXC) = 0
+        END DO
+      END DO
+C
+      DO IEXC = 1, IEXMX
+        MSTRT(IEXC) = MMC
+        MEND(IEXC) = 0
+      END DO
+C
+      I = 1
+      IELE = 0
+      IEXCMX = 0
+      IDELTEX = 1
+      FLGEND = .FALSE.
+      IF (AUTO) FLGEND = .TRUE.
+      IF (ISCHME.EQ.2) IDELTEX = 2
+      IF (NERR.NE.0) FLGEND = .TRUE.
+C
+C
+C     *** ENTERING THE MAIN LOOP ***
+C
+      DO
+C       --- TERMINATION TEST ---
+        IF (FLGEND) EXIT
+C
+C       Element 0 of M1M2 (relative to a specific state)
+C
+        IF (IELE.EQ.0) THEN
+          FLGFLL = .FALSE.
+          M1M2 = M1M2EX(I)
+          IF (TRIPEX) THEN
+            IEXC = 2
           ELSE
-            GOTO 104
+            IEXC = 3
           END IF
-        ELSE
-          NEX  = III + 1
-          IEX2 = ISTEX(III+1)
-        END IF
-        IF (M1M2EX(IEX1).NE.0.AND.M1M2EX(IEX2).NE.0) THEN
-          I = 0
-  102     CONTINUE
+C
+C         -- M1M2,El=0 == -1 --
+          IF (M1M2.EQ.-1) THEN
+            IF (I.EQ.1) THEN
+              IF (MASWRK) WRITE(IW,'(A,/,A)')
+     *          ' NO VALUES WERE LISTED FOR THE M1M2EX ARRAY.',
+     *          ' THE AUTOMATIC PROCEDURE WILL BE USED.'
+              AUTO=.TRUE.
+            END IF
+C
+C           --- If I does not equal 1 it specifies the
+C           --- end of the M1M2EX array.
+            FLGEND = .TRUE.
+C
+C         -- M1M2,El=0 < -1 --
+          ELSE IF (M1M2.LT.-1) THEN
+            IF (MASWRK) WRITE(IW,'(A,I3,A)')
+     *         ' AN ERROR OCCURRED NEAR INDEX I=', I,
+     *         ' OF THE M1M2EX ARRAY.'
+            NERR = NERR + 1
+            FLGEND = .TRUE.
+C
+C         -- M1M2,El=0 > THE TOTAL NUMBER OF STATES --
+          ELSE IF (M1M2.GT.NSTATE) THEN
+            IF (MASWRK) WRITE(IW,'(A,I3,A)')
+     *         ' AN ERROR OCCURRED NEAR INDEX I=', I,
+     *         ' OF THE M1M2EX ARRAY.'
+            NERR = NERR + 1
+            FLGEND = .TRUE.
+C
+C         -- M1M2,El=0 == 0 --
+          ELSE IF (M1M2.EQ.0) THEN
+            ISTCUR = NSTATE
+            IEXCST = ISTPEX
+            FLGFLL = .TRUE.
+            IELE = 1
             I = I + 1
-            IF (M1M2EX(IEX2+I).LT.0) THEN
-              ISTART =  M1M2EX(IEX2+I-1)
-              IEND   = -M1M2EX(IEX2+I)
+C
+C         -- 0 < M1M2,El=0 <= NUMBER OF STATES --
+          ELSE
+            ISTCUR = M1M2
+            I = I + 1
+            M1M2 = M1M2EX(I)-1
+            IF (M1M2.EQ.-1) THEN
+              IEXCST = ISTPEX
+              IELE = 1
+              I = I + 1
+            ELSE IF (M1M2.LT.3) THEN
+              IF (MASWRK) WRITE(IW,'(A,I3,A)')
+     *           ' AN ERROR OCCURRED NEAR INDEX I=', I,
+     *           ' OF THE M1M2EX ARRAY.'
+              NERR = NERR + 1
+              FLGEND = .TRUE.
+            ELSE IF (M1M2.GT.IEXMX) THEN
+              IF (MASWRK) WRITE(IW,'(A,I3,A)')
+     *           ' AN ERROR OCCURRED NEAR INDEX I=', I,
+     *           ' OF THE M1M2EX ARRAY.'
+              NERR = NERR + 1
+              FLGEND = .TRUE.
+            ELSE
+              IF (ISCHME.EQ.2) THEN
+                IF ((M1M2.NE.2).AND.(MOD(M1M2,2).EQ.0)) THEN
+                  IF (MASWRK) WRITE(IW,'(A,I3,A)')
+     *              ' AN ERROR OCCURRED NEAR INDEX I=', I,
+     *              ' OF THE M1M2EX ARRAY.'
+                  NERR = NERR + 1
+                  FLGEND = .TRUE.
+                END IF
+              END IF
+C
+              IF (FLGEND .EQV. .FALSE.) THEN
+                IEXCST = M1M2
+                I = I + 1
+                M1M2 = M1M2EX(I)
+                IF (M1M2.EQ.0) I = I + 1
+                IELE = 1
+              END IF
+            END IF
+          END IF
+C
+          IF (FLGEND .EQV. .FALSE.) THEN
+            ISTTMP = ISTCUR
+            IF (FLGFLL) ISTTMP = NSTATE+1
+            IF (MXEXST(ISTTMP).EQ.0) THEN
+              MXEXST(ISTTMP) = IEXCST
+            ELSE
+              IF (MASWRK) WRITE(IW,'(A,A,I3,".")')
+     *          ' MORE THEN ONE SET OF EXTRAPOLATION',
+     *          ' DATA WAS SPECIFICED FOR STATE ',ISTTMP
+              NERR = NERR + 1
+              FLGEND = .TRUE.
+            END IF
+            IF (IEXCST.GT.IEXCMX) IEXCMX = IEXCST
+          END IF
+C
+C
+C       Element 1 of M1M2 (relative to a specific state)
+C
+        ELSE IF (IELE.EQ.1) THEN
+          M1M2 = M1M2EX(I)
+C
+C         -- M1M2,El=1 >= MMAX (It cannot be equal to MMAX --
+C         --                    because then there would be --
+C         --                    no space for a 2nd point)   --
+          IF (M1M2.GE.MMAX) THEN
+            IF (MASWRK) WRITE(IW,'(A,I3,A)')
+     *         ' AN ERROR OCCURRED NEAR INDEX I=', I,
+     *         ' OF THE M1M2EX ARRAY.'
+            NERR = NERR + 1
+            FLGEND = .TRUE.
+C
+C         -- M1M2,El=1 < M min --
+          ELSE IF (M1M2.LT.MMIN) THEN
+            IF (MASWRK) WRITE(IW,'(A,I3,A)')
+     *         ' AN ERROR OCCURRED NEAR INDEX I=', I,
+     *         ' OF THE M1M2EX ARRAY.'
+            NERR = NERR + 1
+            FLGEND = .TRUE.
+C
+C         -- M min <= M1M2,El=1 < M Max (MMAX) --
+          ELSE
+            ISTTMP = ISTCUR
+            IF (FLGFLL) ISTTMP = NSTATE+1
+            IAD1(ISTTMP,IEXC) = I
+            ITMP = MSTRT(IEXC)
+            IF (M1M2.LT.ITMP) THEN
+              MSTRT(IEXC) = M1M2
+            END IF
+C
+            IPREV = M1M2
+            I = I + 1
+            M1M2 = M1M2EX(I)
+            IF (M1M2.GT.IPREV) THEN
+              KJ = IPREV - MMIN + 1
+              ITMP = NSTCAL(KJ,IEXC)
+              IF (ISTCUR.GT.ITMP) THEN
+                NSTCAL(KJ,IEXC) = ISTCUR
+              END IF
+              IELE = 2
+            ELSE
+              M1M2 = -M1M2
+              IF (M1M2.GT.IPREV) THEN
+                IF (M1M2.GT.MMAX) THEN
+                  IF (MASWRK) WRITE(IW,'(A,I3,A)')
+     *               ' AN ERROR OCCURRED NEAR INDEX I=', I,
+     *               ' OF THE M1M2EX ARRAY.'
+                  NERR = NERR + 1
+                  FLGEND = .TRUE.
+                ELSE
+                  KJ = IPREV - MMIN + 1
+                  DO J = IPREV, M1M2, IDELTM
+                    ITMP = NSTCAL(KJ,IEXC)
+                    IF (ISTCUR.GT.ITMP) THEN
+                      NSTCAL(KJ,IEXC) = ISTCUR
+                    END IF
+                    KJ = KJ + IDELTM
+                  END DO
+                  I = I + 1
+                  IELE = 3
+                  IPREV = M1M2
+                END IF
+              ELSE
+                IF (MASWRK) WRITE(IW,'(A,I3,A)')
+     *             ' AN ERROR OCCURRED NEAR INDEX I=', I,
+     *             ' OF THE M1M2 ARRAY.'
+                NERR = NERR + 1
+                FLGEND = .TRUE.
+              END IF
+            END IF
+          END IF
+C
+C
+C       Element 2 and up of M1M2 (relative to a specific state)
+C
+        ELSE
+          M1M2 = M1M2EX(I)
+C
+C         -- M1M2,El>=2 == -1 --
+          IF (M1M2.EQ.-1) THEN
+            ISTTMP = ISTCUR
+            IF (FLGFLL) ISTTMP = NSTATE+1
+            IAD1SZ(ISTTMP,IEXC)=IELE-1
+            ITMP = MEND(IEXC)
+            IF (IPREV.GT.ITMP) THEN
+              MEND(IEXC) = IPREV
+            END IF
+C
+            IF (IEXC.LT.IEXCST) THEN
+              IADTMP = IAD1(ISTTMP,IEXC)
+              M1ST = M1M2EX(IADTMP)
+              MLAST = IPREV
+              IEX2 = IEXC + IDELTEX
+              IF (IEXC.EQ.2) IEX2 = 3
+              DO IEX2=IEX2, IEXCST, IDELTEX
+                IAD1(ISTTMP,IEX2)=IADTMP
+                IAD1SZ(ISTTMP,IEX2)=IELE-1
+                ITMP = MSTRT(IEX2)
+                IF (M1ST.LT.ITMP) THEN
+                  MSTRT(IEX2) = M1ST
+                END IF
+                ITMP = MEND(IEX2)
+                IF (MLAST.GT.ITMP) THEN
+                  MEND(IEX2) = MLAST
+                END IF
+C
+                III = 0
+                DO
+                  IPREV = M1M2EX(IADTMP+III)
+                  III = III + 1
+                  M1M2 = -M1M2EX(IADTMP+III)
+                  KJ = IPREV - MMIN + 1
+                  IF (M1M2.LT.IPREV) THEN
+                    M1M2 = IPREV
+                  ELSE
+                    III = III + 1
+                  END IF
+                  DO J = IPREV, M1M2, IDELTM
+                    IF (ISTCUR.GT.NSTCAL(KJ,IEX2)) THEN
+                      NSTCAL(KJ,IEX2) = ISTCUR
+                    END IF
+                    KJ = KJ + IDELTM
+                  END DO
+                  IF (III.GE.IELE) EXIT
+                END DO
+              END DO
+            END IF
+            IELE = 0
+            I = I + 1
+C
+C         -- M1M2,El>=2 == 0 --
+          ELSE IF (M1M2.EQ.0) THEN
+            ISTTMP = ISTCUR
+            IF (FLGFLL) ISTTMP = NSTATE+1
+            IAD1SZ(ISTTMP,IEXC)=IELE-1
+            ITMP = MEND(IEXC)
+            IF (IPREV.GT.ITMP) THEN
+              MEND(IEXC) = IPREV
+            END IF
+C
+            I = I + 1
+            M1M2 = M1M2EX(I)
+            IF (M1M2.EQ.-1) THEN
+              IF (IEXC.LT.IEXCST) THEN
+                IADTMP = IAD1(ISTTMP,IEXC)
+                M1ST = M1M2EX(IADTMP)
+                MLAST = IPREV
+                IEX2 = IEXC + IDELTEX
+                IF (IEXC.EQ.2) IEX2 = 3
+                DO IEX2=IEX2, IEXCST, IDELTEX
+                  IAD1(ISTTMP,IEX2)=IADTMP
+                  IAD1SZ(ISTTMP,IEX2)=IELE-1
+                  ITMP = MSTRT(IEX2)
+                  IF (M1ST.LT.ITMP) THEN
+                    MSTRT(IEX2) = M1ST
+                  END IF
+                  ITMP = MEND(IEX2)
+                  IF (MLAST.GT.ITMP) THEN
+                    MEND(IEX2) = MLAST
+                  END IF
+C
+                  III = 0
+                  DO
+                    IPREV = M1M2EX(IADTMP+III)
+                    III = III + 1
+                    M1M2 = -M1M2EX(IADTMP+III)
+                    KJ = IPREV - MMIN + 1
+                    IF (M1M2.LT.IPREV) THEN
+                      M1M2 = IPREV
+                    ELSE
+                      III = III + 1
+                    END IF
+                    DO J = IPREV, M1M2, IDELTM
+                      IF (ISTCUR.GT.NSTCAL(KJ,IEX2)) THEN
+                        NSTCAL(KJ,IEX2) = ISTCUR
+                      END IF
+                      KJ = KJ + IDELTM
+                    END DO
+                    IF (III.GE.IELE) EXIT
+                  END DO
+                END DO
+              END IF
+              IELE = 0
               I = I + 1
             ELSE
-              ISTART =  M1M2EX(IEX2+I-1)
-              IEND   =  ISTART
-            ENDIF
-C
-            DO J = ISTART, IEND
-              IOK = 0
-CZ RESTART CHECK
-              DO KJ = 1, MMC - MMIN + 1
-                IF (J.EQ.KJ+MMIN-1) THEN
-                  IF (IEMAT(KJ,III+1).EQ.1) GOTO 106
-                END IF
-              END DO
-CZ
-              KK  = 0
-  103         CONTINUE
-                KK = KK + 1
-                IF (M1M2EX(IEX1+KK).LT.0) THEN
-                  KSTART =  M1M2EX(IEX1+KK-1)
-                  KEND   = -M1M2EX(IEX1+KK)
-                  KK = KK + 1
-                ELSE
-                  KSTART =  M1M2EX(IEX1+KK-1)
-                  KEND   =  KSTART
-                ENDIF
-                DO L = KSTART, KEND
-                  IF (L.EQ.J) GOTO 106
-                END DO
-              IF (KK.LT.MEX(III)) GOTO 103
-              IOK = IOK + 1
-  106         CONTINUE
-              IF (IOK.NE.0) THEN
-                IF (MASWRK) WRITE (6,*) 'FOR EXC ',III+3,' OR ',III+4,
-     *                      'REDUNDANT NUMBER ',J,
-     *                      ' IS INCLUDED IN M1M2EX(1)'
-                NERR = NERR + 1
+              IELE = 1
+              IF (IEXC.EQ.2) THEN
+                IEXC = IEXC + 1
+              ELSE
+                IEXC = IEXC + IDELTEX
               END IF
-            END DO
-          IF (I.LT.MEX(NEX)) GOTO 102
-        ENDIF
-  104   CONTINUE
+              IF (IEXC.GT.IEXCST) THEN
+                IF (MASWRK) WRITE(IW,'(A,I3,A)')
+     *             ' AN ERROR OCCURRED NEAR INDEX I=', I,
+     *             ' OF THE M1M2EX ARRAY.'
+                NERR = NERR + 1
+                FLGEND = .TRUE.
+              END IF
+            END IF
+C
+C         -- M1M2,El>=2 > M Max --
+          ELSE IF (M1M2.GT.MMAX) THEN
+            IF (MASWRK) WRITE(IW,'(A,I3,A)')
+     *         ' AN ERROR OCCURRED NEAR INDEX I=', I,
+     *         ' OF THE M1M2EX ARRAY.'
+            NERR = NERR + 1
+            FLGEND = .TRUE.
+C
+C         -- M1M2,El>=2 <= Previous --
+          ELSE IF (M1M2.LE.IPREV) THEN
+            IF (MASWRK) WRITE(IW,'(A,I3,A)')
+     *         ' AN ERROR OCCURRED NEAR INDEX I=', I,
+     *         ' OF THE M1M2EX ARRAY.'
+            NERR = NERR + 1
+            FLGEND = .TRUE.
+C
+C         -- M1M2,El>=2 > Previous Value --
+          ELSE
+            IPREV = M1M2
+            I = I + 1
+            M1M2 = -M1M2EX(I)
+            IF (M1M2.GT.MMAX) THEN
+              IF (MASWRK) WRITE(IW,'(A,I3,A)')
+     *           ' AN ERROR OCCURRED NEAR INDEX I=', I,
+     *           ' OF THE M1M2EX ARRAY.'
+              NERR = NERR + 1
+              FLGEND = .TRUE.
+            ELSE IF (M1M2.GT.IPREV) THEN
+              KJ = IPREV - MMIN + 1
+              DO J = IPREV, M1M2, IDELTM
+                ITMP = NSTCAL(KJ,IEXC)
+                IF (ISTCUR.GT.ITMP) THEN
+                  NSTCAL(KJ,IEXC) = ISTCUR
+                END IF
+                KJ = KJ + IDELTM
+              END DO
+              I = I + 1
+              IELE = IELE + 2
+              IPREV = M1M2
+            ELSE
+              KJ = IPREV - MMIN + 1
+              ITMP = NSTCAL(KJ,IEXC)
+              IF (ISTCUR.GT.ITMP) THEN
+                NSTCAL(KJ,IEXC) = ISTCUR
+              END IF
+              IELE = IELE + 1
+            END IF
+          END IF
+        END IF
+C
+C
+C       Closing Steps
+C
+        IF (I.GT.MXM1M2) THEN
+          IF (MASWRK) WRITE(IW,'(A,A,I3,".")')
+     *      ' THE ARRAY THAT WAS SPECIFIED FOR M1M2EX',
+     *      ' WAS LARGER THEN ',MXM1M2
+          NERR = NERR + 1
+          FLGEND=.TRUE.
+        END IF
       END DO
-CZ
+CCC
+CCC
+      IF (AUTO .EQV. .FALSE.) THEN
+CCC
+CCC     Complete the IAD1(state,x); IAD1SZ(state,x); 
+CCC     and MXEXST(state) matrices.
+CCC
+        ITMP = MXEXST(NSTATE+1);
+        IF (ITMP.NE.0) THEN
+          DO I = 1, NSTATE
+            IEXCST = MXEXST(I)
+            IF (IEXCST.EQ.0) THEN
+              MXEXST(I) = ITMP
+              DO J = 2, ITMP
+                IAD1(I,J) = IAD1(NSTATE+1,J)
+                IAD1SZ(I,J) = IAD1SZ(NSTATE+1,J)
+              END DO
+            END IF
+          END DO
 C
-C
-C     ----- ONE OR MORE ERRORS DETECTED, BLOW THE JOB AWAY -----
-C
-      IF(NERR.GT.0) THEN
-         IF (MASWRK) WRITE(IW,9200) NERR
-         CALL ABRT
-      END IF
-CZ
-C
-C
-C        PRINT $CEEIS
-C
-      IF (MASWRK) THEN
-        WRITE (IW,9520) MMIN  , IDELTM, SMRCI ,  ISCHME,
-     *                  ISTPEX, RESTRT, CEMEM ,  CEMXPN,
-     *                  ENREF,  IEXPEMT
-        WRITE (IW,9525)
-        DO I = 1, ISTPEX-2
-          WRITE (IW,9530) I+2,(M1M2EX(ISTEX(I)+J),J=0,MEX(I)-1)
+          MXEXST(NSTATE+1) = 0
+          DO J = 2, ITMP
+            IAD1(NSTATE+1,J) = 0
+            IAD1SZ(NSTATE+1,J) = 0
+          END DO
+        END IF
+CCC
+CCC
+CCC     Augment the NSTCAL matrix so that each E(m,x) value has
+CCC     the corresponding E(m,x-1) or E(m,x-2) value that it
+CCC     needs to complete the extrapolation.
+CCC
+C       -- Excitation == 4 --
+        M1ST = MSTRT(3)
+        MLAST = MEND(3)
+        KJ = M1ST - MMIN + 1
+        DO J = M1ST, MLAST
+          ITMP = NSTCAL(KJ,3)
+          IF (ITMP.GT.NSTCAL(KJ,2)) THEN
+            NSTCAL(KJ,2) = ITMP
+          END IF
+          KJ = KJ + 1
         END DO
-        WRITE (IW,9540) (XTRTOL(I-3),I=4,ISTPEX)
-        WRITE (IW,9600)
+        IF (M1ST.LT.MSTRT(2)) MSTRT(2) = M1ST
+        IF (MLAST.GT.MEND(2)) MEND(2) = MLAST
+C
+C       -- Excitation > 4, Scheme 1 --
+        IF (ISCHME.EQ.1) THEN
+          DO IEXC = 4, IEXCMX
+            IEX2 = IEXC - 1
+            IEX3 = IEXC - 2
+            IEX4 = IEXC - 3
+            M1ST = MSTRT(IEXC)
+            MLAST = MEND(IEXC)
+            KJ = M1ST - MMIN + 1
+            DO J = M1ST, MLAST
+              ITMP = NSTCAL(KJ,IEXC)
+              IF (ITMP.GT.NSTCAL(KJ,IEX2)) THEN
+                NSTCAL(KJ,IEX2) = ITMP
+              END IF
+C
+              IF (ITMP.GT.NSTCAL(KJ,IEX3)) THEN
+                NSTCAL(KJ,IEX3) = ITMP
+              END IF
+C
+              IF (ITMP.GT.NSTCAL(KJ,IEX4)) THEN
+                NSTCAL(KJ,IEX4) = ITMP
+              END IF
+C
+              KJ = KJ + 1
+            END DO
+            IF (M1ST.LT.MSTRT(IEX2)) MSTRT(IEX2) = M1ST
+            IF (MLAST.GT.MEND(IEX2)) MEND(IEX2) = MLAST
+            IF (M1ST.LT.MSTRT(IEX3)) MSTRT(IEX3) = M1ST
+            IF (MLAST.GT.MEND(IEX3)) MEND(IEX3) = MLAST
+            IF (M1ST.LT.MSTRT(IEX4)) MSTRT(IEX4) = M1ST
+            IF (MLAST.GT.MEND(IEX4)) MEND(IEX4) = MLAST
+          END DO
+C
+C       -- Excitation > 4, Scheme 2 --
+        ELSE
+          DO IEXC = 4, IEXCMX
+            IF (MOD(IEXC,2).EQ.1) THEN
+              IEX2 = IEXC - 2
+              M1ST = MSTRT(IEXC)
+              MLAST = MEND(IEXC)
+              KJ = M1ST - MMIN + 1
+              DO J = M1ST, MLAST
+                ITMP = NSTCAL(KJ,IEXC)
+                IF (ITMP.GT.NSTCAL(KJ,IEX2)) THEN
+                  NSTCAL(KJ,IEX2) = ITMP
+                END IF
+C
+                IF (ITMP.GT.NSTCAL(KJ,2)) THEN
+                  NSTCAL(KJ,2) = ITMP
+                END IF
+C
+                KJ = KJ + 1
+              END DO
+              M1ST = MSTRT(IEXC)
+              MLAST = MEND(IEXC)
+              IF (M1ST.LT.MSTRT(IEX2)) MSTRT(IEX2) = M1ST
+              IF (MLAST.GT.MEND(IEX2)) MEND(IEX2) = MLAST
+              IF (M1ST.LT.MSTRT(2)) MSTRT(2) = M1ST
+              IF (MLAST.GT.MEND(2)) MEND(2) = MLAST
+            END IF
+          END DO
+        END IF
+C
+C       -- Excitation == 3 --
+        M1ST = MSTRT(2)
+        MLAST = MEND(2)
+        KJ = M1ST - MMIN + 1
+        DO J = M1ST, MLAST
+          NSTCAL(KJ,1) = NSTCAL(KJ,2)
+          KJ = KJ + 1
+        END DO
+        IF (M1ST.LT.MSTRT(1)) MSTRT(1) = M1ST
+        IF (MLAST.GT.MEND(1)) MEND(1) = MLAST
+CCC
+CCC
+      ELSE
+CCC
+CCC     ADDITIONAL SET UP FOR THE AUTOMATIC 
+CCC     PROCEDURE
+CCC
+C--
+C--        IF (TRIPEX) THEN
+C--          IF (XTRTOL(1).EQ.ZERO) THEN
+C--            IF (MASWRK) WRITE(IW,*)
+C--     *       ' EITHER NO VALUE OR A BAD VALUE WAS GIVEN FOR',
+C--     *       ' XTRTOL(1).'/
+C--     *       ' THE DEFAULT VALUE (',XTOLPAR,') WILL BE USED.'
+C--            XTRTOL(I) = XTOLPAR
+C--          END IF
+C--        END IF
+C--        DO I = 2, ISTPEX
+C--          IF (XTRTOL(I).EQ.ZERO) THEN
+C--            IF (MASWRK) WRITE(IW,*)
+C--     *       ' EITHER NO VALUE OR A BAD VALUE WAS GIVEN FOR',
+C--     *       ' XTRTOL(',I,').'/
+C--     *       ' THE DEFAULT VALUE WILL BE USED.' 
+C--            XTRTOL(I) = XTOLPAR
+C--          END IF
+C--        END DO
+      END IF
+CCC
+CCC
+CCC     Determine if the reference energies need to be
+CCC     recalculated.
+CCC
+      REFCAL = .FALSE.
+      DO I = 1, NSTATE
+        IF (MXEXST(I).NE.0) THEN
+          IF (ENREF(I).GE.ZERO) THEN
+            IF (MASWRK) WRITE(IW,'(A,A,I3,".")')
+     *        ' EITHER NO VALUE OR A BAD VALUE WAS',
+     *        ' GIVEN FOR REFERENCE ENERGY I=', I
+            REFCAL = .TRUE.
+          END IF
+        END IF
+      END DO
+      IF (REFCAL) THEN
+        IF (MASWRK) WRITE(IW,'(A,A)')
+     *    ' THE REFERENCE ENERGIES WILL BE',
+     *    ' RECALCULATED.'
+      END IF
+CCC
+CCC
+CCC   IF THE REF ENERGIES WERE NOT GIVEN,
+CCC   RECALCULATE THEM
+CCC
+      IF (REFCAL) THEN
+        ISTTMP = 0
+        DO I = 1, NSTATE
+          IF (MXEXST(I).NE.0) ISTTMP = I
+        END DO
+        K = ISTTMP
+C
+        CALL ORDET(NRNFG,NPFLG)
+        CALL SEQCLO(IJKT,'DELETE')
+        CALL SEQCLO(NFT12,'DELETE')
+        DO I = 1, ISTTMP
+          ENREF(I) = ESTATE(I)
+        END DO
+      END IF
+CCC
+CCC
+      IF(NERR.GT.0) THEN
+CCC     ~~~ WRITE THE INFO AND TERMINATE THE CALCULATION
+CCC                *** ERROR(S) DETECTED ***
+CCC   YOUR $CEEIS INPUT HAS AT LEAST ONE SPELLING OR LOGIC
+CCC   MISTAKE.
+CCC   PLEASE REVIEW THE REASON(S) JUST LISTED, AND TRY YOUR
+CCC   RUN AGAIN.
+CCC     ~~~ END OF PRINT OUT
+C
+        IF (MASWRK) WRITE(IW,2100)
+        CALL ABRT
+      END IF
+CCC
+CCC
+CCC   PRINT $CEEIS DATA
+CCC
+      IF (MASWRK) THEN
+        WRITE (IW,2200) NSTATE, IEXCMX, ISTPEX, ISTPEX,
+     *                  ISCHME, ISCHME, IDELTM, IDELTM
+        IF (RESTRT) THEN
+          WRITE (IW,2210)
+        ELSE
+          WRITE (IW,2211)
+        END IF
+        IF (TRIPEX) THEN
+          WRITE (IW,2220) MMC
+        ELSE
+          WRITE (IW,2221) MMC
+        END IF
+        IF (AUTO) THEN
+          WRITE (IW,2230)
+        ELSE
+          WRITE (IW,2231)
+        END IF
+        IF (SMRCI) THEN
+          WRITE (IW,2240)
+        ELSE
+          WRITE (IW,2241)
+        END IF
+        IF (INPOLD.EQ.0) THEN
+          WRITE (IW,2250) INPOLD
+        ELSE
+          WRITE (IW,2251) INPOLD
+        END IF
+        WRITE (IW,2260) CEMEM, CEMXPN
+C
+        IF (INPOLD.NE.0)
+     *     WRITE (IW,2300) ISTPEX, ISTPEX, ISTPEX-IEXPEMT,
+     *                     IEXPEMT, MMIN0, MMIN0
+C
+        IF (AUTO)
+     *     WRITE (IW,2400) ISTPEX, ISTPEX, MMIN0, MMIN0,
+     *                     NPTAUTO, NPTAUTO
+C
+        WRITE (IW,2500)
         IF (NCOR.NE.0) THEN
-          WRITE (IW,9650) 1, NCOR, 2*NCOR
+          WRITE (IW,2510) 1, NCOR, 2*NCOR
         END IF
         DO I = 1, NSPACE-1
           IF (NSEXT(I).EQ.1) THEN
-            WRITE (IW,9700) MSTA(I),MSTA(I+1)-1,MINI(I),MAXI(I)
+            WRITE (IW,2520) MSTA(I), MSTA(I+1)-1, MINI(I), MAXI(I)
           ELSE
-            WRITE (IW,9750) MSTA(I),MSTA(I+1)-1,MINI(I),MAXI(I)
+            WRITE (IW,2521) MSTA(I), MSTA(I+1)-1, MINI(I), MAXI(I)
           END IF
         END DO
-        WRITE (IW,9800) MSTA(NSPACE),MMC,MINI(I),MAXI(I)
-        WRITE (IW,9850) NA+NB+NCOR*2
-        WRITE (IW,9550)
-      END IF
+        WRITE (IW,2530) MSTA(NSPACE), MMAX, MINI(I), MAXI(I)
+        WRITE (IW,2540) NELS, NELS+2*NCOR
 C
- 9000 FORMAT(/3X,57(1H-)/
+        WRITE (IW,2600)
+        DO I = 1, NSTATE
+          IF (MXEXST(I).NE.0) THEN
+            WRITE (IW,2610) I, ENREF(I)
+          END IF
+        END DO
+        WRITE (IW,2620)
+C
+        IF (AUTO) THEN
+          WRITE (IW,2700)
+          WRITE (IW,2710)
+          IELE=3
+          DO
+            IF (IELE.EQ.ISTPEX) EXIT
+            IPREV=IELE
+            IELE = IELE + 5
+            IF (IELE.GT.ISTPEX) IELE = ISTPEX
+            WRITE (IW,2720)
+            DO IEXC=IPREV, IELE
+              WRITE (IW,2730) IEXC
+            END DO
+            WRITE (IW,2710)
+            DO I=1, NSTATE
+              WRITE (IW,2740) I
+              DO IEXC=IPREV, IELE
+                WRITE (IW,2750) XTRTOL(IELE-2)
+              END DO
+            END DO
+            WRITE (IW,2710)
+          END DO
+          WRITE (IW,'(/)')
+C
+        ELSE
+          DO ISTCUR=1, NSTATE
+            IEXCST = MXEXST(ISTCUR)
+            IF (IEXCST.EQ.0) THEN
+              WRITE (IW,2800) ISTCUR
+            ELSE
+              WRITE (IW,2810) ISTCUR
+              IEXC = 3
+              IF (TRIPEX) IEXC = 2
+              DO
+                IF (IEXC.GT.IEXCST) EXIT
+                IADTMP = IAD1(ISTCUR,IEXC)
+                IELE = IAD1SZ(ISTCUR,IEXC)
+                III = 0
+                J = 1
+                ITMP = 1
+                DO
+                  IPREV = M1M2EX(IADTMP+III)
+                  III = III + 1
+                  M1M2 = -M1M2EX(IADTMP+III)
+                  IF (M1M2.LT.IPREV) THEN
+                    M1M2 = IPREV
+                  ELSE
+                    III = III + 1
+                  END IF
+                  DO I = IPREV, M1M2, IDELTM
+                    IVEC(J) = I
+                    J = J + 1
+                    IF (J.EQ.6) THEN
+                      IF (ITMP.EQ.1) THEN
+                        WRITE (IW,2820) IEXC+1, IVEC(1:5)
+                        ITMP = 2
+                      ELSE
+                        WRITE (IW,2830) IVEC(1:5)
+                      END IF
+                      J = 1
+                    END IF
+                  END DO
+                  IF (III.GE.IELE) EXIT
+                END DO
+                IF (J.NE.1) THEN
+                  IF (ITMP.EQ.1) THEN
+                    WRITE (IW,2820) IEXC+1, IVEC(1:J-1)
+                  ELSE
+                    WRITE (IW,2830) IVEC(1:J-1)
+                  END IF
+                END IF
+                IEXC = IEXC + 1
+C                IF ((IEXC.NE.3).AND.(ISCHME.EQ.2)) IEXC = IEXC + 1
+              END DO
+              WRITE (IW,2840)
+            END IF
+          END DO
+C
+          M1ST = MSTRT(1)
+          MLAST = MEND(1)
+          DO IEXC=2, IEXCMX
+            IF (M1ST.GT.MSTRT(IEXC)) M1ST = MSTRT(IEXC)
+            IF (MLAST.LT.MEND(IEXC)) MLAST = MEND(IEXC)
+          END DO
+          DO I=1, NSTATE
+            IF (MXEXST(I).NE.0) ISTTMP = I
+          END DO
+C
+          WRITE (IW,2900)
+          IELE=0
+          DO
+            IF (IELE.EQ.IEXCMX) EXIT
+            IPREV = IELE
+            IELE  = IELE + 10
+            IF (IELE.GT.IEXCMX) IELE = IEXCMX
+            WRITE (IW,2910) (IEXC+1, IEXC = IPREV+1, IELE)
+            WRITE (IW,2920)
+            KJ = M1ST-MMIN+1
+            DO I=M1ST, MLAST
+              WRITE (IW,2930) I,
+     *           (NSTCAL(KJ,IEXC), IEXC = IPREV+1, IELE)
+              KJ = KJ + 1
+            END DO
+            IF (IPREV.EQ.0) THEN
+              IF (TRIPEX) THEN
+                WRITE (IW,2930) MMC, ISTTMP,
+     *            (0, IEXC = IPREV+2, IELE)
+              ELSE
+                WRITE (IW,2930) MMC, ISTTMP, ISTTMP,
+     *            (0, IEXC = IPREV+3, IELE)
+              END IF
+            ELSE
+              WRITE (IW,2930) MMC,
+     *          (0, IEXC = IPREV+1, IELE)
+            END IF
+            WRITE (IW,2940)
+          END DO
+C
+        END IF
+      END IF
+CCC
+      RETURN
+CCC
+CCC   FORMAT COMMANDS REFERENCED ABOVE
+CCC
+ 2000 FORMAT(/3X,57(1H-)/
      *  3X,'CEEIS CALCULATION'/
      *  3X,'TAKESHI NAGATA, LAIMUTIS BYTAUTAS, KLAUS RUEDENBERG'/
      *  3X,'AMES LABORATORY USDOE, IOWA STATE UNIVERSITY, 2007'/
      *  3X,'REFERENCES:  L. BYTAUTAS AND K.RUEDENBERG, J. CHEM. PHYS.'/
      *  3X,'121, 10905 (2004); 121, 10919 (2004); 122, 154110 (2005).'/
-     *  3X, 57(1H-))
- 9005 FORMAT(1X,'TYPING ERROR IN $CONTRL INPUT - CHECK NEAR $ MARKER')
- 9010 FORMAT(/1X,'ERROR: $CEEIS KEYWORD ',A6,
-     *          ' WAS GIVEN AN ILLEGAL VALUE ',I8,'.'/)
- 9015 FORMAT(/1X,'ERROR: $CONTRL KEYWORD ',A6,
-     *          ' WAS GIVEN AN ILLEGAL VALUE ',F10.8,'.'/)
- 9200 FORMAT(/1X,'             *** ERROR(S) DETECTED ***'/
-     *        1X,'YOUR $CEEIS  INPUT HAS AT LEAST ONE SPELLING OR',
-     *           ' LOGIC MISTAKE.',I4/
-     *        1X,'PLEASE REVIEW THE REASON(S) JUST LISTED, AND TRY',
+     *  3X, 57(1H-)/)
+C
+ 2100 FORMAT(/1X,'             *** ERROR(S) DETECTED ***'
+     *       /1X,'YOUR $CEEIS INPUT HAS AT LEAST ONE FORMAT OR',
+     *           ' LOGIC MISTAKE.',
+     *       /1X,'PLEASE REVIEW THE REASON(S) JUST LISTED, AND TRY',
      *           ' YOUR RUN AGAIN.'/)
- 9520 FORMAT(/5X,'$CEEIS  OPTIONS'/5X,15(1H-)/
-     * 4X,'MMIN  =',I8,3X,'IDELTM=',I8,3X,'SMRCI =',L8,3X,'ISCHME=',I8/
-     * 4X,'ISTPEX=',I8,3X,'RESTRT=',L8,3X,'CEMEM =',L8,3X,'CEMXPN=',L8/
-     * 4X,'ENREF =',F16.8,3X,'IEXPEMT=',I8)
- 9525 FORMAT(/4X,50(1H-)/
-     *       4X,'ENERGIES REQUESTED FOR'/
-     *       4X,'EXCITATION LEVELS     HIGHEST ORBITALS USED'/
-     *       4X,50(1H-))
- 9530 FORMAT(11X,'X=',I2,20X,'M=',8I5)
- 9540 FORMAT(/5X,'THRESHOLDS FOR EXCITATION ENERGIES'/
-     *        5X, 8(1P,E8.1))
-C9545 FORMAT(/5X,'ORMAS SPACE ACTIVATION',8I5)
- 9550 FORMAT(3X,70(1H=))
- 9600 FORMAT(/4X,'ORMAS SEGMENTATION PATTERN OF REFERENCE FUNCTION')
- 9650 FORMAT(4X,'     CORE ORBITALS',I3,'-',I3,2X,' OCCUPATIONS',I3)
- 9700 FORMAT(4X,'REFERENCE ORBITALS',I3,'-',I3,2X,' OCCUPATIONS',
-     *          I3,'-',I3,2X,'EXCITATION-ACTIVE')
- 9750 FORMAT(4X,'REFERENCE ORBITALS',I3,'-',I3,2X,' OCCUPATIONS',
-     *          I3,'-',I3,2X,'EXCITATION-INACTIVE')
- 9800 FORMAT(4X,'  VIRTUAL ORBITALS',I3,'-',I3,2X,' OCCUPATIONS',
-     *          I3,'-',I3)
- 9850 FORMAT(4X,'TOTAL NUMBER OF ELECTRONS',I4)
+C
+ 2200 FORMAT(3X,'$CEEIS OPTIONS - GENERAL',/3X,24(1H-),
+     *      /3X,'TOTAL NUMBER OF ELECTRONIC',
+     *       1X,'STATES:',9X,I3,
+     *       2X,'(SPECIFIED IN $CIDET)',
+     *      /3X,'LARGEST EXCITATION LEVEL CONSIDERED:',
+     *       8X,I2,2X,'(DETERMINED FROM M1M2EX)',
+     *      /3X,'DEFAULT EXCITATION LEVEL:',19X,I2,
+     *       2X,'(ISTPEX = ',I3,')',
+     *      /3X,'EXTRAPOLATION METHOD:',24X,I1,
+     *       2X,'(ISCHME = ',I3,')',
+     *      /3X,'DELTA M:',36X,I2,2X,'(IDELTM = ',I3,')')
+ 2210 FORMAT(3X,'COPY ALL DATA FROM $CEEIS1 AND $CEEIS2',
+     *      10X,'(RESTRT =   T)')
+ 2211 FORMAT(3X,'IGNORE ALL DATA FROM $CEEIS1 AND $CEEIS2',
+     *       8X,'(RESTRT =   F)')
+ 2220 FORMAT(3X,'EXTRAPOLATE TO THE X=3,M=',I3,' ENERGIES',
+     *      11X,'(TRIPEX =   T)')
+ 2221 FORMAT(3X,'CALCULATE THE X=3,M=',I3,' ENERGIES',
+     *      16X,'(TRIPEX =   F)')
+ 2230 FORMAT(3X,'AUTOMATIC PROCEDURE IS ON',23X,'(AUTO   =   T)')
+ 2231 FORMAT(3X,'AUTOMATIC PROCEDURE IS OFF',22X,'(AUTO   =   F)')
+ 2240 FORMAT(3X,'APPROXIMATE SMRCI ENERGIES',22X,'(SMRCI  =   T)')
+ 2241 FORMAT(3X,'DO NOT APPROXIMATE SMRCI ENERGIES',
+     *      15X,'(SMRCI  =   F)')
+ 2250 FORMAT(3X,'$CEDATA IS WRITEN IN THE STANDARD FORMATE',
+     *       7X,'(INPOLD = ',I3,')')
+ 2251 FORMAT(3X,'$CEDATA IS WRITEN IN THE OLD FORMATE',
+     *      12X,'(INPOLD = ',I3,')')
+ 2260 FORMAT(3X,'ADDITIONAL KEYWORD VALUES',
+     *      23X,'(CEMEM=',L1,', CEMXPN=',L1,')',/)
+C
+ 2300 FORMAT(3X,'$CEEIS OPTIONS - OLD  FORMATE FOR $CEDATA',
+     *      /3X,41(1H-),
+     *      /3X,'CURRENT LARGEST EXCITATION LEVEL:',
+     *      11X,I2,2X,'(ISTPEX =',2X,I2,')',
+     *      /3X,'PREVIOUS LARGEST EXCITATION LEVEL:',
+     *      10X,I2,2X,'(IEXPND =',2X,I2,')',
+     *      /3X,'SMALLEST VALUE FOR M:',
+     *      23X,I2,2X,'(MMIN   =',2X,I2,')'/)
+C
+ 2400 FORMAT(3X,'$CEEIS OPTIONS - AUTOMATIC PROCEDURE',
+     *      /3X,36(1H-),
+     *      /3X,'LARGEST EXCITATION LEVEL:',
+     *      18X,I2,' (ISTPEX=',I2,')',
+     *      /3X,'INITIAL VALUE FOR M:',
+     *      23X,I2,' (MMIN=',I2,')',
+     *      /3X,'NUMBER OF POINTS IN THE EXTRAPOLATION:',
+     *      5X,I2,' (NPAUTO=',I2,')'/)
+C
+ 2500 FORMAT(3X,'ORMAS SEGMENTATION PATTERN OF REFERENCE',
+     *       1X,'FUNCTION',3X,'GROUP AVAILABLILITY',
+     *      /3X,70(1H-))
+ 2510 FORMAT(8X,'CORE ORBITALS ',I3,' - ',I3,
+     *       2X,'OCCUPATIONS ',I2)
+ 2520 FORMAT(3X,'REFERENCE ORBITALS ',I3,' - ',I3,
+     *       2X,'OCCUPATIONS ',I2,' - ',I2,
+     *       2X,'EXCITATION-ACTIVE')
+ 2521 FORMAT(3X,'REFERENCE ORBITALS ',I3,' - ',I3,
+     *       2X,'OCCUPATIONS ',I2,' - ',I2,
+     *       2X,'EXCITATION-INACTIVE')
+ 2530 FORMAT(5X,'VIRTUAL ORBITALS ',I3,' - ',I3,
+     *       2X,'OCCUPATIONS ',I2,' - ',I2)
+ 2540 FORMAT(/3X,'NUMBER OF ACTIVE ELECTRONS: ',I3,
+     *       /3X,'TOTAL NUMBER OF ELECTRONS:  ',I3,
+     *       /3X,70(1H-)/)
+C
+ 2600 FORMAT(3X,'REFERENCE ENERGIES',/3X,25(1H-),
+     *      /4X,'STATE',11X,'ENERGY',/3X,25(1H-))
+ 2610 FORMAT(5X,I3,2X,F18.10)
+ 2620 FORMAT(3X,25(1H-)/)
+C
+ 2700 FORMAT(3X,'THRESHOLDS FOR THE EXTRAPOLATION',
+     *       1X,'CALCULATIONS')
+ 2710 FORMAT(3X,52(1H-))
+ 2720 FORMAT(3X,'STATE',16X,'EXCITIATION LEVELS',/10X)
+ 2730 FORMAT(7X,I2)
+ 2740 FORMAT(/5X,I3,3X)
+ 2750 FORMAT(1X,E8.1)
+C
+ 2800 FORMAT(3X,'NO EXTRAPOLATION WILL BE PERFORMED FOR'
+     *      /3X,'STATE ',I3/)
+ 2810 FORMAT(3X,'EXTRAPOLATION DATA FOR STATE ',I3
+     *      /3X,41(1H-),
+     *      /3X,'EXCITATION LEVELS',
+     *       8X,'VIRTUAL ORBITALS',
+     *      /3X,41(1H-))
+ 2820 FORMAT(9X,I2,13X,5(1X,I3))
+ 2830 FORMAT(24X,5(1X,I3))
+ 2840 FORMAT(3X,41(1H-)/)
+C
+ 2900 FORMAT(3X,'NUMBER OF ENERGIES THAT WILL BE',
+     *       1X,'CALCULATED',/3X,'FOR EACH M,X PAIR')
+ 2910 FORMAT(3X,42(1H-),
+     *      /3X,'VIRTUAL',13X,'EXCITATION LEVELS',
+     *      /3X,'ORBITALS',9X,5(1X,I3))
+ 2920 FORMAT(3X,42(1H-))
+ 2930 FORMAT(5X,I3,12X,5(1X,I3))
+ 2940 FORMAT(3X,42(1H-))
+C
       END
-C*MODULE CEEIS   *DECK RDCEEIS
-      SUBROUTINE RDCEEIS
-C
-      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
-C
-CZ    PARAMETER (MXAO=8192)
-C
-CZ    LOGICAL DBG,MIX,GOPARR,DSKWRK,MASWRK,MFRZ,MOIDON,EDCOMP,
-CZ   *        DIPDCM,DEPRNT,QADDCM,ZDO,POLDCM,POLANG,POLAPP,
-CZ   *        KMIDPT,POLDYN
-      LOGICAL GOPARR,DSKWRK,MASWRK,SMRCI,RESTRT,CEMEM,CEMXPN
-      CHARACTER*8 STCEDATA
-CZ    DOUBLE PRECISION MOROKM
-C
-CZ    DIMENSION IWRK(L1),EIG(L1),SCR(L1,8),S(L2),Q(L3),VEC(L1,L1)
-C
-CZ    PARAMETER (MXATM=2000)
-CZ    PARAMETER (MXRT=100)
-      PARAMETER (MMX=500,IEXMX=50)
-C
-      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
-CZ    COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NEE,NAA,NBB,
-CZ   *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
-CZ    COMMON /GVBWFN/ CICOEF(2,12),F(25),ALPHA(325),BETA(325),NO(10),
-CZ   *                NCO,NSETO,NOPEN,NPAIR,NMOGVB,NCONF(MXAO),NHAM
-      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
-CZ    COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
-CZ
-CZ    I NEED NACT AND NA
-CZ    COMMON /DETWFN/ WSTATE(MXRT),SPINS(MXRT),CRIT,PRTTOL,S,SZ,
-CZ   *                GRPDET,STSYM,GLIST,DWPARM,
-CZ   *                NFLGDM(MXRT),IWTS(MXRT),NCORSV,NCOR,NACT,NORB,
-CZ   *                NA,NB,K,KST,IROOT,IPURES,MAXW1,NITER,MAXP,NCI,
-CZ   *                IGPDET,KSTSYM,NFTGCI,IDWEIGH
-      COMMON /CEEIS1/ MMIN0,MMIN,IDELTM,SMRCI,M1M2EX(MMX),
-     *                XTRTOL(IEXMX),ISCHME,ISTPEX,RESTRT,CEMEM,CEMXPN,
-     *                NSEXT(51),IEXPEMT
-      COMMON /CEEIS2/ ECONT(IEXMX),EMAT(MMX,IEXMX),ENREF,
-     *                MEMCE(MMX,IEXMX),MXPNCE(MMX,IEXMX),
-     *                ISTEX(IEXMX),MEX(IEXMX),MMC
-C
-C     THIS ROUTINE MUST BE CALLED AFTER READING $CIDET GROUP
-C
-      IZERO = 0
-      IONE  = 1
-      ITWO  = 2
-C
-      STCEDATA = ' $CEDATA'
-C
-      IF(MMC.EQ.0.AND.MASWRK) WRITE(IW,9080)
-      IF(MMC.EQ.0) CALL ABRT
-C
-C     POSITION THE INPUT FILE TO $CEDATA
-C
-      CALL SEQREW(IR)
-      CALL FNDGRP(IR,STCEDATA,IEOF)
-      IF (IEOF.EQ.0) GO TO 200
-C
-C               $CEDATA CARD NOT FOUND, KILL JOB
-C
-      IF (MASWRK) WRITE(IW,9020)
-      CALL ABRT
-      STOP
-C
-C               $CEDATA CARD FOUND, READ THE ORBITALS
+CCC   --- END OF CEEISIN ---
 C
 C
-  200 CONTINUE
-CZ
-      IF (MASWRK) THEN
-CZ    IC = 0
-      IC  = MMIN - 1
-      III = MMC - MMIN + 1
-      JJJ = ISTPEX - IEXPEMT - 1
-      DO I = 1, III
-         IMAX = 0
-         IC = IC + 1
-  240    CONTINUE
-            IMIN = IMAX+1
-            IMAX = IMAX+5
-            IF(IMAX .GT. JJJ) IMAX = JJJ
-            READ(IR,9040,END=300,ERR=300) ICC, (EMAT(I,J),J=IMIN,IMAX)
-            IF(ICC.EQ.IC) GO TO 260
-               WRITE(IW,9060) IC, ICC
-               IF (GOPARR) CALL DDI_BCAST(350,'I',ITWO,1,MASTER)
-               CALL ABRT
-               STOP
-  260       CONTINUE
-         IF(IMAX .LT. JJJ) GO TO 240
-      END DO
-CZ
+C*MODULE CEEIS   *DECK RDCEDATAN
+      SUBROUTINE RDCEDATAN(IEXCREST,IEXCMX,NSTREST,NSTATE)
+CCC   -----------------------------------------------
+CCC   PURPOSE OF RDCEDATAN IS TO READ IN ALL OF THE
+CCC   PREVIOUSLY CALCULATED ENERGIES (ENERGIES THAT
+CCC   WERE STORED USING THE NEW FORMAT)
 C
-      IF (GOPARR) CALL DDI_BCAST(350,'I',IZERO,1,MASTER)
 C
-C SLAVE WORK
+CCC
+CCC   LIST THE COMMON VARIABLES USED IN THIS ROUTINE
+CCC   
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
-      ELSE
-         IF (GOPARR) CALL DDI_BCAST(350,'I',IEND,1,MASTER)
-         IF (IEND.EQ.IONE) GO TO 300
-         IF (IEND.EQ.ITWO) CALL ABRT
-      END IF
+      LOGICAL GOPARR,DSKWRK,MASWRK,SMRCI,CEMEM,CEMXPN
 C
-C  GIVE VECTORS TO ALL PROCESSES
-C
-CZ    IF (GOPARR) CALL DDI_BCAST(351,'F',VEC,NMOS*L1,MASTER)
-      IF (GOPARR) CALL DDI_BCAST(351,'F',EMAT,III*JJJ,MASTER)
-CZ
-      RETURN
-CZ
-C
-C        PREMATURE END OF $CEDATA INPUT ENCOUNTERED
-C
-  300 CONTINUE
-      IF (MASWRK) THEN
-         IF (GOPARR) CALL DDI_BCAST(350,'I',IONE,1,MASTER)
-         WRITE(IW,9100) ICC
-      END IF
-      CALL ABRT
- 9020 FORMAT(32H NO $CEDATA INPUT FOUND - STOP  )
- 9040 FORMAT(I4,5F16.8)
- 9060 FORMAT(' *** ERROR READING THE ORMAS ENERGY MATRIX AT',I4/
-     *       '     THE INPUT VALUES WERE',I4)
- 9080 FORMAT(1X,'NACT AND NELS ARE WRONG IN $CIDET')
- 9100 FORMAT(' *** ERROR: PREMATURE END OF CEDATA INPUT ENCOUNTERED'/
-     *       '            LOOKING FOR ELEMENT',I4)
-      END
-C*MODULE CEEIS    *DECK CEEIS
-C     ------------------------------
-      SUBROUTINE CEEIS(NRNFG,NPFLG)
-      ! THIS ROUTINE IS TAKEN FROM ORDET IN ORMAS1.SRC
-C     ------------------------------
-      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
-C
-      DIMENSION NRNFG(10),NPFLG(10)
-C
-      LOGICAL CLABEL
-      LOGICAL GOPARR,DSKWRK,MASWRK,DOEXCH,
-     *        DDITRF,DOOOOO,DOVOOO,DOVVOO,DOVOVO,DOVVVO,DOVVVV,DOCORE
-      LOGICAL FDIRCT,QCORR
-      LOGICAL SMRCI,RESTRT,CEMEM,CEMXPN
-      LOGICAL CEECHK
-C
-      PARAMETER (NMO=500)
       PARAMETER (MXRT=100)
       PARAMETER (ZERO=0.0D+00)
-      PARAMETER (MMX=500,IEXMX=50)
+      PARAMETER (MXM1M2=750)
+      PARAMETER (MMX=500,IEXMX=49)
 C
-      CHARACTER*14 CDELE(3), CDELE1(8), CDELE2(8)
-      DIMENSION COEF(3), XX(NMO), YY(NMO), ZZ(NMO)
-      DIMENSION DEMAT(MMX,IEXMX)
-      DIMENSION MAXISV(51), MINISV(51)
+      COMMON /IOFILE/ IR,IW,IP,IS,IJKT,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /FMCOM / X(1)
+C
+      COMMON /CEEIS1/ M1M2EX(MXM1M2),ENREF(MXRT),ISCHME,RESTRT,
+     *                TRIPEX,ISTPEX,IDELTM,AUTO,NPTAUTO,
+     *                XTRTOL(MXRT*IEXMX),MMIN,MMIN0,IEXPEMT,SMRCI,
+     *                CEMEM,CEMXPN
+      COMMON /CEEIS2/ ECONT(MXRT*IEXMX),MXEXST(MXRT+1),
+     *                IAD1(MXRT+1,IEXMX),IAD1SZ(MXRT+1,IEXMX),
+     *                NSTCAL(MMX,IEXMX),IAD2(IEXMX),MSTRT(IEXMX),
+     *                MEND(IEXMX),MMC,MMAX,ICEDATA
+CCC
+CCC
+CCC   SCAN THROUGH ALL EXCITATIONS BETWEEN
+CCC   IEXC=1 (X=2) AND IEXC=IEXCMX (X=IEXCMX+1)
+CCC
+      IF (MASWRK) THEN
+        DO IEXC = 1, IEXCMX
+C
+C         --- IF ENERGIES WERE PREVIOUSLY CALCULATED  FOR   ---
+C         --- THE CURRENT EXCITATION READ IN THOSE ENERGIES ---
+          IF (IEXC.LE.IEXCREST) THEN
+            READ(IR,3000,IOSTAT=ITMP) IEXCTMP, MR1ST, MRLAST
+            IF ((ITMP.NE.0) .OR. (IEXCTMP.NE.IEXC)) THEN
+              WRITE(IW,3020) IEXC
+              CALL FLSHBF(IW)
+              CALL ABRT
+            END IF
+C
+            IELE = IAD2(IEXC)
+            M1ST = MSTRT(IEXC)
+            MLAST = MEND(IEXC)
+            DO J = M1ST, MR1ST-1
+              DO I = 1, NSTATE
+                IELE = IELE + 1
+                X(IELE) = ZERO
+              END DO
+            END DO
+            DO J = MR1ST, MRLAST
+              IPREV = IELE + 1
+              IELE = IELE + NSTREST
+              READ(IR,3010,IOSTAT=ITMP) X(IPREV:IELE)
+              IF (ITMP.NE.0) THEN
+                WRITE(IW,3020) IEXC
+                CALL FLSHBF(IW)
+                CALL ABRT
+              END IF
+              DO I = NSTREST+1, NSTATE
+                IELE = IELE + 1
+                X(IELE) = ZERO
+              END DO
+            END DO
+            DO J = MRLAST+1, MLAST
+              DO I = 1, NSTATE
+                IELE = IELE + 1
+                X(IELE) = ZERO
+              END DO
+            END DO
+C
+            III = NSTATE*(IEXC-1)
+            IPREV = III + 1
+            III = III + NSTREST
+            READ(IR,3010,IOSTAT=ITMP) ECONT(IPREV:III)
+            IF (ITMP.NE.0) THEN
+              WRITE(IW,3020) IEXC
+              CALL FLSHBF(IW)
+              CALL ABRT
+            END IF
+C
+C         --- IF VALUES DO NOT YET EXIST FOR THE CURRENT ---
+C         --- EXCITATION SET EACH ELEMENT OF EMAT (THE   ---
+C         --- REGION OF THE DYNAMIC MEMORY MATRIX, X,    ---
+C         --- THAT HOLDS THE CI ENERGIES THAT ARE USED   ---
+C         --- IN THE CEEIS EXTRAPOLATION) EQUAL TO ZERO  ---
+          ELSE
+            IELE = IAD2(IEXC) + 1
+            NPTEXN = NSTATE * (MEND(IEXC) - MSTRT(IEXC) + 1)
+            DO JJJ = 1, NPTEXN
+              X(IELE) = ZERO
+              IELE = IELE + 1
+            END DO
+          END IF
+        END DO
+      END IF
+CCC
+CCC
+CCC  GIVE VECTORS TO ALL PROCESSES
+CCC  *** CALL DDI_BCAST(ID #,'F',VEC,NMOS*L1,MASTER) ***
+CCC
+      IF (GOPARR) THEN
+        DO IEXC=1, IEXCMX
+          IELE = IAD2(IEXC) + 1
+          NPTEXN = NSTATE * (MEND(IEXC) - MSTRT(IEXC) + 1)
+          CALL DDI_SYNC(8000+IEXC)
+          CALL DDI_BCAST(7100+IEXC,'F',X(IELE),NPTEXN,MASTER)
+        END DO
+        CALL DDI_SYNC(8200)
+        CALL DDI_BCAST(7010,'F',ECONT(1),NSTATE*IEXCMX,MASTER)
+      END IF
+      CALL DDI_SYNC(8220)
+C
+      RETURN
+CCC
+CCC
+CCC   FORMAT COMMANDS REFERENCED ABOVE
+CCC
+ 3000 FORMAT(3(1X,I3))
+ 3010 FORMAT (5(1X,ES22.15))
+ 3020 FORMAT(/1X,'AN ERROR OCCURED WHILE READING IN THE'
+     *        1X,'ENERGIES FOR EXCIATION',1X,I2,'.')
+C
+      END
+CCC   --- END OF RDCEDATAN ---
+C
+C
+C*MODULE CEEIS   *DECK RDCEDATAO
+      SUBROUTINE RDCEDATAO(IEXCREST,IEXCMX)
+CCC   -----------------------------------------------
+CCC   PURPOSE OF RDCEDATAN IS TO READ IN ALL OF THE
+CCC   PREVIOUSLY CALCULATED ENERGIES (ENERGIES THAT
+CCC   WERE STORED USING THE OLD FORMAT)
+C
+C
+CCC
+CCC   LIST THE COMMON VARIABLES USED IN THIS ROUTINE
+CCC   
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      LOGICAL GOPARR,DSKWRK,MASWRK,SMRCI,CEMEM,CEMXPN
+C
+      PARAMETER (MXRT=100)
+      PARAMETER (ZERO=0.0D+00)
+      PARAMETER (MXM1M2=750)
+      PARAMETER (MMX=500,IEXMX=49)
+C
+      COMMON /IOFILE/ IR,IW,IP,IS,IJKT,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /FMCOM / X(1)
+C
+      COMMON /CEEIS1/ M1M2EX(MXM1M2),ENREF(MXRT),ISCHME,RESTRT,
+     *                TRIPEX,ISTPEX,IDELTM,AUTO,NPTAUTO,
+     *                XTRTOL(MXRT*IEXMX),MMIN,MMIN0,IEXPEMT,SMRCI,
+     *                CEMEM,CEMXPN
+      COMMON /CEEIS2/ ECONT(MXRT*IEXMX),MXEXST(MXRT+1),
+     *                IAD1(MXRT+1,IEXMX),IAD1SZ(MXRT+1,IEXMX),
+     *                NSTCAL(MMX,IEXMX),IAD2(IEXMX),MSTRT(IEXMX),
+     *                MEND(IEXMX),MMC,MMAX,ICEDATA
+CCC
+CCC
+CCC   READ THE ENERGIES FROM $CEDATA
+CCC
+      IF (MASWRK) THEN
+        DO IEXC = 1, IEXCMX
+          IELE = IAD2(IEXC)+1
+          M1ST = MSTRT(IEXC)
+          MLAST = MEND(IEXC)
+          DO J = M1ST, MLAST
+            X(IELE) = ZERO
+            IELE = IELE + 1
+          END DO
+        END DO
+C
+        IELE = 1
+        DO J = MMIN, MMAX
+          IMAX = 0
+          DO
+            IMIN = IMAX+1
+            IMAX = IMAX+5
+            IF(IMAX.GT.IEXCREST) IMAX = IEXCREST
+            READ(IR,3500,IOSTAT=ITMP) JCC,
+     *             (X(IAD2(IEXC)+IELE), IEXC=IMIN,IMAX)
+            IF ((ITMP.NE.0) .OR. (JCC.NE.J)) THEN
+              WRITE(IW,3510) J
+              CALL FLSHBF(IW)
+              CALL ABRT
+            END IF
+C
+            DO IEXC=IMIN, IMAX
+              VTMP = X(IAD2(IEXC)+IELE)
+              IF (VTMP.NE.ZERO)
+     *                X(IAD2(IEXC)+IELE) = VTMP - ENREF(1)
+            END DO
+            IF (IMAX.EQ.IEXCREST) EXIT
+          END DO
+          IELE = IELE + 1
+        END DO
+C
+        J = MMC
+        IMAX = 0
+        DO
+          IMIN = IMAX+1
+          IMAX = IMAX+5
+          IF(IMAX.GT.IEXCREST) IMAX = IEXCREST
+          READ(IR,3500,IOSTAT=ITMP) JCC,
+     *           (ECONT(IEXC), IEXC=IMIN,IMAX)
+          IF ((ITMP.NE.0) .OR. (JCC.NE.J)) THEN
+            WRITE(IW,3510) J
+            CALL FLSHBF(IW)
+            CALL ABRT
+          END IF
+C
+          DO IEXC=IMIN, IMAX
+            VTMP = ECONT(IEXC)
+            IF (VTMP.NE.ZERO)
+     *            ECONT(IEXC) = VTMP - ENREF(1)
+          END DO
+          IF (IMAX.EQ.IEXCREST) EXIT
+        END DO
+        VTMP = ECONT(2)
+        IF (VTMP.NE.ZERO) ECONT(2) = VTMP - ECONT(1)
+      END IF
+CCC
+CCC
+CCC  GIVE VECTORS TO ALL PROCESSES
+CCC  *** CALL DDI_BCAST(ID #,'F',VEC,NMOS*L1,MASTER) ***
+CCC
+      IF (GOPARR) THEN
+        DO IEXC = 1, IEXCMX
+          IELE = IAD2(IEXC)+1
+          M1ST = MSTRT(IEXC)
+          MLAST = MEND(IEXC)
+          MSPAN = MLAST - M1ST + 1
+          CALL DDI_SYNC(8500+IEXC)
+          CALL DDI_BCAST(7300+IEXC,'F',X(IELE),MSPAN,MASTER)
+        END DO
+        CALL DDI_SYNC(8700)
+        CALL DDI_BCAST(7020,'F',ECONT(1),IEXCMX,MASTER)
+      END IF
+      CALL DDI_SYNC(8720)
+CCC
+      RETURN
+CCC
+CCC
+CCC   FORMAT COMMANDS REFERENCED ABOVE
+CCC
+ 3500 FORMAT(I4,5F16.8)
+ 3510 FORMAT(' *** ERROR READING THE ORMAS ENERGIES FOR M = ',I4)
+      END
+CCC   --- END OF RDCEDATAO ---
+C
+C
+C*MODULE CEEIS   *DECK CEEIS
+      SUBROUTINE CEEIS(NRNFG,NPFLG)
+CCC   ---------------------------------------------
+CCC   PURPOSE OF THE CEEIS SUBROUTINE IS TO PERFORM
+CCC   A CEEIS EXTRAPOLATION
+CCC
+CCC   SCHEME  I: YY = COEF(1) + COEF(2)*XX
+CCC   SCHEME II: ZZ = COEF(1)*XX + COEF(2)*YY + COEF(3)
+C
+C
+CCC
+CCC   LIST THE COMMON VARIABLES USED IN THIS ROUTINE
+CCC   
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      LOGICAL GOPARR,DSKWRK,MASWRK,SMRCI,RESTRT,CEMEM,CEMXPN,
+     *        FDIRCT,QCORR,TRIPEX,AUTO,RUNCAL
+      CHARACTER*7 CEDATA
+C
+      PARAMETER (MXRT=100)
+      PARAMETER (ZERO=0.0D+00)
+      PARAMETER (MMX=500,IEXMX=49)
+      PARAMETER (MXM1M2=750)
+C
+      DIMENSION NRNFG(10),NPFLG(10),IXX(MMX+1),MREST(IEXMX)
+      DIMENSION COEF(3),XX(MMX+1),YY(MMX+1),ZZ(MMX+1)
+C
+      DATA CIDET /8HCIDET   /
+      DATA ORMAS /8HORMAS   /
+C
+      COMMON /IOFILE/ IR,IW,IP,IS,IJKT,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /DETWFN/ WSTATE(MXRT),SPINS(MXRT),CRIT,PRTTOL,S,SZ,
+     *                GRPDET,STSYM,GLIST,DWPARM,
+     *                NFLGDM(MXRT),IWTS(MXRT),NCORSV,NCOR,NACT,NORB,
+     *                NA,NB,K,KST,IROOT,IPURES,MAXW1,NITER,MAXP,NCI,
+     *                IGPDET,KSTSYM,NFTGCI,IDWEIGH
+      COMMON /FMCOM / X(1)
+C
+      COMMON /CEEIS1/ M1M2EX(MXM1M2),ENREF(MXRT),ISCHME,RESTRT,
+     *                TRIPEX,ISTPEX,IDELTM,AUTO,NPTAUTO,
+     *                XTRTOL(MXRT*IEXMX),MMIN,MMIN0,IEXPEMT,SMRCI,
+     *                CEMEM,CEMXPN
+      COMMON /CEEIS2/ ECONT(MXRT*IEXMX),MXEXST(MXRT+1),
+     *                IAD1(MXRT+1,IEXMX),IAD1SZ(MXRT+1,IEXMX),
+     *                NSTCAL(MMX,IEXMX),IAD2(IEXMX),MSTRT(IEXMX),
+     *                MEND(IEXMX),MMC,MMAX,ICEDATA
+      COMMON /CEEIS4/ NSEXT(51),MINISV(51),MAXISV(51)
+C
+      COMMON /FCCWFN/ NSPACE,MSTA(51),MNUM(51),MINI(51),MAXI(51),
+     *                IAMI(51),IAMA(51),IBMI(51),IBMA(51),IDIM(51),
+     *                LBST(51),NREF0,FDIRCT,QCORR,C0SQ
+      COMMON /ENRGYS/ ENUCR,EELCT,ETOT,STOT,SZZ,ECORE,ESCF,EERD,E1,E2,
+     *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2),EDISP
+C
+      ICEDATA = 35
+      CEDATA  = 'RESTART'
+CCC
+CCC
+CCC   READ INPUT THAT SPECIFICES THE ORMAS AND
+CCC   PARAMETERS OF THE CI CALCULATIONS
+CCC   ----------------------------------------
+      CALL DDI_SYNC(9000)
+      CALL FCINPUT(NPFLG(1),CIDET,ORMAS)
+      CALL DDI_SYNC(9010) 
+CCC
+CCC
+CCC   STORE BACKUPS OF THE ORIGINAL (REFERENCE SPACE)
+CCC   VALUES THAT WERE GIVEN FOR NSTATE AND THE MINI
+CCC   AND MAXI ORMAS ARRAYS. 
+CCC
+       KSAVE = K
+       NSTATE = KSAVE
+       DO I = 1, NSPACE
+         MINISV(I) = MINI(I)
+         MAXISV(I) = MAXI(I)
+       END DO
+CCC
+CCC
+CCC   READ INPUT THAT SPECIFICES THE CEEIS PARAMETERS 
+CCC   -----------------------------------------------
+      CALL DDI_SYNC(9020)
+      CALL CEEISIN(INPOLD,IEXCMX,NRNFG,NPFLG)
+      CALL DDI_SYNC(9030)
+CCC
+CCC
+CCC   DETERMINE THE NUMBER OF ELECTRONIC STATES
+CCC   AND MAXIMUM NUMBER OF EXCITATIONS THAT
+CCC   WERE USED FOR THE PREVIOUS CALCULATION
+CCC
+C     --- READ IN VALUES ---
+      IF (RESTRT) THEN
+        IF (INPOLD.EQ.0) THEN
+          CALL SEQREW(IR)
+          CALL FNDGRP(IR,' $CEDATA',IEOF)
+          IF (MASWRK) THEN
+            READ(IR,4100,IOSTAT=ITMP) 
+     *                   NSTREST, IEXCREST
+            CALL FLSHBF(IR)
+            IF (ITMP.NE.0) THEN
+              WRITE(IW,4110) CEDATA
+              CALL ABRT
+            END IF
+            IF (IEXCREST.GT.IEXMX) THEN
+              WRITE(IW,4110) CEDATA
+              CALL ABRT
+            END IF
+C
+            READ(IR,4120,IOSTAT=ITMP) MREST(1:IEXCREST)
+            IF (ITMP.NE.0) THEN
+              WRITE(IW,4110) CEDATA
+              CALL ABRT
+            END IF
+            DO IEXC=1, IEXCREST
+              ITMP = MREST(IEXC)
+              IF (ITMP.LT.MMIN) THEN
+                WRITE(IW,4110) CEDATA
+                CALL ABRT
+              END IF
+              IF (ITMP.LT.MSTRT(IEXC)) MSTRT(IEXC) = ITMP
+            END DO
+C
+            READ(IR,4120,IOSTAT=ITMP) MREST(1:IEXCREST)
+            IF (ITMP.NE.0) THEN
+              WRITE(IW,4110) CEDATA
+              CALL ABRT
+            END IF
+            DO IEXC=1, IEXCREST
+              ITMP = MREST(IEXC)
+              IF (ITMP.GT.MMAX) THEN
+                IF (MASWRK) WRITE(IW,4110) CEDATA
+                CALL ABRT
+              END IF
+              IF (ITMP.GT.MEND(IEXC)) MEND(IEXC) = ITMP
+            END DO
+          END IF
+C
+          IF (GOPARR) THEN
+            CALL DDI_SYNC(9040)
+            CALL DDI_BCAST(7030,'I',NSTREST,1,MASTER)
+            CALL DDI_SYNC(9050)
+            CALL DDI_BCAST(7040,'I',IEXCREST,1,MASTER)
+            CALL DDI_SYNC(9060)
+          END IF
+C
+          IF (NSTREST.GT.NSTATE) NSTATE = NSTREST
+          IF (IEXCREST.GT.IEXCMX) IEXCMX = IEXCREST
+C
+          IF (GOPARR) THEN
+            CALL DDI_SYNC(9070)
+            CALL DDI_BCAST(7050,'I',MSTRT,IEXCMX,MASTER)
+            CALL DDI_SYNC(9080)
+            CALL DDI_BCAST(7060,'I',MEND,IEXCMX,MASTER)
+            CALL DDI_SYNC(9090)
+          END IF
+C
+C       --- SPECIFICATION OF NSTREST AND IEXCREST
+C       --- WHEN INPOLD IS 1 OR 2
+        ELSE
+          NSTREST = 1
+          IEXCREST = ISTPEX-IEXPEMT
+          DO IEXC=1, IEXCREST
+            MSTRT(IEXC) = MMIN
+            MEND(IEXC) = MMAX
+          END DO
+C
+          CALL SEQREW(IR)
+          CALL FNDGRP(IR,' $CEDATA',IEOF)
+        END IF
+      END IF
+      CALL DDI_SYNC(9100)
+CCC
+CCC
+CCC   CREATE THE IAD2(X) MATRIX AND DYNAMICALLY
+CCC   ALLOCATE MEMORY OF THE EMAT MATRIX.
+CCC   ------------------------------------------
+CCC   THE IAD2 MATRIX SPECIFIES THE LOCATION IN
+CCC   THE EMAT MATRIX THAT REPRESTENTS THE FIRST
+CCC   ENERGY THAT INVOVLES THE EXCITITION X.
+CCC
+CCC   THE EMAT MATRIX IS SUBSECTION OF THE 
+CCC   DYNAMIC MEMORY MATRIX, X, THAT HOLDS ALL
+CCC   THE ENERGIES THAT WILL BE USED IN THE
+CCC   CEEIS PROCEDURE.
+CCC
+      CALL VALFM(LOADFM)
+      IELE = LOADFM
+      DO IEXC = 1, IEXCMX
+        M1ST = MSTRT(IEXC)
+        MLAST = MEND(IEXC)
+        NPTEXN = NSTATE * (MLAST - M1ST + 1)
+        IAD2(IEXC) = IELE
+        IELE = IELE + NPTEXN
+      END DO
+      NPTEXN = IELE - LOADFM
+      NEED = NPTEXN
+      CALL GETFM(NEED)
+CCC
+CCC
+CCC   INITALIZE THE ECONT ARRAY
+CCC
+      IELE = 1
+      DO IEXC=1, IEXCMX
+        DO I=1, NSTATE
+          ECONT(IELE) = ZERO
+          IELE = IELE + 1
+        END DO
+      END DO
+CCC
+CCC
+CCC   IF RESTRT == TRUE, READ THE PREVIOUSLY
+CCC   CALCULATED ENERGIES
+CCC
+      IF (RESTRT) THEN
+        CALL DDI_SYNC(9110)
+        IF (INPOLD.EQ.0) THEN
+          CALL RDCEDATAN(IEXCREST,IEXCMX,NSTREST,NSTATE)
+        ELSE
+          CALL RDCEDATAO(IEXCREST,IEXCMX)
+        END IF
+CCC
+CCC
+CCC   IF RESTRT == FALSE, INITIALIZE ALL THE EMAT
+CCC   VALUES AS ZERO
+CCC
+      ELSE
+        IELE = IAD2(1)+1
+        DO III=1, NPTEXN
+          X(IELE) = ZERO
+          IELE = IELE + 1
+        END DO
+      END IF
+CCC
+CCC
+CCC   NOW THAT ALL THE OLD ENERGIES HAVE BEEN READ OUT
+CCC   OF THE CEDATA FILE OR INITALIZED AS ZERO,
+CCC   REORGANIZE THE CEDATA FILE TO HOLD THE NEW SET
+CCC   OF ENERGIES.
+CCC
+      CALL SEQOPN(ICEDATA,CEDATA,'NEW',
+     *                   .FALSE.,'FORMATTED')
+C
+      IF (MASWRK) THEN
+C       --- RECORD THE TOTAL NUMBER OF STATES AND ---
+C       --- THE MAXIMUM NUMBER OF EXCITATIONS     ---
+        WRITE(ICEDATA,4101) NSTATE, IEXCMX
+        WRITE(ICEDATA,4120) MSTRT(1:IEXCMX)
+        WRITE(ICEDATA,4120) MEND(1:IEXCMX)
+C
+C       --- RECORD THE EMAT AND ECONT VALUES ---
+        III = 0
+        DO IEXC = 1, IEXCMX
+          M1ST = MSTRT(IEXC)
+          MLAST = MEND(IEXC)
+          WRITE(ICEDATA,4200) IEXC, M1ST, MLAST
+C
+          IELE = IAD2(IEXC)
+          DO J = M1ST, MLAST
+            IPREV = IELE+1
+            IELE = IELE + NSTATE
+            WRITE(ICEDATA,4210) X(IPREV:IELE)
+          END DO
+C
+          IPREV = III+1
+          III = III + NSTATE
+          WRITE(ICEDATA,4210) ECONT(IPREV:III)
+        END DO
+        WRITE(ICEDATA,4220)
+      END IF
+CCC
+CCC
+CCC   SCAN THROUGH ALL EXCITATIONS BETWEEN
+CCC   IEXC=1 (X=2) AND IEXC=IEXCMX (X=IEXCMX+1)
+CCC   AND PERFORM ALL OF THE ENERGY CALCULATIONS
+CCC
+      IEXC = 1
+      DO
+C       --- TERMINATION CONDITION
+        IF (IEXC.GT.IEXCMX) EXIT
+CCC
+CCC
+CCC     WHEN DEALING WITH SCHEME == 2 AND EVEN VALUES
+CCC     OF IEXC (ODD VALUES OF X) THAT ARE GREATER THEN
+CCC     IEXC=3 (X=4), PERFORM THE FOLLOWING TASKS THEN
+CCC     SKIP ALL THE REMAINING STEPS FOR THIS ITERATION
+CCC     OF THE IEXC DO LOOP.
+CCC
+        IF (ISCHME.EQ.2) THEN
+          IF((MOD(IEXC,2).EQ.0).AND.(IEXC.NE.2)) THEN
+            IEXC = IEXC + 1
+            CYCLE
+          END IF
+        END IF
+CCC
+CCC
+CCC     PERFORM ENERGY CALCULATIONS FOR THE ENERGIES THAT
+CCC     STILL NEED TO BE DETERMINED FOR THE CURRENT IEXC
+CCC
+        IF (MASWRK) THEN
+          WRITE(IW,4300) IEXC+1
+        END IF
+        CALL FLSHBF(IW)
+C
+        IADTMP = IAD2(IEXC)+1
+        M1ST = MSTRT(IEXC)
+        MLAST = MEND(IEXC)
+        KJ = M1ST - MMIN + 1
+        DO J = M1ST, MLAST
+          ISTTMP = NSTCAL(KJ,IEXC)
+          IF (ISTTMP.NE.0) THEN
+            III = IADTMP
+            RUNCAL = .FALSE.
+            DO I = 1, ISTTMP
+              IF (X(III).GE.ZERO) RUNCAL = .TRUE.
+              III = III + 1
+            END DO
+            IF (RUNCAL) THEN
+              CALL CEEISSTEP(J,IEXC+1,ISTTMP,
+     *                       X(IADTMP),NRNFG,NPFLG)
+            END IF
+          END IF
+          IADTMP = IADTMP + NSTATE
+          KJ = KJ + 1
+C
+C         --- STORE THE VALUES OF THE EMAT MATRIX ---
+C         --- IN THE CEDATA FILE                  ---
+          III = 0
+          CALL SEQREW(ICEDATA)
+          IF (MASWRK) THEN
+            WRITE(ICEDATA,4101) NSTATE, IEXCMX
+            WRITE(ICEDATA,4120) MSTRT(1:IEXCMX)
+            WRITE(ICEDATA,4120) MEND(1:IEXCMX)
+            DO IEX2 = 1, IEXCMX
+              ITMP1 = MSTRT(IEX2)
+              ITMP2 = MEND(IEX2)
+              WRITE(ICEDATA,4200) IEX2, ITMP1, ITMP2
+C
+              IELE = IAD2(IEX2)
+              DO JJJ = ITMP1, ITMP2
+                IPREV = IELE+1
+                IELE = IELE + NSTATE
+                WRITE(ICEDATA,4210) X(IPREV:IELE)
+              END DO
+C
+              IPREV = III+1
+              III = III + NSTATE
+              IF (IEX2.GT.2) THEN
+                WRITE(ICEDATA,4210) (ZERO, JJJ=1,NSTATE)
+              ELSE IF ((IEX2.GT.1) .AND. TRIPEX) THEN
+                WRITE(ICEDATA,4210) (ZERO, JJJ=1,NSTATE)
+              ELSE
+                WRITE(ICEDATA,4210) ECONT(IPREV:III)
+              END IF
+            END DO
+            WRITE(ICEDATA,4220)
+          END IF
+        END DO
+        CALL FLSHBF(ICEDATA)
+C
+C       --- EVALUATE CONTRIBUTIONS TO ECONT WHEN ---
+C       --- X=2 (IEXC=1).                        ---
+        IF (IEXC.EQ.1) THEN
+          ISTTMP = 0
+          DO I = 1, NSTATE
+            IF (MXEXST(I).NE.0) ISTTMP = I
+          END DO
+          RUNCAL = .FALSE.
+          DO I = 1, ISTTMP
+            IF (ECONT(I).EQ.ZERO) RUNCAL = .TRUE.
+          END DO
+          IF (RUNCAL) THEN
+            CALL CEEISSTEP(MMC,IEXC+1,ISTTMP,
+     *                     ECONT(1),NRNFG,NPFLG)
+          END IF
+        END IF
+C
+C       --- EVALUATE CONTRIBUTIONS TO ECONT WHEN ---
+C       --- X=3 (IEXC=2) AND TRIPEX = FALSE.     ---
+        IF ((IEXC.EQ.2) .AND. (TRIPEX.EQV..FALSE.)) THEN
+          ISTTMP = 0
+          DO I = 1, NSTATE
+            IF (MXEXST(I).NE.0) ISTTMP = I
+          END DO
+C
+          III = NSTATE+1
+          RUNCAL = .FALSE.
+          DO I = 1, ISTTMP
+            IF (ECONT(III).EQ.ZERO) RUNCAL = .TRUE.
+            III = III + 1
+          END DO
+          IF (RUNCAL) THEN
+            CALL CEEISSTEP(MMC,IEXC+1,ISTTMP,
+     *                     ECONT(NSTATE+1),NRNFG,NPFLG)
+            III = NSTATE+1
+            DO I = 1, ISTTMP
+              ECONT(III) = ECONT(III) - ECONT(I)
+              III = III + 1
+            END DO
+          END IF
+        END IF
+C
+C       --- STORE THE VALUES OF THE ECONT MATRIX IN ---
+C       --- THE CEDATA FILE.                        ---
+        III = 0
+        CALL SEQREW(ICEDATA)
+        IF (MASWRK) THEN
+          WRITE(ICEDATA,4101) NSTATE, IEXCMX
+          WRITE(ICEDATA,4120) MSTRT(1:IEXCMX)
+          WRITE(ICEDATA,4120) MEND(1:IEXCMX)
+          DO IEX2 = 1, IEXCMX
+            ITMP1 = MSTRT(IEX2)
+            ITMP2 = MEND(IEX2)
+            WRITE(ICEDATA,4200) IEX2, ITMP1, ITMP2
+C
+            IELE = IAD2(IEX2)
+            DO JJJ = ITMP1, ITMP2
+              IPREV = IELE+1
+              IELE = IELE + NSTATE
+              WRITE(ICEDATA,4210) X(IPREV:IELE)
+            END DO
+C
+            IPREV = III+1
+            III = III + NSTATE
+            IF (IEX2.GT.2) THEN
+              WRITE(ICEDATA,4210) (ZERO, JJJ=1,NSTATE)
+            ELSE IF ((IEX2.GT.1) .AND. TRIPEX) THEN
+              WRITE(ICEDATA,4210) (ZERO, JJJ=1,NSTATE)
+            ELSE
+              WRITE(ICEDATA,4210) ECONT(IPREV:III)
+            END IF
+          END DO
+          WRITE(ICEDATA,4220)
+        END IF
+        CALL FLSHBF(ICEDATA)
+CCC
+CCC
+CCC     PRINT OUT THE VALUES OF THE ECONT MATRICES
+CCC     TO THE OUTPUT FILE IF X=2 OR X=3 AND
+CCC     TRIPEX EQUALS FALSE
+CCC
+C       --- X=2 (IEXC=1) ---
+        IF (IEXC.EQ.1) THEN
+          IF (MASWRK) THEN
+            WRITE(IW,4400)
+            DO I = 1, NSTATE
+              IF (MXEXST(I).NE.0) THEN
+                WRITE(IW,4410) I, ECONT(I)
+              END IF
+            END DO
+            WRITE(IW,4420)
+          END IF
+          IEXC = IEXC + 1
+          CALL FLSHBF(IW)
+          CYCLE
+C
+C       --- X=3 (IEXC=2) AND TRIPEX = FALSE ---
+        ELSE IF (IEXC.EQ.2) THEN
+          IF (TRIPEX .EQV. .FALSE.) THEN
+            IF (MASWRK) THEN
+              WRITE(IW,4401)
+              DO I = 1, NSTATE
+                IF (MXEXST(I).NE.0) THEN
+                  WRITE(IW,4410) I, ECONT(NSTATE+I)
+                END IF
+              END DO
+              WRITE(IW,4420)
+            END IF
+            IEXC = IEXC + 1
+            CALL FLSHBF(IW)
+            CYCLE
+          END IF
+        END IF
+CCC
+CCC
+CCC     THE REMAINING STEPS IN EACH IEXC ITERATION WILL ONLY
+CCC     BE PERFORMED ON THE STATES OF INTEREST
+        DO I = 1, NSTATE
+          IF (MXEXST(I).GE.IEXC) THEN
+            IF (MASWRK) THEN
+              WRITE(IW,4500) I, IEXC+1
+CCC
+CCC           PRINT OUT THE VALUES OF THE EMAT MATRICES
+CCC           TO THE OUTPUT FILE
+CCC
+              IF (IEXC.EQ.2) THEN
+                NIII = 2
+                WRITE(IW,4600)
+                WRITE(IW,4610)
+                WRITE(IW,4620) ('X = ', III, III=2,3)
+                WRITE(IW,4600)
+                MST1 = MSTRT(1)
+                MST2 = MSTRT(2)
+                M1ST = MAX(MST1,MST2)
+                MLAST = MIN(MEND(1),MEND(2))
+                IXX(1) = IAD2(1) + NSTATE*(M1ST-MST1) + I
+                IXX(2) = IAD2(2) + NSTATE*(M1ST-MST2) + I
+              ELSE IF (IEXC.EQ.3) THEN
+                NIII = 3
+                WRITE(IW,4601)
+                WRITE(IW,4610)
+                WRITE(IW,4620) ('X = ', III, III=2,4)
+                WRITE(IW,4601)
+                MST1 = MSTRT(1)
+                MST2 = MSTRT(2)
+                MST3 = MSTRT(3)
+                M1ST = MAX(MST1,MST2)
+                MLAST = MIN(MEND(1),MEND(2))
+                IF (MST3.GT.M1ST) M1ST = MST3
+                IF (MEND(3).LT.MLAST) MLAST = MEND(3)
+                IXX(1) = IAD2(1) + NSTATE*(M1ST-MST1) + I
+                IXX(2) = IAD2(2) + NSTATE*(M1ST-MST2) + I
+                IXX(3) = IAD2(3) + NSTATE*(M1ST-MST3) + I
+              ELSE IF (ISCHME.EQ.1) THEN
+                NIII = 4
+                IEX1 = IEXC-3
+                IEX2 = IEXC-2
+                IEX3 = IEXC-1
+                WRITE(IW,4602)
+                WRITE(IW,4610)
+                WRITE(IW,4620) ('X = ', IEXC+III, III=-2,1)
+                WRITE(IW,4602)
+                MST1 = MSTRT(IEX1)
+                MST2 = MSTRT(IEX2)
+                MST3 = MSTRT(IEX3)
+                MST4 = MSTRT(IEXC)
+                M1ST = MAX(MST1,MST2)
+                IF (MST3.GT.M1ST) M1ST = MST3
+                IF (MST4.GT.M1ST) M1ST = MST4
+                MLAST = MIN(MEND(IEX1),MEND(IEX2))
+                IF (MEND(IEX3).LT.MLAST) MLAST = MEND(IEX3)
+                IF (MEND(IEXC).LT.MLAST) MLAST = MEND(IEXC)
+                IXX(1) = IAD2(IEX1) + NSTATE*(M1ST-MST1) + I
+                IXX(2) = IAD2(IEX2) + NSTATE*(M1ST-MST2) + I
+                IXX(3) = IAD2(IEX3) + NSTATE*(M1ST-MST3) + I
+                IXX(4) = IAD2(IEXC) + NSTATE*(M1ST-MST4) + I
+              ELSE
+                NIII = 4
+                WRITE(IW,4602)
+                WRITE(IW,4610)
+                WRITE(IW,4620) 'X = ', 2, 'X = ', 3,
+     *                         'X = ', IEXC-1, 'X = ', IEXC+1
+                WRITE(IW,4602)
+                MST1 = MSTRT(1)
+                MST2 = MSTRT(2)
+                MST3 = MSTRT(IEXC-2)
+                MST4 = MSTRT(IEXC)
+                M1ST = MAX(MST1,MST2)
+                IF (MST3.GT.M1ST) M1ST = MST3
+                IF (MST4.GT.M1ST) M1ST = MST4
+                MLAST = MIN(MEND(1),MEND(2))
+                IF (MEND(IEXC-2).LT.MLAST) MLAST = MEND(IEXC-2)
+                IF (MEND(IEXC).LT.MLAST) MLAST = MEND(IEXC)
+                IXX(1) = IAD2(1) + NSTATE*(M1ST-MST1) + I
+                IXX(2) = IAD2(2) + NSTATE*(M1ST-MST2) + I
+                IXX(3) = IAD2(IEXC-2) + NSTATE*(M1ST-MST3) + I
+                IXX(4) = IAD2(IEXC) + NSTATE*(M1ST-MST4) + I
+              END IF
+C
+              IELE = 0
+              DO J = M1ST, MLAST
+                WRITE(IW,4630) J, (X(IELE+IXX(III)), III=1,NIII)
+                IELE = IELE + NSTATE
+              END DO
+C
+              IF (IEXC.EQ.2) THEN
+                WRITE(IW,4600)
+              ELSE IF (IEXC.EQ.3) THEN
+                WRITE(IW,4601)
+              ELSE
+                WRITE(IW,4602)
+              END IF
+            END IF
+            CALL FLSHBF(IW)
+CCC
+CCC
+CCC         EVALUATE AND STORE THE ENERGY CHANGES,
+CCC         DE(X) = E(X) - E(X-1) AND DE(X-1,X) = E(X) - E(X-2),
+CCC         THAT WILL BE USED TO EXTRAPOLATE THE VALUES FOR
+CCC         ECONT(X)
+CCC         ----------------------------------------------------
+CCC         UNDER THIS EVALUATION FOR SCHEME 1 (AND FOR SCHEME 2
+CCC         WHEN X=4):
+CCC           XX(M,X) = DE(M,X-2) = E(M,X-2) - E(M,X-3)
+CCC           YY(M,X) = DE(M,X)   = E(M,X)   - E(M,X-1)
+CCC           AND YY(M,X) = COEF(1) + COEF(2)*XX(M,X) 
+CCC           WITH DE(M,2) = DE(M,1,2) = E(M,2) - ENREF
+CCC
+CCC         FOR SCHEME 2 (WHEN X > 4):
+CCC           XX(M,X) = DE(M,1,2)   = E(M,2) - ENREF
+CCC           YY(M,X) = DE(M,3)     = E(M,3) - E(M,2)
+CCC           ZZ(M,X) = DE(M,X-1,X) = E(M,X) - E(M,X-2)
+CCC           AND ZZ(M,X) = COEF(1)*XX(M,X) + COEF(2)*YY(M,X)
+CCC                           + COEF(3) 
+CCC
+CCC         FOR BOTH SCHEME 1 AND SCHEME 2 IF AN EXTRAPOLATION
+CCC         IS PERFORMED FOR X = 3:
+CCC           XX(M,3) = DE(M,1,2) = E(M,2) - ENREF
+CCC           YY(M,3) = DE(M,3)   = E(M,3) - E(M,2)
+CCC           AND YY(M,3) = COEF(1) + COEF(2)*XX(M,3) 
+CCC         ----------------------------------------------------
+C
+C           --- X=3, TRIPEX EQUALS TRUE ---
+            IF (IEXC.EQ.2) THEN
+              III  = 1
+              IELE = 0
+              MST  = MSTRT(IEXC)
+              MST1 = MSTRT(IEXC-1)
+              NELE = IAD1SZ(I,IEXC)
+              IADTMP = IAD1(I,IEXC)
+              DO
+                IPREV = M1M2EX(IADTMP+IELE)
+                IELE = IELE + 1
+                M1M2 = -M1M2EX(IADTMP+IELE)
+                IF (M1M2.LT.IPREV) THEN
+                  M1M2 = IPREV
+                ELSE
+                  IELE = IELE + 1
+                END IF
+C
+                ITMP  = IAD2(IEXC)
+     *                   + NSTATE*(IPREV-MST) + I
+                ITMP1 = IAD2(IEXC-1)
+     *                   + NSTATE*(IPREV-MST1) + I
+                DO J = IPREV, M1M2, IDELTM
+                  ENTMP = X(ITMP)
+                  ENTMP1 = X(ITMP1)
+                  YY(III) = ENTMP - ENTMP1
+                  XX(III) = ENTMP1
+                  IXX(III) = J
+                  ITMP = ITMP + NSTATE*IDELTM
+                  ITMP1 = ITMP1 + NSTATE*IDELTM
+                  III = III + 1
+                END DO
+                IF (IELE.GE.NELE) EXIT
+              END DO
+              XX(III) = ECONT(I)
+              NIII = III-1
+C
+C           --- X=4 (IEXC=3) ---
+            ELSE IF (IEXC.EQ.3) THEN
+              III  = 1
+              IELE = 0
+              MST  = MSTRT(IEXC)
+              MST1 = MSTRT(IEXC-1)
+              MST2 = MSTRT(IEXC-2)
+              NELE = IAD1SZ(I,IEXC)
+              IADTMP = IAD1(I,IEXC)
+              DO
+                IPREV = M1M2EX(IADTMP+IELE)
+                IELE = IELE + 1
+                M1M2 = -M1M2EX(IADTMP+IELE)
+                IF (M1M2.LT.IPREV) THEN
+                  M1M2 = IPREV
+                ELSE
+                  IELE = IELE + 1
+                END IF
+C
+                ITMP  = IAD2(IEXC)
+     *                   + NSTATE*(IPREV-MST) + I
+                ITMP1 = IAD2(IEXC-1)
+     *                   + NSTATE*(IPREV-MST1) + I
+                ITMP2 = IAD2(IEXC-2)
+     *                   + NSTATE*(IPREV-MST2) + I
+                DO J = IPREV, M1M2, IDELTM
+                  ENTMP = X(ITMP)
+                  ENTMP1 = X(ITMP1)
+                  ENTMP2 = X(ITMP2)
+                  YY(III) = ENTMP - ENTMP1
+                  XX(III) = ENTMP2
+                  IXX(III) = J
+                  ITMP = ITMP + NSTATE*IDELTM
+                  ITMP1 = ITMP1 + NSTATE*IDELTM
+                  ITMP2 = ITMP2 + NSTATE*IDELTM
+                  III = III + 1
+                END DO
+                IF (IELE.GE.NELE) EXIT
+              END DO
+              XX(III) = ECONT(I)
+              NIII = III-1
+C
+C           --- X>4 (IEXC>3), ISCHEME=1 ---
+            ELSE IF (ISCHME.EQ.1) THEN
+              III  = 1
+              IELE = 0
+              MST  = MSTRT(IEXC)
+              MST1 = MSTRT(IEXC-1)
+              MST2 = MSTRT(IEXC-2)
+              MST3 = MSTRT(IEXC-3)
+              NELE = IAD1SZ(I,IEXC)
+              IADTMP = IAD1(I,IEXC)
+              DO
+                IPREV = M1M2EX(IADTMP+IELE)
+                IELE = IELE + 1
+                M1M2 = -M1M2EX(IADTMP+IELE)
+                IF (M1M2.LT.IPREV) THEN
+                  M1M2 = IPREV
+                ELSE
+                  IELE = IELE + 1
+                END IF
+C
+                ITMP  = IAD2(IEXC)
+     *                   + NSTATE*(IPREV-MST) + I
+                ITMP1 = IAD2(IEXC-1)
+     *                   + NSTATE*(IPREV-MST1) + I
+                ITMP2 = IAD2(IEXC-2)
+     *                   + NSTATE*(IPREV-MST2) + I
+                ITMP3 = IAD2(IEXC-3)
+     *                   + NSTATE*(IPREV-MST3) + I
+                DO J = IPREV, M1M2, IDELTM
+                  ENTMP = X(ITMP)
+                  ENTMP1 = X(ITMP1)
+                  ENTMP2 = X(ITMP2)
+                  ENTMP3 = X(ITMP3)
+                  YY(III) = ENTMP - ENTMP1
+                  XX(III) = ENTMP2 - ENTMP3
+                  IXX(III) = J
+                  ITMP = ITMP + NSTATE*IDELTM
+                  ITMP1 = ITMP1 + NSTATE*IDELTM
+                  ITMP2 = ITMP2 + NSTATE*IDELTM
+                  ITMP3 = ITMP3 + NSTATE*IDELTM
+                  III = III + 1
+                END DO
+                IF (IELE.GE.NELE) EXIT
+              END DO
+              ITMP2 = NSTATE*(IEXC-3) + I
+              XX(III) = ECONT(ITMP2)
+              NIII = III-1
+C
+C           --- X>4 (IEXC>3), ISCHEME=2 ---
+            ELSE
+              III  = 1
+              IELE = 0
+              MST  = MSTRT(IEXC)
+              MST1 = MSTRT(IEXC-2)
+              MST2 = MSTRT(2)
+              MST3 = MSTRT(1)
+              NELE = IAD1SZ(I,IEXC)
+              IADTMP = IAD1(I,IEXC)
+              DO
+                IPREV = M1M2EX(IADTMP+IELE)
+                IELE = IELE + 1
+                M1M2 = -M1M2EX(IADTMP+IELE)
+                IF (M1M2.LT.IPREV) THEN
+                  M1M2 = IPREV
+                ELSE
+                  IELE = IELE + 1
+                END IF
+C
+                ITMP  = IAD2(IEXC)
+     *                   + NSTATE*(IPREV-MST) + I
+                ITMP1 = IAD2(IEXC-2)
+     *                   + NSTATE*(IPREV-MST1) + I
+                ITMP2 = IAD2(2)
+     *                   + NSTATE*(IPREV-MST2) + I
+                ITMP3 = IAD2(1)
+     *                   + NSTATE*(IPREV-MST3) + I
+                DO J = IPREV, M1M2, IDELTM
+                  ENTMP = X(ITMP)
+                  ENTMP1 = X(ITMP1)
+                  ENTMP2 = X(ITMP2)
+                  ENTMP3 = X(ITMP3)
+                  ZZ(III) = ENTMP - ENTMP1
+                  YY(III) = ENTMP2 - ENTMP3
+                  XX(III) = ENTMP3
+                  IXX(III) = J
+                  ITMP = ITMP + NSTATE*IDELTM
+                  ITMP1 = ITMP1 + NSTATE*IDELTM
+                  ITMP2 = ITMP2 + NSTATE*IDELTM
+                  ITMP3 = ITMP3 + NSTATE*IDELTM
+                  III = III + 1
+                END DO
+                IF (IELE.GE.NELE) EXIT
+              END DO
+              YY(III) = ECONT(NSTATE+I)
+              XX(III) = ECONT(I)
+              NIII = III-1
+            END IF
+CCC
+CCC
+CCC         PRINT THE VALUES OF THE DE(X) MATRIX
+CCC         IN THE OUTPUT FILE
+CCC
+            IF (MASWRK) THEN
+C             --- SCHEME 1 ---
+              WRITE(IW,'(1X)')
+              IF ((ISCHME.EQ.1).OR.(IEXC.LE.3)) THEN
+                WRITE(IW,4600)
+                WRITE(IW,4611)
+                IF (IEXC.EQ.2) THEN
+                  WRITE(IW,4620) ('X = ', III, III=2,3)
+                ELSE
+                  WRITE(IW,4620) ('X = ', IEXC+III, III=-1,1,2)
+                END IF
+                WRITE(IW,4600)
+C
+                DO III = 1, NIII
+                  WRITE(IW,4630) IXX(III), XX(III), YY(III)
+                END DO
+                WRITE(IW,4600)
+C
+C             --- SCHEME 2 ---
+              ELSE
+                WRITE(IW,4601)
+                WRITE(IW,4612) IEXC+1
+                WRITE(IW,4620) 'X = ', 2, 'X = ', 3, 'X = ', IEXC+1
+                WRITE(IW,4601)
+C
+                DO III = 1, NIII
+                  WRITE(IW,4630) IXX(III), XX(III), YY(III), ZZ(III)
+                END DO
+                WRITE(IW,4601)
+              END IF
+            END IF
+            CALL FLSHBF(IW)
+CCC
+CCC
+CCC         PERFORM A LEAST SQUARES FIT OF THE DATA
+CCC         AND EEXTRAPOLATE TO M = MMC
+CCC
+C           -- FOR ISCHME = 1 OR X<5 (IEXC<4)
+            IF ((ISCHME.EQ.1).OR.(IEXC.LE.3)) THEN
+              CALL POLFIT(NIII,2,0,XX,YY,COEF,SIGMAY,CHISQR)
+              YY(NIII+1) = COEF(1) + COEF(2)*XX(NIII+1)
+              ITMP = NSTATE*(IEXC-1) + I
+              ECONT(ITMP) = YY(NIII+1)
+C
+              DELTA1 = ZERO
+              DELTA2 = ZERO
+              DO III = 1, NIII
+                ENTMP = YY(III)-COEF(1)-COEF(2)*XX(III)
+                DELTA1 = DELTA1 + ENTMP**2
+                IF (ABS(ENTMP).GT.DELTA2) DELTA2 = ABS(ENTMP)
+              END DO
+              DELTA1 = SQRT(DELTA1/NIII)
+C
+C           -- FOR ISCHME = 2 AND X>4 (IEXC>3)
+            ELSE
+              CALL TLMSFIT(NIII,XX,YY,ZZ,COEF)
+              ZZ(NIII+1) = COEF(1)*XX(NIII+1) 
+     *                       + COEF(2)*YY(NIII+1)
+     *                           + COEF(3)
+              ITMP = NSTATE*(IEXC-1) + I
+              ECONT(ITMP) = ZZ(NIII+1)
+C
+              DELTA1 = ZERO
+              DELTA2 = ZERO
+              DO III = 1, NIII
+                ENTMP = ZZ(III) - COEF(1)*XX(III)
+     *                      - COEF(2)*YY(III) - COEF(3)
+                DELTA1 = DELTA1 + ENTMP**2
+                IF (ABS(ENTMP).GT.DELTA2) DELTA2 = ABS(ENTMP)
+              END DO
+              DELTA1 = SQRT(DELTA1/NIII)
+            END IF
+C
+C           -- CALCULATE THE UNCERTANTY OF THE EXTRAPOLATION
+            X0 = XX(1)
+            X1 = XX(NIII)
+            X2 = XX(NIII+1)
+            ENTMP  = 1.0D+00 + 2.0D+00*(X2-X1)/(X1-X0)
+            EMAX1 = DELTA1*ENTMP
+            EMAX2 = DELTA2*ENTMP
+C
+C           -- PRINT OUT THE RESULTS OF THE EXTRAPOLATION
+            IF (MASWRK) THEN
+              IF ((ISCHME.EQ.1).OR.(IEXC.LE.3)) THEN
+                IF (IEXC.EQ.2) THEN
+                  WRITE(IW,4700) COEF(2), 1, COEF(1)
+                ELSE
+                  WRITE(IW,4700) COEF(2), 2, COEF(1)
+                END IF
+                WRITE(IW,4710) DELTA1, DELTA2
+                WRITE(IW,4720) YY(NIII+1)
+                WRITE(IW,4730) EMAX1, EMAX2
+              ELSE
+                WRITE(IW,4701) COEF(1), COEF(2), COEF(3)
+                WRITE(IW,4710) DELTA1, DELTA2
+                WRITE(IW,4720) ZZ(NIII+1)
+                WRITE(IW,4730) EMAX1, EMAX2
+              END IF
+            END IF
+            CALL FLSHBF(IW)
+          END IF
+        END DO
+C
+C       --- CLOSING STEPS
+        IEXC = IEXC + 1
+      END DO
+      CALL FLSHBF(ICEDATA)
+CCC
+CCC
+CCC   WRITE THE TOTAL ENERGIES AND EACH CONTRIBUTION THAT
+CCC   THE EXCITATIONS MAKE TO THE TOTAL ENERGIES
+CCC   TO THE OUTPUT FILE
+CCC
+      IF (MASWRK) WRITE(IW,4900)
+      DO I = 1, NSTATE
+        CTOT = ZERO
+        IF (MASWRK) WRITE(IW,4910) I
+        IEXCST = MXEXST(I)
+        III = I
+        DO IEXC = 1, IEXCST
+          CTOT = CTOT + ECONT(III)
+          IF (MASWRK) WRITE(IW,4920) IEXC+1,ECONT(III)
+          III = III + NSTATE
+        END DO
+        ETOT = ENREF(I) + CTOT
+        ESTATE(I) = ETOT
+        IF (MASWRK) WRITE(IW,4930) CTOT, ENREF(I), ETOT
+      END DO
+      IF (MASWRK) WRITE(IW,4940)
+      CALL FLSHBF(IW)
+CCC
+CCC
+CCC   RESTORE THE INITIAL VALUES FOR NSTATE (K) AND
+CCC   MINI AND MAXI
+CCC
+      K = KSAVE
+      DO I = 1, NSPACE
+        MINI(I) = MINISV(I)
+        MAXI(I) = MAXISV(I)
+      END DO
+      CALL SEQCLO(ICEDATA,'KEEP')
+      CALL RETFM(NEED)
+CCC
+      RETURN
+CCC
+CCC
+CCC   FORMAT COMMANDS REFERENCED ABOVE
+CCC
+ 4100 FORMAT(3(1X,I3))
+ 4101 FORMAT(1X,'$CEDATA',/,2(1X,I3))
+ 4110 FORMAT(/1X,'THERE WAS AN ERROR READING INFORMATION FROM THE',
+     *        1X,A,1X,'FILE.')
+ 4120 FORMAT(15(1X,I3))
+C
+ 4200 FORMAT(3(1X,I3))
+ 4210 FORMAT(5(1X,ES22.15))
+ 4220 FORMAT(1X,'$END')
+C
+ 4300 FORMAT(/3X,38(1H=),
+     *       /4X,'CALCULATIONS FOR EXCITATION LEVEL',
+     *        1X,I2,/3X,38(1H=))
+C
+ 4400 FORMAT(/3X,43(1H*),
+     *       /3X,'TOTAL CONTRIBUTIONS FROM',
+     *        1X,'EXCITATION LEVEL 2',
+     *       /3X,43(1H*),
+     *       /5X,'STATE',16X,'DE(2) = E(2) - ENREF')
+ 4401 FORMAT(/3X,43(1H*),
+     *       /3X,'TOTAL CONTRIBUTIONS FROM',
+     *        1X,'EXCITATION LEVEL 3',
+     *       /3X,43(1H*),
+     *       /5X,'STATE',17X,'DE(3) = E(3) - E(2)')
+ 4410 FORMAT(6X,I3,18X,ES18.11)
+ 4420 FORMAT(3X,43(1H*),/)
+C
+ 4500 FORMAT(/3X,51(1HX),
+     *       /4X,'EXTRAPOLATION FOR STATE',1X,I3
+     *       /4X,'AND EXCITATION LEVEL',1X,I2,
+     *       /3X,51(1HX))
+C
+ 4600 FORMAT(3X,43(1H~))
+ 4601 FORMAT(3X,63(1H~))
+ 4602 FORMAT(3X,83(1H~))
+ 4610 FORMAT(3X,'CEEIS RELATIVE ENERGY MATRIX, E(M,X) - EREF')
+ 4611 FORMAT(3X,'CEEIS ENERGY DIFFERENCE MATRIX, DE(M,X)',
+     *    //10X,'DE(M,X) = E(M,X) - E(M,X-1)',
+     *      /7X,'[FOR X=2, DE(M,2) = E(M,2) - EREF]',/)
+ 4612 FORMAT(3X,'CEEIS ENERGY DIFFERENCE MATRICIES,',
+     *       1X,'DE(M,X-1,X) AND DE(M,X)',
+     *    //12X,'DE(M,X-1,X) = E(M,X) - E(M,X-2)',
+     *       5X,'FOR',6X,'X =',1X,I2,
+     *     /16X,'DE(M,X) = E(M,X) - E(M,X-1)',
+     *       5X,'FOR',6X,'X =  3',
+     *     /16X,'DE(M,X) = E(M,X) - REF',
+     *      10X,'FOR',6X,'X =  2',/)
+ 4620 FORMAT(5X,'M',4(13X,A3,1X,I2))
+ 4630 FORMAT(3X,I3,4(2X,ES18.11))
+C
+ 4700 FORMAT(/3X,50(1H~),
+     *       /3X,'LEAST MEAN SQUARE FIT:',
+     *       /9X,'DE(X) = ',ES18.11,1X,'* DE(X-',I1,')',
+     *      /19X,'+',2X,ES18.11)
+ 4701 FORMAT(/3X,50(1H~),
+     *       /3X,'LEAST MEAN SQUARE FIT:',
+     *       /5X,'DE(X-1,X) = ',ES18.11,1X,'* DE(2)',
+     *      /19X,'+',2X,ES18.11,1X,'* DE(3)',
+     *      /19X,'+',2X,ES18.11)
+ 4710 FORMAT(/3X,'STANDARD DEVIATION OF',
+     *        1X,'THE FIT:',2X,ES18.11,
+     *       /4X,'MAXIMUM DEVIATION OF',
+     *        1X,'THE FIT:',2X,ES18.11)
+ 4720 FORMAT(/3X,'EXTRAPOLATED ENERGY',
+     *        1X,'DIFFERENCE:',1X,ES18.11)
+ 4730 FORMAT(/3X,'EXTRAPOLATION UNCERTAINTY USING:',
+     *       /5X,'1. THE STANDARD DEVIATION',5X,ES18.11,
+     *       /5X,'2. THE MAXIMUM DEVIATION',6X,ES18.11,
+     *       /3X,50(1H~),/)
+C
+ 4900 FORMAT(//3X,61(1HT))
+ 4910 FORMAT(/5X,57(1H=),
+     *       /5X,'TOTAL ENERGY ACCOUNTING FOR',
+     *        1X,'STATE ',I3,/5X,57(1H=))
+ 4920 FORMAT(5X,'CONTRIBUTION FROM EXCITATION',
+     *       1X,'LEVEL ',I2,': ',ES18.11)
+ 4930 FORMAT(5X,57(1H-),
+     *      /5X,'CONTRIBUTION OF ALL EXCITATIONS:',
+     *       7X,F18.10,/5X,'REFERENCE ENERGY:',
+     *      22X,F18.10,/5X,'TOTAL ENERGY:',26X,F18.10,
+     *      /5X,57(1H-))
+ 4940 FORMAT(/3X,61(1HT)/)
+C
+      END
+CCC   --- END OF CEEIS --
+C
+C
+C*MODULE CEEIS   *DECK CEEISSTEP
+      SUBROUTINE CEEISSTEP(J,IEXC,NSTATE,EVEC,NRNFG,NPFLG)
+CCC   ----------------------------------------------------
+CCC   PURPOSE OF CEEISSTEP IS TO PERFORM INDIVIDUAL CI
+CCC   ENERGY CALCULATIONS.
+CCC
+CCC   DURING THOSE CALCULATIONS:
+CCC        J  DENOTES THE NUMBER OF EXTERNAL ORBITALS
+CCC             THAT ARE INCLUDED.
+CCC     IEXC  IDENTIFIES THE NUMBER OF EXCITATIONS THAT
+CCC             OCCUR.
+CCC   NSTATE  SPECIFIES THE NUMBER OF ELECTRONIC STATES
+CCC             THAT ARE EVALUATED.
+CCC     EVEC  IS THE VECTOR THAT HOLDS THE ENERGIES.
+C
+C
+CCC
+CCC   LIST THE COMMON VARIABLES USED IN THIS ROUTINE
+CCC   
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      DIMENSION NRNFG(10),NPFLG(10),EVEC(NSTATE)
+C
+      LOGICAL GOPARR,DSKWRK,MASWRK,FDIRCT,QCORR,DOEXCH,
+     *        DDITRF,DOOOOO,DOVOOO,DOVVOO,DOVOVO,DOVVVO,
+     *        DOVVVV,DOCORE,CEECHK,CLABEL
+C
+      PARAMETER (MXRT=100)
+      PARAMETER (ZERO=0.0D+00)
+      PARAMETER (MMX=500,IEXMX=49)
+      PARAMETER (MXM1M2=750)
 C
       COMMON /DETWFN/ WSTATE(MXRT),SPINS(MXRT),CRIT,PRTTOL,S,SZ,
      *                GRPDET,STSYM,GLIST,DWPARM,
      *                NFLGDM(MXRT),IWTS(MXRT),NCORSV,NCOR,NACT,NORB,
      *                NA,NB,K,KST,IROOT,IPURES,MAXW1,NITER,MAXP,NCI,
      *                IGPDET,KSTSYM,NFTGCI,IDWEIGH
-C
       COMMON /ENRGYS/ ENUCR,EELCT,ETOT,STOT,SZZ,ECORE,ESCF,EERD,E1,E2,
      *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2),EDISP
-C
       COMMON /FCCWFN/ NSPACE,MSTA(51),MNUM(51),MINI(51),MAXI(51),
      *                IAMI(51),IAMA(51),IBMI(51),IBMA(51),IDIM(51),
      *                LBST(51),NREF0,FDIRCT,QCORR,C0SQ
-C
       COMMON /IOFILE/ IR,IW,IP,IS,IJKT,IDAF,NAV,IODA(950)
-C
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
       COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
      *                MPLEVL,MPCTYP
-      COMMON /CEEIS1/ MMIN0,MMIN,IDELTM,SMRCI,M1M2EX(MMX),
-     *                XTRTOL(IEXMX),ISCHME,ISTPEX,RESTRT,CEMEM,CEMXPN,
-     *                NSEXT(51),IEXPEMT
-      COMMON /CEEIS2/ ECONT(IEXMX),EMAT(MMX,IEXMX),ENREF,
-     *                MEMCE(MMX,IEXMX),MXPNCE(MMX,IEXMX),
-     *                ISTEX(IEXMX),MEX(IEXMX),MMC
-      COMMON /CEEIS3/ NEEDCI, CEECHK
       COMMON /FMPARM/ LTOP,LOFFS,LENHI,LOCMEM,MEMLIM,MEMOK
       COMMON /CIFILS/ NFT11,NFT12,NFT13,NFT14,NFT15,NFT16,IDAF20,NEMEMX
 C
-      DATA CDELE /'    DEMAT(M,2)','    DEMAT(M,3)','    DEMAT(M,4)'/
-      DATA CDELE1/'    DEMAT(M,5)','    DEMAT(M,6)','    DEMAT(M,7)',
-     *            '    DEMAT(M,8)','    DEMAT(M,9)','   DEMAT(M,10)',
-     *            '   DEMAT(M,11)','   DEMAT(M,12)'/
-      DATA CDELE2/'              ','   DEMAT(M,56)','              ',
-     *            '   DEMAT(M,78)','              ','  DEMAT(M,910)',
-     *            '              ',' DEMAT(M,1112)'/
+      COMMON /CEEIS1/ M1M2EX(MXM1M2),ENREF(MXRT),ISCHME,RESTRT,
+     *                TRIPEX,ISTPEX,IDELTM,AUTO,NPTAUTO,
+     *                XTRTOL(MXRT*IEXMX),MMIN,MMIN0,IEXPEMT,SMRCI,
+     *                CEMEM,CEMXPN
+      COMMON /CEEIS3/ NEEDCI, CEECHK
+      COMMON /CEEIS4/ NSEXT(51),MINISV(51),MAXISV(51)
 C
       INTEGER         D_OOOO,D_VOOO,D_VVOO,D_VOVO,D_VVVO,D_VVVV,
      *                D_OOOOAB,D_OOOOBB,D_VOOOAB,D_VOOOBA,D_VOOOBB,
@@ -708,657 +2605,190 @@ C
      *                NDVVOOBA,NDVVOOAB,NDVVOOBB,NDVOVOAB,NDVOVOBB,
      *                NDVOOOBA,NDVOOOAB,NDVOOOBB,NDOOOOAB,NDOOOOBB
 C
-      DATA CIDET/8HCIDET    /
-      DATA ORMAS/8HORMAS    /
       DATA RNONE/8HNONE     /
-C
-C     SCHEME  I: YY = COEF(1) + COEF(2)*XX
-C     SCHEME II: ZZ = COEF(1)*XX + COEF(2)*YY + COEF(3)
-C
-C        DRIVER FOR FULL CLASS CI CALCULATIONS...
-C
-      DO III = 1, IEXMX
-        ECONT(III) = ZERO
-        DO JJJ = 1, MMX
-           EMAT(JJJ,III) = ZERO
-          DEMAT(JJJ,III) = ZERO
-        END DO
-      END DO
-      DO III = 1, NMO
-        XX(III) = ZERO
-        YY(III) = ZERO
-        ZZ(III) = ZERO
-      END DO
-C
-C        ----- READ INPUT DEFINING THE FULL CLASS CI DIMENSIONS -----
-C
-      CALL FCINPUT(NPFLG(1),CIDET,ORMAS)
-      CALL CEEISIN
-CZ
-      DO KK = 1, NSPACE
-        MINISV(KK) = MINI(KK)
-        MAXISV(KK) = MAXI(KK)
-      END DO
-CZ
-CZ    IF THE REF ENERGY IS NOT GIVEN, DO THE CALCULATION HERE
-CZ
-      IF (ENREF.EQ.ZERO) THEN
-        IF (MASWRK) THEN
-          WRITE(IW,'(/3X,40(1H-))')
-          WRITE(IW,'(3X,A22,A16)') 'ORMAS CALCULATION FOR ',
-     *                           'REFERENCE ENERGY'
+CCC
+CCC
+CCC   IDENTIFY THE TOTAL NUMBER OF ELECTRONIC STATES AND
+CCC   ACTIVE ORBITALS THAT ARE INVOLVED IN THE CURRENT
+CCC   ORMAS CI CALCULATION.
+CCC
+      NELSACT = NA + NB
+      NORB = J
+      NACT = NORB - NCORSV
+      K = NSTATE
+      MSTA(NSPACE+1) = NORB + 1
+      MNUM(NSPACE) = MSTA(NSPACE+1) - MSTA(NSPACE)
+      IF (MASWRK) WRITE(IW,5000) IEXC, MNUM(NSPACE),
+     *                           NCORSV, NACT
+CCC
+CCC
+CCC   ALTER THE MAXI AND MNUM ARRAYS TO ACCOUNT FOR THE
+CCC   CURRENT EXCITATION, IEXC, AND NUMBER OF EXTERNAL
+CCC   ORBITALS, J.
+CCC
+      DO III = 1, NSPACE
+        IF (NSEXT(III).EQ.1) THEN
+          NELSCAP = 2 * MNUM(III)
+          IF (NELSCAP.GT.NELSACT) NELSCAP = NELSACT
+          MINI(III) = MINISV(III) - IEXC
+          MAXI(III) = MAXISV(III) + IEXC
+          IF (MINI(III).LT.0) MINI(III) = 0
+          IF (MAXI(III).GT.NELSCAP) MAXI(III) = NELSCAP
+        ELSE
+          MINI(III) = MINISV(III)
+          MAXI(III) = MAXISV(III)
         END IF
-        CALL ORDET(NRNFG,NPFLG)
-        CALL SEQCLO(IJKT,'DELETE')
-        CALL SEQCLO(NFT12,'DELETE')
-        ENREF = ETOT
-        IF (MASWRK) THEN
-          WRITE(IW,'(3X,A6,F16.10)') 'ENREF=', ENREF
-          WRITE(IW,'(3X,40(1H-)/)')
+      END DO
+      IF (MASWRK) WRITE(IW,5110) (MNUM(I),I=1,NSPACE)
+      IF (MASWRK) WRITE(IW,5120) (MINI(I),I=1,NSPACE)
+      IF (MASWRK) WRITE(IW,5130) (MAXI(I),I=1,NSPACE)
+CCC
+CCC
+CCC   MAXI, MNUM, ETC. MUST BE CHECKED IN EACH CEEIS CYCLE
+CCC   BEFORE THE ORMAS CI CALCULATIONS CAN BE PERFORMED
+CCC
+      CALL FCCHECK(IW,.FALSE.,NSPACE,MNUM,MINI,MAXI,
+     *             IAMI,IAMA,IBMI,IBMA,NA,NB)
+CCC
+CCC
+CCC   SETUP AND PERFORM THE INTEGRAL TRANSFORMATION
+CCC
+      DDITRF=GOPARR
+      DOOOOO=.TRUE.
+      DOVOOO=.FALSE.
+      DOVVOO=.FALSE.
+      DOVOVO=.FALSE.
+      DOVVVO=.FALSE.
+      DOVVVV=.FALSE.
+      DOCORE=.TRUE.
+      DOEXCH=SCFTYP.EQ.RNONE
+      CALL TRFMCX(NPFLG(2),NCORSV,NORB,NORB,.FALSE.,
+     *            DOEXCH,DDITRF,DOOOOO,DOVOOO,DOVVOO,
+     *            DOVOVO,DOVVVO,DOVVVV,DOCORE)
+CCC
+CCC
+CCC   CHECK THE MEMORY REQUIRMENTS FOR THE ORMAS
+CCC   CI CALCULATION
+CCC
+      CEECHK = .TRUE.
+      MXPTMP = MAXP
+      MINP = 2*NSTATE
+      DO
+        IF (NRNFG(3).EQ.0) THEN
+          IF(MASWRK) WRITE(IW,5200)
+          IF(DDITRF) CALL DDI_DESTROY(D_OOOO)
+          RETURN
         END IF
-      END IF
-CZ
-      NANB = (NA + NB)/2
-      NORTOT = NANB + NCORSV
 C
-      SIGMAY = 1.0D+00
-CZ
-CZ    OUTER LOOP: EXCITATIONS
-CZ
-      DO III = 2, ISTPEX
+        CLABEL = .FALSE.
+        IF(GOPARR) CLABEL = .TRUE.
 C
-        IF (ISCHME.EQ.2.AND.III.GE.5.AND.MOD(III,2).NE.0)
-     *  GOTO 4000
-CZ
-        IF (MASWRK) THEN
-          WRITE(IW,'(/3X,44(1H=))')
-          WRITE(IW,'(3X,A33,I4)')
-     *            'CALCULATIONS FOR EXCITATION LEVEL', III
-          WRITE(IW,'(3X,44(1H=)/)')
+        CALL DEFCCI(NPFLG(3),CLABEL,DDITRF,NRNFG(5),
+     *              NRNFG(6),NPFLG(5),NPFLG(6))
+C
+C       --- TERMINATION CONDITION ---
+        IF (NEEDCI*1.01D+00.LT.MEMLIM) EXIT
+C
+C       --- IF MEMORY REQUIRMENTS DEMAND IT REDUCE ---
+C       --- THE SIZE OF MAXP                       ---
+        IF (MAXP.LE.MINP) THEN
+          IF (MASWRK) WRITE(IW,5210) MAXP, NEEDCI, MEMLIM
+          CALL ABRT
         ENDIF
-CZ
-CZ
-        IEXTRA = 0
-        MINTMP = MMIN
-        IF (III.EQ.2.OR.III.EQ.3) THEN
-          IF (III.EQ.2) IEXTRA = 1
-          IF (M1M2EX(ISTEX(1)).EQ.0) THEN
-            IEXTRA = 1
-            IF (M1M2EX(ISTEX(2)).EQ.0) THEN
-              MAXTMP = MINTMP + 19
-              IF (MMC.LE.MAXTMP) MAXTMP = MMC
-              IPOINT = 0
-              IEND   = 0
-            ELSE
-              IPOINT = ISTEX(2)
-              IEND   = ISTEX(2) + MEX(2) - 1
-            END IF
-          ELSE
-            IPOINT = ISTEX(1)
-            IEND   = ISTEX(1) + MEX(1) - 1
-          END IF
-        ELSEIF (III.GE.4) THEN
-          IF (M1M2EX(ISTEX(III-2)).EQ.0) THEN
-            IF (IDELTM.EQ.1) THEN
-              MAXTMP = MINTMP + 4
-            ELSE
-              MAXTMP = MINTMP + 9
-            ENDIF
-            IPOINT = 0
-            IEND   = 0
-          ELSE
-            IPOINT = ISTEX(III-2)
-            IEND   = ISTEX(III-2) + MEX(III-2) - 1
-          ENDIF
-        ENDIF
+        MAXP = MAXP - 1
+      END DO
+CCC
+CCC
+CCC   RUN THE ORMAS CI CALCULATION
+CCC
+      CEECHK = .FALSE.
+      CLABEL = .FALSE.
+      IF(GOPARR) CLABEL = .TRUE.
+      IF (MASWRK) WRITE(IW,5300) STSYM,GRPDET,SZ,NCI
 C
-CZ
-CZ      RANGE CYCLE OR LOOP CONTROLED BY IPOINT
-CZ
-        ICUNT = 0
-        LCUNT = 0
-  100   CONTINUE
+      CALL DEFCCI(NPFLG(3),CLABEL,DDITRF,NRNFG(5),
+     *            NRNFG(6),NPFLG(5),NPFLG(6))
 C
-          IF (IPOINT.EQ.0) THEN
-            ICUNT = ICUNT + 1
-            IF (III.GE.4.AND.ICUNT.GT.1) THEN
-              XX(1) = XX(LCUNT-3)
-              XX(2) = XX(LCUNT-2)
-              XX(3) = XX(LCUNT-1)
-              YY(1) = YY(LCUNT-3)
-              YY(2) = YY(LCUNT-2)
-              YY(3) = YY(LCUNT-1)
-              IF (III.GE.5.AND.ISCHME.EQ.2) THEN
-                ZZ(1) = ZZ(LCUNT-3)
-                ZZ(2) = ZZ(LCUNT-2)
-                ZZ(3) = ZZ(LCUNT-1)
-              ENDIF
-              LCUNT = 3
-            ELSE
-              LCUNT = 0
-            ENDIF
-          ELSEIF (IPOINT.LE.IEND) THEN
-            IF (M1M2EX(IPOINT+1).LT.0) THEN
-              MINTMP =  M1M2EX(IPOINT)
-              MAXTMP = -M1M2EX(IPOINT+1)
-              IPOINT =  IPOINT + 2
-            ELSE
-              MINTMP =  M1M2EX(IPOINT)
-              MAXTMP =  MINTMP
-              IPOINT =  IPOINT + 1
-            ENDIF
-          ENDIF
-C
-CZ
-CZ        MM DO LOOP STARTS
-CZ
-          MINTMP = MINTMP - NORTOT
-          MAXTMP = MAXTMP - NORTOT
-          DO JJJ = MINTMP, MAXTMP, IDELTM
-C
-            LLL = JJJ - MMIN + NORTOT + 1
-            IF (RESTRT.AND.EMAT(LLL,III-1).LT.ZERO) GOTO 5000
-C
-            NACT = NANB + JJJ
-C
-            NORB = NCORSV + NACT
-            MSTA(NSPACE+1) = NACT + NCORSV + 1
-            MNUM(NSPACE) = MSTA(NSPACE+1)-MSTA(NSPACE)
-C
-            IF (MASWRK) WRITE(IW,9000) III,MNUM(NSPACE),NCORSV,NACT
-C
-            DO KKK = 1, NSPACE - 1
-              IF (NSEXT(KKK).EQ.1) THEN
-                NELSCAP = MNUM(KKK)*2
-                MINI(KKK) = MINISV(KKK) - III
-                MAXI(KKK) = MAXISV(KKK) + III
-                IF (MINI(KKK).LT.0) MINI(KKK) = 0
-                IF (MAXI(KKK).GT.NA+NB) MAXI(KKK) = NA + NB
-                IF (MAXI(KKK).GT.NELSCAP) MAXI(KKK) = NELSCAP
-              ELSE
-                MINI(KKK) = MINISV(KKK)
-                MAXI(KKK) = MAXISV(KKK)
-              END IF
-            END DO
-            IF (NSEXT(NSPACE).EQ.1) THEN
-              MINI(NSPACE) = MINISV(NSPACE) - III
-              MAXI(NSPACE) = MAXISV(NSPACE) + III
-            ELSE
-              MINI(NSPACE) = MINISV(NSPACE)
-              MAXI(NSPACE) = MAXISV(NSPACE)
-            END IF
-            IF (MINI(NSPACE).LT.0) MINI(NSPACE)=0
-            NELSCAP = MNUM(NSPACE)*2
-            IF (MAXI(NSPACE).GT.NELSCAP) MAXI(NSPACE) = NELSCAP
-            IF (MASWRK) WRITE(IW,9050) (MNUM(I),I=1,NSPACE)
-            IF (MASWRK) WRITE(IW,9060) (MINI(I),I=1,NSPACE)
-            IF (MASWRK) WRITE(IW,9070) (MAXI(I),I=1,NSPACE)
-C
-C
-CZ          MAXI, MNUM ETC MUST BE CHECKED IN EACH CEEIS CYCLE
-            CALL FCCHECK(IW,.FALSE.,
-     *             NSPACE,MNUM,MINI,MAXI,IAMI,IAMA,IBMI,IBMA,
-     *             NA,NB)
-CZ
-C
-C           ----- INTEGRAL TRANSFORMATION -----
-C
-            DDITRF=GOPARR
-            DOOOOO=.TRUE.
-            DOVOOO=.FALSE.
-            DOVVOO=.FALSE.
-            DOVOVO=.FALSE.
-            DOVVVO=.FALSE.
-            DOVVVV=.FALSE.
-            DOCORE=.TRUE.
-            DOEXCH=SCFTYP.EQ.RNONE
-            CALL TRFMCX(NPFLG(2),NCORSV,NORB,NORB,.FALSE.,DOEXCH,
-     *                  DDITRF,DOOOOO,DOVOOO,DOVVOO,DOVOVO,
-     *                  DOVVVO,DOVVVV,DOCORE)
-C
-            CEECHK = .TRUE.
-            MXPTMP = MAXP
- 6000       CONTINUE
-C
-C           ----- DIRECT ORMAS CI CALCULATION -----
-C
-            IF(NRNFG(3).EQ.0) THEN
-               IF(MASWRK) WRITE(IW,9202)
-               IF(DDITRF) CALL DDI_DESTROY(D_OOOO)
-               RETURN
-            END IF
-C
-                       CLABEL=.FALSE.
-            IF(GOPARR) CLABEL=.TRUE.
-C
-            CALL DEFCCI(NPFLG(3),CLABEL,DDITRF,
-     *                  NRNFG(5),NRNFG(6),NPFLG(5),NPFLG(6))
-C
-            IF (NEEDCI*1.01D+00.GE.MEMLIM) THEN
-              MAXP = MAXP - 1
-              IF (MAXP.LT.2) THEN
-                IF (MASWRK) WRITE(IW,9220) MAXP, NEEDCI, MEMLIM
-                CALL ABRT
-              ENDIF
-              GOTO 6000
-            ELSE
-              IF (CEECHK) THEN
-                CEECHK = .FALSE.
-                IF (MASWRK) WRITE(IW,9150) STSYM,GRPDET,SZ,NCI
-                GOTO 6000
-              ENDIF
-              IF (MASWRK) WRITE(IW,*) 'MAXP=',MAXP
-              MAXP = MXPTMP
-            ENDIF
-C
-C
-CZ          THIS IS TAKEN FROM SUBROUTINE FCINPUT
-            IF (QCORR) THEN
-              IF (NSPACE.GT.3.OR.NSPACE.LT.2) GO TO 2000
-              IF (MAXI(NSPACE).NE.2) GO TO 2000
-              IF (MINI(NSPACE).NE.0) GO TO 2000
-              IF (MAXI(1)-MINI(1).NE.2) GO TO 2000
-              GO TO 3000
- 2000         QCORR=.FALSE.
- 3000         CONTINUE
-            ENDIF
-CZ
-            IF (QCORR) THEN
-C
-              IF (MASWRK) WRITE(IW,9010)
-              EMRCISD = ETOT
-              IF (MASWRK) WRITE(IW,9020) EMRCISD
-              IF (MASWRK) WRITE(IW,9025) C0SQ
-C
-              NSPACE = NSPACE - 1
-              IF (NSPACE.GT.1) THEN
-                MINI(NSPACE) = MINI(NSPACE) + 2
-                MAXI(NSPACE) = MAXI(NSPACE) - 2
-              ENDIF
-CZ
-              MAXMAX       = MAXI(1)
-CZ
-              MINI(1)      = MINI(1) + 2
-              MAXI(1)      = MINI(1)
-C
-CZ            WRITE(IW,9030)
-CZ            WRITE(IW,9040) NSPACE,(MSTA(I),I=1,NSPACE)
-CZ            WRITE(IW,9050) (MNUM(I),I=1,NSPACE)
-CZ            WRITE(IW,9060) (MINI(I),I=1,NSPACE)
-CZ            WRITE(IW,9070) (MAXI(I),I=1,NSPACE)
-C
-              CALL FCCHECK(IW,.FALSE.,
-     *               NSPACE,MNUM,MINI,MAXI,IAMI,IAMA,IBMI,IBMA,
-     *               NA,NB)
-C
-              CALL DEFCCI(-5,.FALSE.,DDITRF,
-     *                    0,0,NPFLG(5),NPFLG(6))
-C
-CZ            IF FORTH AND FIFTH ARGUES ARE BOTH 0,
-CZ            MSTA VALUES ARE NOT RECOVERED!
-              DO IJK = 1, NSPACE+1
-                MSTA(IJK) = MSTA(IJK) + NCORSV
-              END DO
-C
-C
-              EREF0 = ETOT
-              IF (MASWRK) WRITE(IW,9080) EREF0
-              IF (MASWRK) WRITE(IW,9090)
-C
-              ELOW = EREF0 - EMRCISD
-              EQ   = ELOW*(1.0D+00 - C0SQ)/C0SQ
-              ESDQ = EMRCISD - EQ
-              IF (MASWRK) WRITE(IW,9100) ESDQ
-              IF (MASWRK) WRITE(IW,9110)
-              IF (MASWRK) WRITE(IW,9120)
-C
-              ETOT = EMRCISD
-C
-CZ
-CZ            A TRICKY PART FOR CEEIS
-CZ
-              IF (NSPACE.GT.1) THEN
-                 MINI(NSPACE) = MINI(NSPACE) - 2
-                 MAXI(NSPACE) = MAXI(NSPACE) + 2
-              ENDIF
-              NSPACE = NSPACE + 1
-              MINI(1)      = MINI(1) - 2
-              MAXI(1)      = MAXMAX
-CZ
-CZ            END OF THE TRICKY PART
-CZ
-C
-            ENDIF
-C
+      IF (MASWRK) WRITE(IW,5310) MAXP
+      MAXP = MXPTMP
+CCC
+CCC
+CCC   DELETE ALL TEMPERARY FILES, STORE THE
+CCC   ENERGIES IN EMAT, AND PRINT OUT THE
+CCC   RESULTS OF THE CALCULATION.
+CCC
       IF(DDITRF) THEN
-         IF(MASWRK) WRITE(IW,9140) D_OOOO
-         CALL DDI_DESTROY(D_OOOO)
+        IF(MASWRK) WRITE(IW,5400) D_OOOO
+        CALL DDI_DESTROY(D_OOOO)
       END IF
 C
-            EMAT(LLL,III-1) = ETOT
-            DO I1=1,K
-              IF(MASWRK) WRITE(IW,9004) I1,ESTATE(I1),SPINS(I1),SZ,STSYM
-            END DO
-            IF (MASWRK) WRITE (6,9005) NACT+NCORSV, III, ETOT
-CZ
-CZ  5000: SKIP ORMAS CALCULATION
-CZ
- 5000       CONTINUE
-            LCUNT = LCUNT + 1
-            IF (III.EQ.2) THEN
-              DEMAT(LLL,1) = EMAT(LLL,1) - ENREF
-            ELSEIF (III.EQ.3) THEN
-              DEMAT(LLL,2) = EMAT(LLL,2) - EMAT(LLL,1)
-              IF (M1M2EX(ISTEX(1)).GT.0) THEN
-                XX(LCUNT)  = DEMAT(LLL,1)
-                YY(LCUNT)  = DEMAT(LLL,2)
-              END IF
-            ELSEIF (III.EQ.4) THEN
-              DEMAT(LLL,1) = EMAT(LLL,1) - ENREF
-              DEMAT(LLL,3) = EMAT(LLL,3) - EMAT(LLL,2)
-              XX(LCUNT)    = DEMAT(LLL,1)
-              YY(LCUNT)    = DEMAT(LLL,3)
-            ELSEIF (III.GE.5) THEN
-              IF (ISCHME.EQ.1) THEN
-                DEMAT(LLL,III-3) = EMAT(LLL,III-3) - EMAT(LLL,III-4)
-                DEMAT(LLL,III-1) = EMAT(LLL,III-1) - EMAT(LLL,III-2)
-                XX(LCUNT)        = DEMAT(LLL,III-3)
-                YY(LCUNT)        = DEMAT(LLL,III-1)
-              ELSE
-                DEMAT(LLL,III-1) = EMAT(LLL,III-1) - EMAT(LLL,III-3)
-                XX(LCUNT)        = DEMAT(LLL,1)
-                YY(LCUNT)        = DEMAT(LLL,2)
-                ZZ(LCUNT)        = DEMAT(LLL,III-1)
-              ENDIF
-            ENDIF
-C
-            CALL SEQCLO(IJKT,'DELETE')
-            IF (MASWRK) CALL SEQCLO(NFT12,'DELETE')
-C
-CZ
-CZ          WRITE OUT $CEDATA
-CZ
-            IF (MASWRK) THEN
-              WRITE(IP,9230) '$CEDATA'
-              IC = MMIN - 1
-              IJK = MMC - MMIN + 1
-              JJ2 = ISTPEX - 1
-              DO I1 = 1, IJK
-                IMAX = 0
-                IC = IC + 1
-  230           CONTINUE
-                  IMIN = IMAX+1
-                  IMAX = IMAX+5
-                  IF(IMAX .GT. JJ2) IMAX = JJ2
-                  WRITE(IP,9210) IC, (EMAT(I1,J1),J1=IMIN,IMAX)
-                IF(IMAX .LT. JJ2) GO TO 230
-              END DO
-              WRITE(IP,9230) '$END'
-            END IF
-CZ
-          END DO
-CZ
-CZ        END OF ACTIVE ORBITAL LOOP
-CZ
-C
-        IF (IPOINT.LE.IEND) THEN
-          GOTO 100
-        ELSEIF (IPOINT.GT.IEND) THEN
-          IF ((III.EQ.2.OR.III.EQ.3).AND.IEXTRA.EQ.1) THEN
-            IEXTRA = 0
-            MINTMP = MMC
-            MAXTMP = MMC
-            GOTO 100
-          END IF
-        END IF
-C
-CZ
-CZ      EXTRAPOLATION PART
-CZ
-        IF (III.EQ.2) THEN
-          ECONT(1) = EMAT(LLL,1) - ENREF
-          IF (MASWRK) THEN
-            WRITE(IW,9160) III
-            WRITE(IW,9170) ECONT(1)
-            WRITE(IW,9190)
-          END IF
-        ELSEIF (III.EQ.3.AND.M1M2EX(ISTEX(III-2)).EQ.0) THEN
-          ECONT(2) = EMAT(LLL,2) - EMAT(LLL,1)
-          IF (MASWRK) THEN
-            WRITE(IW,9160) III
-            WRITE(IW,9180) ECONT(2)
-            WRITE(IW,9190)
-          END IF
-CZ      ELSEIF (III.EQ.3.AND.M1M2EX(ISTEX(III-2)).GT.0) THEN
-CZ        CALL POLFIT(LCUNT,2,0,XX,YY,COEF,SIGMAY,CHISQR)
-CZ        ECONT(2) = COEF(1) + COEF(2)*ECONT(1)
-CZ        WRITE(IW,'(/3X,A,F12.8/)') 'DELTA E(3)=', ECONT(2)
-CZ      ELSEIF (III.GE.4) THEN
-        ELSEIF (III.GE.3) THEN
-          DELTA1 = ZERO
-          DELTA2 = ZERO
-          IF (ISCHME.EQ.2.AND.III.GE.5) THEN
-            CALL TLMSFIT(LCUNT,XX,YY,ZZ,COEF)
-            ECONT(III-1) = COEF(1)*ECONT(1) + COEF(2)*ECONT(2) + COEF(3)
-            DO IIK = 1, LCUNT
-              TMP1 = ZZ(IIK)-COEF(1)*XX(IIK)-COEF(2)*YY(IIK)-COEF(3)
-              DELTA1 = DELTA1 + TMP1**2
-              IF (ABS(TMP1).GT.DELTA2) DELTA2 = ABS(TMP1)
-            END DO
-          ELSE
-C
-            IF (MASWRK) WRITE(6,*) 'CALLING POLFIT ',LCUNT
-C
-            CALL POLFIT(LCUNT,2,0,XX,YY,COEF,SIGMAY,CHISQR)
-            IF (III.EQ.3) THEN
-              ECONT(III-1) = COEF(1) + COEF(2)*ECONT(1)
-            ELSE
-              ECONT(III-1) = COEF(1) + COEF(2)*ECONT(III-3)
-            ENDIF
-            DO IIK = 1, LCUNT
-              TMP1 = YY(IIK)-COEF(1)-COEF(2)*XX(IIK)
-              DELTA1 = DELTA1 + TMP1**2
-              IF (ABS(TMP1).GT.DELTA2) DELTA2 = ABS(TMP1)
-            END DO
-          ENDIF
-          DELTA1 = SQRT(DELTA1/LCUNT)
-C
-          X0 = XX(1)
-          X1 = XX(LCUNT)
-          X2 = ECONT(III-3)
-          TMP1  = 1.0D+00 + 2.0D+00*(X2-X1)/(X1-X0)
-          EMAX1 = DELTA1*TMP1
-          EMAX2 = DELTA2*TMP1
-C
-          II1 = III
-          II2 = III - 1
-          IF (ISCHME.EQ.2.AND.III.GE.5) THEN
-            II1 = III
-            II2 = III - 2
-          END IF
-          IF (M1M2EX(ISTEX(III-2)).EQ.0) THEN
-C
-            MINT1 = MINTMP
-            IF (ICUNT.GT.1) MINT1 = MINTMP - 3
-            IF (DELTA1.LE.XTRTOL(III-3)) THEN
-              IF (MASWRK) WRITE(IW,9200) III,MINT1,MAXTMP,DELTA1,EMAX1,
-     *                 DELTA2,EMAX2,LCUNT,II1,II2,ECONT(III-1)
-            ELSE
-              IF (MASWRK) WRITE(IW,9205) III,MINT1,MAXTMP,DELTA1,EMAX1,
-     *                 DELTA2,EMAX2,LCUNT,II1,II2,ECONT(III-1)
-C
-              MINTMP = MAXTMP + 1
-              IF (IDELTM.EQ.1) THEN
-                MAXTMP = MINTMP + 4
-              ELSE
-                MAXTMP = MINTMP + 9
-              ENDIF
-              IF (MAXTMP.GT.MMC) MAXTMP = MMC
-              IF (MINTMP.GT.MAXTMP) GOTO 4000
-              GOTO 100
-            ENDIF
-          ELSE
-            IF (MASWRK) THEN
-            WRITE(IW,9300) III
-            WRITE(IW,9310) (M1M2EX(ISTEX(III-2)+JJ),JJ=0,MEX(III-2)-1)
-            WRITE(IW,9315) LCUNT
-            WRITE(IW,9320)
-            ENDIF
-            IF (ISCHME.EQ.2.AND.III.GT.5) THEN
-              IF (MASWRK) WRITE(IW,9325) COEF(1), COEF(2), COEF(3)
-            ELSE
-              IF (MASWRK) WRITE(IW,9330) COEF(2), COEF(1)
-            END IF
-            IF (MASWRK) WRITE(IW,9335) DELTA1,DELTA2
-            IF (MASWRK) WRITE(IW,9340) II1,II2,ECONT(III-1),EMAX1,EMAX2
-          ENDIF
-        ENDIF
-C
- 4000   CONTINUE
-C
-CZ
-CZ      WRITE OUT EMAT AND DEMAT
-CZ
-        IF (MASWRK) THEN
-          WRITE(IW,'(/)')
-          WRITE(IW,9225)
-          WRITE(IW,'(5X,A)') 'CEEIS DIFFERENCE MATRIX DEMAT(M,X)'
-C
-          IF (ISCHME.EQ.1) THEN
-            WRITE(IW,'(1X,A1,12A14)') 'M', (CDELE(I),I=1,3),
-     *                             (CDELE1(I),I=1,ISTPEX-4)
-          ELSE
-            WRITE(IW,'(1X,A1,12A14)') 'M', (CDELE(I),I=1,3),
-     *                             (CDELE2(I),I=1,ISTPEX-4)
-          END IF
-CZ
-          NAVO = MMC - MMIN + 1
-          IC = MMIN
-          DO I = 1, NAVO - 1
-            WRITE(IW,9215) IC, (DEMAT(I,J),J=1,ISTPEX-1)
-            IC = IC + 1
-          END DO
-          WRITE(IW,9215) IC, (ECONT(J),J=1,ISTPEX-1)
-          WRITE(IW,9225)
-CZ
-        ENDIF
-        CALL FLSHBF(IP)
-        CALL FLSHBF(IW)
+      DO I = 1, NSTATE
+        EVEC(I) = ESTATE(I) - ENREF(I)
       END DO
 C
-      ETOT = ENREF
-      CTOT = ZERO
-      IF (MASWRK) WRITE(IW,9350)
-      DO III = 1, ISTPEX-1
-        CTOT = CTOT + ECONT(III)
-        IF (MASWRK) WRITE(IW,9400) III+1,ECONT(III)
-      END DO
-      ETOT = ETOT + CTOT
-      IF (MASWRK) WRITE(IW,9450) CTOT, ENREF, ETOT
+      IF(MASWRK) THEN
+        WRITE(IW,5500) 
+        DO I=1, NSTATE
+          WRITE(IW,5510) I, SPINS(I), SZ, STSYM, ESTATE(I)
+        END DO
+        WRITE(IW,'(1X)')
+      END IF
+      CALL SEQCLO(IJKT,'DELETE')
+      IF (MASWRK) CALL SEQCLO(NFT12,'DELETE')
+CCC
       RETURN
+CCC
+CCC   FORMAT COMMANDS REFERENCED ABOVE
+CCC
+ 5000 FORMAT(3X,62(1H-)
+     *      /3X,'CALCULATIONS FOR EXCITATION LEVEL',I3,
+     *       1X,'WITH',I4,1X,'VIRTUAL ORBITALS',
+     *      /3X,'NCORE=',I4,1X,'NACT=',I5,
+     *      /3X, 62(1H-))
 C
- 9000 FORMAT(/3X,62(1H-)/
-     *   3X, 'CALCULATIONS FOR EXCITATION LEVEL', I3,
-     *   1X, 'WITH',I4,1X,'VIRTUAL ORBITALS'/
-     *   3X, 'NCORE=', I4, 1X, 'NACT=', I5/
-     *   3X, 62(1H-))
- 9004 FORMAT(/1X,'STATE',I4,'  ENERGY= ',F20.10,'  S=',F6.2,
-     *           '  SZ=',F6.2,:,'  SPACE SYM=',A4/)
- 9005 FORMAT(/1X,'CEEIS ENERGY MATRIX ELEMENT EMAT(',I4,',',I2,')=',
-     *       F20.10)
- 9010 FORMAT(/3X,44(1H-)/
-     *   3X,'  DETERMINATION OF DAVIDSON + Q CORRECTION'/
-     *   3X,44(1H-))
- 9020 FORMAT(/1X,'E(MR-CISD) =    ',F20.10)
- 9025 FORMAT(/1X,'REF WEIGHT =    ',F20.10)
-C9030 FORMAT(/1X,'*** CALCULATION OF REFERENCE ENERGY     ***')
-C9040 FORMAT(/1X,'THE NUMBER OF SPACES             =',I4/
-C    *        1X,'EACH SPACE STARTS AT ORBITAL     =',50I4)
- 9050 FORMAT(1X,'NO OF ORBITALS IN EACH SPACE     =',50I4)
- 9060 FORMAT(1X,'MIN NO OF ELECS IN EACH SPACE    =',50I4)
- 9070 FORMAT(1X,'MAX NO OF ELECS IN EACH SPACE    =',50I4)
- 9080 FORMAT(/1X,'E(REF)      =   ',F20.10)
- 9090 FORMAT(/1X,'*** END OF REFERENCE ENERGY CALCULATION ***')
- 9100 FORMAT(/1X,'E(MRCISD + Q) = ',F20.10)
- 9110 FORMAT(/3X,'  END OF DAVIDSON + Q CORRECTION CALC ')
- 9120 FORMAT(3X,44(1H-))
- 9140 FORMAT(1X,'DESTROYING DDI ARRAY [',I2,'] OF [OO|OO] INTEGRALS')
- 9150 FORMAT(/1X,'THE NUMBER OF DETERMINANTS HAVING SPACE SYMMETRY ',A3/
-     *        1X,'IN POINT GROUP ',A4,' WITH SZ=',F5.1,' IS',I15)
- 9160 FORMAT(/3X,55(1H*)/
-     *   3X,'TOTAL CONTRIBUTION FROM EXCITATION LEVEL',I2,':')
- 9170 FORMAT(3X, 'DELTA E(2) = E(2) - ENREF = ', F12.8)
- 9180 FORMAT(3X, 'DELTA E(3) = E(3) - E(2)  = ', F12.8)
- 9190 FORMAT(3X,55(1H*)/)
- 9200 FORMAT(/3X,60(1HX)/
-     *   4X, 'CONVERGENCE IN THIS RANGE HAS BEEN ACHIEVED'/
-     *   4X, 'EXTRAPOLATION FOR EXCITATION LEVEL',I3/
-     *   4X, 'ENERGIES USED FOR LINEAR FIT M=',I4,'-',I4/
-     *   4X, 'STANDARD DEVIATION OF FIT DELTA1   =',F12.8/
-     *   4X, 'EXTRAPOLATION UNCERTAINTY EPSILON1 =',F12.8/
-     *  /4X, 'MAXIMUM DEVIATION OF FIT DELTA2    =',F12.8/
-     *   4X, 'EXTRAPOLATION UNCERTAINTY EPSILON2 =',F12.8/
-     *   4X, 'NUMBER OF POINTS',I4/
-     *   4X, 'EXTRAPOLATED ENERGY CONTRIBUTION'/
-     *   4X,  'E(',I2,')-E(',I2,') = ',F12.8/
-     *   4X,  60(1HX))
- 9202 FORMAT(/1X,'RUN FLAG INPUT IN $CIINP SKIPS ORMAS-CI ENTIRELY')
- 9205 FORMAT(/3X,60(1HX)/
-     *   4X, 'CONVERGENCE IN THIS RANGE HAS NOT BEEN ACHIEVED'/
-     *   4X, 'EXTRAPOLATION FOR EXCITATION LEVEL',I3/
-     *   4X, 'ENERGIES USED FOR LINEAR FIT M=',I4,'-',I4/
-     *   4X, 'STANDARD DEVIATION OF FIT DELTA1   =',F12.8/
-     *   4X, 'EXTRAPOLATION UNCERTAINTY EPSILON1 =',F12.8/
-     *  /4X, 'MAXIMUM DEVIATION OF FIT DELTA2    =',F12.8/
-     *   4X, 'EXTRAPOLATION UNCERTAINTY EPSILON2 =',F12.8/
-     *   4X, 'NUMBER OF POINTS',I4/
-     *   4X, 'EXTRAPOLATED ENERGY CONTRIBUTION'/
-     *   4X,  'E(',I2,')-E(',I2,') = ',F12.8/
-     *   4X,  60(1HX))
- 9210 FORMAT(I4,5F16.8)
- 9215 FORMAT(I4,12F14.8)
- 9220 FORMAT(/1X,'FOR MXXPAN =',I4,2X,I8,' IS REQUIRED ',
-     *       'BUT ACTUAL AMOUNT IS ',I8)
- 9225 FORMAT(70(1H~))
- 9230 FORMAT(1X,A)
- 9300 FORMAT(/3X,60(1HX)/
-     *   4X, 'EXTRAPOLATION FOR EXCITATION LEVEL',I3)
- 9310 FORMAT(4X, 'M VALUES USED FOR LINEAR FIT M=',8I4)
- 9315 FORMAT(4X, 'NUMBER OF DATA POINTS',I4)
- 9320 FORMAT(/4X, 'LEAST MEAN SQUARE FIT')
- 9325 FORMAT(4X, 'DE(X) =',F10.6,'DE(2) +',F10.6,'DE(3) +',F10.6)
- 9330 FORMAT(4X, 'Y =',F13.9,'X +',F13.9)
- 9335 FORMAT(4X, 'STANDARD DEVIATION OF FIT DELTA1 =',F12.8/
-     *       4X, ' MAXIMUM DEVIATION OF FIT DELTA2 =',F12.8)
- 9340 FORMAT(4X, 'EXTRAPOLATED ENERGY DIFFERENCE'/
-     *   4X, 'E(',I2,')-E(',I2,') = ',F16.10/
-     *  /4X, 'EXTRAPOLATION UNCERTAINTY EPSILON1 =',F12.8/
-     *   4X, 'EXTRAPOLATION UNCERTAINTY EPSILON2 =',F12.8/
-     *   3X, 60(1HX))
- 9350 FORMAT(/3X,60(1HT)/
-     *  /4X, 'TOTAL ENERGY ACCOUNTING')
- 9400 FORMAT(4X, 'CONTRIBUTION FROM EXCITATION LEVEL',I3,':',F16.10)
- 9450 FORMAT(4X,60(1H-)/
-     *   4X, 'CONTRIBUTION OF ALL EXCITATIONS:',F16.10/
-     *   4X, 'REFERENCE ENERGY               :',F16.10/
-     *   4X, 'TOTAL ENERGY                   :',F16.10/
-     *  /3X, 60(1HT)/)
+ 5110 FORMAT(3X,'NO OF ORBITALS IN EACH SPACE     =',50I4)
+ 5120 FORMAT(3X,'MIN NO OF ELECS IN EACH SPACE    =',50I4)
+ 5130 FORMAT(3X,'MAX NO OF ELECS IN EACH SPACE    =',50I4)
 C
+ 5200 FORMAT(/3X,'RUN FLAG INPUT IN $CIINP SKIPS ORMAS-CI ENTIRELY')
+ 5210 FORMAT(/3X,'FOR MXXPAN =',I4,2X,I8,1X,'IS REQUIRED',
+     *        1X,'BUT ACTUAL AMOUNT IS',1X,I8)
+C
+ 5300 FORMAT(/3X,'THE NUMBER OF DETERMINANTS HAVING SPACE SYMMETRY'1X,A3,
+     *       /3X,'IN POINT GROUP'1X,A4,1X,'WITH SZ =',F5.1,' IS',I15)
+ 5310 FORMAT(3X,'MAXP =',1X,I12)
+C
+ 5400 FORMAT(3X,'DESTROYING DDI ARRAY [',I2,'] OF [OO|OO] INTEGRALS')
+C
+ 5500 FORMAT(/3X,'STATE',8X,'S',9X,'SZ',4X,'IRREP',17X,'ENERGY')
+ 5510 FORMAT(4X,I3,5X,F6.2,5X,F6.2,5X,A4,5X,F18.10)
       END
+CCC   --- END OF CEEISSTEP ---
+C
+C
 C*MODULE CEEIS    *DECK TLMSFIT
       SUBROUTINE TLMSFIT(NP,XX,YY,ZZ,COEF)
+CCC   -----------------------------------
+CCC   PURPOSE OF TLMSFIT IS TO PERFORM
+CCC   LEAST SQUARES FIT FOR THE EXTRAPOLATION
+CCC   DATA THAT IS DETERMINED UNDER SCHEME 2.
 C
+CCC
+CCC   LIST THE COMMON VARIABLES USED IN THIS ROUTINE
+CCC   
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
 C
       DIMENSION XX(NP), YY(NP), ZZ(NP)
       DIMENSION A(3,3), COEF(3), IPVT(3)
 C
       PARAMETER (ZERO=0.0D+00)
-C
-CZ    LEAST MEAN SQUARE FIT (THREE VALUABLES)
-CZ    ZZ = A*XX + B*YY + C
-CZ    X, Y, Z: SETS OF DATA POINTS
-CZ    A, B, C: VALUABLES
+CCC
+CCC
+CCC   PERFORM THE  LEAST MEAN SQUARE FIT
+CCC   (USING THREE VALUABLES)
+CCC   ZZ = A*XX + B*YY + C
+CCC   XX, YY, ZZ ARE SETS OF DATA POINTS
+CCC   A, B, C ARE VALUABLES
 C
       X  = ZERO
       Y  = ZERO
@@ -1396,3 +2826,5 @@ C
 C
       RETURN
       END
+CCC   --- END OF TLMSFIT ---
+>>>>>>> NewCEEIS
