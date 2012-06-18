@@ -1,4 +1,4 @@
-/* 13 May 2010
+/* 12 June 2012
 
    Interface from FORTRAN/GAMESS to C/system calls
    ===============================================
@@ -37,7 +37,7 @@ long memget_(nwords) long *nwords;
      return (long) malloc(nbytes); }
 
 void memrel_(locmem) long *locmem;
-   { free (*locmem); }
+   { free((void*) *locmem); }
 
 #include <unistd.h>
 void naptime_(nptime) int *nptime;
