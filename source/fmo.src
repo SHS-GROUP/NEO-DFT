@@ -1,3 +1,4 @@
+C 21 JUN 12 - DGF - CHANGES FOR FMO 4.3
 C  9 APR 12 - FZ  - PAD THE INFOTD COMMON FOR TPA
 C 23 MAR 12 - DGF,CHC,TN - code update to finish FMO 4.2
 C 28 DEC 11 - DGF,TN,CS,SRP,CHC  - FMO 4.2 AND EFMO CHANGES
@@ -50,8 +51,9 @@ C
      *       ,TRIPLET,MFRZ,MFRZs,doclmo,doclmo1,dovlmo,dopdc,mepgrid,
      *        SG1,SG1T,projgrad,doexc,doci,totfock,skipesd,DOEFPIEA,
      *        urohf,dodistr,hopgrd,DC,DCCHG,DCABC,dodc,dodimden,
-     *        MCMIN,LGLOE,LGLOEG,mulgeom,dodiff,LSCZVEC,wasgddi,
-     *        TAMMD,TPA,dcsav,skipscc,outpune,QOPS,QFMM,vibcoup,outesd
+     *        MCMIN,LGLOE,LGLOEG,mulgeom,dodiff,LSCZVEC,wasgddi,TAMMD,
+     *        TPA,dcsav,skipscc,outpune,QOPS,QFMM,vibcoup,outesd,hasgrad
+     *       ,fullmfmo3
       Integer ddi_world,ddi_group
       character*80 fmosym
       Parameter(ddi_world=0,ddi_group=1)
@@ -214,7 +216,7 @@ C
      *     rohf/8HROHF    /,energy/8HENERGY  /,
      *     fmo0/8HFMO0    /,PDC/8HPDC     /,CNONE /8HNONE    /,
      *     GLOBOP /8HGLOBOP  /,HSSIAN/8HHESSIAN /,
-     *     FMOHSS/8HFMOHSS  /,FMOMD /8HMD      /
+     *     FMOHESS/8HFMOHESS /,FMOMD /8HMD      /
       data nelm/0,3,9,19/
       equivalence(enucfmo,etfmo(1)),(e1efmo,etfmo(2)),(ekinfmo,etfmo(3))
 c
@@ -592,7 +594,7 @@ c     indtmp is used also as real (hardness)
       last=lindtmp+natfmo
       LNQMTFG = LAST
       LAST    = LNQMTFG + (NFG-1)/NWDVAR + 1
-      if(runtyp.ne.optfmo.AND.RUNTYP.NE.FMOHSS) then
+      if(runtyp.ne.optfmo.AND.RUNTYP.NE.FMOHESS) then
         lfmozan=last
         lfmoc=lfmozan+natfmo
         lfmomas=lfmoc+3*(natfmo+1)
@@ -712,7 +714,7 @@ c
         lenucfg=liactat+(natfmo-1)/nwdvar+1
         last=lenucfg+nfg
       endif
-      if(modfmm.ne.0) call abrt
+c     if(modfmm.ne.0) call abrt
       lcrfrg=last
       lylmfrg=last
       lzlmfrg=last
@@ -1159,6 +1161,27 @@ c     if(nacut.ne.0) call fmoauto(nacut,x(lindat))
         write(iw,*) "Gradients are not derived for bond midpoints - yet"
         call abrt
       endif
+c
+c     Full MFMO3 is such run when there are dimers in several layers.
+c     In other words, the only case when MFMO3 is not full is when only one
+c     fragment is in layer 2 and there are 2 layers (this is a common case).
+c     The present code is a "hack" - only allow the energy and no other
+c     property for a full MFMO3; to fully support this one has to develop
+c     the bookkeeping coefficients like ndtfrg. 
+      fullmfmo3=nlayer.gt.1.and.nbody.gt.2
+      nfglay1=0
+      do ifg=1,nfg
+        if(ixftch(x(llayfrg),ifg).gt.1) nfglay1=nfglay1+1
+      enddo
+      fullmfmo3=fullmfmo3.and.nfg-nfglay1.gt.1
+c     write(6,*) 'wwwfl',fullmfmo3
+c     there are many other restrictioins not checked here.
+      if(fullmfmo3.and.(primul.or.nder.gt.0.or.iemom.gt.0.or.
+     *                  nfmopcm.gt.0)) then
+        if(maswrk) write(iw,9130)
+        call abrt
+      endif
+c
 c     check the above guess of ne0bda=(nbdfg)=2*nbdfg
       if(n0bda.eq.0.and.ipieda.ne.0.and.ne0bda.lt.nbdfg) call abrt
 c
@@ -1231,6 +1254,13 @@ c     fragments.
       if(dolat) last=lklms+(4*maxklms-1)/nwdvar+1
       leexfg=last
       if(doexc.and.nbody.ge.2) last=leexfg+2*nfg*mxrt
+c
+      ledimlow=last
+      if(fullmfmo3) last=ledimlow+nfg2*3 
+c     edim(ij,1) EIJ, default correlated
+c     edim(ij,2) Tr(delta(DIJ)*VIJ), uncorrelated
+c     edim(ij,3) EIJ, uncorrelated
+c
 C     LFZCOR=last 
       CALL MCPFALOC(LAST)
 C
@@ -1375,6 +1405,7 @@ c     spargrid.
         write(iw,9400) nxg,nyg,nzg
         call abrt
       endif
+c
       nxyzgm0=nxyzgm
       if(nbody.ne.0) nxyzgm0=0
       nsetgrid=1
@@ -1619,9 +1650,11 @@ C
 C
       LFMOFCM = LAST
       LFCMWRK = LAST
+      lfmoddm = LAST
       IF (NDER.EQ.2) THEN
-        LFCMWRK = LFMOFCM + 9*natfmo*natfmo
-        LAST    = LFCMWRK + 9*maxnat*mbody*maxnat*mbody
+        LFCMWRK= LFMOFCM + 9*natfmo*natfmo
+        lfmoddm= LFCMWRK + 9*maxnat*mbody*maxnat*mbody
+        last=lfmoddm+3*3*natfmo
       END IF
 C
       latmulq=last
@@ -2086,6 +2119,7 @@ c     some other wavefunction.
       call vclr(x(lemon),1,nfg*4*nlayer)
       if(nbody.gt.1) call vclr(x(ledim),1,nfg2e)
       if(nfg3e.ne.0) call vclr(x(letrim),1,nfg3e)
+      if(fullmfmo3) call vclr(x(ledimlow),1,nfg2*3)
       if(fmoq) call vclr(x(ledimq),1,nfg2)
       if(nfmoelm.ne.0) call vclr(x(lfmoelm),1,nfmoelm*(nfg+nbody-1))
       call viclr(x(lidmrec),1,nlayer)
@@ -2157,7 +2191,7 @@ c
       runtype=runtyp
       if(runtyp.eq.OPTMIZ.or.runtyp.eq.sadpt.or.runtyp.eq.OPTFMO.or.
      *   runtyp.eq.HSSIAN) runtype=grad
-      IF(RUNTYP.EQ.FMOHSS) RUNTYPE=HSSIAN
+      IF(RUNTYP.EQ.FMOHESS) RUNTYPE=HSSIAN
 c     if(needdm) call gddi_create(nfg2,iddm)
 c       the actual number of used elements is nscf (defined below)
       didcc=.false.
@@ -2497,8 +2531,8 @@ c      endif
      *              x(lpfglmo),ilocals,X(LDDIJPOT),naoafo3,naoafod,
      *              x(ldafo),nbndfg,irec0ini,dopdc,nsetgrid,iwhere,
      *              gcorrel,doddcor,e1efmo,ekinfmo,m1efmo,x(leigfmo),
-     *              X(LEFPIEA),X(LFGINT),X(LFMOFCM),X(LFCMWRK),
-     *              X(LABFLDT),X(LDINDF2),X(LDINDDF2),X(LZVLAG),
+     *             X(LEFPIEA),X(LFGINT),x(lfmoddm),X(LFMOFCM),X(LFCMWRK)
+     *             ,X(LABFLDT),X(LDINDF2),X(LDINDDF2),X(LZVLAG),
      *              X(LIPTLG),X(LZVWRK),X(LNQMTFG),hopgrd,dodc,
      *              x(lindtmp),x(lfmohard),x(leaip),X(LVIPOT),nevsav,
      *              modcnv,x(lcrfrg),clm,flm,x(lylmfrgv),x(lzlmfrgv),
@@ -2637,14 +2671,14 @@ c
      *                x(lesplat),addesp,addesp0,x(lstonep),iexcit,eexcit
      *               ,texcit,monoc,monvr,nstmono,isumd,x(leexfg),
      *                nocctdm,nvirtdm,x(lctdm),exfid,dopdc,modcha,iwhere
-     *               ,gcorrel,skipesd,dodistr,X(LFMOFCM),X(LFCMWRK),
-     *                X(LABFLDT),X(LDINDF2),X(LDINDDF2),X(LZVLAG),
-     *                X(LIPTLG),X(LNQMTFG),X(LZVWRK),hopgrd,dodc,
-     *                dodimden,x(liddpnt),nevsav,x(lindtmp),x(lfmohard),
-     *                x(lefmodimg),x(liactfg),x(lemon),outpune,
-     *                x(lenucfg),clm,flm,x(lcrfrg),x(lylmfrg),
+     *               ,gcorrel,skipesd,dodistr,x(lfmoddm),X(LFMOFCM),
+     *                X(LFCMWRK),X(LABFLDT),X(LDINDF2),X(LDINDDF2),
+     *                X(LZVLAG),X(LIPTLG),X(LNQMTFG),X(LZVWRK),hopgrd,
+     *                dodc,dodimden,x(liddpnt),nevsav,x(lindtmp),
+     *                x(lfmohard),x(lefmodimg),x(liactfg),x(lemon),
+     *                outpune,x(lenucfg),clm,flm,x(lcrfrg),x(lylmfrg),
      *                x(lylmfrgq),x(lylmfrgq2),x(lfrgnam),x(lefmoiglob),
-     *                X(LVIPOT),outesd,some)
+     *                X(LVIPOT),outesd,fullmfmo3,x(ledimlow),some)
 c       call fmogout(1,maswrk,x(lindat),x(lfmozan),x(lfmode),x(lDEFTF),
 c    *               x(lTORQF))
 c       call fmogout(2,maswrk,x(lindat),x(lfmozan),x(lfmode),x(lDEFTF),
@@ -2688,12 +2722,12 @@ c
      *                 vdwrad,extracc,nextracc,irec0,doddcor,x(lesolv3),
      *                 dovpcm,etotdft,nedft,x(LAXYZCT),x(lPEL),x(lVNUC),
      *                 IDAcFMO,x(liodcfmo),x(luntrot),x(lstonep),dopdc,
-     *                 modcha,iwhere,gcorrel,e1efmo,ekinfmo,X(LFMOFCM),
-     *                 X(LFCMWRK),X(LABFLDT),X(LDINDF2),X(LDINDDF2),
-     *                 X(LZVLAG),X(LIPTLG),hopgrd,x(lindtmp),x(lfmohard)
-     *                ,X(LIDMREC),X(LNQMTFG),X(LLOADM),NGRFMO,X(LMANNOD)
-     *                ,X(LMASTID),NEVSAV,outpune,clm,flm,x(lcrfrg),
-     *                 x(lYlmfrgq),x(lylmfrgq2),some)
+     *                 modcha,iwhere,gcorrel,e1efmo,ekinfmo,x(lfmoddm),
+     *                 X(LFMOFCM),X(LFCMWRK),X(LABFLDT),X(LDINDF2),
+     *                 X(LDINDDF2),X(LZVLAG),X(LIPTLG),hopgrd,x(lindtmp)
+     *                ,x(lfmohard),X(LIDMREC),X(LNQMTFG),X(LLOADM),
+     *                 NGRFMO,X(LMANNOD),X(LMASTID),NEVSAV,outpune,clm,
+     *                 flm,x(lcrfrg),x(lYlmfrgq),x(lylmfrgq2),some)
           call stopwa(17,1)
         endif
 c
@@ -2749,6 +2783,10 @@ c       if(.not.maswrk) call vclr(x(ledim),1,nfg2e)
         if(fmoq) then
           call ddi_gsumf(2415,x(ledimq),nfg2)
           ndata=ndata+nfg2
+        endif
+        if(fullmfmo3) then
+          call ddi_gsumf(2415,x(ledimlow),nfg2*3)
+          ndata=ndata+nfg2*3
         endif
         if(nfg3e.ne.0) then
           call ddi_gsumf(2415,x(letrim),nfg3e)
@@ -2830,7 +2868,8 @@ c         call ddi_gsumf(2415,x(lemon+nfg*2),nfg*2)
         END IF
         IF (NDER.EQ.2) THEN
           CALL DDI_GSUMF(2415,X(LFMOFCM),NC1*NC1)
-          ndata=ndata+NC1*NC1
+          CALL DDI_GSUMF(2415,X(LFMOddm),3*NC1)
+          ndata=ndata+NC1*NC1+3*NC1
         END IF
         if(iahard.gt.0.and.nbody.ne.0) then
           CALL DDI_GSUMF(2415,X(lfmohard),natfmo*nbody)
@@ -2871,6 +2910,7 @@ c         call ddi_gsumf(2415,x(lemon+nfg*2),nfg*2)
         END IF
         IF (NDER.EQ.2) THEN
           CALL DDI_GSUMF(2418,X(LFMOFCM),NC1*NC1)
+          CALL DDI_GSUMF(2418,X(LFMOddm),3*NC1)
         END IF
       endif
 c     write(6,*) 'wwwdgrid2',(x(ldgrid+i-1),i=1,nxyzg)
@@ -2987,6 +3027,11 @@ c    *               x(lTORQF))
       endif
 C
 c       write(6,*) 'wwwe0bda2=',(x(le0bda-1+i),i=1,4*ne0bda*nlayer)
+      hasgrad=runtyps.ne.fmohess.or.resdim.eq.0
+c     For RUNTYP=FMOHESS and nonzero RESDIM the Hessian code computing the
+c     gradient as well should be extended into adding ES gradients (see TVDER).
+c     At present the 2-body gradient is garbage (if wanted, it should be got in
+c     a separate run).
       call fmoprop(nder,ichfmo,nefmo,mulfmo,l0fmo,l1fmo,nfg2d,nfg2,nfg3,
      *             nenm,nen,nent,needdm,x(lichfg),x(lfrgnam),x(llayfrg),
      *             x(lindat),x(liabdfg),x(ljabdfg),x(litrlay),x(lfmozan)
@@ -3004,7 +3049,8 @@ c       write(6,*) 'wwwe0bda2=',(x(le0bda-1+i),i=1,4*ne0bda*nlayer)
      *             x(LFZCOR),totfock,x(lnumfrg),m1efmo,x(leigfmo),
      *             x(libfmo),skipesd,urohf,dodc,x(lfmohard),x(leaip),
      *             x(liactfg),x(liactat),modfd.ne.0.and.irststp.ge.2,
-     *             nevsav,prtdst,x(lemocdra),x(lesdi))
+     *             nevsav,prtdst,x(lemocdra),x(lesdi),hasgrad,fullmfmo3,
+     *             x(ledimlow),needmd)
 c
       if(iterpcm.gt.0) then
         econv=etot-eprev
@@ -3081,7 +3127,8 @@ c       end if
         CALL OPENDA(0)
         CALL DAWRIT(IDAF,IODA,X(LFMODE),NC1,3,0)
         CALL DAWRIT(IDAF,IODA,X(LFMOFCM),NC1*NC1,4,0)
-        ! this is not used with totdens (see below)
+c       this is not used with totdens (see below)
+        CALL DAWRIT(IDAF,IODA,X(LFMOddm),3*NC1,34,0)
       END IF
 c
 c     Save the total electron density
@@ -3269,6 +3316,10 @@ c9110 format(/1x,'The average amount of MEMDDI you need is ',I4,
 c    *       /1x,'At least double of that value is recommended.',/)
  9120 format(/1x,'FMO3 correlated properties require RESDIM=0 and ',
      *           'RITRIM(3)=RITRIM(4).')
+ 9130 format(/1x,'This full multilayer FMO3 run requires:',
+     *       /3x,'RUNTYP=ENERGY, in $FMOPRP NPRINT without 8 added, ',
+     *       /3x,'$ELMOM IEMOM=0, i.e., no property other than the ',
+     *           'energy.',/)
  9200 format(/1x,'Rcorsd is reset to zero: no electron correlation.',/)
  9300 format(//1x,'Aborting due to an unrecoverable error.',/)
  9400 format(//1x,'No or invalid grid defined in $GRID: ',3I6)
@@ -4320,10 +4371,10 @@ C*MODULE fmo     *DECK monoscf
      *                   pfglmo,ilocals,DDIJPOT,naoafo3,naoafod,dafo,
      *                   nbndfg,irec0ini,dopdc,nsetgrid,iwhere,gcorrel,
      *                   doddcor,e1efmo,ekinfmo,m1efmo,eigfmo,EFPIEA,
-     *                   FGINT,FMOFCM,FCMWRK,ABFLDT,DINDF2,DINDDF2,ZVLAG
-     *                  ,IPTLG,ZVWRK,NQMTFG,hopgrd,dodc,potat,fmohard,
-     *                   eaip,VIPOT,nevsav,modcnv,crfrg,clm,flm,Ylmfrgv,
-     *                   Zlmfrgv,Ylmfrgq,Ylmfrgq2)
+     *                   FGINT,fmoddm,FMOFCM,FCMWRK,ABFLDT,DINDF2,
+     *                   DINDDF2,ZVLAG,IPTLG,ZVWRK,NQMTFG,hopgrd,dodc,
+     *                   potat,fmohard,eaip,VIPOT,nevsav,modcnv,crfrg,
+     *                   clm,flm,Ylmfrgv,Zlmfrgv,Ylmfrgq,Ylmfrgq2)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       integer ddi_world,ddi_group
       Parameter(ddi_world=0,ddi_group=1)
@@ -4450,9 +4501,9 @@ C*MODULE fmo     *DECK monoscf
      *          clmo(maxbbd,maxabd2,maxlmo,*),ialmo(2,maxabd2,maxlmo,*),
      *          indlmo(2,*),iwlmo(*),atclmo(*),lmobdf(*),
      *          fgflmo(maxl1,maxslo,*),nfglmo(*),lfglmo(maxslo,*),
-     *          pfglmo(maxnat,maxslo,*),DDIJPOT(*),
-     *          dafo(*),eigfmo(*),EFPIEA(*),FGINT(*),FMOFCM(*),FCMWRK(*)
-     *         ,potat(*),fmohard(natfmo,*),eaip(nfg,2),ABFLDT(*),
+     *          pfglmo(maxnat,maxslo,*),DDIJPOT(*),dafo(*),eigfmo(*),
+     *          EFPIEA(*),FGINT(*),fmoddm(*),FMOFCM(*),FCMWRK(*),
+     *          potat(*),fmohard(natfmo,*),eaip(nfg,2),ABFLDT(*),
      *          DINDF2(*),DINDDF2(*),ZVLAG(*),IPTLG(*),
      *          ZVWRK(*),NQMTFG(*),VIPOT(MAXNAT,NFG,2),crfrg(4,nfg),
      *          CLM(-maxNP:maxNP),FLM(-maxNP:maxNP)
@@ -4561,7 +4612,10 @@ c     Mulliken point charge derivatives
 C 
 C     FMO HESSIAN
 C 
-      IF (NDER.EQ.2) CALL VCLR(FMOFCM,1,9*NATFMO*NATFMO)
+      IF (NDER.EQ.2) then
+        CALL VCLR(FMOFCM,1,9*NATFMO*NATFMO)
+        CALL VCLR(FMODDM,1,3*3*NATFMO)
+      endif
 C
 C     clear ZVLAG
 C
@@ -5732,7 +5786,7 @@ C
               IEEH = IDAM
               IF (NBODY.GT.1) IEEH = IDAM + IDAD
               IF (NBODY.GT.2) IEEH = IDAM + IDAD + IDAT
-              CALL FMODEH(IEEH,FCMWRK,FMOFCM,FMOPG,IAGLOB)
+              CALL FMODEH(IEEH,FCMWRK,fmoddm,FMOFCM,FMOPG,IAGLOB)
             END IF
 C
 C           THE CORRECTION TO ANALYTIC FMO-MP2 GRADIENT
@@ -6218,12 +6272,12 @@ C*MODULE fmo     *DECK edimer
      *                  iexcit,eexcit,texcit,monoc,monvr,nstmono,
      *                  isumd,eexfg,nocctdm,nvirtdm,ctdm,exfid,dopdc,
      *                  modcha,iwhere,gcorrel,skipesd,dodistr,
-     *                  FMOFCM,FCMWRK,ABFLDT,DINDF2,DINDDF2,
+     *                  fmoddm,FMOFCM,FCMWRK,ABFLDT,DINDF2,DINDDF2,
      *                  ZVLAG,IPTLG,NQMTFG,ZVWRK,hopgrd,dodc,
      *                  dodimden,iddpnt,nevsav,potat,fmohard,efmodimg,
      *                  iactfg,emon1,outpune,enucfg,clm,flm,crfrg,ylmfrg
      *                 ,ylmfrgq,ylmfrgq2,frgnam,iefmoiglob,VIPOT,outesd,
-     *                  some)
+     *                  fullmfmo3,edimlow,some)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       parameter(MXATM=2000,MXSH=5000,MXGTOT=20000,MXRT=100,MXGRID=10,
      *         maxpst=10,MaxNp=45,zero=0.0D+00,one=1.0D+00,half=0.5D+00)
@@ -6237,7 +6291,7 @@ C*MODULE fmo     *DECK edimer
      *        addesp0,addespij,lcflag,lrint,lcsav,gopsav,dopdc,urohfi,
      *        urohfj,some,SG1,gcorrel,skipesd,dodistr,hopgrd,DOEFPIEA,
      *        dodc,dodimden,mixdim,outpune,QOPS,QFMM,CAMFLAG,CAMsav,
-     *        outesd,wasgddi
+     *        outesd,wasgddi,fullmfmo3,lowdimer
       character*11 wfnstri
       character*8 dimdek,end
       character*1 flipch
@@ -6261,12 +6315,12 @@ C*MODULE fmo     *DECK edimer
      *          nsymeq(*),klms(4,*),esplat(n2fmo,*),stonep(*),iexcit(5),
      *          eexcit(mxrt,2),texcit(3,mxrt,2),monoc(mxrt),monvr(mxrt),
      *          icst(mxrt),isumd(mxrt+1),eexfg(2,nfg,mxrt),ctdm(*),
-     *          FMOFCM(*),FCMWRK(*),ABFLDT(*),DINDF2(*),
+     *          fmoddm(*),FMOFCM(*),FCMWRK(*),ABFLDT(*),DINDF2(*),
      *          DINDDF2(*),ZVLAG(*),IPTLG(*),NQMTFG(*),ZVWRK(*),
      *          iddpnt(*),potat(*),fmohard(natfmo,*),iactfg(*),
      *          emon1(nfg,2),enucfg(*),crfrg(4,nfg),
      *          CLM(-maxNP:maxNP),FLM(-maxNP:maxNP),frgnam(*),
-     *          VIPOT(MAXNAT,NFG,*),iefmoiglob(*)
+     *          VIPOT(MAXNAT,NFG,*),iefmoiglob(*),edimlow(nfg2,3)
       COMMON /DFTCAM/ ALPHAC,BETAC,CAMMU,CAMVWN,CAMLYP,CAMFLAG
       COMMON /DFGRID/ DFTTHR,DFTGTHR,SWOFF,SW0,BSLRD(137),NDFTFG,
      *                NRAD,NTHE,NPHI,NRAD0,NTHE0,NPHI0,
@@ -6467,10 +6521,19 @@ c
 c         mixdim=modfd.ne.0.and.iactfg(ifg)+iactfg(jfg).eq.1
           mixdim=modfd.ne.0.and.layfrg(ifg)+layfrg(jfg).eq.3
 c
+          lowdimer=.false.
           if(modfd.eq.0) then
 c         skip dimers from higher layers
             if(.not.((layfrg(ifg).eq.ilay.or.layfrg(jfg).eq.ilay).and.
-     *        layfrg(ifg).ge.ilay.and.layfrg(jfg).ge.ilay)) goto 450
+     *        layfrg(ifg).ge.ilay.and.layfrg(jfg).ge.ilay)) then
+                 if(fullmfmo3) then
+                   if(ilay.ne.1) goto 450
+                   lowdimer=.true. 
+c                  if(maswrk) write(iw,*) 'This is a low dimer.'
+                 else
+                   goto 450
+                 endif
+            endif
           else
             if(ilay.ne.2) call abrt
             if(iand(modfd,2).ne.0) then
@@ -6552,6 +6615,9 @@ c
           else
             enuc0ij=0
           endif
+          edim1sav=edim(ijfg,1) 
+          edim2sav=edim(ijfg,2) 
+          edim3sav=edim(ijfg,3) 
           if(rij.gt.resdim.and.resdim.ne.zero.and.skipesd) then
 c           call makemol just to get ENUCR!
             call makemol(ifg,jfg,0,ilay,0,0,0,0,0,0,0,.false.)
@@ -6736,7 +6802,7 @@ c           For separated dimers we only get ENUC contribution to properties
 c
             call stopwa(15,1)
             if(rij.gt.resdim.and.resdim.ne.zero .or.mixdim) then
-              if(maswrk) enucfmo=enucfmo+enucr-enuc0ij
+              if(maswrk.and..not.lowdimer) enucfmo=enucfmo+enucr-enuc0ij
               lie=.true.
               goto 440
             endif
@@ -6836,7 +6902,7 @@ c
           l1=num
           l2=(l1*l1+l1)/2
           l3=l1*l1
-          if(maswrk) enucfmo=enucfmo+enucr-enuc0ij
+          if(maswrk.and..not.lowdimer) enucfmo=enucfmo+enucr-enuc0ij
           if(maswrk) then
             if(labsiz.ne.labsix) write(iw,9005) labsiz,labsix
             if(NINTIC.ne.0) write(iw,9007) LABSIZ,NINTIC,ININTIC
@@ -7438,7 +7504,7 @@ C
           IF (NDER.EQ.2.AND.RUNTYP.NE.ENERGY) THEN
             IEEH = IDAD
             IF (NBODY.GT.2) IEEH = IDAD + IDA
-            CALL FMODEH(IEEH,FCMWRK,FMOFCM,FMOPG,IAGLOB)
+            CALL FMODEH(IEEH,FCMWRK,fmoddm,FMOFCM,FMOPG,IAGLOB)
           END IF
 C
           IF (IEACAL.EQ.1) THEN
@@ -7529,6 +7595,19 @@ C            CALL EFMODEG(IEFMODIMER,FMODE(1,1,2),IAGLOB,EFMODIMG)
   445     continue
           if(outpune) then
             write(ip,9210) ifg,jfg,ilay,(edim(ijfg,ien),ien=1,nen)
+          endif
+c         if(lowdimer) then
+          if(fullmfmo3.and.ilay.eq.1.and.maswrk) then
+            edimlow(ijfg,1)=edim(ijfg,1)
+            edimlow(ijfg,2)=edim(ijfg,2)
+            if(correl.or.dodc) edimlow(ijfg,3)=edim(ijfg,3)
+            if(lowdimer) then
+              edim(ijfg,1)=edim1sav
+              edim(ijfg,2)=edim2sav
+              edim(ijfg,3)=edim3sav
+c             Only element 1 should be restored to avoid double counting.
+c             Elements 2 and 3 need not be, but are done "just in case".
+            endif
           endif
 c
   450   continue
@@ -7880,11 +7959,11 @@ C*MODULE fmo     *DECK etrimer
      *                   l1dir,grdpad,vdwrad,extracc,nextracc,irec0,
      *                   doddcor,esolv,dovpcm,etotdft,nedft,XYZCTS,PEL,
      *                   VNUC,IDAcFMO,iodcfmo,untrot,stonep,dopdc,modcha
-     *                  ,iwhere,gcorrel,e1efmo,ekinfmo,FMOFCM,FCMWRK,
-     *                   ABFLDT,DINDF2,DINDDF2,ZVLAG,IPTLG,hopgrd,potat,
-     *                   fmohard,IDMREC0,NQMTFG,LOADM,NGRFMO,MANNOD,
-     *                   MASTID,NEVSAV,outpune,clm,flm,crfrg,Ylmfrgq,
-     *                   Ylmfrgq2,some)
+     *                  ,iwhere,gcorrel,e1efmo,ekinfmo,fmoddm,FMOFCM,
+     *                   FCMWRK,ABFLDT,DINDF2,DINDDF2,ZVLAG,IPTLG,hopgrd
+     *                  ,potat,fmohard,IDMREC0,NQMTFG,LOADM,NGRFMO,
+     *                   MANNOD,MASTID,NEVSAV,outpune,clm,flm,crfrg,
+     *                   Ylmfrgq,Ylmfrgq2,some)
 c
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       integer ddi_world,ddi_group
@@ -7911,7 +7990,7 @@ c
      *          nprfrg(*),totd(*),iaoglob(*),dgrid(*),vdwrad(*),
      *          extracc(nextracc,*),esolv(*),etotdft(*),XYZCTS(mxts,3),
      *          PEL(*),VNUC(*),iodcfmo(*),untrot(3,3,*),stonep(*),
-     *          FMOFCM(*),FCMWRK(*),ABFLDT(*),DINDF2(*),
+     *          fmoddm(*),FMOFCM(*),FCMWRK(*),ABFLDT(*),DINDF2(*),
      *          DINDDF2(*),ZVLAG(*),IPTLG(*),potat(*),fmohard(natfmo,*),
      *          IDMREC0(*),NQMTFG(*),LOADM(*),NGRFMO(*),MANNOD(*),
      *          MASTID(*),CLM(-maxNP:maxNP),FLM(-maxNP:maxNP),
@@ -8369,7 +8448,7 @@ C
 C         Hessian contribution
 C 
           IF (NDER.EQ.2.AND.RUNTYP.NE.ENERGY) then
-            CALL FMODEH(1,FCMWRK,FMOFCM,FMOPG,IAGLOB)
+            CALL FMODEH(1,FCMWRK,fmoddm,FMOFCM,FMOPG,IAGLOB)
           END IF
 c
 c         accumulate gradient

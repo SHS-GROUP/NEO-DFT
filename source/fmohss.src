@@ -1,16 +1,15 @@
+C 21 JUN 12 - DGF - CHANGES FOR FMO 4.3
 C 23 MAR 12 - DGF - PAD COMMON BLOCKS
 C 28 DEC 11 - DGF - pad commons for FMO 4.2
 C 15 Apr 11 - MWS - synch FMOPNT common
 C 11 Aug 10 - TN  - new module for Hessians in FMO
 c
 C*MODULE FMOHSS  *DECK FMODEH
-      SUBROUTINE FMODEH(ida,FCM,FMOFCM,fmopg,iaglob)
+      SUBROUTINE FMODEH(ida,FCM,fmoddm,FMOFCM,fmopg,iaglob)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
       LOGICAL GOPARR,DSKWRK,MASWRK
-      dimension fmopg(3,*),iaglob(*)
-      DIMENSION FMOFCM(3*natfmo,*),FCM(3*nat,*)
       Parameter (MXATM=2000)
 CZCZ  common /GRAD  / DE(3,MXATM)
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
@@ -23,17 +22,40 @@ cz    common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
 cz   *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
 cz   *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
 cz   *                IESDPPC,idoprop,mp2run
+      dimension fmopg(3,*),iaglob(*)
+      DIMENSION fmoddm(3,3,natfmo),FMOFCM(3*natfmo,*),FCM(3*nat,*)
 c
 c     gather FMO HESSIAN contributions coming from the analytic gradient of a
 c     monomer/dimer.
 c
-      write(6,*) 'Grad accs',ida
+c     write(6,*) 'Grad accs',ida
       if(ida.eq.0) return
       if(nat.lt.0) write(iw,*) fmopg(1,1)
-
       NC1 = 3*NAT
+c
+c     Accumulate the dipole derivatives. 
+c
+      CALL DAREAD(IDAF,IODA,FCM,3*NC1,34,0)
+
+      if(maswrk) then
+      da = ida
+      do i = 1, nat
+        ih  = iaglob(i)
+        do k = 1,3
+          ii  = 9*(i-1)+(k-1)*3
+          do l = 1,3
+            fmoddm(l,k,ih) = fmoddm(l,k,ih)+da*fcm(ii+l,1)
+c           Here we treat fcm as a linear array of size 3*3*nat.
+          end do
+        end do
+      end do
+      endif
+c
+c     Accumulate the Hessian
+c
       CALL DAREAD(IDAF,IODA,FCM,NC1*NC1,4,0)
    
+      if(maswrk) then
       da = ida
       do i = 1, nat
         ih  = iaglob(i)
@@ -45,23 +67,23 @@ c
           jms = 3*(jh-1)
           do k = 1,3
             do l = 1,3
-              if (maswrk) fmofcm(ims+k,jms+l) = fmofcm(ims+k,jms+l)
-     *                                        + da*fcm(ii+k,jj+l)
+              fmofcm(ims+k,jms+l)=fmofcm(ims+k,jms+l)+da*fcm(ii+k,jj+l)
             end do
           end do
         end do
       end do
-
+      endif
+c
       CALL VCLR(FCM,1,NC1*NC1)
       CALL DAWRIT(IDAF,IODA,FCM,NC1*NC1,4,0)
-
+c
 c     No FMO/PCM contribution for separated dimers.
 CZCZ  if(nfmopcm.gt.0.and.ifmostp.ne.6.and.ifmostp.ne.7
 CZCZ *   .and.IESDPPC.eq.0) call daxpy(natfmo*3,da,fmopg,1,fmode,1)
       return
       end
-C*MODULE FMOHSS  *DECK FMOHSSX
-      SUBROUTINE FMOHSSX(VIBOVR,GOTWFN)
+C*MODULE FMOHSS  *DECK FMOHESSX
+      SUBROUTINE FMOHESSX(VIBOVR,GOTWFN)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       DOUBLE PRECISION METHOD,METHNR
@@ -176,7 +198,7 @@ C
       DATA NONE,RNONE/4HNONE,8HNONE    /
       DATA CHECK/8HCHECK   /
 czcz
-      DATA FMOHSS/8HFMOHSS  /
+      DATA FMOHESS/8HFMOHESS /
       dimension dum3(3)
 czcz
 C
@@ -299,7 +321,7 @@ C
       PRTIFC=.FALSE.
       VIBANL=.FALSE.
 czcz  IF(RUNTYP.EQ.HSSIAN) VIBANL=.TRUE.
-      IF(RUNTYP.EQ.FMOHSS) VIBANL=.TRUE.
+      IF(RUNTYP.EQ.FMOHESS) VIBANL=.TRUE.
       DECOMP=.FALSE.
       PROJCT=.FALSE.
       IF(IFREEZ(1).NE.0.AND.RUNTYP.EQ.HSSIAN) PROJCT=.TRUE.
@@ -472,9 +494,10 @@ CZ
 CZ    FMO HESSIAN CALCULATION
 CZ
       if (.not.rdhess) then
-        if (maswrk) write(6,*) 'HESS CALC IN FMOHSS DRIVER STARTS'
+        GOTDDM=.TRUE.
+        if (maswrk) write(6,*) 'HESS CALC IN FMOHESS DRIVER STARTS'
         CALL FMOX(0)
-        if (maswrk) write(6,*) 'HESS CALC IN FMOHSS DRIVER ENDS'
+        if (maswrk) write(6,*) 'HESS CALC IN FMOHESS DRIVER ENDS'
         ncoord = natfmo*3
         SCFOK = .TRUE.
       end if
@@ -644,7 +667,7 @@ C
       END IF
 C
 czcz  IF(RUNTYP.EQ.HSSIAN  .OR.  GOTWFN) THEN
-      IF(RUNTYP.EQ.FMOHSS  .OR.  GOTWFN) THEN
+      IF(RUNTYP.EQ.FMOHESS  .OR.  GOTWFN) THEN
          IF(GOTEG.AND.MASWRK) WRITE(IW,9040)
          IF(GOTEG)  CALL  EGOUT(X(LEG) ,NAT)
 CZCZ                CALL FCMOUT(X(LFCM),NCOORD+6*NFRG)
@@ -714,13 +737,13 @@ CZ    NATM = NAT+2*NFRG
       IF(NEORUN.EQ.0) THEN
          CALL FGMTRX(X(LVEC),X(LFCM),X(LE),X(LSCR),X(LIA),X(LRM),
      *               X(LSVT),X(LSVR),X(LSVTT),X(LSVRT),
-     *               X(LCC),X(LCOM),X(LZMS),X(LBUF1),X(LBUF2),
+     *               X(Lfmoc),X(LCOM),X(Lfmomas),X(LBUF1),X(LBUF2),
      *               NC1,NC2,NPART,X(LDDM),GOTDDM,X(LADM),GOTADM,
      *               PROJCT,STATPT,SCFOK)
       ELSE
          CALL FGMTRX_NEO(X(LVEC),X(LFCM),X(LE),X(LSCR),X(LIA),X(LRM),
      *               X(LSVT),X(LSVR),X(LSVTT),X(LSVRT),
-     *               X(LCC),X(LCOM),X(LZMS),X(LBUF1),X(LBUF2),
+     *               X(Lfmoc),X(LCOM),X(Lfmomas),X(LBUF1),X(LBUF2),
      *               NC1,NC2,NPART,X(LDDM),GOTDDM,X(LADM),GOTADM,
      *               PROJCT,STATPT,SCFOK)
       END IF
