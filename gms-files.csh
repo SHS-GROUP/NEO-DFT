@@ -83,6 +83,7 @@ setenv SOCCDAT $SCR/$JOB.F40
 setenv  AABB41 $SCR/$JOB.F41
 setenv  BBAA42 $SCR/$JOB.F42
 setenv  BBBB43 $SCR/$JOB.F43
+setenv  REMD   $SCR/$JOB.F44
 setenv  MCQD50 $SCR/$JOB.F50
 setenv  MCQD51 $SCR/$JOB.F51
 setenv  MCQD52 $SCR/$JOB.F52
