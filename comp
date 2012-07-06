@@ -19,8 +19,6 @@ endif
 #  and possibly several other GMS_XXX values that may be used below.
 #
 set TARGET=$GMS_TARGET
-#chdir $GMS_PATH
-chdir $GMS_BUILD_DIR/object
 #        allow for "dry run" that doesn't actually do anything
 #
 if ($?GMS_COMP_DRYRUN) then
@@ -30,9 +28,7 @@ endif
 #
 #        allow for extra debugging flags
 #
-if ($?GMS_DEBUG_FLAGS) then
-   if (! -d tmp) mkdir tmp
-else
+if ($?GMS_DEBUG_FLAGS == 0) then
    set GMS_DEBUG_FLAGS=''
 endif
 #
@@ -49,6 +45,30 @@ if (null$MODULE == null) then
    echo No compile module name given...
    exit
 endif
+# AG: we will need these later in the script
+set MODULE_F=$MODULE.f
+set MODULE_OBJ=$MODULE.o
+# AG: user may explicitly request not to remove the preprocessed file
+if ( $?GMS_DO_NOT_REMOVE == 0 ) set GMS_DO_NOT_REMOVE=0
+# AG: If a path given rather than a module name, user wants to compile that particular file
+# AG:  with flags appropriate for the $TARGET, but without activation or even copying,
+# AG:  and surely without removing!
+set MODULE_DIR = $1:h
+if ( $MODULE_DIR != $MODULE ) then
+    if ( $?GMS_OTHER_OBJDIR == 0 ) set GMS_OTHER_OBJDIR = $MODULE_DIR/
+    set GMS_OTHER_SRCDIR = $MODULE_DIR/
+    set GMS_DO_NOT_REMOVE = 1
+    set MODULE_F = $MODULE
+    # Guess the object file name (to test later whether it will be generated) 
+    set MODULE_OBJ = `cd $GMS_OTHER_OBJDIR && pwd`/"$MODULE:t:r".o
+endif
+# AG: user may request to compile into a particular dir
+if ( $?GMS_OTHER_OBJDIR ) then
+    chdir $GMS_OTHER_OBJDIR
+else
+    chdir $GMS_BUILD_DIR/object
+endif
+   
 #
 echo ======================== $MODULE ==============================
 date
@@ -195,6 +215,10 @@ endif
 #
 set SRCDIR=$GMS_PATH/source
 set OBJDIR=$GMS_BUILD_DIR/object
+# AG: if we want the other object directory, we must point to it.
+if ( $?GMS_OTHER_OBJDIR ) then
+  set OBJDIR = $GMS_OTHER_OBJDIR
+endif
 #
 #        a few source files are kept in non-standard places, defined here
 #
@@ -206,6 +230,7 @@ if ($MODULE == ddishm)   set SRCDIR=$GMS_PATH/ddi/olddi/shmem
 if ($MODULE == ddit3e)   set SRCDIR=$GMS_PATH/ddi/olddi/shmem
 if ($MODULE == ddio3k)   set SRCDIR=$GMS_PATH/ddi/olddi/shmem
 if ($MODULE == ddixt3)   set SRCDIR=$GMS_PATH/ddi/olddi/shmem
+# AG: if we want the other source directory, we must point to it.
 if ($?GMS_OTHER_SRCDIR) then
     set SRCDIR=$GMS_OTHER_SRCDIR
 endif
@@ -446,8 +471,11 @@ if (($BLAS3 == true) && ($MODULE == mthlib)) goto act
 #
 #   All other modules are straight FORTRAN, just copy them.
 #
+# AG: If module is not to be removed, it is not to be activated or copied either.
+# AG: It avoids irritating situation when errors are reported NOT in the file where they are to be fixed!
+if ( $GMS_DO_NOT_REMOVE ) goto cmp
 echo Copying source code, $MODULE.src does not require activation.
-cp $SRCDIR/$MODULE.src $MODULE.f
+cp $SRCDIR/$MODULE.src $MODULE_F
 goto cmp
 #
 #   ----- Choose which version is to be activated -----
@@ -621,16 +649,16 @@ endif
 #   extra support included in the activation program (e.g. DDOT to SDOT
 #   conversion, or exponent D to E changing), so 'sed' suffices.
 #
-echo "Activating $SRCDIR/$MODULE.src to create $MODULE.f for target $TARGET..."
+echo "Activating $SRCDIR/$MODULE.src to create $MODULE_F for target $TARGET..."
 #
 if (($TARGET == win32) || ($TARGET == win64) || ($TARGET == winazure)) then
   setenv   SRCIN c:/cygwin/$SRCDIR/$MODULE.src
-  rm -f $MODULE.f
+  rm -f $MODULE_F
 else
   setenv   SRCIN $SRCDIR/$MODULE.src
 endif
-setenv CODEOUT $MODULE.f
-if (-e $MODULE.f) rm -f $MODULE.f
+setenv CODEOUT $MODULE_F
+if (-e $MODULE_F) rm -f $MODULE_F
 switch ($TARGET)
    case ibm64-sp:
    case ibm-bg:
@@ -778,8 +806,8 @@ if ($mathhack == true) then
              -e "s/DTRMM$par/XTRMM$par/g"   -e "s/dtrmm$par/XTRMM$par/g" \
              -e "s/DTRSM$par/XTRSM$par/g"   -e "s/dtrsm$par/XTRSM$par/g" \
              -e "s/DSYRK$par/XSYRK$par/g"   -e "s/dsyrk$par/XSYRK$par/g" \
-             $MODULE.f > $MODULE.munged
-          mv -f $MODULE.munged $MODULE.f
+             $MODULE_F > $MODULE.munged
+          mv -f $MODULE.munged $MODULE_F
       breaksw
    endsw
 endif
@@ -789,8 +817,8 @@ endif
 #
 if ($TARGET == ibm-bg) then
    sed -e "s/PREAD(/GMS_PREAD(/g"   -e "s/pread(/GMS_PREAD(/g" \
-       $MODULE.f > $MODULE.munged
-   mv -f $MODULE.munged $MODULE.f
+       $MODULE_F > $MODULE.munged
+   mv -f $MODULE.munged $MODULE_F
 endif
 #
 #    systems with very many processors should change default load-balancing
@@ -798,8 +826,8 @@ endif
 #
 if (($TARGET == ibm-bg) && ($MODULE == inputa)) then
    sed -e "s/      BALTYP = BLANK/      BALTYP = RSLB/" \
-       $MODULE.f > $MODULE.munged
-   mv -f $MODULE.munged $MODULE.f
+       $MODULE_F > $MODULE.munged
+   mv -f $MODULE.munged $MODULE_F
 endif
 #
 #    IBM Blue Gene can't run a command -after- GAMESS execution
@@ -809,8 +837,8 @@ endif
 #
 if (($TARGET == ibm-bg) && ($MODULE == gamess)) then
    sed -e "s/         CALL SEQOPN(IW,'OUTPUT','NEW',.FALSE.,'FORMATTED')/C/" \
-       $MODULE.f > $MODULE.munged
-   mv -f $MODULE.munged $MODULE.f
+       $MODULE_F > $MODULE.munged
+   mv -f $MODULE.munged $MODULE_F
 endif
 #
 #            The "file-get-environment" hack.
@@ -876,9 +904,9 @@ if ($GPUCODE == true) then
       case rhfuhf:
       case mp2:
          echo "Also, selecting '*CXX' lines to use GPUs in $MODULE.src..."
-         mv -f $MODULE.f $MODULE.junk
+         mv -f $MODULE_F $MODULE.junk
          sed -e "s/\*CXX/    /" \
-             $MODULE.junk > $MODULE.f
+             $MODULE.junk > $MODULE_F
          rm -f $MODULE.junk
          breaksw
       default:
@@ -919,8 +947,8 @@ endif
 #
 if ($TINKER == true) then
    if (($MODULE == inputb) || ($MODULE == fmogrd) || ($MODULE == qmmm)) then
-      mv -f $MODULE.f $MODULE.junk
-      sed -e "s/MAXATM=10/MAXATM=$NumTinkAtms/" $MODULE.junk > $MODULE.f
+      mv -f $MODULE_F $MODULE.junk
+      sed -e "s/MAXATM=10/MAXATM=$NumTinkAtms/" $MODULE.junk > $MODULE_F
       rm -f $MODULE.junk
    endif
 endif
@@ -956,7 +984,7 @@ cmp:
 #
 if ($ACTONLY == true) then
 #AAD since we operate within OBJDIR, the following is not required
-   #mv -f $MODULE.f ~/scr
+   #mv -f $MODULE_F ~/scr
    if ($VB2000 == true) rm -f ../source/$MODULE.src
    exit
 endif
@@ -965,7 +993,7 @@ endif
 #             Begin by erasing any previously generated object code,
 #        so that a failure to compile is very obvious when we can't link.
 #
-if (-e $OBJDIR/$MODULE.o) rm -f $OBJDIR/$MODULE.o
+if (-e $OBJDIR/$MODULE_OBJ) rm -f $OBJDIR/$MODULE_OBJ
 #
 #  the 64 bit alpha chip, more formally called AXP.
 #  These were marketed by Digital, Compaq, and HP as well as some 'whitebox'
@@ -1003,7 +1031,7 @@ if ($TARGET == axp64) then
    set OPT = '-O4'
    if ($MODULE == zheev) set OPT='-O0'
    set echo
-   $FORT -c -i8 -v -automatic -col72 $OPT $MODULE.f
+   $FORT -c -i8 -v -automatic -col72 $OPT $MODULE_F
    unset echo
 endif
 #
@@ -1032,7 +1060,7 @@ if ($TARGET == cray-pvp) then
    if ($MODULE == ormas1) set OPT='-O0 '   # also from Jerry
    if ($MODULE == zheev)  set OPT='-O0'    # defensive compiling
    set echo
-   f90 -c -V $OPT $MODULE.f
+   f90 -c -V $OPT $MODULE_F
    unset echo
 endif
 #
@@ -1048,7 +1076,7 @@ if ($TARGET == cray-t3e) then
    if ($MODULE == hss1b) set OPT='-O1'   # for cf90 3.4.0.0
    if ($MODULE == zheev) set OPT='-O0'   # defensive compiling
    set echo
-   env TARGET=cray-t3e f90 -c $OPT -dp -Onomsgs,nonegmsgs $MODULE.f
+   env TARGET=cray-t3e f90 -c $OPT -dp -Onomsgs,nonegmsgs $MODULE_F
    unset echo
 endif
 #
@@ -1072,7 +1100,7 @@ if ($TARGET == cray-x1) then
    if ($MODULE == vector) set OPT='-Oscalar3,vector3'
    if ($MODULE == zheev)  set OPT='-O0'   # defensive compiling
    set echo
-   ftn -c -V $OPT $LST -Ossp,aggress -xomp -dp -sdefault64 $MODULE.f
+   ftn -c -V $OPT $LST -Ossp,aggress -xomp -dp -sdefault64 $MODULE_F
    unset echo
 endif
 #
@@ -1100,10 +1128,10 @@ if ($TARGET == cray-xd1) then
    set AMD_TRGT = amd64
 
    if (($MODULE == qeigen) || ($MODULE == int2c)) then
-      mv -f $MODULE.f $MODULE.junk
+      mv -f $MODULE_F $MODULE.junk
       sed -e "s/Q-/D-/g" \
           -e "s/Q+00/D+00/g" \
-          -e "s/REAL\*16/DOUBLE PRECISION/" $MODULE.junk > $MODULE.f
+          -e "s/REAL\*16/DOUBLE PRECISION/" $MODULE.junk > $MODULE_F
       rm -f $MODULE.junk
    endif
 
@@ -1120,7 +1148,7 @@ if ($TARGET == cray-xd1) then
        ($MODULE == mpcmol) || ($MODULE == mpcmsc)) set OPT = '-O0'
 
    set echo
-   $USE_FTN -c $OPT -Mnosecond_underscore -tp $AMD_TRGT -i8 $MODULE.f
+   $USE_FTN -c $OPT -Mnosecond_underscore -tp $AMD_TRGT -i8 $MODULE_F
    unset echo
 endif
 #
@@ -1232,20 +1260,20 @@ if ($TARGET == cray-xt) then
 
    if ($GMS_XT_COMP != ifort) then
       if (($MODULE == qeigen) || ($MODULE == int2c)) then
-         mv $MODULE.f $MODULE.junk
+         mv $MODULE_F $MODULE.junk
          sed -e "s/Q-/D-/g" \
              -e "s/Q+00/D+00/g" \
-             -e "s/REAL\*16/DOUBLE PRECISION/" $MODULE.junk > $MODULE.f
+             -e "s/REAL\*16/DOUBLE PRECISION/" $MODULE.junk > $MODULE_F
          rm -f $MODULE.junk
       endif
    endif
 #
 #              now, actually compile the module for the XT.
 #
-   if(-e $MODULE.f) then
-     echo "Compiling fixed format FORTRAN file $MODULE.f"
+   if(-e $MODULE_F) then
+     echo "Compiling fixed format FORTRAN file $MODULE_F"
      set echo
-        $FC -c $BASE $OPT $XT_OPT $INFO $MODULE.f
+        $FC -c $BASE $OPT $XT_OPT $INFO $MODULE_F
      unset echo
    else if(-e $MODULE.f90) then
      echo "Compiling free format FORTRAN file $MODULE.f90"
@@ -1276,7 +1304,7 @@ endif
 if ($TARGET == fuji-pp32) then
    set OPT = '-Kfast_GP2=3,prefetch=5'
    set echo
-   f90 -c -fs $OPT $MODULE.f
+   f90 -c -fs $OPT $MODULE_F
    unset echo
 endif
 
@@ -1287,7 +1315,7 @@ if ($TARGET == fuji-pp64) then
    set OPT = '-Kfast_GP2=3,prefetch=5,largepage=2'
    if ($MODULE == gamess) set OPT='-O0'  # only fails in 64 bit mode
    set echo
-   f90 -c -fs $OPT -KV9 -CcdII8  $MODULE.f
+   f90 -c -fs $OPT -KV9 -CcdII8  $MODULE_F
    unset echo
 endif
 #
@@ -1330,7 +1358,7 @@ if ($TARGET == hpux32) then
    if ($MODULE == unport) set OPT="$OPT +U77"
    if ($MODULE == zheev)  set OPT='+O0'   # defensive compiling
    set echo
-   f90 -c $OPT +nosave +noppu $MODULE.f
+   f90 -c $OPT +nosave +noppu $MODULE_F
    unset echo
 endif
 #
@@ -1350,7 +1378,7 @@ if ($TARGET == hpux64) then
    if ($MODULE == trfdm2) set OPT="+O1"   # for CI gradients, exam05
    if ($MODULE == zheev)  set OPT='+O0'   # defensive compiling
    set echo
-   f90 -c $OPT +DD64 +i8 +nosave +noppu $MODULE.f
+   f90 -c $OPT +DD64 +i8 +nosave +noppu $MODULE_F
    unset echo
 endif
 #
@@ -1436,7 +1464,7 @@ if (($TARGET == ibm32) || ($TARGET == ibm64) || ($TARGET == ibm64-sp)) then
 #
    set echo
    $FORT -c $OPT $BITS -qarch=$ARCH -qtune=$TUNE \
-         -qflag=W:W -qhalt=W -qspillsize=2500 -qnosave $MODULE.f
+         -qflag=W:W -qhalt=W -qspillsize=2500 -qnosave $MODULE_F
    unset echo
 endif
 #
@@ -1461,7 +1489,7 @@ if ($TARGET == ibm-bg) then
    if ($MODULE == zheev)  set OPT='-O0'  # the usual "defensive compiling"
    set echo
    $FORT -c $OPT -qarch=$ARCH -qtune=$TUNE \
-         -qflag=W:W -qhalt=W -qmaxmem=-1  -qnosave $MODULE.f
+         -qflag=W:W -qhalt=W -qmaxmem=-1  -qnosave $MODULE_F
    unset echo
 endif
 #
@@ -1496,21 +1524,21 @@ if ($TARGET == linux32) then
    if ($MODULE == ormas1) set OPT='-O2 -fno-move-all-movables' # RH9, g77 3.3
    if ($MODULE == zheev)  set OPT='-O0'  # defensive compiling
    if (($MODULE == qeigen) || ($MODULE == int2c)) then
-      mv -f $MODULE.f $MODULE.junk
+      mv -f $MODULE_F $MODULE.junk
       sed -e "s/Q-/D-/g" \
           -e "s/Q+00/D+00/g" \
-          -e "s/REAL\*16/DOUBLE PRECISION/" $MODULE.junk > $MODULE.f
+          -e "s/REAL\*16/DOUBLE PRECISION/" $MODULE.junk > $MODULE_F
       rm -f $MODULE.junk
    endif
    if (($MODULE == iolib) || ($MODULE == inputa) || \
        ($MODULE == gamess) || ($MODULE == mp2ims)) then
-      mv -f $MODULE.f $MODULE.junk
-      sed -e "s/MXUNIT=299/MXUNIT=99/g" $MODULE.junk > $MODULE.f
+      mv -f $MODULE_F $MODULE.junk
+      sed -e "s/MXUNIT=299/MXUNIT=99/g" $MODULE.junk > $MODULE_F
       rm -f $MODULE.junk
    endif
    set echo
    g77 -c $OPT -malign-double -fautomatic \
-           -Wno-globals -fno-globals $MODULE.f
+           -Wno-globals -fno-globals $MODULE_F
    unset echo
    breaksw
 #
@@ -1526,14 +1554,14 @@ if ($TARGET == linux32) then
    if ($MODULE == zheev)  set OPT='-O0'  # defensive compiling
    if ($MODULE == pcmcv2) set OPT='-O1'  # EFP+CPCM, ala Francois, v4.1.2
    if (($MODULE == qeigen) || ($MODULE == int2c)) then
-      mv -f $MODULE.f $MODULE.junk
+      mv -f $MODULE_F $MODULE.junk
       sed -e "s/Q-/D-/g" \
           -e "s/Q+00/D+00/g" \
-          -e "s/REAL\*16/DOUBLE PRECISION/" $MODULE.junk > $MODULE.f
+          -e "s/REAL\*16/DOUBLE PRECISION/" $MODULE.junk > $MODULE_F
       rm -f $MODULE.junk
    endif
    set echo
-   gfortran -c $OPT -std=legacy $MODULE.f
+   gfortran -c $OPT -std=legacy $MODULE_F
    unset echo
    breaksw
 #
@@ -1558,7 +1586,7 @@ if ($TARGET == linux32) then
    if ($GMS_IFORT_VERNO  < 12) set EXTRAOPT="$EXTRAOPT -w95 -cm"
    if ($GMS_IFORT_VERNO >= 12) set EXTRAOPT="$EXTRAOPT -warn nousage -inline-level=0"
    set echo
-   ifort -c -i4 $OPT -ftz -auto $EXTRAOPT $MODULE.f
+   ifort -c -i4 $OPT -ftz -auto $EXTRAOPT $MODULE_F
    unset echo
    breaksw
 #
@@ -1574,22 +1602,22 @@ if ($TARGET == linux32) then
    case pgfortran:
    case pgf77:
    if (($MODULE == qfmm) || ($MODULE =~ so*) || ($MODULE == zheev)) then
-       mv -f $MODULE.f $MODULE.junk
-       sed -e s/DREAL/DBLE/g $MODULE.junk > $MODULE.f
+       mv -f $MODULE_F $MODULE.junk
+       sed -e s/DREAL/DBLE/g $MODULE.junk > $MODULE_F
        rm -f $MODULE.junk
    endif
    if (($MODULE == qeigen) || ($MODULE == int2c)) then
-      mv -f $MODULE.f $MODULE.junk
+      mv -f $MODULE_F $MODULE.junk
       sed -e "s/Q-/D-/g" \
           -e "s/Q+00/D+00/g" \
-          -e "s/REAL\*16/DOUBLE PRECISION/" $MODULE.junk > $MODULE.f
+          -e "s/REAL\*16/DOUBLE PRECISION/" $MODULE.junk > $MODULE_F
       rm -f $MODULE.junk
    endif
    set OPT = '-O2'
    if ($MODULE == zheev)  set OPT = '-O2 -Kieee'
    if ($MODULE == bassto) set OPT = '-O0'  # Takako
    set echo
-   $GMS_FORTRAN -c $OPT -Msecond_underscore $MODULE.f
+   $GMS_FORTRAN -c $OPT -Msecond_underscore $MODULE_F
    unset echo
    breaksw
 #
@@ -1684,10 +1712,10 @@ if ($TARGET == linux64) then
          case 4.5:
             set extraflags=''
             if (($MODULE == qeigen) || ($MODULE == int2c)) then
-               mv -f $MODULE.f $MODULE.junk
+               mv -f $MODULE_F $MODULE.junk
                sed -e "s/Q-/D-/g" \
                    -e "s/Q+00/D+00/g" \
-                   -e "s/REAL\*16/DOUBLE PRECISION/" $MODULE.junk > $MODULE.f
+                   -e "s/REAL\*16/DOUBLE PRECISION/" $MODULE.junk > $MODULE_F
                rm -f $MODULE.junk
             endif
             breaksw
@@ -1701,7 +1729,7 @@ if ($TARGET == linux64) then
             breaksw
       endsw
       set echo
-      gfortran -c -fdefault-integer-8 $OPT -std=legacy $extraflags $MODULE.f
+      gfortran -c -fdefault-integer-8 $OPT -std=legacy $extraflags $MODULE_F
       unset echo
       breaksw
 
@@ -1744,17 +1772,17 @@ if ($TARGET == linux64) then
       if ($GMS_IFORT_VERNO  < 12) set EXTRAOPT="$EXTRAOPT -w95 -cm"
       if ($GMS_IFORT_VERNO >= 12) set EXTRAOPT="$EXTRAOPT -warn nousage -inline-level=0"
       set echo
-      ifort -c -i8 $OPT -ftz -auto $EXTRAOPT $MODULE.f
+      ifort -c -i8 $OPT -ftz -auto $EXTRAOPT $MODULE_F
       unset echo
       breaksw
 
    case pgfortran:
    case pgf77:
       if (($MODULE == qeigen) || ($MODULE == int2c)) then
-         mv -f $MODULE.f $MODULE.junk
+         mv -f $MODULE_F $MODULE.junk
          sed -e "s/Q-/D-/g" \
              -e "s/Q+00/D+00/g" \
-             -e "s/REAL\*16/DOUBLE PRECISION/" $MODULE.junk > $MODULE.f
+             -e "s/REAL\*16/DOUBLE PRECISION/" $MODULE.junk > $MODULE_F
          rm -f $MODULE.junk
       endif
       if ($GMS_L64_OPT == testing) then
@@ -1799,7 +1827,7 @@ if ($TARGET == linux64) then
         if ($MODULE == zheev)  set OPT='-O0'
       endif
       set echo
-      $GMS_FORTRAN $GMS_LIN_FLAGS -c -i8 -i8storage -mcmodel=medium $OPT $MODULE.f
+      $GMS_FORTRAN $GMS_LIN_FLAGS -c -i8 -i8storage -mcmodel=medium $OPT $MODULE_F
       unset echo
       breaksw
 #
@@ -1808,16 +1836,16 @@ if ($TARGET == linux64) then
 #
    case pathf90:
       if (($MODULE == qeigen) || ($MODULE == int2c)) then
-         mv -f $MODULE.f $MODULE.junk
+         mv -f $MODULE_F $MODULE.junk
          sed -e "s/Q-/D-/g" \
              -e "s/Q+00/D+00/g" \
-             -e "s/REAL\*16/DOUBLE PRECISION/" $MODULE.junk > $MODULE.f
+             -e "s/REAL\*16/DOUBLE PRECISION/" $MODULE.junk > $MODULE_F
          rm -f $MODULE.junk
       endif
       set OPT = '-O2'
       if ($MODULE == zheev)  set OPT='-O0'
       set echo
-      pathf90 -c -r8 -i8 $OPT $MODULE.f
+      pathf90 -c -r8 -i8 $OPT $MODULE_F
       unset echo
       breaksw
 #
@@ -1873,34 +1901,34 @@ if ($TARGET == mac32) then
       set OPT = '-O2'
       if ($MODULE == zheev) set OPT='-O0'
       if (($MODULE == qeigen) || ($MODULE == int2c)) then
-         mv -f $MODULE.f $MODULE.junk
+         mv -f $MODULE_F $MODULE.junk
          sed -e "s/Q-/D-/g" \
              -e "s/Q+00/D+00/g" \
-             -e "s/REAL\*16/DOUBLE PRECISION/" $MODULE.junk > $MODULE.f
+             -e "s/REAL\*16/DOUBLE PRECISION/" $MODULE.junk > $MODULE_F
          rm -f $MODULE.junk
       endif
       if (($MODULE == iolib) || ($MODULE == inputa) || \
           ($MODULE == gamess) || ($MODULE == mp2ims)) then
-         mv -f $MODULE.f $MODULE.junk
-         sed -e "s/MXUNIT=299/MXUNIT=99/g" $MODULE.junk > $MODULE.f
+         mv -f $MODULE_F $MODULE.junk
+         sed -e "s/MXUNIT=299/MXUNIT=99/g" $MODULE.junk > $MODULE_F
          rm -f $MODULE.junk
       endif
       set echo
-      g77 -c $OPT -fautomatic -Wno-globals -fno-globals $MODULE.f
+      g77 -c $OPT -fautomatic -Wno-globals -fno-globals $MODULE_F
       unset echo
       breaksw
    case gfortran:
       set OPT='-O2'
       if ($MODULE == zheev)  set OPT='-O0'  # defensive compiling
       if (($MODULE == qeigen) || ($MODULE == int2c)) then
-         mv -f $MODULE.f $MODULE.junk
+         mv -f $MODULE_F $MODULE.junk
          sed -e "s/Q-/D-/g" \
              -e "s/Q+00/D+00/g" \
-             -e "s/REAL\*16/DOUBLE PRECISION/" $MODULE.junk > $MODULE.f
+             -e "s/REAL\*16/DOUBLE PRECISION/" $MODULE.junk > $MODULE_F
          rm -f $MODULE.junk
       endif
       set echo
-      gfortran -c $OPT -std=legacy $MODULE.f
+      gfortran -c $OPT -std=legacy $MODULE_F
       unset echo
       breaksw
    default:
@@ -1927,10 +1955,10 @@ if ($TARGET == mac64) then
       case 4.5:
          set extraflags=''
          if (($MODULE == qeigen) || ($MODULE == int2c)) then
-            mv -f $MODULE.f $MODULE.junk
+            mv -f $MODULE_F $MODULE.junk
             sed -e "s/Q-/D-/g" \
                 -e "s/Q+00/D+00/g" \
-                -e "s/REAL\*16/DOUBLE PRECISION/" $MODULE.junk > $MODULE.f
+                -e "s/REAL\*16/DOUBLE PRECISION/" $MODULE.junk > $MODULE_F
             rm -f $MODULE.junk
          endif
          breaksw
@@ -1944,7 +1972,7 @@ if ($TARGET == mac64) then
          breaksw
    endsw
    set echo
-   gfortran -c -m64 -fdefault-integer-8 $OPT -std=legacy $extraflags $MODULE.f
+   gfortran -c -m64 -fdefault-integer-8 $OPT -std=legacy $extraflags $MODULE_F
    unset echo
 endif
 #
@@ -1972,7 +2000,7 @@ if ($TARGET == necsx) then
    if ($MODULE == gugdrt) set OPT='-Wf"-Nv"'
 #
    set echo
-   f90 -c -ebw -size_t64 $OPT $MODULE.f
+   f90 -c -ebw -size_t64 $OPT $MODULE_F
    unset echo
 endif
 #
@@ -2006,7 +2034,7 @@ if (($TARGET == sgi32) || ($TARGET == sgi64)) then
    if ($TARGET == sgi32) set INTS='-n32 -i4'
    set FLAGS='-automatic -G0 -woff 2290 -OPT:Olimit=0'
    set echo
-   $FORT -c $OPT $INTS $FLAGS $MODULE.f
+   $FORT -c $OPT $INTS $FLAGS $MODULE_F
    unset echo
 endif
 #
@@ -2102,10 +2130,10 @@ if (($TARGET == sun32) || ($TARGET == sun64)) then
 #         However, SPARC chips do just fine with q.p.
       if (`uname -p` == i386) then
          if (($MODULE == qeigen) || ($MODULE == int2c)) then
-            mv -f $MODULE.f $MODULE.junk
+            mv -f $MODULE_F $MODULE.junk
             sed -e "s/Q-/D-/g" \
                 -e "s/Q+00/D+00/g" \
-                -e "s/REAL\*16/DOUBLE PRECISION/" $MODULE.junk > $MODULE.f
+                -e "s/REAL\*16/DOUBLE PRECISION/" $MODULE.junk > $MODULE_F
             rm -f $MODULE.junk
          endif
       endif
@@ -2127,7 +2155,7 @@ if (($TARGET == sun32) || ($TARGET == sun64)) then
       if ($MODULE == zheev)  set OPT='-O0'
       set WARN='-erroff=WARNING_1278,WARNING_1279,WARNING_1615'
       set echo
-      f90 -c -stackvar -xtypemap=integer:$BITS $OPT $WARN $ARCH $MODULE.f
+      f90 -c -stackvar -xtypemap=integer:$BITS $OPT $WARN $ARCH $MODULE_F
       unset echo
    else
 #
@@ -2144,7 +2172,7 @@ if (($TARGET == sun32) || ($TARGET == sun64)) then
       if ($MODULE == symslc) set OPT='-fast -O4 -nodepend -xarch=v8plus'
       if ($MODULE == zheev)  set OPT='-O0'
       set echo
-      f77 -c $OPT -stackvar $MODULE.f
+      f77 -c $OPT -stackvar $MODULE_F
       unset echo
    endif
 endif
@@ -2164,15 +2192,15 @@ if ($TARGET == win32) then
 #
    case pgfortran:
    if (($MODULE == qfmm) || ($MODULE == solib) || ($MODULE == zheev)) then
-       mv -f $MODULE.f $MODULE.junk
-       sed -e s/DREAL/DBLE/g $MODULE.junk > $MODULE.f
+       mv -f $MODULE_F $MODULE.junk
+       sed -e s/DREAL/DBLE/g $MODULE.junk > $MODULE_F
        rm -f $MODULE.junk
    endif
    if (($MODULE == qeigen) || ($MODULE == int2c)) then
-      mv -f $MODULE.f $MODULE.junk
+      mv -f $MODULE_F $MODULE.junk
       sed -e "s/Q-/D-/g" \
           -e "s/Q+00/D+00/g" \
-          -e "s/REAL\*16/DOUBLE PRECISION/" $MODULE.junk > $MODULE.f
+          -e "s/REAL\*16/DOUBLE PRECISION/" $MODULE.junk > $MODULE_F
       rm -f $MODULE.junk
    endif
    if ($GMS_WIN_OPT == baseline)     set OPT='-O0'
@@ -2196,7 +2224,7 @@ if ($TARGET == win32) then
 #
    set echo
    $GMS_FORTRAN $GMS_WIN_FLAGS -c -Msecond_underscore -Munix -Bstatic $OPT $GMS_WIN_TP \
-                -o $MODULE.o $MODULE.f
+                -o $MODULE_OBJ $MODULE_F
    unset echo
    breaksw
 #
@@ -2244,16 +2272,16 @@ if (($TARGET == win64) || ($TARGET == winazure)) then
       if ($GMS_IFORT_VERNO >= 10) set EXTRAOPT="$EXTRAOPT -Qvec-report0"
       if ($GMS_IFORT_VERNO >= 12) set EXTRAOPT="$EXTRAOPT -warn:nousage"
       set echo
-      ifort $GMS_WIN_TP -c -integer-size:64 -Qzero -Qftz $OPT -auto $EXTRAOPT $GMS_WIN_FLAGS $MODULE.f
+      ifort $GMS_WIN_TP -c -integer-size:64 -Qzero -Qftz $OPT -auto $EXTRAOPT $GMS_WIN_FLAGS $MODULE_F
       unset echo
-      if (-e $MODULE.obj) mv -v $MODULE.obj $MODULE.o # needed for ifort on Windows
+      if (-e $MODULE.obj) mv -v $MODULE.obj $MODULE_OBJ # needed for ifort on Windows
       breaksw
    case pgfortran:
       if (($MODULE == qeigen) || ($MODULE == int2c)) then
-         mv -f $MODULE.f $MODULE.junk
+         mv -f $MODULE_F $MODULE.junk
          sed -e "s/Q-/D-/g" \
              -e "s/Q+00/D+00/g" \
-             -e "s/REAL\*16/DOUBLE PRECISION/" $MODULE.junk > $MODULE.f
+             -e "s/REAL\*16/DOUBLE PRECISION/" $MODULE.junk > $MODULE_F
          rm -f $MODULE.junk
       endif
       if ($GMS_WIN_OPT == baseline) then
@@ -2365,7 +2393,7 @@ if (($TARGET == win64) || ($TARGET == winazure)) then
 #     set OPT="$OPT -v"
 #
       set echo
-      $GMS_FORTRAN $GMS_WIN_FLAGS -c -i8 -Mnobackslash -Minform=inform -Bstatic $OPT $GMS_WIN_TP -o $MODULE.o $MODULE.f
+      $GMS_FORTRAN $GMS_WIN_FLAGS -c -i8 -Mnobackslash -Minform=inform -Bstatic $OPT $GMS_WIN_TP -o $MODULE_OBJ $MODULE_F
       unset echo
       breaksw
 #
@@ -2380,16 +2408,14 @@ endif
 #  Store the generated object code, clean up, and quit
 #
 if ($TINKCODE == yes) then
-  mv -f $MODULE.o $OBJDIR/$MODULE.o
+  mv -f $MODULE_OBJ $OBJDIR/$MODULE_OBJ
   exit
 endif
 #
 #  option to possibly save the preprocessed code, out of the way
 #
-if ( ".$GMS_DEBUG_FLAGS" == '.' ) then
-   rm -f $MODULE.f
-else
-   mv -f $MODULE.f tmp/
+if ( ".$GMS_DEBUG_FLAGS" == '.' && $GMS_DO_NOT_REMOVE == 0 ) then
+   rm -f $MODULE_F
 endif
 #
 if ($SRCDIR == .)    rm -f $MODULE.src    # delete copy with no scalar code
@@ -2400,7 +2426,7 @@ if ($VB2000 == true) rm -f ../source/$MODULE.src
 unset echo
 date
 time
-if (-e $MODULE.o ) then
+if (-e $MODULE_OBJ ) then
    exit
 else
    echo Compilation failure for $MODULE, please fix the problem.
