@@ -1,3 +1,4 @@
+C 24 Jul 12 - HN,DGF - code update to finish FMO 4.3
 C 23 MAR 12 - DGF,CHC - code update to finish FMO 4.2
 C 28 DEC 11 - DGF,TN,CS  - FMO 4.2 and EFMO CHANGES
 C 11 Aug 11 - HL  - fix for LJ term
@@ -91,7 +92,7 @@ C*MODULE fmogrd  *DECK optfmox
      *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
      *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
      *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
-     *                modlmo,nopden,mofock,modfd,modfmm
+     *                modlmo,nopden,mofock,modfd,modfmm,ncentm
       common /fmopnt/ lichfg,lmulfg,lidmrec,lfrgnam,llayfrg,lindat,
      *                lnCBS,lfmozan,lfmoc,lfmomas,lizbas,liaglob,libdgh,
      *                liabdfg,ljabdfg,lnCAO,lidxCAO,liaprjo,ljaprjo,
@@ -764,10 +765,12 @@ c
  9810 format(/1x,'Unknown inverse Hessian update: ',A8)
       END
 C*MODULE fmogrd  *DECK readmond
-      SUBROUTINE readmond(d,orbxch,odexch,na,nb,l1,iodfmo,idmrec0)
+      SUBROUTINE readmond(d,orbxch,odexch,na,nb,l1,iodfmo,idmrec0
+     *          ,uhfcal)
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      PARAMETER (one=1.0D+00)
       dimension d(*),iodfmo(*)
-      logical orbxch,odexch
+      logical orbxch,odexch,uhfcal
       common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
      *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
      *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
@@ -786,8 +789,17 @@ c
         if(odexch) then
           call rareads(IDAFMO,iodfmo,d,l2+l3,idmrec0,0)
         else
-          call rareads(IDAFMO,iodfmo,d(l2+1),l3,idmrec0,0)
-          call DMTX2(d,d(l2+1),na,l1,l1,nb)
+          lenrec=l3
+          if(uhfcal) lenrec=l3+l3
+          call rareads(IDAFMO,iodfmo,d(l2+1),lenrec,idmrec0,0)
+          if(.not.uhfcal) then
+            call DMTX2(d,d(l2+1),na,l1,l1,nb)
+          else
+            call DMTX2(d,d(l2+1),na,l1,l1,0)
+            call DMTX2(d(l2+1),d(l2+1+l3),nb,l1,l1,0)
+            call daxpy(l2,one,d(l2+1),1,d,1)
+            call rareads(IDAFMO,iodfmo,d(l2+1),lenrec,idmrec0,0)
+          endif
         endif
       else
         call rareads(IDAFMO,iodfmo,d,l2,idmrec0,0)
@@ -796,10 +808,11 @@ c
       END
 C*MODULE fmogrd  *DECK readumond
       SUBROUTINE readumond(d,wrk,orbxch,odexch,na,nb,l1,l1i,
-     *                     iodfmo,idmrec0)
+     *                     iodfmo,idmrec0,uhfcal)
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      PARAMETER (one=1.0D+00)
       dimension d(*),wrk(*),iodfmo(*) 
-      logical orbxch,odexch
+      logical orbxch,odexch,uhfcal
       common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
      *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
      *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
@@ -819,13 +832,26 @@ c
         if(odexch) then
           call rareads(IDAFMO,iodfmo,d,l2+l3,idmrec0,0)
         else
-          call rareads(IDAFMO,iodfmo,d(l2+1),l3,idmrec0,0)
+          lenrec=l3
+          if(uhfcal) lenrec=l3+l3
+          call rareads(IDAFMO,iodfmo,d(l2+1),lenrec,idmrec0,0)
           if(icurunt.gt.0) then
             call rotmo(d(l2+1),l1,na,l1i,ncursh,wrk)
             call dcopy(l1*na,wrk,1,d(l2+1),1)
+            if(uhfcal) then
+              call rotmo(d(l2+1+l3),l1,nb,l1i,ncursh,wrk)
+              call dcopy(l1*na,wrk,1,d(l2+1+l3),1)
+            end if
 c           Only occupied are rotated.
           endif
-          call DMTX2(d,d(l2+1),na,l1,l1,nb)
+          if(.not.uhfcal) then
+            call DMTX2(d,d(l2+1),na,l1,l1,nb)
+          else
+            call DMTX2(d,d(l2+1),na,l1,l1,0)
+            call DMTX2(d(l2+1),d(l2+1+l3),nb,l1,l1,0)
+            call daxpy(l2,one,d(l2+1),1,d,1)
+            call rareads(IDAFMO,iodfmo,d(l2+1),lenrec,idmrec0,0)
+          endif
         endif
       else
         call rareads(IDAFMO,iodfmo,d,l2,idmrec0,0)
@@ -980,7 +1006,7 @@ C*MODULE fmogrd  *DECK esdgrd
       integer ddi_world,ddi_group,ddi_masters
       Parameter(ddi_world=0,ddi_group=1,ddi_masters=2)
       logical isgddi,parout,INITGDDI,GOPARR,DSKWRK,MASWRK,orbxch,
-     *        iodexch,myjob,dodistr,urohf,wasgddi
+     *        iodexch,myjob,dodistr,urohf,wasgddi,uhfcal
       COMMON /GDDI/   ISCOPE,NGROUPS,MYGROUP,MEGLOB,npglob,nnglob,JBTYP,
      *                ISGDDI,PAROUT,INITGDDI,wasgddi
       COMMON /GRAD  / DE(3,MXATM)
@@ -997,7 +1023,7 @@ C*MODULE fmogrd  *DECK esdgrd
      *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
      *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
      *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
-     *                modlmo,nopden,mofock,modfd,modfmm
+     *                modlmo,nopden,mofock,modfd,modfmm,ncentm
       common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
      *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
      *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
@@ -1098,6 +1124,7 @@ c
         CALL DDI_BCAST(2421,'I',jobgrp,nfg,MASTER)
 c
 c     write(6,*) 'jobgrp=',(jobgrp(i),i=1,nfg)
+      uhfcal=.false.
       do 120 ifg=1,nfg
         if(layfrg(ifg).lt.ilay.and.modfd.eq.0 .or.jobgrp(ifg).eq.0) 
      *    goto 120
@@ -1108,6 +1135,7 @@ c     write(6,*) 'jobgrp=',(jobgrp(i),i=1,nfg)
         CALL DDI_BCAST(2421,'F',fa,l2,MASTER)
         imxl30=maxl30(ifg)
         if(.not.maswrk) CALL rawrites(IDAFMO,iodfmo,fa,imxl30,l2,nrec,0)
+        if(scffrg(ifg).eq.uhf) uhfcal=.true.
   120 continue 
       endif
 c
@@ -1153,7 +1181,8 @@ c       Read densities.
 c
         irec=irec0
         if(modfd.ne.0.and.layfrg(ifg).eq.1) irec=irec1
-        call readmond(da,orbxch,iodexch,na,nb,l1,iodfmo,ifg+irec)
+        call readmond(da,orbxch,iodexch,na,nb,l1,iodfmo,ifg+irec,
+     *  scffrg(ifg).eq.uhf)
 c
 c       For FMO/FD, compute derivatives of <mu|dV/da|nu> for fragments
 c       in layer 1 (mu,nu) and potentials V in layer 2 (atom "a"). 
@@ -1190,7 +1219,11 @@ c         Get alpha density
           call CPYTSQ(da,wrk(1+l2),l1,1)
           call TFTRI(wrk,fa,wrk(1+l2),WRK(1+l2+l3),l1,l1,l1)
 c         Get beta density 
-          call DMTX2(da,da(l2+1),nb,l1,l1,0)
+          if(scffrg(ifg).eq.rohf) then
+            call DMTX2(da,da(l2+1),nb,l1,l1,0)
+          else if(scffrg(ifg).eq.uhf) then
+            call DMTX2(da,da(l2+1+l3),nb,l1,l1,0)
+          end if 
           call CPYTSQ(da,wrk(1+l2),l1,1)
           call TFTRI(fb,fa,wrk(1+l2),WRK(1+l2+l3),l1,l1,l1)
           call daxpy(l2,one,wrk,1,fb,1)
@@ -1200,7 +1233,7 @@ c         -2 * 1/4 * D * V * D, D is total density
           call CPYTSQ(da,da(1+l2),l1,1)
           call TFTRI(fb,fa,da(1+l2),WRK,l1,l1,l1)
           call dscal(l2,-half,fb,1)
-          IF (IAND(MODGRD,42).EQ.42) THEN
+          IF (IAND(MODGRD,42).EQ.42.and..not.uhfcal) THEN
             CALL RAREADS(IDAFMO,IODFMO,DA(L2+1),L3,IREC+IFG,0)
             call getcnt2ubar(1,L1,L3,IFG,IPTLG,NQMTFG,DA(L2+1),
      *                       FA,ZVWRK,ZVLAG)
@@ -1289,7 +1322,7 @@ C*MODULE fmogrd  *DECK esdderz
      *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
      *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
      *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
-     *                modlmo,nopden,mofock,modfd,modfmm
+     *                modlmo,nopden,mofock,modfd,modfmm,ncentm
       common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
      *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
      *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
@@ -1546,7 +1579,7 @@ C*MODULE fmogrd  *DECK gmsxyz
      *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
      *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
      *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
-     *                modlmo,nopden,mofock,modfd,modfmm
+     *                modlmo,nopden,mofock,modfd,modfmm,ncentm
       dimension layfrg(*),indat(*),fmozan(*),fmoc(3,*),izbas(*)
       equivalence (dum,cdum),(dnill,nill)
       data OPTMIZ /8HOPTIMIZE/, SADPT  /8HSADPOINT/,GLOBOP /8HGLOBOP  /,
@@ -1749,7 +1782,7 @@ C*MODULE fmogrd  *DECK gmsprop
      *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
      *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
      *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
-     *                modlmo,nopden,mofock,modfd,modfmm
+     *                modlmo,nopden,mofock,modfd,modfmm,ncentm
       data HSSIAN/8HHESSIAN /,  FMOMD   /8HMD      /
 c     data OPTMIZ /8HOPTIMIZE/, SADPT  /8HSADPOINT/
 c 
@@ -1846,7 +1879,7 @@ C*MODULE fmogrd  *DECK fmorst
      *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
      *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
      *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
-     *                modlmo,nopden,mofock,modfd,modfmm
+     *                modlmo,nopden,mofock,modfd,modfmm,ncentm
       common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
      *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
      *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
@@ -2297,7 +2330,7 @@ C
      *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
      *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
      *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
-     *                modlmo,nopden,mofock,modfd,modfmm
+     *                modlmo,nopden,mofock,modfd,modfmm,ncentm
       COMMON /FMOPNT/ LICHFG,LMULFG,LIDMREC,LFRGNAM,LLAYFRG,LINDAT,
      *                LNCBS,LFMOZAN,LFMOC,LFMOMAS,LIZBAS,LIAGLOB,LIBDGH,
      *                LIABDFG,LJABDFG,LNCAO,LIDXCAO,LIAPRJO,LJAPRJO,
