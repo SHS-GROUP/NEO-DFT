@@ -1,3 +1,4 @@
+C 25 JUL 12 - LBR - MODIFIED FOCKE TO WORK WITH ORMAS-SCF MRPT
 C 14 Mar 12 - MWS - MRPT: save dynamic state weights to reuse here.
 C  7 MAR 12 - MWS - ALIGN DETWFN COMMON
 C 17 Feb 12 - LBR - updated DETWFN common block
@@ -101,6 +102,14 @@ C  may be incorrect unless we repeat the -detinp- call
 C
       DATA DET/8HDET     /
       DATA DETPT/8HDETPT   /
+      DATA ORMAS/8HORMAS   /
+C                                                                                                                               
+C  OPTION FOR ORMAS PERTURBATION THEORY                                                                                         
+C                                                                                                                               
+      IF(CISTEP.EQ.ORMAS) THEN
+         CALL ORMASPT
+         RETURN
+      ENDIF
 C
 C        In case of dynamical state weighting, i.e. MCSCF really done,
 C        preserve the MCSCF weights, instead of reading input's.
@@ -889,11 +898,23 @@ C*MODULE DEMPRT   *DECK DPTCAN
       SUBROUTINE DPTCAN(SOME,V,Q,S,F,FMO,VOLD,U,IWRK,EIG,SCR,
      *                  L0,L1,L2,L3,NACT,NCORBS,NCORPT)
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      PARAMETER (MXNORO=250)
       DIMENSION V(L1,L0),Q(L1,L1),S(L2),F(L2),FMO(L2),VOLD(L1,L1),
      *          U(L1,L0),IWRK(L1),EIG(L1),SCR(*)
       LOGICAL SOME
+      INTEGER NSPACE,MSTA(51),MNUM(51),MINI(51),MAXI(51),
+     $     IAMI(51),IAMA(51),IBMI(51),IBMA(51),IDIM(51),
+     $     LBST(51),NREF0
+      COMMON /FCCWFN/ NSPACE,MSTA,MNUM,MINI,MAXI,
+     *     IAMI,IAMA,IBMI,IBMA,IDIM,
+     *     LBST,NREF0,FDIRCT,QCORR,C0SQ
       COMMON /IOFILE/ IR,IW,IP,IS,IJKT,IDAF,NAV,IODA(950)
+      COMMON /MCINP / METHOD,CISTEP,ACURCY,ENGTOL,DAMP,MICIT,NWORD,
+     *                NNORB,NOROT(2,MXNORO),MOFRZ(15),NPFLG(10),
+     *                NOFO,MCFMO,CANONC,FCORE,FORSNR,NOCI,EKT,LINSER
       PARAMETER (ZERO=0.0D+00)
+      DATA GUGA,ALDET,GENCI,ORMAS,GMCCI
+     *     /8HGUGA    ,8HALDET   ,8HGENCI   ,8HORMAS   ,8HGMCCI   /
 C
 C     Canonicalize orbitals for DETPT...core/active/virtual space
 C     Note: this is just always done, if called, because if the
@@ -903,10 +924,12 @@ C
       NORB = L0
       NVIRT= NORB-NCORBS-NACT
       IF(SOME) WRITE(IW,9000) NCORBS,NACT,NVIRT
-C
-C     ----- ZERO BLOCKS CONNECTING CORE, ACTIVE, EXTERNAL SPACES -----
-C     THIS WILL PREVENT ANY SUBSEQUENT MIXING OF THESE ORBITAL SPACES
-C
+C                                                                   
+C     ----- ZERO BLOCKS CONNECTING CORE, ACTIVE, EXTERNAL SPACES ---
+C     THIS WILL PREVENT ANY SUBSEQUENT MIXING OF THESE ORBITAL SPACE
+C     IF USING ORMAS-SCF, ALSO ZERO BLOCKS CONNECTING ACTIVE SUBSPAC
+C                                                                   
+C     CORE/ACTIVE                                                   
       DO I=NCORBS+1,NCORBS+NACT
          IROW = (I*I-I)/2
          DO J=1,NCORBS
@@ -914,6 +937,7 @@ C
             FMO(IJ) = ZERO
          ENDDO
       ENDDO
+C     ACTIVE/VIRUTAL                                                
       DO I=NCORBS+NACT+1,NORB
          IROW = (I*I-I)/2
          DO J=1,NCORBS+NACT
@@ -921,6 +945,27 @@ C
             FMO(IJ) = ZERO
          ENDDO
       ENDDO
+C            CORE/VIRTUAL: SHOULD BE ALMOST ZERO IF MCSCF CONVERGED,
+C                          ZAP IT EXACTLY, JUST TO BE CAREFUL.      
+      DO I=NCORBS+NACT+1,NORB
+         IROW = (I*I-I)/2
+         DO J=1,NCORBS
+            IJ = IROW+J                                             
+            FMO(IJ) = ZERO
+         ENDDO
+      ENDDO
+C            POSSIBLE SUBSPACE BLOCKING WITHIN ACTIVE SPACE         
+      IF(CISTEP.EQ.ORMAS.AND.NSPACE.GT.1) THEN
+         DO ISPA=2,NSPACE
+            DO I = MSTA(ISPA),MSTA(ISPA+1)-1
+               IROW = (I*I-I)/2
+               DO J=NCORBS+1,MSTA(ISPA)-1
+                  IJ = IROW + J
+                  FMO(IJ) = ZERO
+               ENDDO
+            ENDDO
+         ENDDO
+      ENDIF
 C
 C     ----- TRANSFORM BLOCKED FOCK MATRIX BACK TO AO SPACE -----
 C
@@ -962,6 +1007,7 @@ C
       ENDDO
 C
       NORBS = NCORBS+NACT
+      IF(CISTEP.EQ.ORMAS.AND.NSPACE.GT.1) GOTO 700
       DO K=NCORBS+1,NORBS-1
          KMIN=K
          RMIN=EIG(K)
@@ -976,6 +1022,7 @@ C
             CALL DSWAP(L1,V(1,K),1,V(1,KMIN),1)
          END IF
       END DO
+ 700    CONTINUE
 C
       DO K=NORBS+1,NORBS+NVIRT-1
          KMIN=K
@@ -998,11 +1045,20 @@ C        from the diagonal of -fmo-, and then saves to the disk.
 C
       CALL DAWRIT(IDAF,IODA,V,L3,15,0)
 C
-      IF(SOME) THEN
+      IF(SOME.AND.CISTEP.EQ.ALDECI) THEN
          WRITE(IW,9010) NCORPT
          WRITE(IW,9040) (EIG(I),I=1,NCORBS)
          WRITE(IW,9020)
          WRITE(IW,9040) (EIG(I),I=NCORBS+1,NCORBS+NACT)
+         WRITE(IW,9030)
+         WRITE(IW,9040) (EIG(I),I=NCORBS+NACT+1,NCORBS+NACT+NVIRT)
+      ELSEIF(SOME.AND.CISTEP.EQ.ORMAS)THEN
+         WRITE(IW,9010) NCORPT
+         WRITE(IW,9040) (EIG(I),I=1,NCORBS)
+         DO ISPACE = 1,NSPACE
+            WRITE(IW,9025)ISPACE
+            WRITE(IW,9040) (EIG(I),I=MSTA(ISPACE),MSTA(ISPACE+1)-1)
+         ENDDO
          WRITE(IW,9030)
          WRITE(IW,9040) (EIG(I),I=NCORBS+NACT+1,NCORBS+NACT+NVIRT)
       END IF
@@ -1019,6 +1075,7 @@ C
  9010 FORMAT(1X,'ORBITAL ENERGIES FOR FILLED ORBITAL SPACE (',I5,
      *          ' ARE FROZEN CORES)')
  9020 FORMAT(1X,'ORBITAL ENERGIES FOR ACTIVE ORBITAL SPACE')
+ 9025  FORMAT(1X,'ORBITAL ENERGIES FOR ACTIVE ORBITAL SUBSPACE',x,i4)
  9030 FORMAT(1X,'ORBITAL ENERGIES FOR EXTERNAL ORBITAL SPACE')
  9040 FORMAT(1X,5F11.6)
       END
