@@ -1,3 +1,4 @@
+C 13 Aug 12 - DGF - padd common block QMMM2
 C 21 Apr 10 - NA,KK - allow choosing minimizer, RESTRAIN-POSITION changes
 C  1 May 03 - CHC - modify TINKIN to concoct a LINKGE default
 C  9 MAR 00 - CHC - FIX for parallel run
@@ -796,7 +797,7 @@ c
 c
       subroutine iqmgind
       PARAMETER (MAXR1=2000)
-      COMMON /QMMM2/ IQMatm(MAXR1)
+      COMMON /QMMM2/ IQMATM(MAXR1),ibasfmo(MAXR1)
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
 c
       ndat=0
