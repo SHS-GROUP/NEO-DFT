@@ -1,3 +1,4 @@
+C  2 Sep 12 - NM  - allow SF-TDDFT with EFP1 and/or C-PCM gradients
 C  9 APR 12 - FZ  - PAD THE INFOTD COMMON FOR TPA
 C 11 AUG 11 - NM  - NEW MODULE IMPLEMENTING SPIN-FLIP TD-DFT
 C
@@ -9,9 +10,11 @@ C
       LOGICAL GOPARR,DSKWRK,MASWRK,TRIPLET,SG1,SG1T,TAMMD,TPA
       LOGICAL SOME,GOPSAV
       LOGICAL LCFLAG,LRINT
+      logical efstatic,mtd1,mtd2
 C
       PARAMETER (MXRT=100)
       PARAMETER (MXGRID=10)
+      parameter (mxatm=2000, mxfrg=1050, mxdfg=5, mxdppt=mxfrg*mxdfg*12)
 C
       COMMON /DFGRID/ DFTTHR,DFTGTHR,SWOFF,SW0,BSLRD(137),NDFTFG,
      *                NRAD,NTHE,NPHI,NRAD0,NTHE0,NPHI0,
@@ -19,6 +22,16 @@ C
       COMMON /DFLEB/  NLEB(MXGRID),NLEB0(MXGRID)
 C     COMMON /DFTPAR/ DFTTYP(20),EXENA,EXENB,EXENC,IDFT34,NAUXFUN,
 C    *                                                    NAUXSHL
+      common /efnrgy/ enucrp,repnuc0,enel,efrms,qefea0(5),qefeap(5),
+     *                mtd1,mtd2,efstatic
+      common /efptdg/ itdefg
+      common /fmcom / x(1)
+      common /frginf/ nmpts(mxfrg),nmttpt,iefc,iefd,iefq,iefo,
+     *                nppts(mxfrg),npttpt,iefp,
+     *                nrpts(mxfrg),nrttpt,irep,ichgp,nfrg,
+     *                ndppts(mxdppt),ndpttpt,iefdp,lstmpts(mxfrg)
+      common /infoa / nat,ich,mul,num,nqmt,ne,na,nb,
+     *                zan(mxatm),c(3,mxatm),ian(mxatm)
       COMMON /INFOEX/ TDM(3,MXRT),MOCC(MXRT),MVIR(MXRT),
      *                MONOC1,MONVR1,IFMODIM
       COMMON /INFOTD/ CNVTOL,TRIPLET,SG1T,JANST,NRADT,NTHET,NPHIT,NLEBT,
@@ -28,6 +41,7 @@ C    *                                                    NAUXSHL
       COMMON /NLRC  / LCFLAG,LRINT,EMU,EMU2,LRFILE
       COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      common /pcmpar/ ipcm,nft26,nft27,irppcm,ief,ip_f,nfmopcm
       COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
       COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
      *                MPLEVL,MPCTYP
@@ -59,7 +73,12 @@ C
 C        IF NO EXCITED STATE DENSITY WILL BE GENERATED, JUST QUIT.
 C
       CALL DERCHK(NDER)
-      IF(NDER.EQ.0  .AND.  ITDPRP.EQ.0) RETURN
+c     IF(NDER.EQ.0  .AND.  ITDPRP.EQ.0) RETURN
+      if((nder.gt.0 .and. nglevl.eq.0).or. itdprp.eq.1) then
+         continue
+      else
+         return
+      end if
 C
 C****                             **************************************
 C**** SF-DFT GRADIENT CALCULATION **************************************
@@ -70,6 +89,10 @@ C****                             **************************************
      *      ' NO GRADIENT. SF-DFT ENERGY CALCULATION IS NOT CONVERGED.'
          CALL ABRT
       END IF
+c
+c     initialize sf-dft/efp1 gradient
+c
+      if(itdefg.ne.0) call tdefpinit 
 C
 C     PARALLEL VERSION OF THE GRADIENT CALCULATION ONLY WORKS FOR
 C     DYANAMIC LOAD BALANCING
@@ -115,6 +138,29 @@ C
 C     ----- CALCULATE PROPERTY -----
 C
       IF(NPRINT.NE.-5) CALL PROPTY('TDDF')
+c
+c     ----- sfdft-efp1 -----
+c
+c     solve efp induced dipoles due to transition state density and
+c     excitation difference density
+c
+      if(itdefg.eq.2 .and. ipcm.eq.0 .and. .not.efstatic) then
+         l1 = num
+         l2 = (num*(num+1))/2
+         call valfm(loadfm)
+         lpm   = loadfm + 1
+         ldum  = lpm    + l2
+         lxefi = ldum   + l2
+         lyefi = lxefi  + l2
+         lzefi = lyefi  + l2
+         lfld  = lzefi  + l2
+         last  = lfld   + npttpt*3
+         need  = last  - loadfm -1
+         call getfm(need)
+         call sfdftm(x(lpm),x(ldum),x(lxefi),x(lyefi),x(lzefi),
+     *               x(lfld),l1,l2,npttpt)
+         call retfm(need)
+      end if
 C
 C     -- SWITCH BACK TO THE REGULAR GRID SIZE, E.G. FOR GRADIENT STEP
 C
@@ -138,7 +184,7 @@ C
      *        5X,'(3) NEITHER LC NOR CAMB3LYP IS SUPPORTED.'/
      *        5X,'(4) INCORRECT ANALYTIC GRADIENT FOR META-GGA.'/
      *        5X,'(5) SOLVENT MODELS (EFP1 AND/OR C-PCM) ARE',
-     *           ' AVAILABLE'/9X,'FOR EXCITATION ENERGY CALCULATIONS.'/
+     *           ' AVAILABLE.'/
      *       /5X,55(1H*)/)
  9100 FORMAT(/1X,71(1H-)/
      *  19X,'SF-DFT ENERGY GRADIENT CALCULATION'/
@@ -152,6 +198,7 @@ C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
       PARAMETER (MXSH=5000, MXATM=2000, MXRT=100)
+      parameter (mxfrg=1050, mxdfg=5, mxdppt=mxfrg*mxdfg*12)
 C
       LOGICAL DIRSCF,FDIFF
       LOGICAL GOPARR,DSKWRK,MASWRK,GOPSAV
@@ -164,11 +211,16 @@ C
      *                RDCISV
       COMMON /DFTPAR/ DFTTYP(20),EXENA,EXENB,EXENC,IDFT34,NAUXFUN,
      *                                                    NAUXSHL
+      common /frginf/ nmpts(mxfrg),nmttpt,iefc,iefd,iefq,iefo,
+     *                nppts(mxfrg),npttpt,iefp,
+     *                nrpts(mxfrg),nrttpt,irep,ichgp,nfrg,
+     *                ndppts(mxdppt),ndpttpt,iefdp,lstmpts(mxfrg)
 C     COMMON /IJPAIR/ IA(MXAO)
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
       COMMON /OPTSCF/ DIRSCF,FDIFF
       COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      common /pcmpar/ ipcm,nft26,nft27,irppcm,ief,ip_f,nfmopcm
       COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
       COMMON /SYMTRY/ MAPSHL(MXSH,48),MAPCTR(MXATM,48),
      *                T(432),INVT(48),NT
@@ -212,7 +264,12 @@ C
 C        IF NO EXCITED STATE DENSITY WILL BE GENERATED, JUST QUIT.
 C
       CALL DERCHK(NDER)
-      IF(NDER.EQ.0  .AND.  ICISPR.EQ.0) GO TO 200
+c     IF(NDER.EQ.0  .AND.  ICISPR.EQ.0) GO TO 200
+      if((nder.gt.0 .and. nglevl.eq.0) .or. icispr.eq.1) then
+         continue
+      else
+         go to 200
+      end if
 C
 C****                             **************************************
 C**** SF-CIS GRADIENT CALCULATION **************************************
@@ -223,6 +280,22 @@ C****                             **************************************
      *       ' NO GRADIENT. SF-CIS ENERGY CALCULATION IS NOT CONVERGED.'
          CALL ABRT
       END IF
+c
+c     trap sf-cis/efp1 gradient
+c
+      if(nfrg.gt.0 .and. iefp.eq.1) then
+         write(iw,*) ' SF-CIS IS INCOMPATIBLE WITH EFP.'
+         write(iw,*) ' USE SF-TDDFT WITH DFTTYP=NONE AND TAMMD=.T.'
+         call abrt
+      end if 
+c
+c     trap sf-cis/PCM gradient here
+c
+      if(ipcm.eq.1) then
+         write(iw,*) ' SF-CIS IS INCOMPATIBLE WITH PCM.'
+         write(iw,*) ' USE SF-TDDFT WITH DFTTYP=NONE AND TAMMD=.T.'
+         call abrt
+      end if 
 C
 C     PARALLEL VERSION OF THE GRADIENT CALCULATION ONLY WORKS FOR
 C     DYANAMIC LOAD BALANCING
@@ -856,14 +929,14 @@ C
   800 CONTINUE
       IF(EXETYP.EQ.CHECK) THEN
          CALL VCLR(X(LWRK1),1,L3)
-         CALL VCLR(X(LPOINT),1,L7MAX)
+         call vclr(x(lbvec),1,l7max)
          CALL DAWRIT(IDAF,IODA,X(LWRK1),L2, 16,0)
          CALL DAWRIT(IDAF,IODA,X(LWRK1),L2, 20,0)
          CALL DAWRIT(IDAF,IODA,X(LWRK1),L2,417,0)
          CALL DAWRIT(IDAF,IODA,X(LWRK1),L2,418,0)
          CALL DAWRIT(IDAF,IODA,X(LWRK1),L2,427,0)
          CALL DAWRIT(IDAF,IODA,X(LWRK1),L2,428,0)
-         CALL DAWRIT(IDAF,IODA,X(LPOINT),L7MAX,472,0)
+         call dawrit(idaf,ioda,x(lbvec),l7max,472,0)
          CALL DAWRIT(IDAF,IODA,X(LWRK1 ),L3   ,474,0)
       END IF
 

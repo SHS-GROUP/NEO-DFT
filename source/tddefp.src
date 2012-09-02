@@ -1,3 +1,4 @@
+C  2 Sep 12 - NM  - implement nuclear gradient for EFP1 with SF-TDDFT
 C  9 APR 12 - FZ  - PAD THE INFOTD COMMON FOR TPA
 C 23 MAR 12 - CHC - Patch for num hessian with move.eq.0
 C 12 DEC 10 - HL  - ADD CALLS TO ENUCP,INDCHG,INDDPL,INDQUA,INDIND
@@ -360,6 +361,7 @@ C
      *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
      *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ*MXFGPT),
      *                POLSCR(MXFGPT),IPLSCR,INDSCR
+      common /efptdg/ itdefg
       COMMON /FMCOM / X(1)
       COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
      *                NPPTS(MXFRG),NPTTPT,IEFP,
@@ -453,7 +455,13 @@ C
 C****                   ************************************************
 C**** TERMS (C) AND (F) ************************************************
 C****                   ************************************************
-      CALL DAREAD(IDAF,IODA,X(LDUM1),L2,308,0)
+      if(itdefg.eq.1) then
+         CALL DAREAD(IDAF,IODA,X(LDUM1),L2,308,0)
+      else if(itdefg.eq.2) then
+         call daread(idaf,ioda,x(ldum1),l2,418,0)
+         call daread(idaf,ioda,x(ldum2),l2,428,0)
+         call vadd(x(ldum1),1,x(ldum2),1,x(ldum1),1,l2)
+      end if
 C X(LDUM1) ... GROUND STATE DENSITY
       CALL DCOPY(3*NPTTPT,PMIND ,1,DIND ,1)
       CALL DCOPY(3*NPTTPT,PMINDD,1,DINDD,1)
@@ -464,16 +472,18 @@ C NOW DIND AND DINDD ARE DM AND DM~
 C****                   ************************************************
 C**** TERMS (D) AND (G) ************************************************
 C****                   ************************************************
-      CALL DAREAD(IDAF,IODA,X(LDUM2),L3,IRECTD+2,0)
-      CALL TDPCMDEN(X(LDUM1),X(LDUM2),L1)
-      CALL DSCAL(L2,TWO,X(LDUM1),1)
+      if(itdefg.eq.1) then
+         CALL DAREAD(IDAF,IODA,X(LDUM2),L3,IRECTD+2,0)
+         CALL TDPCMDEN(X(LDUM1),X(LDUM2),L1)
+         CALL DSCAL(L2,TWO,X(LDUM1),1)
 C X(LDUM1) ... 2*(X+Y)
-      CALL DCOPY(3*NPTTPT,XYIND ,1,DIND ,1)
-      CALL DCOPY(3*NPTTPT,XYINDD,1,DINDD,1)
+         CALL DCOPY(3*NPTTPT,XYIND ,1,DIND ,1)
+         CALL DCOPY(3*NPTTPT,XYINDD,1,DINDD,1)
 C NOW DIND AND DINDD ARE DN AND DN~.
-      CALL EFPDER(X(LDUM1))
-      IF(MOVE.NE.0) CALL EFPDEF(X(LDUM1),X(LCH),L4)
-      CALL EFTORP(X(LDUM1),X(LCH),L4)
+         CALL EFPDER(X(LDUM1))
+         IF(MOVE.NE.0) CALL EFPDEF(X(LDUM1),X(LCH),L4)
+         CALL EFTORP(X(LDUM1),X(LCH),L4)
+      end if
 C**** RECOVER DIND AND DINDD *******************************************
       IC = LBUF - 6
       DO LEFP=1,NPTTPT
@@ -516,6 +526,7 @@ C
      *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
      *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ,MXFGPT),
      *                POLSCR(MXFGPT),IPLSCR,INDSCR
+      common /efptdg/ itdefg
       COMMON /FMCOM / XX(1)
       COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
      *                NPPTS(MXFRG),NPTTPT,IEFP,
@@ -585,16 +596,18 @@ C NOW DIND AND DINDD ... M AND DM~
 C****          *********************************************************
 C**** TERM (J) *********************************************************
 C****          *********************************************************
-      DO LEFP=1,NPTTPT
-         DO IXYZ=1,3
-             DIND(IXYZ,LEFP) =  XYIND(IXYZ,LEFP)
-            DINDD(IXYZ,LEFP) = XYINDD(IXYZ,LEFP)*TWO
+      if(itdefg.eq.1) then
+         DO LEFP=1,NPTTPT
+            DO IXYZ=1,3
+                DIND(IXYZ,LEFP) =  XYIND(IXYZ,LEFP)
+               DINDD(IXYZ,LEFP) = XYINDD(IXYZ,LEFP)*TWO
+            END DO
          END DO
-      END DO
 C NOW DIND AND DINDD ... DN AND 2*DN~
-      CALL DININ(XX(LDIP1),XX(LDIP2),XX(LDFRG),IFMO)
-      CALL INDIND(IFMO)
-      IF(OUT) CALL EFP_GRD_DBG('DININ   ',DESFRG)
+         CALL DININ(XX(LDIP1),XX(LDIP2),XX(LDFRG),IFMO)
+         CALL INDIND(IFMO)
+         IF(OUT) CALL EFP_GRD_DBG('DININ   ',DESFRG)
+      end if
 C
 C     ----- RECOVER DIND AND DINDD -----
 C
@@ -712,3 +725,265 @@ C
       CALL RETFM(NEED)
       RETURN
       END
+c*module tddefp  *deck utdefp
+      subroutine utdefp(pa,pb,fa,fb,xefi,yefi,zefi,l2,l1,nv)
+c
+      implicit double precision(a-h,o-z)
+c
+      parameter (mxfrg=1050, mxdfg=5, mxdppt=mxfrg*mxdfg*12)
+c
+      common /fmcom / x(1)
+      common /frginf/ nmpts(mxfrg),nmttpt,iefc,iefd,iefq,iefo,
+     *                nppts(mxfrg),npttpt,iefp,
+     *                nrpts(mxfrg),nrttpt,irep,ichgp,nfrg,
+     *                ndppts(mxdppt),ndpttpt,iefdp,lstmpts(mxfrg)
+c
+      dimension pa(l1,l1,nv),pb(l1,l1,nv)
+      dimension fa(l2,nv),fb(l2,nv)
+      dimension xefi(l2), yefi(l2), zefi(l2)
+c
+      if(iefp.ne.1) return
+c
+      call valfm(loadfm)
+      lefld   = loadfm  + 1
+      ldindc  = lefld   + 3*npttpt*nv
+      ldinddc = ldindc  + 3*npttpt
+      ldind_w = ldinddc + 3*npttpt
+      ldind_c = ldind_w + 6*npttpt
+      ldipnew = ldind_c + 6*npttpt
+      ldipnwd = ldipnew + nfrg
+      lwork   = ldipnwd + nfrg
+      ldummy  = lwork   + 6*npttpt
+      last    = ldummy  + 3*npttpt
+      need    = last - loadfm - 1
+      call getfm(need)
+      call utdefp_multi(pa,pb,fa,fb,xefi,yefi,zefi,l2,l1,nv,
+     *                  x(lefld),x(lefld),x(ldindc),x(ldinddc),
+     *                  x(ldind_w),x(ldind_c),npttpt,x(ldipnew),
+     *                  x(ldipnwd),x(lwork),x(ldummy))
+      call retfm(need)
+      return
+      end
+c*module utdefp  *deck utdefp_multi
+      subroutine utdefp_multi(pa,pb,fa,fb,xefi,yefi,zefi,l2,l1,nv,
+     *                        efld,dintmp,dindc,dinddc,dind_w,dind_c,n,
+     *                        dipnew,dipnwd,work,dummy)
+c
+      implicit double precision(a-h,o-z)
+c
+      logical  svdskw,goparr,maswrk,dskwrk
+c
+      character*8     polnam,dpolnam
+c
+      parameter (half=0.5d+00, one=1.0d+00)
+      parameter (mxfrg=1050, mxfgpt=12000,mxifrq=12,
+     *           mxdfg=5, mxdppt=mxfrg*mxdfg*12, mxao=8192)
+c
+      common /efppar/ efp(3,mxfgpt),efpol(9,mxfgpt),
+     *                efdp(3,mxifrq*mxfgpt),efdpol(9,mxifrq*mxfgpt),
+     *                eno,dind(3,mxfgpt),dindd(3,mxfgpt),
+     *                polnam(mxfgpt),dpolnam(mxifrq*mxfgpt),
+     *                polscr(mxfgpt),iplscr,indscr
+      common /frginf/ nmpts(mxfrg),nmttpt,iefc,iefd,iefq,iefo,
+     *                nppts(mxfrg),npttpt,iefp,
+     *                nrpts(mxfrg),nrttpt,irep,ichgp,nfrg,
+     *                ndppts(mxdppt),ndpttpt,iefdp,lstmpts(mxfrg)
+      common /ijpair/ ia(mxao)
+      common /par   / me,master,nproc,ibtyp,iptim,goparr,dskwrk,maswrk
+c
+      dimension pa(l1,l1,nv),pb(l1,l1,nv)
+      dimension fa(l2,nv),fb(l2,nv)
+      dimension xefi(l2), yefi(l2), zefi(l2)
+c n ... npttpt
+      dimension efld(3,n,nv),dintmp(3,n,nv)
+c efld and dintmp have the same address.
+      dimension work(6,n),
+     *          dindc(*),dinddc(*),dind_w(*),dind_c(*),
+     *          dipnew(*),dipnwd(*),dummy(*)
+c
+c     ----- initialize parallel -----
+c
+      ipcount = me - 1
+      if(goparr) call vclr(efld,1,3*n*nv)
+c
+c        the electric field integral is to be a distributed file
+c
+      svdskw = dskwrk
+      dskwrk = .true.
+      nft25 = 25
+      call seqrew (nft25)
+c
+      do ifp=1,npttpt
+c
+c     ----- go parallel! -----
+c
+         if (goparr) then
+            ipcount = ipcount + 1
+            if(mod(ipcount,nproc).ne.0) go to 100
+         end if
+c
+c     ----- electric field integrals -----
+c
+         call sqread(nft25,xefi,l2)
+         call sqread(nft25,yefi,l2)
+         call sqread(nft25,zefi,l2)
+c
+         do imo=1,nv
+            abfldx = 0.0d+00
+            abfldy = 0.0d+00
+            abfldz = 0.0d+00
+            do i=1,l1
+               do j=1,i
+c rhf
+c                 dij = pa(i,j,imo) + pa(j,i,imo)
+c                 dij = dij*2.0d+00
+c uhf/rohf
+                  dij =  pa(i,j,imo) + pa(j,i,imo)
+     *                 + pb(i,j,imo) + pb(j,i,imo)
+                  if (i.eq.j) then
+                     dij = half*dij
+                  end if
+                  nij=ia(i)+j
+                  xi = xefi(nij)
+                  yi = yefi(nij)
+                  zi = zefi(nij)
+                  abfldx = abfldx + xi * dij
+                  abfldy = abfldy + yi * dij
+                  abfldz = abfldz + zi * dij
+               end do
+            end do
+c "electric field" ... trace[efi*bvec]
+            efld(1,ifp,imo) = abfldx
+            efld(2,ifp,imo) = abfldy
+            efld(3,ifp,imo) = abfldz
+         end do ! imo
+ 100     continue
+      end do ! ifp
+c
+      if (goparr) call ddi_gsumf(668,efld,3*npttpt*nv)
+c
+c     ----- save dind and dindd -----
+c
+      do ifp=1,npttpt
+         do ixyz=1,3
+            work(ixyz  ,ifp) =  dind(ixyz,ifp)
+            work(ixyz+3,ifp) = dindd(ixyz,ifp)
+         end do
+      end do
+c
+c     ----- "induced dipole moment" -----
+c
+c           d^{-1}*trace[2*efi*bvec] and
+c transpose d^{-1}*trace[2*efi*bvec]
+c
+c ...iterative method is used.
+      do imo=1,nv
+         do ifp=1,npttpt
+c
+c initial guess:
+c           d^{-1} ... alpha           and
+c transpose d^{-1} ... transpose alpha
+c
+            polxx = efpol(1,ifp)
+            polyy = efpol(2,ifp)
+            polzz = efpol(3,ifp)
+            polxy = efpol(4,ifp)
+            polxz = efpol(5,ifp)
+            polyz = efpol(6,ifp)
+            polyx = efpol(7,ifp)
+            polzx = efpol(8,ifp)
+            polzy = efpol(9,ifp)
+c
+            abfldx = efld(1,ifp,imo)
+            abfldy = efld(2,ifp,imo)
+            abfldz = efld(3,ifp,imo)
+c
+             dind(1,ifp) =  polxx*abfldx + polxy*abfldy + polxz*abfldz
+             dind(2,ifp) =  polyx*abfldx + polyy*abfldy + polyz*abfldz
+             dind(3,ifp) =  polzx*abfldx + polzy*abfldy + polzz*abfldz
+            dindd(1,ifp) =  polxx*abfldx + polyx*abfldy + polzx*abfldz
+            dindd(2,ifp) =  polxy*abfldx + polyy*abfldy + polzy*abfldz
+            dindd(3,ifp) =  polxz*abfldx + polyz*abfldy + polzz*abfldz
+         end do
+
+c get "induced dipoles" by iterative method
+         call dipit(efld(1,1,imo),dummy,dindc,dinddc,
+     *              dind_w,dind_c,npttpt,
+     *              dipnew,dipnwd,dummy,dummy,nfrg)
+c
+c   dind:           d^{-1}*trace[2*efi*bvec] 
+c  dindd: transpose d^{-1}*trace[2*efi*bvec]
+c
+         do ifp=1,npttpt
+            do ixyz=1,3
+               dintmp(ixyz,ifp,imo) = dind(ixyz,ifp) + dindd(ixyz,ifp)
+            end do
+         end do
+      end do ! imo
+c
+c     ----- recover dind and dindd -----
+c
+      do ifp=1,npttpt
+         do ixyz=1,3
+             dind(ixyz,ifp) = work(ixyz  ,ifp)
+            dindd(ixyz,ifp) = work(ixyz+3,ifp)
+         end do
+      end do
+c
+c     ----- form dot product -----
+c
+      call seqrew(nft25)
+c
+c if parallel, scale f
+c
+      ipcount = me - 1
+      if(goparr) then
+         call dscal(l2*nv,one/nproc,fa,1)
+         call dscal(l2*nv,one/nproc,fb,1)
+      end if
+c
+      do ifp=1,npttpt
+c
+c     ----- go parallel! -----
+c
+         if (goparr) then
+            ipcount = ipcount + 1
+            if(mod(ipcount,nproc).ne.0) go to 200
+         end if
+c
+c     ----- electric field integrals -----
+c
+         call sqread(nft25,xefi,l2)
+         call sqread(nft25,yefi,l2)
+         call sqread(nft25,zefi,l2)
+c
+         do imo=1,nv
+            pmux = dintmp(1,ifp,imo)
+            pmuy = dintmp(2,ifp,imo)
+            pmuz = dintmp(3,ifp,imo)
+            do k=1,l1
+               do l=1,k
+                  nkl = ia(k) + l
+                  xk = xefi(nkl)
+                  yk = yefi(nkl)
+                  zk = zefi(nkl)
+c
+                  dum = pmux*xk + pmuy*yk + pmuz*zk
+                  fa(nkl,imo) = fa(nkl,imo) - dum
+                  fb(nkl,imo) = fb(nkl,imo) - dum
+               end do
+            end do
+         end do ! imo
+ 200     continue
+      end do ! ifp
+c
+c     ----- sum up partial fock-like matrix -----
+c
+      if (goparr) call ddi_gsumf(2313,fa,l2*nv)
+      if (goparr) call ddi_gsumf(2314,fb,l2*nv)
+c
+      call seqrew(nft25)
+      dskwrk = svdskw
+c
+      return
+      end

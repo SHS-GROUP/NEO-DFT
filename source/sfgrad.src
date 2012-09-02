@@ -1,3 +1,4 @@
+C  2 Sep 12 - NM  - allow SF-TDDFT with EFP1 and/or C-PCM gradients
 C 11 AUG 11 - NM  - NEW MODULE IMPLEMENTING SPIN-FLIP GRADIENTS
 C
 C*MODULE SFGRAD  *DECK JKDSPNFLP
@@ -44,19 +45,33 @@ C
       LOGICAL GOPARR,DSKWRK,MASWRK
       LOGICAL SG1,PACK2E
       LOGICAL SOME,DEBUG
+      logical ipcfp
+      character*8 polnam,dpolnam
 C
       PARAMETER (ZERO=0.0D+00, ONE=1.0D+00, TWO=2.0D+00)
       PARAMETER (MXATM=2000, MXRT=100)
       PARAMETER (MXGRID=10)
+      parameter (mxifrq=12, mxfgpt=12000, mxfrg=1050, mxdfg=5,
+     *           mxdppt=mxfrg*mxdfg*12)
 C
       COMMON /DFGRID/ DFTTHR,DFTGTHR,SWOFF,SW0,BSLRD(137),NDFTFG,
      *                NRAD,NTHE,NPHI,NRAD0,NTHE0,NPHI0,
      *                NANGPT(MXGRID),NANGPT0(MXGRID),SG1,JANS
       COMMON /DFTPAR/ DFTTYP(20),EXENA,EXENB,EXENC,IDFT34,NAUXFUN,
      *                                                    NAUXSHL
+      common /efppar/ efp(3,mxfgpt),efpol(9,mxfgpt),
+     *                efdp(3,mxifrq*mxfgpt),efdpol(9,mxifrq*mxfgpt),
+     *                eno,dind(3,mxfgpt),dindd(3,mxfgpt),
+     *                polnam(mxfgpt),dpolnam(mxifrq*mxfgpt),
+     *                polscr(mxfgpt),iplscr,indscr
+      common /efptdg/ itdefg
       COMMON /ENRGYS/ ENUC,EELEC,ETOT,SZ,SZZ,ECORE,ESCF,EERD,E1,E2,
      *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2),EDISP
       COMMON /FMCOM / X(1)
+      common /frginf/ nmpts(mxfrg),nmttpt,iefc,iefd,iefq,iefo,
+     *                nppts(mxfrg),npttpt,iefp,
+     *                nrpts(mxfrg),nrttpt,irep,ichgp,nfrg,
+     *                ndppts(mxdppt),ndpttpt,iefdp,lstmpts(mxfrg)
       COMMON /INFGRD/ RHOMIN,ILENG,MAXGRD
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
      *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
@@ -65,6 +80,14 @@ C
       COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
       COMMON /PCKLAB/ LABSIZ
+      common /pcmdim/ mxsp,mxts,mempcm1,mempcm2,nts
+      common /pcmitr/ rcut(2),thres,ipcmit,imul,mxdiis,nreg,mxitr1,
+     *                mxitr2,modpap
+      common /pcmpar/ ipcm,nft26,nft27,irppcm,ief,ip_f,nfmopcm
+      common /pcmpnt/ lxyzre,lssfe,llist,lalpcm,lrinpcm,linapcm,linfpcm,
+     *                linipcm,lmepcm,laxyzct,lxyzct2,lnvert,lqsn,lqse,
+     *                lqfs,lqind,lisphe,lvad,lqor,lvecmul,laiprj,lfiprj,
+     *                lpel,lpcmcdr,ldai,liddai,lqsnd,lqsed
       COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
 C
       DATA SFDFT/8HSFDFT   /
@@ -149,6 +172,43 @@ C MEMORY FOR DFT GRID
          LIPRGB = LIPRGA + L3*2       ! IPRGRDA(2,L3)
          LAST   = LIPRGB + L3*2       ! IPRGRDB(2,L3)
       END IF
+c
+c     -- pcm memory
+c
+      isd = 1
+      ipcfp = .false.
+      call pcmmem3(ipcfp,l2,last,ntspar,lsol,lchg,ldmatm,lqpot,lqfld,
+     *             lvpot,lse,lde,lq0,lq1,lq2,lq3,ld0,lqa,ldimat,lqrep,
+     *             ltmp0,ltmp1,ltmp2,lipvt,lpottmp,lrmul,lchg2,
+     *             lasccrd,lascchg,lascdip,lascqad,ldisv,ldis1,ldis2,
+     *             lcqef,lqeff,leld,lxdint,lydint,lzdint,lefld,madd,
+     *             labfld,lvecmp,lvec_2,lvec_s,laproj,lfproj)
+      if(ipcm.eq.1 .and. iefp.eq.0) then
+         lwrk3  = last
+         lscr   = lwrk3  + l3
+         lqset  = lscr   + l1
+         lqsnt  = lqset  + nts
+         lqsedt = lqsnt  + nts
+         l100   = lqsedt + nts
+         last   = l100   + l2
+      end if
+c
+c     -- efp memory
+c
+      if(itdefg.eq.2) then
+         if(ipcm.eq.0) then
+            lxefi = last
+            lyefi = lxefi + l2 
+            lzefi = lyefi + l2 
+            last  = lzefi + l2
+         else if(ipcm.eq.1 .and. ief.eq.10) then
+            ldindsv  = last
+            ldinddsv = ldindsv  + 3*npttpt
+            lqsetd   = ldinddsv + 3*npttpt
+            l100     = lqsetd   + nts
+            last     = l100     + l2
+         end if
+      end if
 C
       NEED = LAST - LOADFM - 1
       CALL GETFM(NEED)
@@ -212,6 +272,60 @@ C
          CALL DAXPY(L2,TWO,X(LFXC1),1,X(LAPBA),1)
          CALL DAXPY(L2,TWO,X(LFXC2),1,X(LAPBB),1)
       END IF
+c
+c cpcm contribution
+c
+      if(ipcm.eq.1 .and. iefp.eq.0) then
+         if(ief.ne.10 .or. ipcmit.ne.1) then
+          if(maswrk) write(iw,*) 'tddft/pcm is allowed for ief=-10 only'
+          call abrt
+         end if
+         call vadd(x(ltaoa),1,x(ltaob),1,x(lwrk1),1,l3)
+         call sqtr(x(lwrk1),x(l100),l1)
+         call vclr(x(lq0),1,nts)
+         call pcmfld(x(lapba),x(lapbb),x(l100),x(lsol),
+     *               x(lchg),x(lwrk1),x(ldisv),
+     *               x(ldis1),x(ldis2),x(lwrk3),x(lscr),x(ldmatm),
+     *               x(lcqef),x(lqeff),x(leld),x(lqpot),x(lqfld),
+     *               x(lvpot),x(lse),x(lde),
+     *               x(lq0),x(lq1),x(lq2),x(lq3),
+     *               x(ld0),x(lqa),x(ldimat),x(lqrep),
+     *               x(ltmp0),x(ltmp1),x(ltmp2),x(lipvt),
+     *               x(lpottmp),x(lrmul),
+     *               tch,qet,qetn,qesc,isd,nft27,ipcfp,l1,l2,ntspar,
+     *               x(laxyzct),x(laxyzct+mxts),x(laxyzct+mxts*2),
+     *               x(lxyzct2),x(lxyzct2+mxts),x(lxyzct2+mxts*2),
+     *               x(laxyzct+mxts*3),x(lqsnt),x(lqset),
+     *               x(lqsedt),x(lqfs),
+     *               x(lvecmul),x(lchg2),x(lqind+mxts),x(lpel),
+     *               x(lasccrd),x(lascchg),x(lascdip),x(lascqad),
+     *               x(lxyzre),x(lxyzre+mxsp),x(lxyzre+mxsp*2),
+     *               x(lxyzre+mxsp*3),x(lisphe),x(llist))
+      end if
+c
+c efp contribution
+c
+      if(itdefg.eq.2) then
+         if(ipcm.eq.0) then
+            call utdefp(x(ltaoa),x(ltaob),x(lapba),x(lapbb),
+     *                  x(lxefi),x(lyefi),x(lzefi),l2,l1,1)
+         else if(ipcm.eq.1 .and. ief.eq.10) then
+            call dcopy(3*npttpt,dind ,1,x(ldindsv) ,1)
+            call dcopy(3*npttpt,dindd,1,x(ldinddsv),1)
+c
+            call vadd(x(ltaoa),1,x(ltaob),1,x(lwrk1),1,l3)
+            call sqtr(x(lwrk1),x(l100),l1)
+            call vclr(x(lwrk1),1,l2)
+            call pcmpolfld(x(lwrk1),x(l100),x(laxyzct),
+     *                     x(laxyzct+mxts),x(laxyzct+2*mxts),
+     *                     x(laxyzct+3*mxts),l2,l1,x(lqsetd),1)
+            call vadd(x(lapba),1,x(lwrk1),1,x(lapba),1,l2)
+            call vadd(x(lapbb),1,x(lwrk1),1,x(lapbb),1,l2)
+c
+            call dcopy(3*npttpt,x(ldindsv) ,1,dind ,1)
+            call dcopy(3*npttpt,x(ldinddsv),1,dindd,1)
+         end if
+      end if
 C
 C ALPHA: AO(M,N) -> MO(IA+) ... LPTMOA
       LPTMOA = LPTMO
@@ -304,7 +418,14 @@ C
       CSCAL = ONE
       CALL UTD2E(X(LPAOA),X(LPAOB),X(LAPBA),X(LAPBB),
      *           X(LAST),X(LAST),X(LBUF),X(LIBUF),L1,CSCAL,0,1,0,1)
-C
+c
+c efp contribution ... skip because x(lxk)=0
+c
+c     if(itdefg.eq.2 .and. ipcm.eq.0) then
+c        call utdefp(x(lpaoa),x(lpaob),x(lapba),x(lapbb),
+c    *               x(lxefi),x(lyefi),x(lzefi),l2,l1,1)
+c     end if
+c
 C XC PART
 C
       IF(SFTYPE.EQ.SFDFT .AND. NDFTFG.EQ.1) THEN
@@ -381,6 +502,56 @@ C
       CSCAL = ONE
       CALL UTD2E(X(LPAOA),X(LPAOB),X(LAPBA),X(LAPBB),
      *           X(LAST),X(LAST),X(LBUF),X(LIBUF),L1,CSCAL,0,1,0,1)
+c
+c cpcm contribution
+c
+      if (ipcm.eq.1 .and. ief.eq.10 .and. iefp.eq.0) then
+         call vadd(x(lpaoa),1,x(lpaob),1,x(lwrk1),1,l3)
+         call sqtr(x(lwrk1),x(l100),l1)
+         call vclr(x(lq0),1,nts)
+         call pcmfld(x(lapba),x(lapbb),x(l100),x(lsol),
+     *               x(lchg),x(lwrk1),x(ldisv),
+     *               x(ldis1),x(ldis2),x(lwrk3),x(lscr),x(ldmatm),
+     *               x(lcqef),x(lqeff),x(leld),x(lqpot),x(lqfld),
+     *               x(lvpot),x(lse),x(lde),
+     *               x(lq0),x(lq1),x(lq2),x(lq3),
+     *               x(ld0),x(lqa),x(ldimat),x(lqrep),
+     *               x(ltmp0),x(ltmp1),x(ltmp2),x(lipvt),
+     *               x(lpottmp),x(lrmul),
+     *               tch,qet,qetn,qesc,isd,nft27,ipcfp,l1,l2,ntspar,
+     *               x(laxyzct),x(laxyzct+mxts),x(laxyzct+mxts*2),
+     *               x(lxyzct2),x(lxyzct2+mxts),x(lxyzct2+mxts*2),
+     *               x(laxyzct+mxts*3),x(lqsnt),x(lqset),
+     *               x(lqsedt),x(lqfs),
+     *               x(lvecmul),x(lchg2),x(lqind+mxts),x(lpel),
+     *               x(lasccrd),x(lascchg),x(lascdip),x(lascqad),
+     *               x(lxyzre),x(lxyzre+mxsp),x(lxyzre+mxsp*2),
+     *               x(lxyzre+mxsp*3),x(lisphe),x(llist))
+      end if
+c
+c efp contribution
+c
+      if(itdefg.eq.2) then
+         if(ipcm.eq.0) then
+            call utdefp(x(lpaoa),x(lpaob),x(lapba),x(lapbb),
+     *                  x(lxefi),x(lyefi),x(lzefi),l2,l1,1)
+         else if(ipcm.eq.1 .and. ief.eq.10) then
+            call dcopy(3*npttpt,dind ,1,x(ldindsv) ,1)
+            call dcopy(3*npttpt,dindd,1,x(ldinddsv),1)
+c
+            call vadd(x(lpaoa),1,x(lpaob),1,x(lwrk1),1,l3)
+            call sqtr(x(lwrk1),x(l100),l1)
+            call vclr(x(lwrk1),1,l2)
+            call pcmpolfld(x(lwrk1),x(l100),x(laxyzct),
+     *                     x(laxyzct+mxts),x(laxyzct+2*mxts),
+     *                     x(laxyzct+3*mxts),l2,l1,x(lqsetd),1)
+            call vadd(x(lapba),1,x(lwrk1),1,x(lapba),1,l2)
+            call vadd(x(lapbb),1,x(lwrk1),1,x(lapbb),1,l2)
+c
+            call dcopy(3*npttpt,x(ldindsv) ,1,dind ,1)
+            call dcopy(3*npttpt,x(ldinddsv),1,dindd,1)
+         end if
+      end if
 C
 C XC PART
 C
@@ -465,6 +636,56 @@ C
       CSCAL = ONE
       CALL UTD2E(X(LPAOA),X(LPAOB),X(LAPBA),X(LAPBB),
      *           X(LAST),X(LAST),X(LBUF),X(LIBUF),L1,CSCAL,0,1,0,1)
+c
+c cpcm contribution
+c
+      if (ipcm.eq.1 .and. ief.eq.10 .and. iefp.eq.0) then
+         call vadd(x(lpaoa),1,x(lpaob),1,x(lwrk1),1,l3)
+         call sqtr(x(lwrk1),x(l100),l1)
+         call vclr(x(lq0),1,nts)
+         call pcmfld(x(lapba),x(lapbb),x(l100),x(lsol),
+     *               x(lchg),x(lwrk1),x(ldisv),
+     *               x(ldis1),x(ldis2),x(lwrk3),x(lscr),x(ldmatm),
+     *               x(lcqef),x(lqeff),x(leld),x(lqpot),x(lqfld),
+     *               x(lvpot),x(lse),x(lde),
+     *               x(lq0),x(lq1),x(lq2),x(lq3),
+     *               x(ld0),x(lqa),x(ldimat),x(lqrep),
+     *               x(ltmp0),x(ltmp1),x(ltmp2),x(lipvt),
+     *               x(lpottmp),x(lrmul),
+     *               tch,qet,qetn,qesc,isd,nft27,ipcfp,l1,l2,ntspar,
+     *               x(laxyzct),x(laxyzct+mxts),x(laxyzct+mxts*2),
+     *               x(lxyzct2),x(lxyzct2+mxts),x(lxyzct2+mxts*2),
+     *               x(laxyzct+mxts*3),x(lqsnt),x(lqset),
+     *               x(lqsedt),x(lqfs),
+     *               x(lvecmul),x(lchg2),x(lqind+mxts),x(lpel),
+     *               x(lasccrd),x(lascchg),x(lascdip),x(lascqad),
+     *               x(lxyzre),x(lxyzre+mxsp),x(lxyzre+mxsp*2),
+     *               x(lxyzre+mxsp*3),x(lisphe),x(llist))
+      end if
+c
+c efp contribution
+c
+      if(itdefg.eq.2) then
+         if(ipcm.eq.0) then
+            call utdefp(x(lpaoa),x(lpaob),x(lapba),x(lapbb),
+     *                  x(lxefi),x(lyefi),x(lzefi),l2,l1,1)
+         else if(ipcm.eq.1 .and. ief.eq.10) then
+            call dcopy(3*npttpt,dind ,1,x(ldindsv) ,1)
+            call dcopy(3*npttpt,dindd,1,x(ldinddsv),1)
+c
+            call vadd(x(lpaoa),1,x(lpaob),1,x(lwrk1),1,l3)
+            call sqtr(x(lwrk1),x(l100),l1)
+            call vclr(x(lwrk1),1,l2)
+            call pcmpolfld(x(lwrk1),x(l100),x(laxyzct),
+     *                     x(laxyzct+mxts),x(laxyzct+2*mxts),
+     *                     x(laxyzct+3*mxts),l2,l1,x(lqsetd),1)
+            call vadd(x(lapba),1,x(lwrk1),1,x(lapba),1,l2)
+            call vadd(x(lapbb),1,x(lwrk1),1,x(lapbb),1,l2)
+c
+            call dcopy(3*npttpt,x(ldindsv) ,1,dind ,1)
+            call dcopy(3*npttpt,x(ldinddsv),1,dindd,1)
+         end if
+      end if
 C
 C XC PART
 C
@@ -559,6 +780,56 @@ C
       CSCAL = ONE
       CALL UTD2E(X(LTAOA),X(LTAOB),X(LAPBA),X(LAPBB),
      *           X(LAST),X(LAST),X(LBUF),X(LIBUF),L1,CSCAL,0,1,0,1)
+c
+c cpcm contribution
+c
+      if (ipcm.eq.1 .and. ief.eq.10 .and. iefp.eq.0) then
+         call vadd(x(ltaoa),1,x(ltaob),1,x(lwrk1),1,l3)
+         call sqtr(x(lwrk1),x(l100),l1)
+         call vclr(x(lq0),1,nts)
+         call pcmfld(x(lapba),x(lapbb),x(l100),x(lsol),
+     *               x(lchg),x(lwrk1),x(ldisv),
+     *               x(ldis1),x(ldis2),x(lwrk3),x(lscr),x(ldmatm),
+     *               x(lcqef),x(lqeff),x(leld),x(lqpot),x(lqfld),
+     *               x(lvpot),x(lse),x(lde),
+     *               x(lq0),x(lq1),x(lq2),x(lq3),
+     *               x(ld0),x(lqa),x(ldimat),x(lqrep),
+     *               x(ltmp0),x(ltmp1),x(ltmp2),x(lipvt),
+     *               x(lpottmp),x(lrmul),
+     *               tch,qet,qetn,qesc,isd,nft27,ipcfp,l1,l2,ntspar,
+     *               x(laxyzct),x(laxyzct+mxts),x(laxyzct+mxts*2),
+     *               x(lxyzct2),x(lxyzct2+mxts),x(lxyzct2+mxts*2),
+     *               x(laxyzct+mxts*3),x(lqsnt),x(lqset),
+     *               x(lqsedt),x(lqfs),
+     *               x(lvecmul),x(lchg2),x(lqind+mxts),x(lpel),
+     *               x(lasccrd),x(lascchg),x(lascdip),x(lascqad),
+     *               x(lxyzre),x(lxyzre+mxsp),x(lxyzre+mxsp*2),
+     *               x(lxyzre+mxsp*3),x(lisphe),x(llist))
+      end if
+c
+c efp contribution
+c
+      if(itdefg.eq.2) then
+         if(ipcm.eq.0) then
+            call utdefp(x(ltaoa),x(ltaob),x(lapba),x(lapbb),
+     *                  x(lxefi),x(lyefi),x(lzefi),l2,l1,1)
+         else if(ipcm.eq.1 .and. ief.eq.10) then
+            call dcopy(3*npttpt,dind ,1,x(ldindsv) ,1)
+            call dcopy(3*npttpt,dindd,1,x(ldinddsv),1)
+c
+            call vadd(x(ltaoa),1,x(ltaob),1,x(lwrk1),1,l3)
+            call sqtr(x(lwrk1),x(l100),l1)
+            call vclr(x(lwrk1),1,l2)
+            call pcmpolfld(x(lwrk1),x(l100),x(laxyzct),
+     *                     x(laxyzct+mxts),x(laxyzct+2*mxts),
+     *                     x(laxyzct+3*mxts),l2,l1,x(lqsetd),1)
+            call vadd(x(lapba),1,x(lwrk1),1,x(lapba),1,l2)
+            call vadd(x(lapbb),1,x(lwrk1),1,x(lapbb),1,l2)
+c
+            call dcopy(3*npttpt,x(ldindsv) ,1,dind ,1)
+            call dcopy(3*npttpt,x(ldinddsv),1,dindd,1)
+         end if
+      end if
 C
 C XC PART
 C
@@ -1948,19 +2219,33 @@ C
       LOGICAL GOPARR,DSKWRK,MASWRK
       LOGICAL SG1,PACK2E
       LOGICAL SOME,DEBUG
+      logical ipcfp
+      character*8 polnam,dpolnam
 C
       PARAMETER (ZERO=0.0D+00, HALF=0.5D+00, ONE=1.0D+00, TWO=2.0D+00)
       PARAMETER (MXATM=2000, MXRT=100)
       PARAMETER (MXGRID=10)
+      parameter (mxifrq=12, mxfgpt=12000, mxfrg=1050, mxdfg=5,
+     *           mxdppt=mxfrg*mxdfg*12)
 C
       COMMON /DFGRID/ DFTTHR,DFTGTHR,SWOFF,SW0,BSLRD(137),NDFTFG,
      *                NRAD,NTHE,NPHI,NRAD0,NTHE0,NPHI0,
      *                NANGPT(MXGRID),NANGPT0(MXGRID),SG1,JANS
       COMMON /DFTPAR/ DFTTYP(20),EXENA,EXENB,EXENC,IDFT34,NAUXFUN,
      *                                                    NAUXSHL
+      common /efppar/ efp(3,mxfgpt),efpol(9,mxfgpt),
+     *                efdp(3,mxifrq*mxfgpt),efdpol(9,mxifrq*mxfgpt),
+     *                eno,dind(3,mxfgpt),dindd(3,mxfgpt),
+     *                polnam(mxfgpt),dpolnam(mxifrq*mxfgpt),
+     *                polscr(mxfgpt),iplscr,indscr
+      common /efptdg/ itdefg
       COMMON /ENRGYS/ ENUC,EELEC,ETOT,SZ,SZZ,ECORE,ESCF,EERD,E1,E2,
      *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2),EDISP
       COMMON /FMCOM / X(1)
+      common /frginf/ nmpts(mxfrg),nmttpt,iefc,iefd,iefq,iefo,
+     *                nppts(mxfrg),npttpt,iefp,
+     *                nrpts(mxfrg),nrttpt,irep,ichgp,nfrg,
+     *                ndppts(mxdppt),ndpttpt,iefdp,lstmpts(mxfrg)
       COMMON /INFGRD/ RHOMIN,ILENG,MAXGRD
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
      *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
@@ -1969,6 +2254,14 @@ C
       COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
       COMMON /PCKLAB/ LABSIZ
+      common /pcmdim/ mxsp,mxts,mempcm1,mempcm2,nts
+      common /pcmitr/ rcut(2),thres,ipcmit,imul,mxdiis,nreg,mxitr1,
+     *                mxitr2,modpap
+      common /pcmpar/ ipcm,nft26,nft27,irppcm,ief,ip_f,nfmopcm
+      common /pcmpnt/ lxyzre,lssfe,llist,lalpcm,lrinpcm,linapcm,linfpcm,
+     *                linipcm,lmepcm,laxyzct,lxyzct2,lnvert,lqsn,lqse,
+     *                lqfs,lqind,lisphe,lvad,lqor,lvecmul,laiprj,lfiprj,
+     *                lpel,lpcmcdr,ldai,liddai,lqsnd,lqsed
       COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
 C
       DATA SFDFT/8HSFDFT   /
@@ -2064,6 +2357,43 @@ C MEMORY FOR DFT GRID
          LIPRGB = LIPRGA + L3*2       ! IPRGRDA(2,L3)
          LAST   = LIPRGB + L3*2       ! IPRGRDB(2,L3)
       END IF
+c
+c     -- pcm memory
+c
+      isd = 1
+      ipcfp = .false.
+      call pcmmem3(ipcfp,l2,last,ntspar,lsol,lchg,ldmatm,lqpot,lqfld,
+     *             lvpot,lse,lde,lq0,lq1,lq2,lq3,ld0,lqa,ldimat,lqrep,
+     *             ltmp0,ltmp1,ltmp2,lipvt,lpottmp,lrmul,lchg2,
+     *             lasccrd,lascchg,lascdip,lascqad,ldisv,ldis1,ldis2,
+     *             lcqef,lqeff,leld,lxdint,lydint,lzdint,lefld,madd,
+     *             labfld,lvecmp,lvec_2,lvec_s,laproj,lfproj)
+      if(ipcm.eq.1 .and. iefp.eq.0) then
+         lwrk3  = last
+         lscr   = lwrk3  + l3
+         lqset  = lscr   + l1
+         lqsnt  = lqset  + nts
+         lqsedt = lqsnt  + nts
+         l100   = lqsedt + nts
+         last   = l100   + l2
+      end if
+c
+c     -- efp memory
+c
+      if(itdefg.eq.2) then
+         if(ipcm.eq.0) then
+            lxefi = last
+            lyefi = lxefi + l2 
+            lzefi = lyefi + l2 
+            last  = lzefi + l2
+         else if(ipcm.eq.1 .and. ief.eq.10) then
+            ldindsv  = last
+            ldinddsv = ldindsv  + 3*npttpt
+            lqsetd   = ldinddsv + 3*npttpt
+            l100     = lqsetd   + nts
+            last     = l100     + l2
+         end if
+      end if
 C
       NEED = LAST - LOADFM - 1
       CALL GETFM(NEED)
@@ -2146,6 +2476,60 @@ C
          CALL DAXPY(L2,TWO,X(LFXC1),1,X(LAPBA),1)
          CALL DAXPY(L2,TWO,X(LFXC2),1,X(LAPBB),1)
       END IF
+c
+c cpcm contribution
+c
+      if (ipcm.eq.1 .and. iefp.eq.0) then
+         if(ief.ne.10 .or. ipcmit.ne.1) then
+          if(maswrk) write(iw,*) 'tddft/pcm is allowed for ief=-10 only'
+          call abrt
+         end if
+         call vadd(x(ltaoa),1,x(ltaob),1,x(lwrk1),1,l3)
+         call sqtr(x(lwrk1),x(l100),l1)
+         call vclr(x(lq0),1,nts)
+         call pcmfld(x(lapba),x(lapbb),x(l100),x(lsol),
+     *               x(lchg),x(lwrk1),x(ldisv),
+     *               x(ldis1),x(ldis2),x(lwrk3),x(lscr),x(ldmatm),
+     *               x(lcqef),x(lqeff),x(leld),x(lqpot),x(lqfld),
+     *               x(lvpot),x(lse),x(lde),
+     *               x(lq0),x(lq1),x(lq2),x(lq3),
+     *               x(ld0),x(lqa),x(ldimat),x(lqrep),
+     *               x(ltmp0),x(ltmp1),x(ltmp2),x(lipvt),
+     *               x(lpottmp),x(lrmul),
+     *               tch,qet,qetn,qesc,isd,nft27,ipcfp,l1,l2,ntspar,
+     *               x(laxyzct),x(laxyzct+mxts),x(laxyzct+mxts*2),
+     *               x(lxyzct2),x(lxyzct2+mxts),x(lxyzct2+mxts*2),
+     *               x(laxyzct+mxts*3),x(lqsnt),x(lqset),
+     *               x(lqsedt),x(lqfs),
+     *               x(lvecmul),x(lchg2),x(lqind+mxts),x(lpel),
+     *               x(lasccrd),x(lascchg),x(lascdip),x(lascqad),
+     *               x(lxyzre),x(lxyzre+mxsp),x(lxyzre+mxsp*2),
+     *               x(lxyzre+mxsp*3),x(lisphe),x(llist))
+      end if
+c
+c efp contribution
+c
+      if(itdefg.eq.2) then
+         if(ipcm.eq.0) then
+            call utdefp(x(ltaoa),x(ltaob),x(lapba),x(lapbb),
+     *                  x(lxefi),x(lyefi),x(lzefi),l2,l1,1)
+         else if(ipcm.eq.1 .and. ief.eq.10) then
+            call dcopy(3*npttpt,dind ,1,x(ldindsv) ,1)
+            call dcopy(3*npttpt,dindd,1,x(ldinddsv),1)
+c
+            call vadd(x(ltaoa),1,x(ltaob),1,x(lwrk1),1,l3)
+            call sqtr(x(lwrk1),x(l100),l1)
+            call vclr(x(lwrk1),1,l2)
+            call pcmpolfld(x(lwrk1),x(l100),x(laxyzct),
+     *                     x(laxyzct+mxts),x(laxyzct+2*mxts),
+     *                     x(laxyzct+3*mxts),l2,l1,x(lqsetd),1)
+            call vadd(x(lapba),1,x(lwrk1),1,x(lapba),1,l2)
+            call vadd(x(lapbb),1,x(lwrk1),1,x(lapbb),1,l2)
+c
+            call dcopy(3*npttpt,x(ldindsv) ,1,dind ,1)
+            call dcopy(3*npttpt,x(ldinddsv),1,dindd,1)
+         end if
+      end if
 C
 C ALPHA: AO(M,N) -> MO(IA+) ... LPTMOA
       LPTMOA = LPTMO
@@ -2228,6 +2612,13 @@ C
       CSCAL = ONE
       CALL UTD2E(X(LPAOA),X(LPAOB),X(LAPBA),X(LAPBB),
      *           X(LAST),X(LAST),X(LBUF),X(LIBUF),L1,CSCAL,0,1,0,1)
+c
+c efp contribution ... skip because x(lxk)=0
+c
+c     if(itdefg.eq.2 .and. ipcm.eq.0) then
+c        call utdefp(x(lpaoa),x(lpaob),x(lapba),x(lapbb),
+c    *               x(lxefi),x(lyefi),x(lzefi),l2,l1,1)
+c     end if
 C
 C XC PART
 C
@@ -2305,6 +2696,56 @@ C
       CSCAL = ONE
       CALL UTD2E(X(LPAOA),X(LPAOB),X(LAPBA),X(LAPBB),
      *           X(LAST),X(LAST),X(LBUF),X(LIBUF),L1,CSCAL,0,1,0,1)
+c
+c cpcm contribution
+c
+      if (ipcm.eq.1 .and. ief.eq.10 .and. iefp.eq.0) then
+         call vadd(x(lpaoa),1,x(lpaob),1,x(lwrk1),1,l3)
+         call sqtr(x(lwrk1),x(l100),l1)
+         call vclr(x(lq0),1,nts)
+         call pcmfld(x(lapba),x(lapbb),x(l100),x(lsol),
+     *               x(lchg),x(lwrk1),x(ldisv),
+     *               x(ldis1),x(ldis2),x(lwrk3),x(lscr),x(ldmatm),
+     *               x(lcqef),x(lqeff),x(leld),x(lqpot),x(lqfld),
+     *               x(lvpot),x(lse),x(lde),
+     *               x(lq0),x(lq1),x(lq2),x(lq3),
+     *               x(ld0),x(lqa),x(ldimat),x(lqrep),
+     *               x(ltmp0),x(ltmp1),x(ltmp2),x(lipvt),
+     *               x(lpottmp),x(lrmul),
+     *               tch,qet,qetn,qesc,isd,nft27,ipcfp,l1,l2,ntspar,
+     *               x(laxyzct),x(laxyzct+mxts),x(laxyzct+mxts*2),
+     *               x(lxyzct2),x(lxyzct2+mxts),x(lxyzct2+mxts*2),
+     *               x(laxyzct+mxts*3),x(lqsnt),x(lqset),
+     *               x(lqsedt),x(lqfs),
+     *               x(lvecmul),x(lchg2),x(lqind+mxts),x(lpel),
+     *               x(lasccrd),x(lascchg),x(lascdip),x(lascqad),
+     *               x(lxyzre),x(lxyzre+mxsp),x(lxyzre+mxsp*2),
+     *               x(lxyzre+mxsp*3),x(lisphe),x(llist))
+      end if
+c
+c efp contribution
+c
+      if(itdefg.eq.2) then
+         if(ipcm.eq.0) then
+            call utdefp(x(lpaoa),x(lpaob),x(lapba),x(lapbb),
+     *                  x(lxefi),x(lyefi),x(lzefi),l2,l1,1)
+         else if(ipcm.eq.1 .and. ief.eq.10) then
+            call dcopy(3*npttpt,dind ,1,x(ldindsv) ,1)
+            call dcopy(3*npttpt,dindd,1,x(ldinddsv),1)
+c
+            call vadd(x(lpaoa),1,x(lpaob),1,x(lwrk1),1,l3)
+            call sqtr(x(lwrk1),x(l100),l1)
+            call vclr(x(lwrk1),1,l2)
+            call pcmpolfld(x(lwrk1),x(l100),x(laxyzct),
+     *                     x(laxyzct+mxts),x(laxyzct+2*mxts),
+     *                     x(laxyzct+3*mxts),l2,l1,x(lqsetd),1)
+            call vadd(x(lapba),1,x(lwrk1),1,x(lapba),1,l2)
+            call vadd(x(lapbb),1,x(lwrk1),1,x(lapbb),1,l2)
+c
+            call dcopy(3*npttpt,x(ldindsv) ,1,dind ,1)
+            call dcopy(3*npttpt,x(ldinddsv),1,dindd,1)
+         end if
+      end if
 C
 C XC PART
 C
@@ -2386,6 +2827,56 @@ C
       CSCAL = ONE
       CALL UTD2E(X(LPAOA),X(LPAOB),X(LAPBA),X(LAPBB),
      *           X(LAST),X(LAST),X(LBUF),X(LIBUF),L1,CSCAL,0,1,0,1)
+c
+c cpcm contribution
+c
+      if (ipcm.eq.1 .and. ief.eq.10 .and. iefp.eq.0) then
+         call vadd(x(lpaoa),1,x(lpaob),1,x(lwrk1),1,l3)
+         call sqtr(x(lwrk1),x(l100),l1)
+         call vclr(x(lq0),1,nts)
+         call pcmfld(x(lapba),x(lapbb),x(l100),x(lsol),
+     *               x(lchg),x(lwrk1),x(ldisv),
+     *               x(ldis1),x(ldis2),x(lwrk3),x(lscr),x(ldmatm),
+     *               x(lcqef),x(lqeff),x(leld),x(lqpot),x(lqfld),
+     *               x(lvpot),x(lse),x(lde),
+     *               x(lq0),x(lq1),x(lq2),x(lq3),
+     *               x(ld0),x(lqa),x(ldimat),x(lqrep),
+     *               x(ltmp0),x(ltmp1),x(ltmp2),x(lipvt),
+     *               x(lpottmp),x(lrmul),
+     *               tch,qet,qetn,qesc,isd,nft27,ipcfp,l1,l2,ntspar,
+     *               x(laxyzct),x(laxyzct+mxts),x(laxyzct+mxts*2),
+     *               x(lxyzct2),x(lxyzct2+mxts),x(lxyzct2+mxts*2),
+     *               x(laxyzct+mxts*3),x(lqsnt),x(lqset),
+     *               x(lqsedt),x(lqfs),
+     *               x(lvecmul),x(lchg2),x(lqind+mxts),x(lpel),
+     *               x(lasccrd),x(lascchg),x(lascdip),x(lascqad),
+     *               x(lxyzre),x(lxyzre+mxsp),x(lxyzre+mxsp*2),
+     *               x(lxyzre+mxsp*3),x(lisphe),x(llist))
+      end if
+c
+c efp contribution
+c
+      if(itdefg.eq.2) then
+         if(ipcm.eq.0) then
+            call utdefp(x(lpaoa),x(lpaob),x(lapba),x(lapbb),
+     *                  x(lxefi),x(lyefi),x(lzefi),l2,l1,1)
+         else if(ipcm.eq.1 .and. ief.eq.10) then
+            call dcopy(3*npttpt,dind ,1,x(ldindsv) ,1)
+            call dcopy(3*npttpt,dindd,1,x(ldinddsv),1)
+c
+            call vadd(x(lpaoa),1,x(lpaob),1,x(lwrk1),1,l3)
+            call sqtr(x(lwrk1),x(l100),l1)
+            call vclr(x(lwrk1),1,l2)
+            call pcmpolfld(x(lwrk1),x(l100),x(laxyzct),
+     *                     x(laxyzct+mxts),x(laxyzct+2*mxts),
+     *                     x(laxyzct+3*mxts),l2,l1,x(lqsetd),1)
+            call vadd(x(lapba),1,x(lwrk1),1,x(lapba),1,l2)
+            call vadd(x(lapbb),1,x(lwrk1),1,x(lapbb),1,l2)
+c
+            call dcopy(3*npttpt,x(ldindsv) ,1,dind ,1)
+            call dcopy(3*npttpt,x(ldinddsv),1,dindd,1)
+         end if
+      end if
 C
 C XC PART
 C
@@ -2476,6 +2967,56 @@ C
       CSCAL = ONE
       CALL UTD2E(X(LTAOA),X(LTAOB),X(LAPBA),X(LAPBB),
      *           X(LAST),X(LAST),X(LBUF),X(LIBUF),L1,CSCAL,0,1,0,1)
+c
+c cpcm contribution
+c
+      if (ipcm.eq.1 .and. ief.eq.10 .and. iefp.eq.0) then
+         call vadd(x(ltaoa),1,x(ltaob),1,x(lwrk1),1,l3)
+         call sqtr(x(lwrk1),x(l100),l1)
+         call vclr(x(lq0),1,nts)
+         call pcmfld(x(lapba),x(lapbb),x(l100),x(lsol),
+     *               x(lchg),x(lwrk1),x(ldisv),
+     *               x(ldis1),x(ldis2),x(lwrk3),x(lscr),x(ldmatm),
+     *               x(lcqef),x(lqeff),x(leld),x(lqpot),x(lqfld),
+     *               x(lvpot),x(lse),x(lde),
+     *               x(lq0),x(lq1),x(lq2),x(lq3),
+     *               x(ld0),x(lqa),x(ldimat),x(lqrep),
+     *               x(ltmp0),x(ltmp1),x(ltmp2),x(lipvt),
+     *               x(lpottmp),x(lrmul),
+     *               tch,qet,qetn,qesc,isd,nft27,ipcfp,l1,l2,ntspar,
+     *               x(laxyzct),x(laxyzct+mxts),x(laxyzct+mxts*2),
+     *               x(lxyzct2),x(lxyzct2+mxts),x(lxyzct2+mxts*2),
+     *               x(laxyzct+mxts*3),x(lqsnt),x(lqset),
+     *               x(lqsedt),x(lqfs),
+     *               x(lvecmul),x(lchg2),x(lqind+mxts),x(lpel),
+     *               x(lasccrd),x(lascchg),x(lascdip),x(lascqad),
+     *               x(lxyzre),x(lxyzre+mxsp),x(lxyzre+mxsp*2),
+     *               x(lxyzre+mxsp*3),x(lisphe),x(llist))
+      end if
+c
+c efp contribution
+c
+      if(itdefg.eq.2) then
+         if(ipcm.eq.0) then
+            call utdefp(x(ltaoa),x(ltaob),x(lapba),x(lapbb),
+     *                  x(lxefi),x(lyefi),x(lzefi),l2,l1,1)
+         else if(ipcm.eq.1 .and. ief.eq.10) then
+            call dcopy(3*npttpt,dind ,1,x(ldindsv) ,1)
+            call dcopy(3*npttpt,dindd,1,x(ldinddsv),1)
+c
+            call vadd(x(ltaoa),1,x(ltaob),1,x(lwrk1),1,l3)
+            call sqtr(x(lwrk1),x(l100),l1)
+            call vclr(x(lwrk1),1,l2)
+            call pcmpolfld(x(lwrk1),x(l100),x(laxyzct),
+     *                     x(laxyzct+mxts),x(laxyzct+2*mxts),
+     *                     x(laxyzct+3*mxts),l2,l1,x(lqsetd),1)
+            call vadd(x(lapba),1,x(lwrk1),1,x(lapba),1,l2)
+            call vadd(x(lapbb),1,x(lwrk1),1,x(lapbb),1,l2)
+c
+            call dcopy(3*npttpt,x(ldindsv) ,1,dind ,1)
+            call dcopy(3*npttpt,x(ldinddsv),1,dindd,1)
+         end if
+      end if
 C
 C XC PART
 C
@@ -3007,3 +3548,288 @@ C
 C
       RETURN
       END
+c*module sfgrad  *deck sfdftm
+      subroutine sfdftm(pm,dum,xefi,yefi,zefi,fld,l1,l2,n)
+c
+      implicit double precision (a-h,o-z)
+c
+      logical svdskw,goparr,dskwrk,maswrk
+c
+      character*8 polnam,dpolnam
+c
+      parameter (zero=0.0d+00)
+      parameter (mxdfg=5, mxfrg=1050, mxfgpt=12000,
+     *           mxifrq=12,mxdppt=mxfrg*mxdfg*12)
+c
+      common /deidip/ pmind(3,mxfgpt),pmindd(3,mxfgpt),
+     *                xyind(3,mxfgpt),xyindd(3,mxfgpt)
+      common /efppar/ efp(3,mxfgpt),efpol(9,mxfgpt),
+     *                efdp(3,mxifrq*mxfgpt),efdpol(9,mxifrq*mxfgpt),
+     *                eno,dind(3,mxfgpt),dindd(3,mxfgpt),
+     *                polnam(mxfgpt),dpolnam(mxifrq*mxfgpt),
+     *                polscr(mxfgpt),iplscr,indscr
+      common /fmcom / xx(1)
+      common /frginf/ nmpts(mxfrg),nmttpt,iefc,iefd,iefq,iefo,
+     *                nppts(mxfrg),npttpt,iefp,
+     *                nrpts(mxfrg),nrttpt,irep,ichgp,nfrg,
+     *                ndppts(mxdppt),ndpttpt,iefdp,lstmpts(mxfrg)
+      common /iofile/ ir,iw,ip,is,ipk,idaf,nav,ioda(950)
+      common /par   / me,master,nproc,ibtyp,iptim,goparr,dskwrk,maswrk
+c
+      dimension pm(*),dum(*),xefi(*),yefi(*),zefi(*)
+c n ... npttpt
+      dimension fld(3,n)
+c
+c     this routine calculates induced dipole moments due to
+c     the electronic field generated by p and x+y.
+c     they are obtained by the iterative method.
+c
+c     pmind ... induced dipoles due to trace[p*efi] and
+c               other induced dipoles
+c
+c****                ***************************************************
+c**** electric field ***************************************************
+c****                ***************************************************
+c**** read p ***********************************************************
+      call daread(idaf,ioda, pm,l2,417,0) ! alpha
+      call daread(idaf,ioda,dum,l2,427,0) ! beta
+      call vadd(pm,1,dum,1,pm,1,l2)
+c**** initialize parallel **********************************************
+      ipcount = me - 1
+c
+      svdskw = dskwrk
+      dskwrk = .true.
+      nft25 = 25
+      call seqrew(nft25)
+c
+      do lefp=1,npttpt
+c**** go parallel! *****************************************************
+         if(goparr) then
+            fld(1,lefp) = zero
+            fld(2,lefp) = zero
+            fld(3,lefp) = zero
+            ipcount = ipcount + 1
+            if(mod(ipcount,nproc).ne.0) go to 100
+         end if
+c**** electric field integrals *****************************************
+         call sqread(nft25,xefi,l2)
+         call sqread(nft25,yefi,l2)
+         call sqread(nft25,zefi,l2)
+c**** trace[p*efi] *****************************************************
+         fld(1,lefp) = tracep(pm,xefi,l1)
+         fld(2,lefp) = tracep(pm,yefi,l1)
+         fld(3,lefp) = tracep(pm,zefi,l1)
+  100    continue
+      end do
+c
+      if (goparr) call ddi_gsumf(668,fld,3*n)
+c
+      call seqrew(nft25)
+      dskwrk = svdskw
+c****                 **************************************************
+c**** induced dipoles **************************************************
+c****                 **************************************************
+      call valfm(loadfm)
+      ldipnew = loadfm  + 1
+      ldipnwd = ldipnew + nfrg
+      ldindc  = ldipnwd + nfrg
+      ldinddc = ldindc  + 3*npttpt
+      ldind_w = ldinddc + 3*npttpt
+      ldind_c = ldind_w + 6*npttpt
+      lbuff   = ldind_c + 6*npttpt
+      ldummy  = lbuff   + 6*npttpt
+      last    = ldummy  + 3*npttpt
+c
+      need = last - loadfm - 1
+      call getfm(need)
+c**** save dind and dindd **********************************************
+      ic = lbuff - 6
+      do lefp=1,npttpt
+         ic = ic + 6
+         xx(ic  ) =  dind(1,lefp)
+         xx(ic+1) =  dind(2,lefp)
+         xx(ic+2) =  dind(3,lefp)
+         xx(ic+3) = dindd(1,lefp)
+         xx(ic+4) = dindd(2,lefp)
+         xx(ic+5) = dindd(3,lefp)
+      end do
+c
+c**** pmind and pmindd *************************************************
+      do lefp=1,npttpt
+         do ixyz=1,3
+             dind(ixyz,lefp) = zero
+            dindd(ixyz,lefp) = zero
+         end do
+      end do
+c
+c solve pmind and pmindd by iterative method
+c
+      call dipit(fld,xx(ldummy),xx(ldindc),xx(ldinddc),
+     *           xx(ldind_w),xx(ldind_c),npttpt,
+     *           xx(ldipnew),xx(ldipnwd),xx(ldummy),xx(ldummy),nfrg)
+c
+      call dcopy(npttpt*3, dind,1, pmind,1)
+      call dcopy(npttpt*3,dindd,1,pmindd,1)
+c**** recover dind and dindd *******************************************
+      ic = lbuff - 6
+      do lefp=1,npttpt
+         ic = ic + 6
+          dind(1,lefp) = xx(ic)
+          dind(2,lefp) = xx(ic+1)
+          dind(3,lefp) = xx(ic+2)
+         dindd(1,lefp) = xx(ic+3)
+         dindd(2,lefp) = xx(ic+4)
+         dindd(3,lefp) = xx(ic+5)
+      end do
+c
+      call retfm(need)
+      return
+      end
+c*module sfgrad  *deck sfdftq
+      subroutine sfdftq(qpotxy,qpotmn,q0,q1,q2,q3,d0,qa,dimat,qrep,tmp,
+     *                  tmp1,tmp2,ipvt,rmul,ntspar,xcts,ycts,zcts,as,
+     *                  qsexy,qsemn,xe,ye,ze,re,isphe,list,ta,v1,l1,l2,
+     *                  mxdii1,dtemp)
+c
+      implicit double precision(a-h,o-z)
+c
+      logical goparr,dskwrk,maswrk
+c
+      dimension qpotxy(nts),qpotmn(nts),
+     *          q0(nts),q1(nts),q2(nts),q3(nts),
+     *          d0(nts),qa(nts),dimat(mxdii1,mxdii1),
+     *          qrep(ntspar,mxdiis,2),tmp(nts,3),tmp1(mxdii1),
+     *          tmp2(mxdii1,mxdii1),ipvt(mxdii1),
+     *          rmul(mxsp,10),xcts(*),ycts(*),zcts(*),as(*),
+     *          qsexy(*),qsemn(*),xe(*),ye(*),ze(*),
+     *          re(*),isphe(*),list(*),ta(l2),v1(l2),dtemp(*)
+c
+      common /iofile/ ir,iw,ip,is,ipk,idaf,nav,ioda(950)
+      common /par   / me,master,nproc,ibtyp,iptim,goparr,dskwrk,maswrk
+      common /pcmdim/ mxsp,mxts,mempcm1,mempcm2,nts
+      common /pcmitr/ rcut(2),thres,ipcmit,imul,mxdiis,nreg,mxitr1,
+     *                mxitr2,modpap
+      common /pcmopt/ rabi,rasc,refpol,thrsls,densls,wb,wa,eta2,gd,evac,
+     *                rhow,pm,areatl,areakp,bondry,omega,ret,fro,epsinf,
+     *                eps,dr,rsolv,vmol,tce,sten,dsten,cmf,tabs,idirct,
+     *                ipcder,idp,icomp,ifield,icav,idisp,iprint,iretcav,
+     *                icent,ifast,neval,iefpol,keepsm,imgabi,imgasc,nadd
+c
+      data one/1.0d+00/
+c
+      if((l1*l1+l1)/2 .ne. l2) call abrt
+c
+c     -- solve pcm induced charges due to transition state density and
+c        excitation difference density
+c
+c     ta = excitation difference density
+c
+      call daread(idaf,ioda,ta   ,l2,417,0) ! alpha
+      call daread(idaf,ioda,dtemp,l2,427,0) ! beta
+      call vadd(ta,1,dtemp,1,ta,1,l2)
+c
+c     v1 = x = transition state density
+c     ... sf transition induces no charges
+c
+      call vclr(v1,1,l2)
+c
+      call vclr(qpotxy,1,nts)
+      call vclr(qpotmn,1,nts)
+c     call epoten(one,xcts,ycts,zcts,qpotxy,v1,nts,l2)
+      call epoten(one,xcts,ycts,zcts,qpotmn,ta,nts,l2)
+c     if(goparr) call ddi_gsumf(2344,qpotxy,nts)
+      if(goparr) call ddi_gsumf(2345,qpotmn,nts)
+c
+      call vclr(qsexy,1,nts)
+c     call ascit(1,0,qpotxy,q0,q1,q2,q3,d0,qa,dimat,qrep,tmp,tmp1,
+c    *           tmp2,ipvt,rmul,mxdiis+1,ntspar,xcts,ycts,zcts,as,
+c    *           qsexy,xe,ye,ze,re,isphe,list)
+c
+      call ascit(1,0,qpotmn,q0,q1,q2,q3,d0,qa,dimat,qrep,tmp,tmp1,
+     *           tmp2,ipvt,rmul,mxdiis+1,ntspar,xcts,ycts,zcts,as,
+     *           qsemn,xe,ye,ze,re,isphe,list)
+c
+c     - scale the charge, because ief=10
+      scale = (eps-one)/eps
+      do its = 1, nts
+c        qsexy(its) = qsexy(its)*scale
+         qsemn(its) = qsemn(its)*scale
+      end do
+c
+      return
+      end
+c*module sfgrad  *deck sfchgdip
+      subroutine sfchgdip(qsexy,qsemn,ta,v1,l1,l2,dtemp)
+c
+      implicit double precision(a-h,o-z)
+c
+      character*8 polnam,dpolnam
+c
+      dimension qsexy(*),qsemn(*),ta(*),v1(*),dtemp(*)
+c
+c     parameter (mxatm=2000, mxfgpt=12000, mxfrg=1050, mxifrq=12,
+c    *           mxao=8192, mxdfg=5, mxdppt=mxfrg*mxdfg*12)
+      parameter (mxfgpt=12000, mxfrg=1050, mxifrq=12,
+     *           mxdfg=5, mxdppt=mxfrg*mxdfg*12)
+c
+      common /deidip/ pmind(3,mxfgpt),pmindd(3,mxfgpt),
+     *                xyind(3,mxfgpt),xyindd(3,mxfgpt)
+      common /efppar/ efp(3,mxfgpt),efpol(9,mxfgpt),
+     *                efdp(3,mxifrq*mxfgpt),efdpol(9,mxifrq*mxfgpt),
+     *                eno,dind(3,mxfgpt),dindd(3,mxfgpt),
+     *                polnam(mxfgpt),dpolnam(mxifrq*mxfgpt),
+     *                polscr(mxfgpt),iplscr,indscr
+      common /fmcom / x(1)
+      common /frginf/ nmpts(mxfrg),nmttpt,iefc,iefd,iefq,iefo,
+     *                nppts(mxfrg),npttpt,iefp,
+     *                nrpts(mxfrg),nrttpt,irep,ichgp,nfrg,
+     *                ndppts(mxdppt),ndpttpt,iefdp,lstmpts(mxfrg)
+c     common /ijpair/ ia(mxao)
+      common /pcmpnt/ lxyzre,lssfe,llist,lalpcm,lrinpcm,linapcm,linfpcm,
+     *                linipcm,lmepcm,laxyzct,lxyzct2,lnvert,lqsn,lqse,
+     *                lqfs,lqind,lisphe,lvad,lqor,lvecmul,laiprj,lfiprj,
+     *                lpel,lpcmcdr,ldai,liddai,lqsnd,lqsed
+      common /pcmdim/ mxsp,mxts,mempcm1,mempcm2,nts
+c     common /infoa / nat,ich,mul,num,nqmt,ne,na,nb,
+c    *                zan(mxatm),c(3,mxatm),ian(mxatm)
+      common /iofile/ ir,iw,ip,is,ipk,idaf,nav,ioda(950)
+c
+c     solve pcm induced charge and efp induced dipoles due to ta and v1
+c    
+c     ta = excitation difference density
+c    
+      call daread(idaf,ioda,ta,l2,417,0) ! alpha
+      call daread(idaf,ioda,dtemp,l2,427,0) ! beta
+      call vadd(ta,1,dtemp,1,ta,1,l2)
+c    
+c     v1 = x + y = transition state density
+c
+      call vclr(v1,1,l2)
+c
+      call valfm(loadfm)
+      ldindsv  = loadfm   + 1
+      ldinddsv = ldindsv  + 3*npttpt
+      last     = ldinddsv + 3*npttpt
+      need     = last     - loadfm - 1
+      call getfm(need)
+c
+      call dcopy(3*npttpt,dind ,1,x(ldindsv) ,1)
+      call dcopy(3*npttpt,dindd,1,x(ldinddsv),1)
+      call pcmpolfld(dummy,v1,x(laxyzct),
+     *               x(laxyzct+mxts),x(laxyzct+2*mxts),
+     *               x(laxyzct+3*mxts),l2,l1,qsexy,0)
+      call dcopy(3*npttpt,dind     ,1, xyind ,1)
+      call dcopy(3*npttpt,dindd    ,1,xyindd ,1)
+c
+      call pcmpolfld(dummy,ta,x(laxyzct),
+     *               x(laxyzct+mxts),x(laxyzct+2*mxts),
+     *               x(laxyzct+3*mxts),l2,l1,qsemn,0)
+      call dcopy(3*npttpt,dind     ,1, pmind ,1)
+      call dcopy(3*npttpt,dindd    ,1,pmindd ,1)
+c
+      call dcopy(3*npttpt,x(ldindsv) ,1,dind ,1)
+      call dcopy(3*npttpt,x(ldinddsv),1,dindd,1)
+      call retfm(need)
+c
+      return
+      end
