@@ -12,7 +12,7 @@
 #  so you have to do a bit more than name your machine type here:
 #
 #    a) choose the target for execution from the following list:
-#           sockets, mpi, altix, cray-xt, ibm64-sp, sgi64
+#           sockets, mpi, ga, altix, cray-xt, ibm64-sp, sgi64
 #       IBM Blue Gene uses separate execution files: ~/gamess/machines/ibm-bg
 #
 #       choose "sockets" if your compile time target was any of these:
@@ -24,6 +24,9 @@
 #       If your target was 'linux64', you may chose "sockets" or "mpi",
 #       according to how you chose to compile.  The MPI example below
 #       should be carefully matched against info found in 'readme.ddi'!
+#
+#       Choose 'ga' if and only if you did a 'linux64' build linked
+#       to the LIBCCHEM software for CPU/GPU computations.
 #
 #           Search on the words typed in capital letters just below
 #           in order to find the right place to choose each one:
@@ -651,8 +654,8 @@ if ($TARGET == mpi) then
    #     add Intel MPI to the library path and to the execution path.
    #        version number might be 3.2.1, 4.0.1.007, 4.0.2.003, or ...
    #
-   setenv LD_LIBRARY_PATH /opt/intel/impi/4.0.2.003/lib64:$LD_LIBRARY_PATH
-   set path=(/opt/intel/impi/4.0.2.003/bin64 $path)
+   setenv LD_LIBRARY_PATH /share/apps/intel/impi/4.0.2.003/lib64:$LD_LIBRARY_PATH
+   set path=(/share/apps/intel/impi/4.0.2.003/bin64 $path)
    #
    #  add MVAPICH2 to the execution path
    #--set path=(/usr/mpi/gcc/mvapich2-1.2p1/bin $path)
@@ -719,49 +722,6 @@ if ($TARGET == mpi) then
       end
    endif
    #
-   #      Next pertains to thread count in case GAMESS has been
-   #      linked to "libcchem" (see that program's readme file),
-   #      otherwise, these settings will just be ignored.
-   #
-   #      the profiling variable inserts extra timing output into the
-   #      log files.  Omit it, if you like.
-   #
-   #      "libcchem" controls the CPU thread count by NUM_THREADS,
-   #      which defaults to the number of CPU cores, if not given.
-   #      Note that the number of CPU threads doing quantum chemistry
-   #      will always be one less than NUM_THREADS, as one core is
-   #      required to do GPU/CPU management things, except if the
-   #      number of cores is just 1 (of course it runs 1 thread then).
-   #
-   #      "libcchem" controls the GPU devices used by GPU_DEVICES,
-   #      which is a list of the devices to be used.  If not given,
-   #      which safest, all avaliable GPUs will be detected and used.
-   #
-   #      You will need to put a path to your CUDA run time libraries here.
-   #
-   #      Finally, note that the front end 'gms' script must edit
-   #      the string 'NUMGPU=0' to the desired number, after which,
-   #      the if clause will actually be executed!
-   #      Or, hardwire this to non-zero if all your nodes own GPUs.
-   #      Setting GPU_DEVICES to -1 runs CPU threads, only.
-   #
-   @ NUMGPU=0
-   if ($NUMGPU > 0) then
-      @ NUMCPU = $PPN - 1
-      echo libcchem kernels will use $NUMCPU cores and $NUMGPU GPUs per node...
-      set echo
-      setenv CCHEM_PROFILE 1
-      setenv NUM_THREADS $PPN
-      #--if ($NUMGPU == 0) setenv GPU_DEVICES -1
-      #--if ($NUMGPU == 2) setenv GPU_DEVICES 0,1
-      #--if ($NUMGPU == 4) setenv GPU_DEVICES 0,1,2,3
-      setenv LD_LIBRARY_PATH /share/apps/cuda/lib64:$LD_LIBRARY_PATH
-      ###### LD_LIBRARY_PATH /usr/local/cuda/lib64:$LD_LIBRARY_PATH
-      unset echo
-   else
-      setenv GPU_DEVICES -1
-   endif
-   #
    #  Now, at last, we can actually kick-off the MPI processes...
    #
    echo "MPI kickoff will run GAMESS on $NCPUS cores in $NNODES nodes."
@@ -804,6 +764,188 @@ if ($TARGET == mpi) then
       echo No valid MPI startup procedure chosen.
       exit
    endsw
+   #
+   #    keep HOSTFILE, as it is passed to the file erasing step below
+   rm -f $PROCFILE
+   #
+endif
+#      ------ end of the MPI execution section -------
+
+#
+if ($TARGET == ga) then
+   #
+   #      Modified from the MPI part just above, but specialized to start
+   #      just one process per node: no data server.
+   #      This means of execution is required by GAMESS built with LIBCCHEM.
+   #      Parallelization inside the nodes is handled by LIBCCHEM threads.
+   #      The lack of data servers is due to GA as the message passing agent.
+   #      The use of sockets on the Infiniband is due to not knowing how
+   #      to fully utilize GA.   GA doesn't seem to work with Hydra.
+   #
+   set PPN=1
+   @ NPROCS = $NCPUS
+   #
+   #  A. build HOSTFILE,
+   #
+   setenv HOSTFILE $SCR/$JOB.nodes.mpd
+   if (-e $HOSTFILE) rm $HOSTFILE
+   touch $HOSTFILE
+   #
+   if ($NCPUS == 1) then
+             # Serial run must be on this node itself!
+      echo `hostname` >> $HOSTFILE
+      set NNODES=1
+   else
+             # Parallel run gets node names from schedular's assigned list:
+      if ($SCHED == SGE) then
+         uniq $TMPDIR/machines $HOSTFILE
+         set NNODES=`wc -l $HOSTFILE`
+         set NNODES=$NNODES[1]
+      endif
+      if ($SCHED == PBS) then
+         uniq $PBS_NODEFILE $HOSTFILE
+         set NNODES=`wc -l $HOSTFILE`
+         set NNODES=$NNODES[1]
+      endif
+   endif
+   #           uncomment these if you are still setting up...
+   #--echo '-----debug----'
+   #--echo HOSTFILE $HOSTFILE contains
+   #--cat $HOSTFILE
+   #--echo '--------------'
+   #
+   #  B. the next file forces explicit "which process on what node" rules.
+   #
+   setenv PROCFILE $SCR/$JOB.processes.mpd
+   if (-e $PROCFILE) rm $PROCFILE
+   touch $PROCFILE
+   #
+   if ($NCPUS == 1) then
+      echo "-n $NPROCS -host `hostname` /home/mike/gamess/gamess.$VERNO.x" >> $PROCFILE
+   else
+      if ($NNODES == 1) then
+             # when all processes are inside a single node, it is simple!
+             # all MPI processes, whether compute processes or data servers,
+             # are just in this node.   (note: NPROCS = 2*NCPUS!)
+         echo "-n $NPROCS -host `hostname` /home/mike/gamess/gamess.$VERNO.x" >> $PROCFILE
+      else
+         @ n=1
+         while ($n <= $NNODES)
+            set host=`sed -n -e "$n p" $HOSTFILE`
+            set host=$host[1]
+            echo "-n $PPN -host $host /home/mike/gamess/gamess.$VERNO.x" >> $PROCFILE
+            @ n++
+         end
+      endif
+   endif
+   #
+   #     add Intel MPI to the library path and to the execution path.
+   #
+   setenv LD_LIBRARY_PATH /share/apps/intel/impi/4.0.2.003/intel64/lib:$LD_LIBRARY_PATH
+   set path=(/share/apps/intel/impi/4.0.2.003/intel64/bin $path)
+   #
+   #  add MVAPICH2 to the execution path
+   #--set path=(/usr/mpi/gcc/mvapich2-1.2p1/bin $path)
+   #
+   #     tunings below are specific to Intel MPI 3.2 and/or 4.0:
+   #        a very important option avoids polling for incoming messages
+   #           which allows us to compile DDI in pure "mpi" mode,
+   #           and get sleeping data servers if the run is SCF level.
+   #        trial and error showed process pinning slows down GAMESS runs,
+   #        set debug option to 2 or to 5 to see messages while kicking off,
+   #        set statistics option to 1 or 2 to collect messaging info,
+   #        iMPI 3.2 allows specification of a DAPL 2.0 library,
+   #        iMPI 4.0 defaults fabric to shm,dapl: forcing dapl only is faster.
+   #
+   set echo
+   setenv I_MPI_WAIT_MODE enable
+   setenv I_MPI_PIN disable
+   setenv I_MPI_DEBUG 0
+   setenv I_MPI_STATS 0
+   #      force the Infiniband to run in IPoIB mode due to using GA.
+   setenv I_MPI_DEVICE sock
+   setenv I_MPI_NETMASK ib0
+   #      in case we ever figure out how to use GA with DAPL
+   #--setenv I_MPI_FABRICS dapl
+   #--setenv I_MPI_DAT_LIBRARY libdat2.so
+   #      in case someone wants to try the "tag matching interface",
+   #      an option which unfortunately ignores the WAIT_MODE in 4.0.2!
+   #--setenv I_MPI_FABRICS tmi
+   #--setenv I_MPI_TMI_LIBRARY libtmi.so
+   #--setenv I_MPI_TMI_PROVIDER psm
+   #--setenv TMI_CONFIG /share/apps/intel/impi/4.0.2.003/intel64/etc/tmi.conf
+   unset echo
+   #
+   #      similar tunings for MVAPICH2 are
+   #--setenv MV2_USE_BLOCKING 1
+   #--setenv MV2_ENABLE_AFFINITY 0
+   #
+   #         ... thus ends setting up the process initiation,
+   #             tunings, pathnames, library paths, for the MPI.
+   #
+   #  set up Intel MKL (math kernel library).  
+   #  LIBCCHEM links to threaded shared object libraries.
+   #  While GAMESS steps run, we want serial execution here, note that
+   #  at times LIBCCHEM manipulates some steps to use threaded MKL.
+   setenv LD_LIBRARY_PATH /share/apps/intel/composerxe-2011/mkl/lib/intel64:$LD_LIBRARY_PATH
+   setenv MKL_SERIAL YES
+   setenv MKL_NUM_THREADS 1
+   #
+   #      We need to find the CUDA runtime libraries here.
+   setenv LD_LIBRARY_PATH /share/apps/cuda4.1/lib64:$LD_LIBRARY_PATH
+   #
+   #      Runtime control over LIBCCHEM.
+   #        set GMS_CCHEM to 0 to disable calls into LIBCCHEM.
+   #        set OMP_NUM_THREADS to limit core usage to less than all cores.
+   #        set CCHEM to control use of GPUs, or memory used.
+   #                  for example, setenv CCHEM 'devices=;memory=100m'
+   #                  disables the usage of GPUs,
+   #                  and limits memory/node to 100m (m,g work)
+   #    
+   setenv GMS_CCHEM '1'
+   echo libcchem launches on $PPN cores/node to use all cores via threads.
+   #      next line is converted to 2 or 4 on our GPU cluster
+   #      during the process of submitting to PBS batch queues.
+   @ NUMGPU=0
+   if ($NUMGPU > 0) then
+      echo libcchem launches onto $NUMGPU GPUs per node...
+   else
+      echo libcchem is not using any GPUs...
+      setenv CCHEM 'devices='
+   endif
+#----------debug----------
+#  echo PROCFILE $PROCFILE contains
+#  cat $PROCFILE
+#  echo HOSTFILE $HOSTFILE contains
+#  cat $HOSTFILE
+#  echo environment is
+#  ldd /home/mike/ccgms/gamess.gpu.00.x
+#----------debug----------
+   #
+   #  Now, at last, we can actually kick-off the MPI processes...
+   #
+   echo "MPI kickoff will run GAMESS on $NCPUS cores in $NNODES nodes."
+   echo "The binary to be executed is /home/mike/gamess/gamess.$VERNO.x"
+   echo "MPI will run $NCPUS compute processes and $NCPUS data servers,"
+   echo "    placing $PPN of each process type onto each node."
+   echo "The scratch disk space on each node is $SCR, with free space"
+   df -k $SCR
+   #
+   chdir $SCR
+   #
+   #  a) bring up a 'ring' of MPI demons
+   #
+   set echo
+   mpdboot --rsh=ssh -n $NNODES -f $HOSTFILE
+   #
+   #  b) kick off the compute processes and the data servers
+   #
+   mpiexec -configfile $PROCFILE < /dev/null
+   #
+   #  c) shut down the 'ring' of MPI demons
+   #
+   mpdallexit
+   unset echo
    #
    #    keep HOSTFILE, as it is passed to the file erasing step below
    rm -f $PROCFILE

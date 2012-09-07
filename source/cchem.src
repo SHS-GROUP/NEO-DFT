@@ -1,0 +1,455 @@
+#ifdef VANILLA
+#undef HAVE_CCHEM
+#endif
+
+      integer function pushfm(n)
+      integer n,need
+!$omp critical(memory)
+      call valfm(pushfm)
+      pushfm = pushfm+1
+      call getfm(n)
+!$omp end critical(memory)
+      return
+      end function
+
+      subroutine popfm(n)
+      integer n
+!$omp critical(memory)
+      call retfm(n)
+!$omp end critical(memory)
+      end subroutine
+
+      logical function gms_cchem()
+      implicit none
+      integer enabled_
+      common /gms_cchem_/ enabled_ 
+      gms_cchem = enabled_.eq.1
+      return
+      end function
+
+
+      subroutine gms_cchem_initialize()
+      implicit none
+      integer enabled_
+      common /gms_cchem_/ enabled_ 
+#ifdef HAVE_CCHEM
+      character*256 env
+      enabled_ = 0
+      call getenv("GMS_CCHEM", env)
+      if (env.eq."1") enabled_ = 1
+      call ddi_bcast(0, "I", enabled_, 1, 0)
+      if (enabled_.eq.1) call cchem_initialize()
+#else
+      enabled_ = 0
+#endif
+      return 
+      end subroutine
+
+      subroutine gms_cchem_failed(msg)
+      implicit none
+      character*(*) msg
+      integer me,master,nproc,ibtyp,iptim
+      logical goparr,dskwrk,maswrk
+      common /par   / me,master,nproc,ibtyp,iptim,goparr,dskwrk,maswrk
+      if (me.eq.master) write(6,*) msg
+      call abrt()
+      return
+      end subroutine
+
+#ifndef HAVE_CCHEM
+#define GMS_CCHEM_ERROR( ) \
+      gms_cchem_error("cchem.F", __LINE__)
+      subroutine gms_cchem_error(file, line)
+      character*(*) file
+      integer line
+      write (6,*) file, ":", line, msg
+      call abrt()
+      return
+      end subroutine
+#endif
+
+
+c$$$  asadchev
+      subroutine gms_cchem_hf_fock(d, f, x, cutoff)
+      implicit double precision (a-h,o-z)
+      double precision d(*),f(*),x(*)
+      double precision cutoff
+#ifdef HAVE_CCHEM
+      common /dftpar/ dfttyp(20),exena,exenb,exenc,idft34,nauxfun,
+     *     nauxshl
+      common /dftcam/ alphac,betac,cammu,camvwn,camlyp,camflag
+      logical camflag
+      common /nlrc  / lcflag,lrint,emu,emu2,lrfile
+      logical lcflag,lrint,lrfile
+
+      integer me,master,nproc,ibtyp,iptim
+      logical goparr,dskwrk,maswrk
+      common /par   / me,master,nproc,ibtyp,iptim,goparr,dskwrk,maswrk
+
+      parameter (mxatm=2000)
+      parameter (mxsh=5000)
+      parameter (mxgtot=20000)
+      common /infoa / nat,ich,mul,num,nqmt,ne,na,nb,
+     $     zan(mxatm),c(3,mxatm),ian(mxatm)
+
+      integer basis_new_gamess, molecule_new_gamess
+      integer basis, molecule
+      integer cchem_hf_fock, ok
+
+      molecule = molecule_new_gamess()
+      basis = basis_new_gamess(molecule)
+
+      hfscal=dfttyp(3)
+      cscalt=1.0d+00
+      if(lcflag) then
+         if(lrint) then
+            hfscal=1.0d+00
+            cscalt=0.0d+00
+         else
+            hfscal=0.0d+00
+            cscalt=1.0d+00
+         endif
+      endif
+      if(camflag.and.lrint) cscalt=0.0d+00
+
+      ok = cchem_hf_fock(basis, D, F, 4*cscalt, -1*hfscal, x, cutoff)
+      if (ok.eq.0) call gms_cchem_failed("CCHEM HF FAILED")
+      call dscal((num*num+num)/2, 1.D0/nproc, F, 1)
+      call ddi_dlbreset()
+
+#else
+      call GMS_CCHEM_ERROR()
+#endif /* HAVE_CCHEM */
+      return 
+      end subroutine
+
+
+c$$$  asadchev
+      subroutine gms_cchem_mp2_energy(E2)
+      implicit double precision (a-h,o-z)
+      double precision E2 ! return value
+
+#ifdef HAVE_CCHEM
+      parameter (mxatm=2000)
+      parameter (mxsh=5000)
+      parameter (mxgtot=20000)
+
+      common /infoa / nat,ich,mul,num,nqmt,ne,na,nb,
+     $     zan(mxatm),c(3,mxatm),ian(mxatm)
+
+      common /mp2par/ ospt,codemp,scspt,tol,method,nwdmp2,mempri,mpprop,
+     *                nacore,nbcore,noa,nob,no,nbf,nomit,mocphf,maxitc
+
+      common /nshel / ex(mxgtot),cs(mxgtot),cp(mxgtot),cd(mxgtot),
+     *                cf(mxgtot),cg(mxgtot),ch(mxgtot),ci(mxgtot),
+     *                kstart(mxsh),katom(mxsh),ktype(mxsh),kng(mxsh),
+     *                kloc(mxsh),kmin(mxsh),kmax(mxsh),nshell
+
+      common /output/ nprint,itol,icut,normf,normp,nopk
+
+      integer ir,iw,ip,ijk,ipk,idaf,nav,ioda(950)
+      common /iofile/ ir,iw,ip,ijk,ipk,idaf,nav,ioda
+
+      logical goparr,dskwrk,maswrk
+      common /par   / me,master,nproc,ibtyp,iptim,goparr,dskwrk,maswrk
+
+      integer basis, basis_new_gamess
+      integer molecule, molecule_new_gamess
+      integer wf, new_wavefunction
+
+      integer cchem_mp2_energy
+
+      double precision X(1)
+      common /fmcom /  X
+      integer pushfm, v_ptr, e_ptr
+
+      call flshbf(6)
+
+      v_ptr = pushfm(nbf*no)
+      e_ptr = pushfm(no)
+
+      call daread(idaf,ioda,X(v_ptr),nbf*no,15,0)
+      call daread(idaf,ioda,X(e_ptr),no ,17,0)
+
+      v_ptr = v_ptr + nacore*nbf
+      e_ptr = e_ptr + nacore
+
+      nocc  = noa - nacore
+      nvir = no - noa
+
+      molecule = molecule_new_gamess()
+      basis = basis_new_gamess(molecule)
+      wf = new_wavefunction(basis)
+      call wavefunction_set_occupied(wf, 0, nocc, 0)
+      call wavefunction_set_virtuals(wf, nocc, nocc+nvir)
+      call wavefunction_set_c(wf, 'n', nbf, nocc+nvir, X(v_ptr), nbf)
+      call wavefunction_set_e(wf, X(e_ptr))
+      call wavefunction_normalize(wf)
+
+      call cchem_runtime_set_double(
+     $     "/mp2/integrals/cutoff", 10.0d0**(-icut))
+
+      if (cchem_mp2_energy(wf, E2).eq.0)
+     $     call gms_cchem_failed("CCHEM MP2 FAILED")
+
+      call popfm(nbf*no)
+      call popfm(no)
+
+#else
+      call GMS_CCHEM_ERROR()
+#endif /* HAVE_CCHEM */
+      return 
+      end subroutine
+
+c$$$  asadchev
+      subroutine gms_cchem_ccsd_energy(E)
+      implicit none
+      double precision E(5)
+
+#ifdef HAVE_CCHEM
+      integer          methcc,ncctot,nccocc,nccfzc,nccfzv,
+     *                 mxccit,mxrleit,mwrdcc,icccnv,iccrst,idskcc
+      double precision amptsh
+      common /ccpar /  amptsh,methcc,ncctot,nccocc,nccfzc,nccfzv,
+     *                 mxccit,mxrleit,mwrdcc,icccnv,iccrst,idskcc
+
+      integer mxrle,nrle0,nrle,irle,itrle
+      common /ccrle / mxrle,nrle0,nrle,irle,itrle
+
+      double precision tsh
+      integer         nh,np,met,mem,iconv,maxit,irest,idisc
+      common /ccinfo/ tsh,nh,np,met,mem,iconv,maxit,irest,idisc
+
+      integer ir,iw,ip,ijk,ipk,idaf,nav,ioda(950)
+      common /iofile/ ir,iw,ip,ijk,ipk,idaf,nav,ioda
+
+      integer mxatm
+      parameter (mxatm=2000)
+
+      integer          nat,ich,mul,num,nqmt,ne,na,nb,ian(mxatm)
+      double precision zan(mxatm),c(3,mxatm)
+      common /infoa /  nat,ich,mul,num,nqmt,ne,na,nb,zan,c,ian
+
+      integer nprint,itol,icut,normf,normp,nopk
+      common /output/ nprint,itol,icut,normf,normp,nopk
+
+      double precision X(1)
+      common /fmcom /  X
+      integer pushfm, ptr,lfp,lfh,lfph
+      integer no,nv
+      double precision oeh(nccocc-nccfzc)
+      double precision oep(ncctot-nccfzv-nccocc)
+
+      integer wf
+      common /cchem / wf
+
+      integer basis, basis_new_gamess
+      integer molecule, molecule_new_gamess
+      integer new_wavefunction
+      integer cchem_cc_energy
+
+      integer start(4), n(4)
+      integer i,j,ij
+
+      call flshbf(6)
+
+      no = nccocc-nccfzc
+      nv = ncctot-nccfzv-nccocc
+
+      molecule = molecule_new_gamess()
+      basis = basis_new_gamess(molecule)
+
+      ptr = pushfm(num*num)
+      call daread(idaf,ioda,X(ptr),num*num,15,0)
+
+      wf = new_wavefunction(basis)
+      call wavefunction_set_occupied(wf, 0, no, 0)
+      call wavefunction_set_virtuals(wf, no, no+nv)
+
+      i = 1
+      ij = 1
+      do j = 1,ncctot
+         if (j.le.nccfzc) cycle
+         if (j.gt.nccocc .and. j.le.nccocc+nccfzv) cycle
+         if (i.ne.j)
+     $        call DCOPY(num,X(ptr+(j-1)*num),1,X(ptr+(i-1)*num),1)
+         i = i+1
+      enddo
+      call wavefunction_set_c(wf, 'n', num, no+nv, X(ptr), num)
+      call wavefunction_normalize(wf)
+
+      lfh = pushfm(num*num)
+      lfp = pushfm(num*num)
+      lfph = pushfm(num*num)
+      CALL CCSD_FOCK(NO,Nv,Num,NCCFZC,X(LFH),X(LFP),X(LFPH),OEH,OEP)
+
+      do j = 0,no+nv-1
+         do i = 0,no+nv-1
+            ij = i + j*(no+nv) + ptr
+            if (i.lt.no .and. j.lt.no) X(ij) = X(lfh+i + j*no)
+            if (i.ge.no .and. j.ge.no) X(ij) = X(lfp + i-no + (j-no)*nv)
+            if (i.ge.no .and. j.lt.no) X(ij) = X(lfph + j + (i-no)*no)
+            if (i.lt.no .and. j.ge.no) X(ij) = X(lfph + i + (j-no)*no)
+         enddo
+         ij = j + j*(no+nv) + ptr
+         if (j.lt.no) X(ij) = oeh(j+1)
+         if (j.ge.no) X(ij) = oep(j+1-no)
+         !write (*,*) "xxx",X(ij)
+      enddo
+      call wavefunction_set_f(wf, X(ptr), no+nv)
+c$$$
+c$$$      call DCOPY(no,oeh,1,X(ptr),1)
+c$$$      call DCOPY(nv,oep,1,X(ptr+no-1),1)
+c$$$      call wavefunction_set_e(wf, X(ptr))
+
+      call popfm(4*num*num)
+
+      call cchem_runtime_set_double("/cc/integrals/cutoff",
+     $     10.d0**(-ICUT))
+      call cchem_runtime_set_double("/cc/convergence",
+     $     10.d0**(-ICCCNV))
+      call cchem_runtime_set_int("/cc/max_iter", MXCCIT)
+      call cchem_runtime_set_int("/cc/diis/max", MXRLEIT)
+
+      if (cchem_cc_energy(wf, e, "ccsd(t)").eq.0)
+     $     call gms_cchem_failed("CCHEM CC FAILED")
+
+#else
+      call GMS_CCHEM_ERROR()
+#endif /* HAVE_CCHEM */
+      return 
+      end subroutine
+
+
+c$$$  asadchev
+      subroutine gms_cchem_dft_fock(
+     $     urohf, coeffa, coeffb, L1,
+     $     totwt, napts, iangn, ncntr,nang,
+     $     ptrad, xdat, ydat,zdat,
+     $     atmxvec,atmyvec,atmzvec,
+     $     rad,fact, wcutoff, rcutoff, ccutoff,
+     $     Fa, Fb, Ex, Ec, Rho)
+c     
+      implicit double precision (a-h,o-z)
+
+      dimension totwt(nat,*),coeffa(l1,*),coeffb(l1,*)
+      dimension napts(nat),iangn(nat,2,*),iifact(nat),ifactr(nat)
+      dimension fa(*),fb(*)
+      dimension ptrad(*),xdat(nat,maxang,*),ydat(nat,maxang,*),
+     $     zdat(nat,maxang,*),
+     $     atmxvec(nat,nat),atmyvec(nat,nat),atmzvec(nat,nat)
+
+
+      logical urohf
+      parameter (mxatm=2000)
+      parameter (zero=0.0d+00)
+      parameter (mxgrid=10,mxgridtyp=10)
+c     
+      common /dfgrid/ dftthr,dftgthr,swoff,sw0,bslrd(137),ndftfg,
+     $     nrad,nthe,nphi,nrad0,nthe0,nphi0,
+     $     nangpt(mxgrid),nangpt0(mxgrid),sg1,jans
+      common /dfprun/ prunerads(mxgrid,mxgridtyp),
+     $     pruneatoms(2,mxgridtyp),
+     $     iprunecuts(mxatm),ntotgridpoints(mxatm),
+     $     ngrids,maxang,ngridtyps
+      common /infoa / nat,ich,mul,num,nqmt,ne,na,nb,
+     $     zan(mxatm),c(3,mxatm),ian(mxatm)
+c     
+      common /fmcom / x(1)
+
+#ifdef HAVE_CCHEM
+
+      character*10 functional
+      integer pushfm, pointer
+      integer basis, basis_new_gamess
+      integer molecule, molecule_new_gamess
+      integer wf, new_wavefunction
+      double precision dr(3)
+      integer task,loop
+
+      functional = 'b3lyp'
+
+      call ddi_dlbreset()
+      call ddi_smp_nproc(np,iproc)
+      if (iproc.ne.0) goto 100
+      
+      molecule = molecule_new_gamess()
+      basis = basis_new_gamess(molecule)
+      call basis_recenter(basis, 
+     $     atmxvec(ncntr,1), nat,
+     $     atmyvec(ncntr,1), nat,
+     $     atmzvec(ncntr,1), nat)
+
+      wf = new_wavefunction(basis)
+      call wavefunction_set_occupied(wf, 0, na, 0)
+      call wavefunction_set_c(wf, 'T', na, L1, coeffa, L1)
+      call wavefunction_normalize(wf)
+
+      call delete_molecule(molecule)
+      Xa = zero
+      Xg = zero
+      Ec = zero
+      Rho = zero
+
+      call ddi_dlbnext(task)
+      loop = 0
+
+c     loop over radial grids
+c     loop over angular grids
+c     stb modified for pruning
+      maxnp = 512
+      pointer = pushfm(4*maxnp) 
+      np = 0
+      igrid = 1
+      do iradpt = 1, nrad
+         r1= rad*ptrad(iradpt)
+         if(r1.ge.(prunerads(igrid,iprunecuts(ncntr))*rad)) then
+            igrid = igrid + 1
+         endif
+         do 10 iangpt = iangn(ncntr,1,igrid), iangn(ncntr,2,igrid)
+
+            loop = loop + 1
+            if ((task+1).ne.loop) goto 10
+            call ddi_dlbnext(task)
+
+            ipt=(iradpt-1)*napts(ncntr)+iangpt
+            ftotwt = totwt(ncntr,ipt)*fact
+            if(abs(ftotwt).lt.wcutoff) goto 10
+            xd=r1*xdat(ncntr,iangpt,igrid)
+            yd=r1*ydat(ncntr,iangpt,igrid)
+            zd=r1*zdat(ncntr,iangpt,igrid)
+            X(pointer + 0) = xd
+            X(pointer + 1) = yd
+            X(pointer + 2) = zd
+            X(pointer + 3) = ftotwt
+            np = np+1
+            pointer = pointer+4
+            if (np.eq.maxnp) then
+               pointer = pointer - 4*np
+               call cchem_dft_fock(
+     $              wf, rcutoff, ccutoff,
+     $              np, X(pointer), 4, X(pointer+3), 4,
+     $              Fa, Xa, Xg, Ec, Rho, functional)
+               np = 0
+            endif
+ 10       continue
+      end do
+      if (np.ne.0) then
+         pointer = pointer - 4*np
+         call cchem_dft_fock(
+     $        wf, rcutoff, ccutoff,
+     $        np, X(pointer), 4, X(pointer+3), 4,
+     $        Fa, Xa, Xg, Ec, Rho, functional)
+      endif
+      call popfm(4*maxnp)
+      Ex = Xa + Xg
+      call delete_wavefunction(wf)
+      call delete_basis(basis)
+
+ 100  continue
+
+#else
+      call GMS_CCHEM_ERROR()
+#endif /* HAVE_CCHEM */
+      return 
+      end subroutine

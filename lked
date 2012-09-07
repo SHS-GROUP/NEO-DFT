@@ -1,6 +1,6 @@
 #!/bin/csh
 #
-#   2 Sept. 12 - script to "link-edit" a GAMESS executable
+#   7 Sept. 12 - script to "link-edit" a GAMESS executable
 #
 #  Invoke this job by 'lked EXE VERNO >& lked.log &'
 #    EXE is normally 'gamess',
@@ -64,10 +64,11 @@ set XMVB=false
 #
 set NEO=false
 #
-#   4. optional Nvidia/CUDA code, for closed shell SCF Fock construction
+#   4. optional C++ code, running on CPUs, and possibly Nvidia/CUDA GPUs
 #         see ~/gamess/libcchem/aaa.readme.1st for more information
 #
-set GPUCODE=false
+set CCHEM=false
+if ($?GMS_LIBCCHEM) set CCHEM=$GMS_LIBCCHEM
 #
 #   5. optional Natural Bond Orbital (NBO) interface
 #         see http://www.chem.wisc.edu/~nbo6
@@ -530,7 +531,9 @@ if ($TARGET == linux64) then
 
    case mkl:
       set mpath=$GMS_MATHLIB_PATH
-      switch ($GMS_MKL_VERNO)
+      set mklver=$GMS_MKL_VERNO
+      if ($CCHEM == true) set mklver=${mklver}-so
+      switch ($mklver)
         case 8:
           set MATHLIBS="-L$mpath -lmkl_lapack64 -lmkl -lguide -lpthread"
           breaksw
@@ -561,9 +564,16 @@ if ($TARGET == linux64) then
           #  Just hand edit GMS_MKL_VERNO in your 'install.info' to use this.
           #  run-time libs (and LD_LIBRARY_PATH) needed on every compute node!
           #  note that it does force single-threaded usage.
+          #  LIBCCHEM fails to link properly against static libraries.
+          #  LIBCCHEM prefers to use threading
           set iflib=intel
           if ($GMS_FORTRAN == gfortran) set iflib=gf
-          set MATHLIBS="-L$mpath -lmkl_${iflib}_ilp64 -lmkl_sequential -lmkl_core"
+          if ($CCHEM == false) then
+             set MATHLIBS="-L$mpath -lmkl_${iflib}_ilp64 -lmkl_sequential -lmkl_core"
+          else
+             set MATHLIBS="-L$mpath -lmkl_${iflib}_ilp64 -lmkl_${iflib}_thread -lmkl_core -liomp5"
+          endif
+          breaksw
         default:
           echo "unknown version number for MKL/linux64"
           echo "please edit 'lked' to select the right 64 bit MKL libraries."
@@ -1215,26 +1225,27 @@ else
    echo "   Nuclear Electron Orbital code skipped, using dummy object $NEOOBJ"
 endif
 #
-#    CUDA (et cetera) libraries below will require editing to match
-#                               your computer's pathnames!
-#    Our two clusters differ in where the CUDA lives.
-#    Gnu's openMP library is needed if --disable-omp was not used:
-if ($GPUCODE == true) then
-   echo "   Using 'libcchem' add-in C++ codes for Nvidia/CUDA GPUs."
-   set GPU_LIBS="-L/home/mike/gamess/libcchem/lib -lcchem_gamess -lcchem -lrysq"
-   set GPU_LIBS="$GPU_LIBS -L/share/apps/cuda/lib64 -lcudart -lcublas"
-   ### GPU_LIBS="$GPU_LIBS -L/usr/local/cuda/lib64  -lcudart -lcublas"
-   set GPU_LIBS="$GPU_LIBS /usr/local/lib/libboost_thread.a"
-   set GPU_LIBS="$GPU_LIBS /usr/local/lib/libhdf5_cpp.a"
-   set GPU_LIBS="$GPU_LIBS /usr/local/lib/libhdf5.a"
-   set GPU_LIBS="$GPU_LIBS -lz"
-   set GPU_LIBS="$GPU_LIBS -lstdc++"
-   ### GPU_LIBS="$GPU_LIBS -lgomp"
-   set GPU_LIBS="$GPU_LIBS -lpthread"
-   echo "   libcchem GPU code's libraries are"
-   echo "$GPU_LIBS"
+#    CUDA (et cetera) libraries may require two edits:
+#       path for CUDA to its two libraries.
+#       path for HDF5 library.
+#
+if ($CCHEM == true) then
+   echo "   Using 'libcchem' add-in C++ code for CPUs and/or Nvidia/CUDA GPUs."
+   set CCHEM_LIBS="cchem.o"
+   set CCHEM_LIBS="$CCHEM_LIBS -L$GMS_PATH/libcchem/lib -lcchem_gamess -lcchem -lrysq"
+   set CCHEM_LIBS="$CCHEM_LIBS -L/share/apps/cuda4.1/lib64 -lcudart -lcublas"
+   set CCHEM_LIBS="$CCHEM_LIBS $GMS_PATH/libcchem/boost/lib/libboost_thread.a"
+   set CCHEM_LIBS="$CCHEM_LIBS /usr/local/lib/libhdf5.a"
+   set CCHEM_LIBS="$CCHEM_LIBS -lz"
+   set CCHEM_LIBS="$CCHEM_LIBS -lstdc++"
+   set CCHEM_LIBS="$CCHEM_LIBS -lgomp"
+   set CCHEM_LIBS="$CCHEM_LIBS -lpthread"
+   echo "   libcchem's libraries are"
+   echo "$CCHEM_LIBS"
+   #           must switch to GA rather than DDI, this is echoed later on.
+   set MSG_LIBRARIES="ga.o zga.o $GMS_PATH/libcchem/ga/lib/libga.a $MPILIBS"
 else
-   set GPU_LIBS=""
+   set CCHEM_LIBS="cchdmy.o"
 endif
 #
 #   NBO is turned off with nbostb.o dummy substitute in GAMESS distribution.
@@ -1334,7 +1345,7 @@ $LDR  $EXTRA_LINK_FLAGS:q -o $GMS_BUILD_DIR/$EXE.$VERNO.x $LDOPTS \
       $STANDARD_GAMESS_OBJ3 \
       $QMMMOBJ $VBOBJ $NEOOBJ $NBOOBJ \
       $GMS_EXTRA_OBJS \
-      $GPU_LIBS \
+      $CCHEM_LIBS \
       $MPQCOBJ $MPQCLIBS $LIBINT \
       $MSG_LIBRARIES $LIBRARIES $EXTRA_MPI_LIB_FLAGS:q
 #

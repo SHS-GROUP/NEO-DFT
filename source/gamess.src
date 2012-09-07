@@ -1,3 +1,4 @@
+C  7 Sep 12 - AA  - update interface to LIBCCHEM
 C  2 Sep 12 - NM  - WFN: skip SCF for the 2nd calc. in the CI search
 C 24 JUL 12 - DGF - PAD COMMON FOR FMO 4.3
 C 21 JUN 12 - DGF - CHANGES FOR FMO 4.3
@@ -473,6 +474,7 @@ C     NO TIMING CALLS BEFORE BEGING --> DDI_PBEG BECAUSE MPI_WTIME IS UTILIZED I
 C     TSECND
 C
       CALL BEGING(VERSN)
+      CALL GMS_CCHEM_INITIALIZE()
 C
       call vclr(timstp,1,maxtstp*4)
       call stopwa(1,0)
@@ -2231,6 +2233,8 @@ C
 C
       LOGICAL GOPARR,DSKWRK,MASWRK,ABEL,ABELPT,DIRSCF,FDIFF,
      *        EOM,DDITRF,NDINTS,DOCORE
+      LOGICAL GMS_CCHEM
+      DIMENSION ECCHEM(5)
 C
       PARAMETER (MXRT=100, MXATM=2000, MXAO=8192)
 C
@@ -2273,6 +2277,7 @@ C
      *                FZCORE,DOMP1,HFFRM
 C
       DATA RHF,ROHF/8HRHF     ,8HROHF    /
+      DATA CCSDT/8HCCSD(T) /
       DATA EOMSD,CREOM,CREOML,CRCCL
      *   /8HEOM-CCSD,8HCR-EOM  ,8HCR-EOML ,8HCR-CCL  /
       DATA CHECK/8HCHECK   /
@@ -2288,6 +2293,57 @@ C
       NCCTOT = NQMT
       IXESPS=IXESP
       IF(NFG.NE.0.AND.IAND(IXESP,2048).NE.0) IXESP=IXESP-2048
+C
+C        LIBCCHEM's C++ program can take CCSD(T) runs only.
+C
+      IF (GMS_CCHEM()  .AND.  CCTYP.EQ.CCSDT) THEN
+         CALL SYSINP(MEMORY,MEMDDI)
+         IF(NPROC.GT.1  .AND.  MEMDDI.EQ.0) THEN
+            IF(MASWRK) THEN
+               WRITE(IW,*) 'PARALLEL LIBCCHEM CCSD(T) WITHOUT MEMDDI.'
+               WRITE(IW,*) 'ASSUMING LIBCCHEM BUILT WITH PARALLEL HDF5.'
+            END IF
+            CALL ABRT
+         END IF
+         IF(MASWRK) THEN
+            WRITE(IW,9200) CCTYP,NCCTOT,NCCOCC,NCCFZC,NCCFZV,
+     *                     MXCCIT,MXRLEIT,ICCCNV,AMPTSH
+            WRITE(IW,*) ' '
+         END IF
+C
+         CALL GMS_CCHEM_CCSD_ENERGY(ECCHEM)
+C
+         E    = ESCF + ECCHEM(4)
+         ETOT = ESCF + ECCHEM(4)
+         IF(MASWRK) THEN
+            WRITE(IW,*) ' '
+            WRITE(IW,9210) ESCF,ESCF+ECCHEM(1),ESCF+ECCHEM(2),
+     *                          ESCF+ECCHEM(3),ESCF+ECCHEM(4)
+            WRITE(IW,*) ' '
+            WRITE(IW,*) '.... DONE WITH CCSD(T) ENERGY ....'
+         END IF
+         CALL TIMIT(1)
+         RETURN
+      END IF
+ 9200 FORMAT(/5X,41(1H-),5X,21(1H-)/
+     *        5X,'CCSD(T) ENERGY CALCULATION USING LIBCCHEM',
+     *        5X,'PROGRAM BY A.ASADCHEV'/
+     *        5X,41(1H-),5X,21(1H-)/
+     *        1X,'CCTYP                        =',A8/
+     *        1X,'TOTAL NUMBER OF MOS          =',I6/
+     *        1X,'NUMBER OF OCCUPIED MOS       =',I6/
+     *        1X,'NUMBER OF FROZEN CORE MOS    =',I6/
+     *        1X,'NUMBER OF FROZEN VIRTUAL MOS =',I6/
+     *        1X,'MAXIMUM CC ITERATIONS        =',I6/
+     *        1X,'MAXIMUM DIIS ITERATIONS      =',I6/
+     *        1X,'CONVERGENCE CRITERION FOR CC =',I6/
+     *        1X,'AMPLITUDE ACCURACY THRESHOLD =',1P,E8.1)
+ 9210 FORMAT(/5X,'LIBCCHEM''S COUPLED CLUSTER CALCULATION RESULTS:'/
+     *        10X,'E(RHF)     =',F20.10/
+     *        10X,'E(MP2)     =',F20.10/
+     *        10X,'E(CCSD)    =',F20.10/
+     *        10X,'E(CCSD[T]) =',F20.10/
+     *        10X,'E(CCSD(T)) =',F20.10)
 C
       IF(MASWRK) THEN
          IF(.NOT.DODCCR) THEN
@@ -3014,8 +3070,8 @@ C
       DATA RMP,ZAPT          /8HRMP     ,8HZAPT    /
       DATA DEMRPT,RMCQD,GVVPT,GMCQDPT
      *    /8HDETMRPT ,8HMCQDPT  ,8HGVVPT   ,8HGMCPT   /
-      DATA SERIAL,DDI,IMS,RIMP2,GPU
-     *    /8HSERIAL  ,8HDDI     ,8HIMS     ,8HRIMP2   ,8HGPU     /
+      DATA SERIAL,DDI,IMS,RIMP2,CCHEM
+     *    /8HSERIAL  ,8HDDI     ,8HIMS     ,8HRIMP2   ,8HCCHEM   /
       DATA G3MP2/8HG3MP2   /
       DATA RNONE/8HNONE    /
 C
@@ -3151,7 +3207,7 @@ C                     STANDARD CLOSED SHELL MP2
                IF(CODEMP.EQ.DDI)    CALL MP2DDI
                IF(CODEMP.EQ.SERIAL) CALL MP2NRG
                IF(CODEMP.EQ.IMS)    CALL MP2IMS
-               IF(CODEMP.EQ.GPU)    CALL MP2GPU
+               IF(CODEMP.EQ.CCHEM)  CALL MP2CCHEM
                IF(CODEMP.EQ.RIMP2)  CALL RIMP2DRIVER
             ENDIF
 C

@@ -1,3 +1,4 @@
+C  7 Sep 12 - AA  - SOGRAD,SOTRAN: LIBCCHEM/GA can't do proc-to-proc msg
 C 04 MAY 12 - ND  - STABILITY ANALYSIS OF THE RHF WAVEFUNCTION
 c 23 MAR 12 - DGF - enable locking SCF options during switches
 C 28 DEC 11 - DGF - PAD COMMONS FOR FMO 4.2
@@ -4272,6 +4273,7 @@ C
       PARAMETER (ZERO=0.0D+00, MXSEQ=150)
 C
       LOGICAL GOPARR,DSKWRK,MASWRK,PARR
+      LOGICAL GMS_CCHEM
 C
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
       COMMON /SCFOPT/ CONVHF,MAXIT,MCONV,NPUNCH,NPREO(4)
@@ -4291,6 +4293,8 @@ C
       CALL VCLR(WRK,1,L1)
       KG=0
       PARR = GOPARR  .AND.  NA.GT.MXSEQ
+C
+      IF(PARR  .AND.  GMS_CCHEM()) CALL VCLR(GRAD,1,NA*NVIR)
 C
 C          MULTIPLY NA (OCCUPIED) FIRST ROWS OF C-DAGGER BY -F-
 C
@@ -4333,17 +4337,21 @@ C     ----- GO PARALLEL! -----
 C     COLLECT COLUMNS FROM EACH NODE TO MASTER, THEN BROADCAST TO ALL
 C
       IF(PARR) THEN
-         DO 350 I=1,NA
-            IFROM = MOD(I,NPROC)
-            IF(IFROM.EQ.MASTER) GO TO 350
-            II= (I-1)*NVIR+1
-            IF(MASWRK) THEN
-               CALL DDI_RECV(GRAD(II),8*NVIR,IFROM)
-            ELSE
-               IF(IFROM.EQ.ME) CALL DDI_SEND(GRAD(II),8*NVIR,MASTER)
-            END IF
-  350    CONTINUE
-         CALL DDI_BCAST(1011,'F',GRAD,NA*NVIR,MASTER)
+         IF(.NOT.GMS_CCHEM()) THEN
+            DO 350 I=1,NA
+               IFROM = MOD(I,NPROC)
+               IF(IFROM.EQ.MASTER) GO TO 350
+               II= (I-1)*NVIR+1
+               IF(MASWRK) THEN
+                  CALL DDI_RECV(GRAD(II),8*NVIR,IFROM)
+               ELSE
+                  IF(IFROM.EQ.ME) CALL DDI_SEND(GRAD(II),8*NVIR,MASTER)
+               END IF
+  350       CONTINUE
+            CALL DDI_BCAST(1011,'F',GRAD,NA*NVIR,MASTER)
+         ELSE
+            CALL DDI_GSUMF(1011,GRAD,NA*NVIR)
+         END IF
       END IF
 C
       IMAX   = IDAMAX(NPR,GRAD,1)
@@ -4661,6 +4669,7 @@ C
 C
       PARAMETER (ZERO=0.0D+00, HALF=0.5D+00, ONE=1.0D+00, MXSEQ=150)
       LOGICAL GOPARR,DSKWRK,MASWRK,PARR
+      LOGICAL GMS_CCHEM
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
 C
 C     ----- APPROXIMATE SECOND ORDER ORBITAL TRANSFORMATION -----
@@ -4769,12 +4778,21 @@ C
       END IF
 C
 C     ----- ROTATE THE ORBITALS -C- BY TRANSFORMATION -G- -----
+C     LIBCCHEM OVER GA HAS NO POINT TO POINT MESSAGING,
+C     SO FALL BACK TO LESS SCALABLE GLOBAL SUM INVOLVING ZEROS.
 C
       IF(PARR) THEN
          DO 650 I=1,L1
-            DO 610 K=1,L0
-               WRK(K)=C(I,K)
-  610       CONTINUE
+            IF(.NOT.GMS_CCHEM()) THEN
+               DO K=1,L0
+                  WRK(K)=C(I,K)
+               ENDDO
+            ELSE
+               DO K=1,L0
+                  WRK(K)=C(I,K)
+                  C(I,K) = ZERO
+               ENDDO
+            ENDIF
             DO 630 J=1,L0
                IF(MOD(J,NPROC).NE.ME) GO TO 630
                DUM=ZERO
@@ -4785,16 +4803,20 @@ C
   630       CONTINUE
   650    CONTINUE
 C
-         DO 660 J=1,L0
-            JFROM = MOD(J,NPROC)
-            IF(JFROM.EQ.MASTER) GO TO 660
-            IF(MASWRK) THEN
-               CALL DDI_RECV(C(1,J),8*L1,JFROM)
-            ELSE
-               IF(JFROM.EQ.ME) CALL DDI_SEND(C(1,J),8*L1,MASTER)
-            END IF
-  660    CONTINUE
-         CALL DDI_BCAST(1012,'F',C,L1*L0,MASTER)
+         IF(.NOT.GMS_CCHEM()) THEN
+            DO 660 J=1,L0
+               JFROM = MOD(J,NPROC)
+               IF(JFROM.EQ.MASTER) GO TO 660
+               IF(MASWRK) THEN
+                  CALL DDI_RECV(C(1,J),8*L1,JFROM)
+               ELSE
+                  IF(JFROM.EQ.ME) CALL DDI_SEND(C(1,J),8*L1,MASTER)
+               END IF
+  660       CONTINUE
+            CALL DDI_BCAST(1012,'F',C,L1*L0,MASTER)
+         ELSE
+            CALL DDI_GSUMF(1011,C,L1*L0)
+         END IF
       ELSE
          DO 750 I=1,L1
             DO 710 K=1,L0
