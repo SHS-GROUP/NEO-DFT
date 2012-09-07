@@ -1,6 +1,0 @@
-#ifndef TENSOR_CONFIG_HPP
-#define TENSOR_CONFIG_HPP
-
-#define TENSOR_MAX_RANK 4
-
-#endif // TENSOR_CONFIG_HPP
