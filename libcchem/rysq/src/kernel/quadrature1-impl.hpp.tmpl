@@ -1,0 +1,410 @@
+/**  ## -*- C++-Cheetah -*-
+#compiler-settings 
+directiveStartToken = %
+commentStartToken = ///
+#end compiler-settings
+ @file 
+ @warning Automatically Generated
+*/
+%include "global.tmpl"
+%from shell import Shell
+%from shell import Shell2
+
+#ifndef RYSQ_KERNEL_QUADRATURE1_IMPL_HPP_
+#define RYSQ_KERNEL_QUADRATURE1_IMPL_HPP_
+
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
+// #include <pmmintrin.h>
+
+#ifdef RYSQ_WITH_SSE
+#warning "Using SSE3 instructions"
+#include <pmmintrin.h>
+#include <xmmintrin.h>
+
+
+#define D128 __m128d
+#define ZERO _mm_setzero_pd()
+#define SET1(v) _mm_set1_pd((v))
+
+#define LOAD(m) _mm_load_pd((m))
+#define LOADU(m) _mm_loadu_pd((m))
+#define LOAD1(m) _mm_load_sd((m))
+#define	LOADDUP(m) _mm_loaddup_pd((m))
+
+#define STORE(m,r) _mm_store_pd((m), (r))
+#define STOREU(m,r) _mm_storeu_pd((m), (r))
+#define STORE1(m,r) _mm_store_sd((m), (r))
+
+#define MUL(x,y) _mm_mul_pd((x), (y))
+#define ADD(a,b) _mm_add_pd((a), (b))
+#define HADD(a,b) _mm_hadd_pd((a), (b))
+
+#define MUL1(x,y) _mm_mul_sd((x), (y))
+#define ADD1(a,b) _mm_add_sd((a), (b))
+
+#endif
+
+#include <math.h>
+#include "meta.hpp"
+#include "kernel/forward.hpp"
+
+%set fps = [ ("double", "", 8) ]
+
+namespace rysq {
+namespace kernel {
+namespace quadrature {
+
+
+    //unrolled bras
+
+#define Ix(a,i,j) (Ix[(a) + (i)*NT + (j)*(NT*Li1)])
+#define Iy(a,i,j) (Iy[(a) + (i)*NT + (j)*(NT*Li1)])
+#define Iz(a,i,j) (Iz[(a) + (i)*NT + (j)*(NT*Li1)])
+
+%for B in Shell.range(last=$LMAX, sp = $SP)
+%for A in Shell.range(last=$LMAX, sp = $SP)
+%set AB = Shell2(A, B)
+	///
+%for (fp,fp_suffix,fp_size) in fps
+///
+/** 
+    @brief <$(A)$(B)| shell quadrature
+    @param normalize
+    @param tol tolerance
+    @param K number of contractions
+    @param C contraction coefficients
+    @param dim2d 2-D integrals dimensions
+    @param Ix 2-D integral, Ix(N,Li,Lj,K,Lk,Ll)
+    @param Iy 2-D integral, Iy(N,Li,Lj,K,Lk,Ll)
+    @param Iz 2-D integral, Iz(N,Li,Lj,K,Lk,Ll)
+    @param scale scale factor
+    @param[out] I integral batch
+    @return number of screened integrals
+*/
+%set typeA = "rysq::%s" % (A.upper())
+%set typeB = "rysq::%s" % (B.upper())
+%set bra = "meta::state<%s,%s>" % (typeA, typeB)
+
+
+template<>
+struct impl< $(bra) > {
+
+    template<typename T>
+    struct aligned {
+#if (defined(__GNUC__) && ((__GNUC__ < 4) || (__GNUG__ == 4 && __GNUC_MINOR__ < 3)))
+#warning "alignment not implemented for GNUC < 4.3"
+	typedef T type;
+#else
+	typedef T type __attribute__((aligned (16)));
+#endif
+    };
+
+    template<size_t N, typename T, size_t NT>
+    static size_t apply(bool normalize,
+			double tol, int K,
+			const double *__restrict C,
+			int dim2d,
+			const typename aligned<T>::type *__restrict Ix,
+			const typename aligned<T>::type *__restrict Iy, 
+			const typename aligned<T>::type *__restrict Iz, 
+			double scale,
+			double *__restrict I);// __attribute__((pure));
+};
+
+template<size_t N, typename T, size_t NT>
+size_t impl< $(bra) >::apply(bool normalize,
+			     double tol, int K,
+			     const double *__restrict C,
+			     int dim2d,
+			     const typename aligned<T>::type *__restrict Ix,
+			     const typename aligned<T>::type *__restrict Iy, 
+			     const typename aligned<T>::type *__restrict Iz, 
+			     double scale,
+			     double *__restrict I) {
+
+%set nspij = 1<<(int(A.sp) + int(B.sp))
+    const int Li1 = $(A.L + 1);
+    
+    int num = 0;
+    
+    /// first function in block 
+%set ifb = 0  
+    
+    /// function block
+%for fb in AB.partition(block = 10)
+    ///$KERNEL_BLOCK)
+    
+    //contracted registers
+#ifdef RYSQ_WITH_SSE
+    // std::cout <<  "SSE" << std::endl;
+%for i in range(ifb, len(fb)+ifb, 2)
+     D128 qK$(i) = ZERO;
+%end for
+#else
+%for i in range(ifb, len(fb)+ifb)
+     //double qK$(i) = 0.0;
+%end for
+#endif
+
+#ifdef __GNUG__
+     asm("#begin vector loop");
+#endif
+
+    for(int k = 0; k < K*$(nspij); k += $(nspij)) {
+	double C_[$(nspij)];
+	for (int i = 0; i < $(nspij); ++ i) C_[i] = C[k + i];
+
+	// // prefetch next contraction
+	// _mm_prefetch(Ix + 3*dim2d, _MM_HINT_T0);
+	// _mm_prefetch(Iy + 3*dim2d, _MM_HINT_T0);
+	// _mm_prefetch(Iz + 3*dim2d, _MM_HINT_T0);
+
+#ifdef RYSQ_WITH_SSE
+	
+	// prefetch next contraction
+	_mm_prefetch(Ix + 3*dim2d, _MM_HINT_T0);
+	_mm_prefetch(Iy + 3*dim2d, _MM_HINT_T0);
+	_mm_prefetch(Iz + 3*dim2d, _MM_HINT_T0);
+
+/// cartesian factors in block
+%set xset = set([(fi[0],fj[0]) for (fi,fj) in fb])
+%set yset = set([(fi[1],fj[1]) for (fi,fj) in fb])
+%set zset = set([(fi[2],fj[2]) for (fi,fj) in fb])
+%for i in range(ifb, len(fb)+ifb)
+	D128 q$(i) = ZERO;
+%end for
+///
+ 	for (int a = 0; a < (int(N)/2)*2; a += 2) {
+///
+%for (i,j) in xset 
+	    D128 x$(i)$(j) = LOAD(&Ix(a,$(i),$(j)));
+%end for
+%for (i,j) in yset 
+	    D128 y$(i)$(j) = LOAD(&Iy(a,$(i),$(j)));
+%end for
+%for (i,j) in zset 
+	    D128 z$(i)$(j) = LOAD(&Iz(a,$(i),$(j)));
+%end for
+/// for functions in block
+%for ii, (fi,fj) in enumerate(fb) 
+%set i = ii + ifb
+%set (x,y,z) = ["%s%i%i" % ("xyz"[q], fi[q], fj[q]) for q in range(3)]
+///
+	    q$(i) = ADD(q$(i), MUL(MUL($(x), $(y)), $(z)));
+%end for
+	}
+
+#ifdef __GNUG__
+     asm("#end vector loop");
+#endif
+
+ 	for (int a = (int(N)/2)*2; a < int(N); a += 1) {
+%for (i,j) in xset 
+	    D128 x$(i)$j = LOAD1(&Ix(a,$(i),$j));
+%end for
+%for (i,j) in yset 
+	    D128 y$(i)$j = LOAD1(&Iy(a,$(i),$j));
+%end for
+%for (i,j) in zset 
+	    D128 z$(i)$j = LOAD1(&Iz(a,$(i),$j));
+%end for
+/// for functions in block
+%for ii, (fi,fj) in enumerate(fb) 
+%set i = ii + ifb
+%set (x,y,z) = ["%s%i%i" % ("xyz"[q], fi[q], fj[q]) for q in range(3)]
+///
+	    q$(i) = ADD1(q$(i), MUL1(MUL1($(x), $(y)), $(z)));
+%end for
+/// end for functions in block
+	}
+
+%set coefficient0 = lambda A, index: int(A.sp and (index % len(A)) > 0)
+%set coefficient1 = lambda A, B, index: int(B.sp and (index >= len(A)))
+%set coefficient = lambda A, B, index: coefficient0(A, index) + (coefficient1(A, B, index) << int(A.sp))
+///
+	//contraction coefficients
+	//D128 C0 = _mm_loaddup_pd(&C[k]);
+///for functions in block
+%set coefficients = set()
+%for ii in range(0, len(fb), 2) 
+%set i = ii + ifb  
+///
+%set k0 = coefficient(A, B, i)
+%set k1 = (coefficient(A, B, i+1), k0)[ii == len(fb)-1]
+///
+%set C = "C%i%i" % (k0, k1)
+%if (k0,k1) not in coefficients
+%silent coefficients.add((k0,k1))
+%if k0 == k1
+	D128 $(C) = LOADDUP(&C[k+$(k0)]);
+%else
+	D128 $(C) = LOADU(&C[k+$(k0)]);
+%end if
+%end if
+///
+%if ii == len(fb)-1
+	qK$(i) = ADD1(qK$(i), MUL1($(C), HADD(q$(i), q$(i))));
+%else
+	qK$(i) = ADD(qK$(i), MUL($(C), HADD(q$(i), q$(i+1))));
+%end if
+%end for 
+///end for functions in block
+
+#else // SSE
+	    
+	// function registers
+%for i in range(ifb, len(fb)+ifb)
+	T q$(i) = 0.0$(fp_suffix);
+%end for
+    
+#if defined (__INTEL_COMPILER) 
+#pragma vector aligned
+#endif // alignment attribute
+
+	for (int a = 0; a < int(N); ++a) {
+%for ii, (fi,fj) in enumerate(fb) 
+%set i = ii + ifb
+%set (ix,iy,iz) = fi[0:3]
+%set (jx,jy,jz) = fj[0:3]
+	    q$(i) += Ix(a,$(ix),$(jx))*Iy(a,$(iy),$(jy))*Iz(a,$(iz),$(jz));
+%end for
+	    /// end for functions in block
+	}
+	    
+	//contraction coefficients
+///for functions in block
+%for ii in range(0, len(fb)) 
+%set i = ii + ifb  
+%set k = int(A.sp and (i % len(A)) > 0)
+%set k += int(B.sp and (i >= len(A))) << int(A.sp)
+	//qK$(i) += q$(i)*C[k+$(k)];
+	//I[$(i)] += q$(i)*C[k+$(k)];
+	I[$(i)] += q$(i)*C_[$(k)];
+%end for 
+///end for functions in block
+
+#endif // not SSE
+	    
+	Ix += 3*dim2d;
+	Iy += 3*dim2d;
+	Iz += 3*dim2d;
+	
+    }
+    Ix = Ix - 3*dim2d*K;
+    Iy = Iy - 3*dim2d*K;
+    Iz = Iz - 3*dim2d*K;
+    
+    // normalization, scaling, and storage
+
+#ifdef RYSQ_WITH_SSE
+
+    {
+	D128 q = SET1(scale);
+%for i in range(ifb, (ifb + len(fb)), 2)
+	qK$(i) = MUL(q, qK$(i));
+%end for
+	num += $(len(fb)); //num += (fabs(I[$(i)]) >= tol);
+    }
+
+    if (normalize) {
+	throw std::runtime_error("not implemented");
+    }
+    else {
+	if (size_t(&I[$(ifb)]) & 0xF) {
+	    // $(ifb, (ifb + (len(fb)/2)*2))
+%for i in range(ifb, (ifb + (len(fb)/2)*2), 2)
+	    STOREU(&I[$(i)], ADD(qK$(i), LOADU(&I[$(i)])));
+%end for 
+	}
+	else {
+%for i in range(ifb, (ifb + (len(fb)/2)*2), 2)
+	    STORE(&I[$(i)], ADD(qK$(i), LOADU(&I[$(i)])));
+%end for 
+	}
+%if len(fb)%2
+%set i = (ifb + (len(fb)/2)*2)
+	STORE1(&I[$(i)], ADD1(qK$(i), LOAD1(&I[$(i)])));
+%end if
+/// functions in block
+    }
+
+#else // !SSE
+
+    if(normalize) {
+/// functions in block
+%for ii in range(0, len(fb)) 
+%set i = ii + ifb 
+%set ia = A.first + i % len(A)
+%set ib = B.first + i / len(A)
+	// I[$(i)] += scale*NORMALIZE[$(ia)]*NORMALIZE[$(ib)]*qK$(i);
+	// num += (fabs(I[$(i)]) >= tol);
+/// functions in block
+%end for 
+    }
+    else {
+/// functions in block
+%for ii in range(0, len(fb))
+%set i = ii + ifb
+	// I[$(i)] += scale*qK$(i);
+	// num += (fabs(I[$(i)]) >= tol);
+/// functions in block
+%end for 
+    }
+
+#endif // !SSE
+    
+/// advance function index
+%set ifb += len(fb) 
+/// function block
+%end for 
+    
+    return num;
+}
+
+
+%end for
+///end overloading precision
+
+///%end for
+///end for roots
+%end for
+///end for A
+%end for
+///end for B
+
+
+#undef Ix
+#undef Iy
+#undef Iz
+
+
+} // namespace rysq
+} // namespace kernel
+} // namespace quadrature
+
+
+#undef D128
+#undef ZERO
+#undef SET1
+
+#undef LOAD
+#undef LOADU
+#undef LOAD1
+#undef LOADDUP
+
+#undef STORE
+#undef STOREU
+#undef STORE1
+
+#undef MUL
+#undef ADD
+#undef HADD
+
+#undef MUL1
+#undef ADD1
+
+#endif // RYSQ_KERNEL_QUADRATURE1_IMPL_HPP_
+

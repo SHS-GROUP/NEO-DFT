@@ -1,0 +1,270 @@
+/**  ## -*- C++-Cheetah -*-
+#compiler-settings 
+directiveStartToken = %
+commentStartToken = ///
+#end compiler-settings
+@file 
+@warning Automatically Generated
+*/
+%include "global.tmpl"
+%import operator
+%from shell import Shell, product, coefficient_index2
+
+%set Specs = eval(file("quadrature2.py", "r").read())
+
+#ifndef RYSQ_KERNEL_QUADRATURE2_IMPL_HPP
+#define RYSQ_KERNEL_QUADRATURE2_IMPL_HPP
+
+#include "rysq-core.hpp"
+#include "meta.hpp"
+#include "kernel/forward.hpp"
+#include "kernel/vector.hpp"
+
+#include <boost/config.hpp>
+
+namespace rysq {
+namespace kernel {
+namespace quadrature {
+
+namespace recurrence {
+
+    BOOST_GPU_ENABLED
+    inline double coefficient(double A1, double B, double t2) {
+	return 0.5*A1*(1.0 - B*t2);
+    }
+    
+    template<int q, class RAI, class RAB>
+    BOOST_GPU_ENABLED
+    inline double coefficient(const RAI &rAi, double B,
+			      const RAB &rAB, double t2) {
+	return rAi[q] - B*rAB[q]*t2;
+    }
+
+    // template<int q, int N>
+    // BOOST_GPU_ENABLED vector<N> coefficient(const vector<3> &rAi, double B,
+    // 					const vector<3> &rAB, double (&t2)[N]) {
+    // 	vector<N> C;
+    // 	for (int a = 0; a < N; ++a) {
+    // 	    C[a] = coefficient<q>(rAi, B, rAB, t2[a]);
+    // 	}
+    // return C;
+    // }
+
+    template<size_t N>
+    BOOST_GPU_ENABLED double pow(double x) { return x*pow<N-1>(x); }
+    template<>
+    BOOST_GPU_ENABLED inline double pow<0>(double) { return double(1); }
+
+}
+
+namespace mpl = boost::mpl;
+
+///%set types = []
+%for spec in Specs.items()
+%set S = map(Shell, spec[0])
+%set (symbols, exprs) = spec[1]
+%set Q = list(product(*S))
+%set bra = ", ".join(["rysq::%s" % (s.upper()) for s in S[:2]])
+%set ket = ", ".join(["rysq::%s" % (s.upper()) for s in S[2:]])
+%set tparams = ", ".join(["%s" % (s.upper()) for s in S])
+///%set types = types + [ tparams ]
+%set L = sum([s.L for s in S])
+%set N = L/2 + 1
+%set size =  reduce(operator.mul, map(len, S))
+%set (nci, ncj) = [ S[0].nc*S[1].nc, S[2].nc*S[3].nc ]
+%set nc = nci*ncj
+
+template<>
+struct impl<meta::braket<$(bra), $(ket)> > {
+    typedef void enable;
+    static const bool value = true; 
+    static const int N = $(N);
+
+    struct update {
+	BOOST_GPU_ENABLED
+	void operator()(const double &q, double *Q) const {
+	    *Q += q;
+	}
+    };
+
+    template<
+	class RAI, class RBK, 
+	class RAB,
+	class RIJ, class RKL,
+	class T2_, class W_>
+    BOOST_GPU_ENABLED
+    static inline
+    void eval(double A, double B,
+	      const RAI &rAi, const RBK &rBk,
+	      const RAB &rAB,
+	      const RIJ &rij, const RKL &rkl,
+	      const T2_ &t2, const W_ &W,
+	      const double (&C)[$(ncj)][$(nci)],
+    // void eval(double A, double B,
+    // 		     const vector<3> &rAi, const vector<3> &rBk,
+    // 		     const vector<3> &rAB,
+    // 		     const vector<3> &rij, const vector<3> &rkl,
+    // 		     const vector<$(min(N,L))> &t2, const vector<$(N)> &W,
+    // 		     const double (&C)[$(ncj)][$(nci)],
+	      double (&I)[$(size)]) {
+	eval<$(N)>(A, B, rAi, rBk, rAB, rij, rkl, t2, W, C, I, update());
+    }
+
+    template<int M,
+	class RAI, class RBK, 
+	class RAB,
+	class RIJ, class RKL,
+	class T2_, class W_>
+    BOOST_GPU_ENABLED
+    static inline
+    void eval(double A, double B,
+	      const RAI &rAi, const RBK &rBk,
+	      const RAB &rAB,
+	      const RIJ &rij, const RKL &rkl,
+	      const T2_ &t2, const W_ &W,
+	      const double (&C)[$(ncj)][$(nci)],
+	      double *I) {
+	eval<M>(A, B, rAi, rBk, rAB, rij, rkl, t2, W, C, I, update());
+    }
+
+    template<int M,
+	class RAI, class RBK, 
+	class RAB,
+	class RIJ, class RKL,
+	class T2_, class W_,
+	class U>
+    BOOST_GPU_ENABLED
+    static inline
+    void eval(double A, double B,
+	      const RAI &rAi, const RBK &rBk,
+	      const RAB &rAB,
+	      const RIJ &rij, const RKL &rkl,
+	      const T2_ &t2, const W_ &W,
+	      const double (&C)[$(ncj)][$(nci)],
+	      double *I, const U &update) {
+
+%if "Xij" in symbols
+	const double &Xij = rij[0];
+	const double &Yij = rij[1];
+	const double &Zij = rij[2];
+%end if
+
+%if "Xkl" in symbols
+	const double &Xkl = rkl[0];
+	const double &Ykl = rkl[1];
+	const double &Zkl = rkl[2];
+%end if
+
+	///%set BLOCK = 128
+%set exprs = sorted(exprs, key=lambda (Q,(E,S)): len(S) and sorted(S, reverse=True)[0] or '')
+%set BLOCK = len(exprs)
+%for I in range(0, len(exprs), $BLOCK)
+
+#if defined (__INTEL_COMPILER) 
+#pragma ivdep
+#pragma vector aligned
+#endif
+#ifdef __CUDACC__
+#pragma unroll
+#endif
+	for (int a = 0; a < M; ++a) {
+
+%if "B00" in symbols
+	    double B00 = 0.5*t2[a];
+%end if
+%if "B10" in symbols
+	    double B10 = recurrence::coefficient(1.0/A, B, t2[a]);
+%end if
+%if "B01" in symbols
+	    double B01 = recurrence::coefficient(1.0/B, A, t2[a]);
+%end if
+
+%if "Cx" in symbols
+	    double Cx = recurrence::coefficient<0>(rAi, B, rAB, t2[a]);
+	    double Cy = recurrence::coefficient<1>(rAi, B, rAB, t2[a]);
+	    double Cz = recurrence::coefficient<2>(rAi, B, rAB, t2[a]);
+%end if
+
+%if "Dx" in symbols
+	    double Dx = recurrence::coefficient<0>(rBk, -A, rAB, t2[a]);
+	    double Dy = recurrence::coefficient<1>(rBk, -A, rAB, t2[a]);
+	    double Dz = recurrence::coefficient<2>(rBk, -A, rAB, t2[a]);
+%end if 
+
+#define pow(x,y) recurrence::pow<y>((x))
+
+%set declared = []
+%set SE = [se[0] for se in sorted(symbols.items()) if se[1] ]
+%for (s,e) in [se for se in sorted(symbols.items()) if se[1] and se[0][0] != "f"]
+ 	    double $(s) = $(e);
+%silent declared.append(s)
+%end for
+
+%for j,(q,(e,s)) in enumerate(exprs[I:I+$BLOCK])
+%set i = Q.index(q)
+%set (k0,k1) = coefficient_index2(i, *S)
+%set last = (j+1 == len(exprs[I:I+$BLOCK]))
+%for sym in s
+%if sym not in declared and sym in SE
+	    double $(sym) = $(symbols[sym]);
+%silent declared.append(sym)
+%end if
+%end for  
+	    update((C[$(k1)][$(k0)])*W[a]*($(e)), I+$(j+I));
+%end for
+#undef pow
+
+	}
+%end for
+
+    }
+
+    BOOST_GPU_ENABLED static
+    void reorder(double (&I)[$(size)]) {
+	double T[$(size)];
+	for (int i = 0; i < $(size); ++i) {
+	    T[i] = I[i];
+	}
+%for j,(q,(e,s)) in enumerate(exprs)
+%set i = Q.index(q)
+	I[$(i)] = T[$(j)];
+%end for
+    }
+
+//     BOOST_GPU_ENABLED static
+//     size_t reorder(size_t index) {
+// %set index = [ (Q.index(q), j) for j,(q,e) in enumerate(exprs) ]
+// %set index = ", ".join( [ str(j) for (i, j) in sorted(index) ] )
+// 	const unsigned short index_[$(size)] = { $(index) };
+// 	if (index < $(size)) return index_[index];
+// 	return size_t(-1);
+//     }
+
+    BOOST_GPU_ENABLED
+    static int index(int i) {
+%set index = ", ".join(["%s" % Q.index(i) for (i,t) in exprs])
+	const unsigned short index[] = {
+	    $(index)
+	};
+	return index[i];
+    }
+
+    template<typename U>
+    BOOST_GPU_ENABLED
+    static void index(U *idx) {
+%for (i,t) in exprs
+	*idx++ = $(Q.index(i));
+%end for
+    }
+
+
+};
+%end for 
+
+
+} // namespace quadrature
+} // namespace kernel
+} // namespace rysq
+
+#endif /* RYSQ_KERNEL_QUADRATURE2_IMPL_HPP */
+

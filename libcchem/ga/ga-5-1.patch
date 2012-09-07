@@ -1,0 +1,663 @@
+diff -urN ga-5-1~/armci/src/common/armci.c ga-5-1/armci/src/common/armci.c
+--- ga-5-1~/armci/src/common/armci.c	2011-10-14 12:31:13.000000000 -0500
++++ ga-5-1/armci/src/common/armci.c	2012-04-27 18:22:46.000000000 -0500
+@@ -26,7 +26,10 @@
+  */
+ 
+ #define  EXTERN
+-/*#define  PRINT_BT*/
++
++#ifdef LINUX
++#define  PRINT_BT
++#endif
+ 
+ #if HAVE_STDIO_H
+ #   include <stdio.h>
+@@ -984,7 +987,11 @@
+ 	     armci_me,armci_clus_info[armci_clus_me].hostname, 
+ 	     getpid(), file,func,line,cond_string);
+ #if defined(PRINT_BT)
+-      backtrace_symbols_fd(bt, backtrace(bt, 100), 2);
++      {
++	  void *bt[100];
++	  printf("Backtrace:\n");
++	  backtrace_symbols_fd(bt, backtrace(bt, 100), 2);
++      }
+ #endif
+     }
+     armci_abort(code);
+diff -urN ga-5-1~/armci/src/common/pack.c ga-5-1/armci/src/common/pack.c
+--- ga-5-1~/armci/src/common/pack.c	2011-09-12 14:09:32.000000000 -0500
++++ ga-5-1/armci/src/common/pack.c	2012-04-27 18:22:46.000000000 -0500
+@@ -84,7 +84,8 @@
+                        int count[], int stride_levels, ext_header_t *h,
+                        int fit_level, int nb, int last,armci_ihdl_t nb_handle)
+ {
+-    int rc=0, sn, bufsize=BUFSIZE,noswap=0;
++    int rc=0, bufsize=BUFSIZE,noswap=0;
++    size_t sn;
+     void *src, *dst;
+ #ifdef REMOTE_OP
+     int flag=0;
+@@ -161,8 +162,8 @@
+         else{ b = chunk%nb; if(b==0)b=nb; } /* put smallest piece first */
+ 
+         for(sn = 0; sn < chunk; ){
+-           src = (char*)src_ptr + src_stride* sn;
+-           dst = (char*)dst_ptr + dst_stride* sn;
++	   src = (char*)src_ptr + (size_t)src_stride*sn;
++	   dst = (char*)dst_ptr + (size_t)dst_stride*sn;
+            count[fit_level] = ARMCI_MIN(b, chunk-sn); /*modify count for this level*/
+ 
+            if(h) h->last = (last && ((sn+b)>=chunk))? 1: 0 ;
+@@ -180,8 +181,8 @@
+     else {
+         for(sn = 0; sn < count[stride_levels]; sn++){
+            int looplast =0;
+-           src = (char*)src_ptr + src_stride_arr[stride_levels -1]* sn;
+-           dst = (char*)dst_ptr + dst_stride_arr[stride_levels -1]* sn;
++           src = (char*)src_ptr + (size_t)src_stride_arr[stride_levels -1]*sn;
++           dst = (char*)dst_ptr + (size_t)dst_stride_arr[stride_levels -1]*sn;
+ 
+            if(last && (sn == count[stride_levels]-1)) looplast =1;
+            rc = armci_pack_strided(op, scale, proc, src, src_stride_arr,
+diff -urN ga-5-1~/armci/src/common/signaltrap.c ga-5-1/armci/src/common/signaltrap.c
+--- ga-5-1~/armci/src/common/signaltrap.c	2010-12-01 19:30:28.000000000 -0600
++++ ga-5-1/armci/src/common/signaltrap.c	2012-04-27 18:22:46.000000000 -0500
+@@ -63,7 +63,6 @@
+ SigType (*SigChldOrig)(), (*SigIntOrig)(), (*SigHupOrig)(), (*SigTermOrig)();
+ SigType (*SigSegvOrig)();
+ 
+-
+ /*********************** SIGINT *************************************/
+ #if defined(SUN) && !defined(SOLARIS)
+ SigType SigIntHandler(sig, code, scp, addr)
+@@ -114,7 +113,7 @@
+      int sig;
+ {
+   AR_caught_sig= sig;
+-  Error("SigIntHandler: abort signal was caught: cleaning up",(int) sig);
++  Error("SigAbortHandler: abort signal was caught: cleaning up",(int) sig);
+ }
+ 
+ void TrapSigAbort()
+@@ -124,7 +123,7 @@
+   manner not possible just by killing everyone
+ */
+ {
+-  if (  signal(SIGINT, SigAbortHandler) == SIG_ERR)
++  if (  signal(SIGABRT, SigAbortHandler) == SIG_ERR)
+     Error("TrapSigAbort: error from signal setting SIGABORT",0);
+ }
+ 
+diff -urN ga-5-1~/armci/src/devices/mpi-spawn/mpi2_client.c ga-5-1/armci/src/devices/mpi-spawn/mpi2_client.c
+--- ga-5-1~/armci/src/devices/mpi-spawn/mpi2_client.c	2011-05-06 01:39:16.000000000 -0500
++++ ga-5-1/armci/src/devices/mpi-spawn/mpi2_client.c	2012-04-27 18:22:46.000000000 -0500
+@@ -102,9 +102,9 @@
+                        int count[], int proc, MPI_Comm comm)
+ {
+     int i, j;
+-    long idx;    /* index offset of current block position to ptr */
+-    int n1dim;  /* number of 1 dim block */
+-    int bvalue[MAX_STRIDE_LEVEL], bunit[MAX_STRIDE_LEVEL];
++    size_t idx;    /* index offset of current block position to ptr */
++    size_t n1dim;  /* number of 1 dim block */
++    size_t bvalue[MAX_STRIDE_LEVEL], bunit[MAX_STRIDE_LEVEL];
+     MPI_Status status;
+     
+     /* number of n-element of the first dimension */
+@@ -151,37 +151,41 @@
+ void armci_mpi_strided2(int op, void *ptr, int stride_levels, int stride_arr[],
+                         int count[], int proc, MPI_Comm comm)
+ {
+-    int i, stride=1;
++    int i;
+     MPI_Status status;
+-    MPI_Datatype type[MAX_STRIDE_LEVEL];
++    MPI_Datatype type[MAX_STRIDE_LEVEL+2];
++    MPI_Aint stride;
+ 
+-    if(stride_levels == 0) 
+-    {
++    if(stride_levels == 0) {
+         armci_mpi_strided(op, ptr, stride_levels, stride_arr, count, proc,
+                           comm);
+         return;
+     }
+ 
+-    /* convert stided data desciption to MPI type */
++    // convert stided data desciption to MPI type
+     type[0] = MPI_BYTE;
+-    for(i=1; i<=stride_levels; i++) 
+-    {
+-       stride *= stride_arr[i-1];
+-       MPI_Check( MPI_Type_hvector(count[i], count[i-1], stride,
+-                                  type[i-1], &type[i]) );
++    for (i = 0; i <= stride_levels; ++i) {
++	stride = (i == 0) ? 1 : stride_arr[i-1];
++    	// printf("count=%i, blocklen=%i, stride=%i\n", count[i], 1, stride);
++    	MPI_Check( MPI_Type_hvector(count[i], 1, stride, type[i], &type[i+1]) );
++    	MPI_Check( MPI_Type_commit(&type[i+1]) );
+     }
+-    MPI_Check( MPI_Type_commit(&type[stride_levels]) );
+-    
++
+     if(op == SEND) 
+     {
+-       MPI_Check( MPI_Send(ptr, 1, type[stride_levels], proc,
++       MPI_Check( MPI_Send(ptr, 1, type[stride_levels+1], proc,
+                            ARMCI_MPI_SPAWN_VDATA_TAG, comm) );
+     }
+     else /* ( op == RECV) */
+     {
+-       MPI_Check( MPI_Recv(ptr, 1, type[stride_levels], proc,
++       MPI_Check( MPI_Recv(ptr, 1, type[stride_levels+1], proc,
+                            ARMCI_MPI_SPAWN_VDATA_TAG, comm, &status) );
+     }
++
++    for (i = 0; i <= stride_levels; ++i) {
++	MPI_Check( MPI_Type_free(&type[i+1]) );
++    }
++
+ }
+ 
+ /*\ client sends request message to server
+diff -urN ga-5-1~/armci/src/devices/mpi-spawn/mpi2_server.c ga-5-1/armci/src/devices/mpi-spawn/mpi2_server.c
+--- ga-5-1~/armci/src/devices/mpi-spawn/mpi2_server.c	2011-05-06 01:39:16.000000000 -0500
++++ ga-5-1/armci/src/devices/mpi-spawn/mpi2_server.c	2012-04-27 18:22:46.000000000 -0500
+@@ -25,6 +25,7 @@
+ #include "mpi2.h"
+ #include "kr_malloc.h"
+ #include "locks.h"
++#include "signaltrap.h"
+ 
+ /* Inter-communicators for communicating with clients */
+ MPI_Comm MPI_COMM_SERVER2CLIENT=MPI_COMM_NULL;
+@@ -501,7 +502,7 @@
+     char processor_name[MPI_MAX_PROCESSOR_NAME];
+     long shm_info[3];
+     MPI_Status status;
+-    
++
+     MPI_Comm_rank(ARMCI_COMM_WORLD, &armci_server_me);
+     MPI_Comm_size(ARMCI_COMM_WORLD, &armci_nserver);
+     MPI_Get_processor_name(processor_name, &namelen);
+@@ -554,8 +555,11 @@
+              MPI_COMM_SERVER2CLIENT, &status);
+     
+     MPI_Recv(shm_info, 3, MPI_LONG, armci_client_first,
+-             ARMCI_MPI_SPAWN_INIT_TAG, MPI_COMM_SERVER2CLIENT, &status);
+-    
++             ARMCI_MPI_SPAWN_INIT_TAG, MPI_COMM_SERVER2CLIENT, &status);    
++
++#ifndef BLRTS
++    ARMCI_ChildrenTrapSignals();
++#endif
+     
+     /* server setup clusinfo&locks, exactly as this node's armci master */
+     emulate_armci_init_clusinfo();  /* armci_init_clusinfo()  in PARMCI_Init */
+@@ -570,6 +574,7 @@
+      * *******************************************************************/
+ 
+     MPI_Barrier(ARMCI_COMM_WORLD);
++
+ }
+ 
+ void armci_mpi2_server() 
+diff -urN ga-5-1~/armci/src/devices/sockets/dataserv.c ga-5-1/armci/src/devices/sockets/dataserv.c
+--- ga-5-1~/armci/src/devices/sockets/dataserv.c	2011-09-12 14:54:47.000000000 -0500
++++ ga-5-1/armci/src/devices/sockets/dataserv.c	2012-04-27 18:22:46.000000000 -0500
+@@ -104,13 +104,13 @@
+ 
+ 
+ int armci_RecvStridedFromSocket(int sock,void *dst_ptr, int dst_stride_arr[],
+-                     int count[],int stride_levels,struct iovec *iov){
++				int count[],int stride_levels,struct iovec *iov){
+ 
+-char *dst=(char*)dst_ptr;
+-char *dst1;
+-int i,j,k,num_xmit=0,lastiovlength,iovlength,n=0,max_iovec,totalsize=0,vecind;
+-int total_of_2D=1;
+-int index[MAX_STRIDE_LEVEL], unit[MAX_STRIDE_LEVEL];
++    char *dst=(char*)dst_ptr;
++    char *dst1;
++    int i,j,k,num_xmit=0,lastiovlength,iovlength,n=0,max_iovec,totalsize=0,vecind;
++    int total_of_2D=1;
++    size_t index[MAX_STRIDE_LEVEL], unit[MAX_STRIDE_LEVEL];
+ 
+     max_iovec = MAX_IOVEC;
+     if(DEBUG1){
+@@ -172,12 +172,12 @@
+ 
+ 
+ int armci_SendStridedToSocket(int sock,void *src_ptr, int src_stride_arr[],
+-                     int count[], int stride_levels,struct iovec *iov){
+-char *src=(char*)src_ptr;
+-char *src1;
+-int i,j,k,num_xmit=0,lastiovlength,iovlength,n=0,max_iovec,totalsize=0,vecind;
+-int total_of_2D=1;
+-int index[MAX_STRIDE_LEVEL], unit[MAX_STRIDE_LEVEL];
++			      int count[], int stride_levels,struct iovec *iov){
++    char *src=(char*)src_ptr;
++    char *src1;
++    int i,j,k,num_xmit=0,lastiovlength,iovlength,n=0,max_iovec,totalsize=0,vecind;
++    int total_of_2D=1;
++    size_t index[MAX_STRIDE_LEVEL], unit[MAX_STRIDE_LEVEL];
+ 
+     max_iovec = MAX_IOVEC;
+     if(DEBUG1){
+diff -urN ga-5-1~/armci/src/devices/sockets/sockets.c ga-5-1/armci/src/devices/sockets/sockets.c
+--- ga-5-1~/armci/src/devices/sockets/sockets.c	2011-09-12 15:29:04.000000000 -0500
++++ ga-5-1/armci/src/devices/sockets/sockets.c	2012-04-27 18:22:46.000000000 -0500
+@@ -282,17 +282,18 @@
+ 
+ #if defined(USE_SOCKET_VECTOR_API) 
+ 
+-int _armci_tcp_writev(int sock, struct iovec *iovptr,int writeiovlength,int currentwritesize,struct iovec *iov){
+-    int n=0;
++size_t _armci_tcp_writev(int sock, struct iovec *iovptr,int writeiovlength,
++			 size_t currentwritesize,struct iovec *iov){
++    size_t n=0;
+     while(n!=currentwritesize){
+-        int rc;
++        size_t rc;
+         rc=writev(sock,iovptr,writeiovlength);
+         if(rc<0)perror("writev failed");
+         if(DEBUG1&&0)if(rc<currentwritesize){printf("\n%d:_armci_tcp_writev write %d bytes of %d bytes writeiovlen=%d",armci_me,rc,currentwritesize,writeiovlength);fflush(stdout);} 
+         n+=rc;
+         if(n<currentwritesize){
+             int completediovs=0;
+-            int templength=0;
++            size_t templength=0;
+             while(templength!=rc){
+                 if(((int)iovptr->iov_len)+templength>rc){
+                     iovptr->iov_base=(char *)((*iovptr).iov_base)+(rc-templength);
+@@ -312,17 +313,18 @@
+     return(n);
+ }
+ 
+-int _armci_tcp_readv(int sock, struct iovec *iovptr,int readiovlength,int currentreadsize,struct iovec *iov){
+-    int n=0;
++size_t _armci_tcp_readv(int sock, struct iovec *iovptr,int readiovlength,
++			size_t currentreadsize,struct iovec *iov){
++    size_t n=0;
+     while(n!=currentreadsize){
+-        int rc;
++        size_t rc;
+         rc=readv(sock,iovptr,readiovlength);
+         if(rc<0)perror("readv failed");
+         if(DEBUG1&&0)if(rc<currentreadsize){printf("\n%d:_armci_tcp_readv Read %d bytes of %d bytes readiovlen=%d",armci_me,rc,currentreadsize,readiovlength);fflush(stdout);}
+         n+=rc;
+         if(n<currentreadsize){
+             int completediovs=0;
+-            int templength=0;
++            size_t templength=0;
+             while(templength!=rc){
+                 if(((int)iovptr->iov_len)+templength>rc){
+                     iovptr->iov_base=(char *)((*iovptr).iov_base)+(rc-templength);
+@@ -342,13 +344,14 @@
+     return(n);
+ }
+ 
+-int armci_ReadVFromSocket(int sock,struct iovec *iov, int iovlength, int totalsize)
+-{
+-    struct iovec *iovptr;
+-    int i=0,num_xmit=1,lastiovoriglen=0,lastiovnewlen=0,lastiovindex=-1,n=0;
+-    int readiovlength,currentreadsize=totalsize,totalreadsofar=0,byteslefttoread=0;
++int armci_ReadVFromSocket(int sock, struct iovec *iov, int iovlength, int totalsize) {
++
++    int i=0, num_xmit=1, lastiovindex=-1, readiovlength;
++    size_t lastiovoriglen=0, lastiovnewlen=0, n=0;
++    size_t currentreadsize=totalsize, totalreadsofar=0, byteslefttoread=0;
+     char *lastiovorigbase=NULL;
+-    iovptr=iov; 
++    struct iovec *iovptr=iov;
++
+     if(totalsize>PACKET_SIZE){
+         while(totalreadsofar!=totalsize){
+             currentreadsize=0;
+@@ -396,14 +399,15 @@
+ }
+ 
+ 
+-int armci_WriteVToSocket(int sock,struct iovec *iov, int iovlength, int totalsize){     
++int armci_WriteVToSocket(int sock, struct iovec *iov, int iovlength, int totalsize) {
+ 
+-    int lastiovoriglen=0,lastiovnewlen=0,lastiovindex=-1,totalwritesofar=0,byteslefttowrite=0;
+-    struct iovec *iovptr; 
+-    int i=0,num_xmit=0,n=0;
+-    int currentwritesize=totalsize,writeiovlength;
+-     char *lastiovorigbase=NULL;
+-    iovptr=iov; 
++    size_t lastiovoriglen=0, lastiovnewlen=0;
++    size_t totalwritesofar=0, byteslefttowrite=0;
++    size_t n=0, currentwritesize = totalsize;
++    char *lastiovorigbase=NULL;
++    int i=0, num_xmit=0, lastiovindex=-1, writeiovlength;
++    struct iovec *iovptr = iov;
++ 
+     if(totalsize>PACKET_SIZE){
+  	while(totalwritesofar!=totalsize){      
+             currentwritesize=0; 
+@@ -462,7 +466,7 @@
+ */
+ {
+ 
+-   int nread, status, nintr=0;
++   size_t nread, status, nintr=0;
+    char *buf = (char*)buffer;
+    status = lenbuf;
+    while (lenbuf > 0) {
+@@ -507,8 +511,8 @@
+   Write to the socket in packets of PACKET_SIZE bytes
+ */
+ {
+-  int status = lenbuf;
+-  int nsent, len;
++  size_t status = lenbuf;
++  size_t nsent, len;
+   char *buf = (char*)buffer;
+  
+   if(DEBUG_){
+diff -urN ga-5-1~/armci/src/memory/kr_malloc.c ga-5-1/armci/src/memory/kr_malloc.c
+--- ga-5-1~/armci/src/memory/kr_malloc.c	2011-09-07 12:50:16.000000000 -0500
++++ ga-5-1/armci/src/memory/kr_malloc.c	2012-04-27 18:22:46.000000000 -0500
+@@ -29,7 +29,7 @@
+  */
+ #define DEFAULT_NALLOC       (4*128*1024)  
+ #define DEFAULT_NALLOC_ALIGN 1024  
+-#define DEFAULT_MAX_NALLOC   (4*1024*1024*16) 
++#define DEFAULT_MAX_NALLOC   (64*1024*1024*16) 
+ 
+ /* mutual exclusion defs go here */
+ #define LOCKED   100
+@@ -73,9 +73,9 @@
+ #endif
+ 
+     if (ctx->total >= ctx->max_nalloc) {
+-#      if DEBUG
++/*#      if DEBUG*/
+          armci_die("kr_malloc: morecore: maximum allocation reached",armci_me);
+-#      endif
++/*#      endif*/
+        return (Header *) NULL;   /* Enforce upper limit on core usage */
+     }
+ 
+@@ -91,8 +91,8 @@
+     (void) printf("%d: morecore: Getting %ld more units of length %d\n",
+ 		  armci_me, (long)nu, sizeof(Header));
+     (void) fflush(stdout);
+-#endif
+-    
++#endif    
++
+     if ((cp =(char *)(*ctx->alloc_fptr)((size_t)nu * sizeof(Header))) == (char *)NULL)
+       return (Header *) NULL;
+ 
+diff -urN ga-5-1~/armci/src/memory/memory.c ga-5-1/armci/src/memory/memory.c
+--- ga-5-1~/armci/src/memory/memory.c	2011-09-12 15:29:04.000000000 -0500
++++ ga-5-1/armci/src/memory/memory.c	2012-04-27 18:22:46.000000000 -0500
+@@ -866,7 +866,8 @@
+     void *ptr;
+     ARMCI_PR_DBG("enter",0);
+     if(DEBUG_){ 
+-       fprintf(stderr,"%d bytes in armci_malloc %d\n",armci_me, (int)bytes);
++       fprintf(stderr,"%lu bytes in armci_malloc %d\n",
++	       armci_me, (long unsigned int)bytes);
+        fflush(stderr);
+        armci_msg_barrier();
+     }
+diff -urN ga-5-1~/armci/src/xfer/strided.c ga-5-1/armci/src/xfer/strided.c
+--- ga-5-1~/armci/src/xfer/strided.c	2011-09-12 14:09:32.000000000 -0500
++++ ga-5-1/armci/src/xfer/strided.c	2012-04-27 18:22:46.000000000 -0500
+@@ -466,7 +466,8 @@
+ 		       armci_ihdl_t nb_handle)
+ {
+   char *src = (char*)src_ptr, *dst=(char*)dst_ptr;
+-  int s2, s3, i,j, unlockit=0;
++  size_t s2, s3;
++  int i,j, unlockit=0;
+   int total_of_2D;
+   int index[MAX_STRIDE_LEVEL], unit[MAX_STRIDE_LEVEL];
+ 
+diff -urN ga-5-1~/armci/src-gemini/armci.c ga-5-1/armci/src-gemini/armci.c
+--- ga-5-1~/armci/src-gemini/armci.c	2011-10-07 16:29:17.000000000 -0500
++++ ga-5-1/armci/src-gemini/armci.c	2012-04-27 18:22:46.000000000 -0500
+@@ -28,8 +28,12 @@
+  */
+ 
+ #define  EXTERN
+-/*#define  PRINT_BT*/
+ #define _GNU_SOURCE
++
++#ifdef LINUX
++#define  PRINT_BT
++#endif
++
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <assert.h>
+@@ -189,8 +193,6 @@
+ 
+ void armci_die(char *msg, int code)
+ {
+-    void *bt[100];
+-
+     if(_armci_terminating)return;
+     else _armci_terminating=1;
+ 
+@@ -203,7 +205,10 @@
+     }
+ 
+ #ifdef PRINT_BT
+-    backtrace_symbols_fd(bt, backtrace(bt, 100), 2);
++    {
++	void *bt[100];
++	backtrace_symbols_fd(bt, backtrace(bt, 100), 2);
++    }
+ #endif
+ 
+     armci_abort(code);
+@@ -384,6 +389,11 @@
+ #ifndef NEW_MALLOC
+     armci_krmalloc_init_localmem();
+ #endif
++
++#ifndef BLRTS
++    ARMCI_ChildrenTrapSignals();
++#endif
++
+ #if defined(SYSV) || defined(WIN32) || defined(MMAP)
+     if(ARMCI_Uses_shm() ) {
+       armci_shmem_init();
+diff -urN ga-5-1~/armci/src-gemini/kr_malloc.c ga-5-1/armci/src-gemini/kr_malloc.c
+--- ga-5-1~/armci/src-gemini/kr_malloc.c	2011-08-16 11:35:08.000000000 -0500
++++ ga-5-1/armci/src-gemini/kr_malloc.c	2012-04-27 18:22:46.000000000 -0500
+@@ -63,15 +63,18 @@
+     Header *up;
+ 
+ #if DEBUG
+-    (void) printf("%d: morecore 1: Getting %ld more units of length %d nalloc=%d\n", armci_me, (long)nu, sizeof(Header),ctx->nalloc);
++    (void) printf("%d: morecore 1: Getting %ld more units of length %d nalloc=%d\n",
++		  armci_me, (long)nu, sizeof(Header),ctx->nalloc);
+     (void) fflush(stdout);
+ #endif
+ 
+     if (ctx->total >= ctx->max_nalloc) {
+-#      if DEBUG
+-         armci_die("kr_malloc: morecore: maximum allocation reached",armci_me);
+-#      endif
+-       return (Header *) NULL;   /* Enforce upper limit on core usage */
++	fprintf(stderr, "%i: %s:%i: maximum allocation reached: ctx->total=%lu, ctx->max_nalloc=%lu", 
++		armci_me, __FILE__, __LINE__, (unsigned long)ctx->total, (unsigned long)ctx->max_nalloc);
++#if DEBUG
++	armci_die("kr_malloc: morecore: maximum allocation reached", armci_me);
++#endif
++	return (Header *) NULL;   /* Enforce upper limit on core usage */
+     }
+ 
+ #if 1
+diff -urN ga-5-1~/armci/src-gemini/memory.c ga-5-1/armci/src-gemini/memory.c
+--- ga-5-1~/armci/src-gemini/memory.c	2011-08-16 11:35:08.000000000 -0500
++++ ga-5-1/armci/src-gemini/memory.c	2012-04-27 18:22:46.000000000 -0500
+@@ -562,8 +562,14 @@
+     armci_shmalloc_exchange_offsets(&ctx_localmem);
+ #else
+ 
+-    kr_malloc_init(0, 0, 0, malloc, 0, &ctx_localmem);
+-
++    size_t unit = 0;
++    size_t units_avail = 0;
++#if defined(CRAY_UGNI)
++    unit = 1024;
++    units_avail = 64*1024*1024;
++#endif
++    kr_malloc_init(unit, 0, units_avail, malloc, 0, &ctx_localmem);
++    //kr_malloc_init(0, 0, 0, malloc, 0, &ctx_localmem);
+ #endif
+ 
+     ctx_localmem.ctx_type = KR_CTX_LOCALMEM;
+diff -urN ga-5-1~/armci/src-gemini/pack.c ga-5-1/armci/src-gemini/pack.c
+--- ga-5-1~/armci/src-gemini/pack.c	2010-11-08 17:19:46.000000000 -0600
++++ ga-5-1/armci/src-gemini/pack.c	2012-04-27 18:22:46.000000000 -0500
+@@ -82,7 +82,8 @@
+                        int count[], int stride_levels, ext_header_t *h,
+                        int fit_level, int nb, int last,armci_ihdl_t nb_handle)
+ {
+-    int rc=0, sn, bufsize=BUFSIZE,noswap=0;
++    int rc=0, bufsize=BUFSIZE, noswap=0;
++    size_t sn;
+     void *src, *dst;
+ #ifdef REMOTE_OP
+     int flag=0;
+diff -urN ga-5-1~/armci/src-gemini/signaltrap.c ga-5-1/armci/src-gemini/signaltrap.c
+--- ga-5-1~/armci/src-gemini/signaltrap.c	2010-11-08 17:19:46.000000000 -0600
++++ ga-5-1/armci/src-gemini/signaltrap.c	2012-04-27 18:22:46.000000000 -0500
+@@ -21,7 +21,7 @@
+ #include <errno.h>
+ #endif
+ 
+-#define PAUSE_ON_ERROR
++//#define PAUSE_ON_ERROR
+ 
+ #define  Error armci_die 
+ 
+@@ -103,17 +103,11 @@
+      int sig;
+ {
+   AR_caught_sig= sig;
+-  Error("SigIntHandler: abort signal was caught: cleaning up",(int) sig);
++  Error("SigAbortHandler: abort signal was caught: cleaning up",(int) sig);
+ }
+ 
+-void TrapSigAbort()
+-/*
+-  Trap the signal SIGINT so that we can propagate error
+-  conditions and also tidy up shared system resources in a
+-  manner not possible just by killing everyone
+-*/
+-{
+-  if (  signal(SIGINT, SigAbortHandler) == SIG_ERR)
++void TrapSigAbort() {
++  if (  signal(SIGABRT, SigAbortHandler) == SIG_ERR)
+     Error("TrapSigAbort: error from signal setting SIGABORT",0);
+ }
+ 
+diff -urN ga-5-1~/armci/src-gemini/strided.c ga-5-1/armci/src-gemini/strided.c
+--- ga-5-1~/armci/src-gemini/strided.c	2011-08-16 11:35:08.000000000 -0500
++++ ga-5-1/armci/src-gemini/strided.c	2012-04-28 01:09:58.000000000 -0500
+@@ -401,12 +401,14 @@
+ int armci_op_strided(int op, void* scale, int proc,void *src_ptr, 
+                      int src_stride_arr[], void* dst_ptr, int dst_stride_arr[], 
+                      int count[], int stride_levels, int lockit,
+-                     armci_ihdl_t nb_handle)
+-{
+-char *src = (char*)src_ptr, *dst=(char*)dst_ptr;
+-int s2, s3, i,j, unlockit=0;
+-int total_of_2D;
+-int index[MAX_STRIDE_LEVEL], unit[MAX_STRIDE_LEVEL];
++                     armci_ihdl_t nb_handle) {
++
++    char *src = (char*)src_ptr, *dst=(char*)dst_ptr;
++    size_t s2, s3;
++    int i, j, unlockit=0;
++    int total_of_2D;
++    int index[MAX_STRIDE_LEVEL], unit[MAX_STRIDE_LEVEL];
++
+     ARMCI_PR_DBG("enter",op);
+ #   if defined(ACC_COPY)
+       
+@@ -756,9 +758,9 @@
+                    int count[], char *buf)
+ {
+     int i, j;
+-    long idx;    /* index offset of current block position to ptr */
+-    int n1dim;  /* number of 1 dim block */
+-    int bvalue[MAX_STRIDE_LEVEL], bunit[MAX_STRIDE_LEVEL];
++    size_t idx;    /* index offset of current block position to ptr */
++    size_t n1dim;  /* number of 1 dim block */
++    size_t bvalue[MAX_STRIDE_LEVEL], bunit[MAX_STRIDE_LEVEL];
+     int bytes = count[0];
+     ARMCI_PR_DBG("enter",stride_levels);
+ 
+@@ -792,9 +794,9 @@
+ void armci_write_strided2(void *ptr, int stride_levels, int stride_arr[],
+                           int count[], char *buf)
+ {                  
+-    int i, j;
+-    int total;   /* number of 2 dim block */
+-    int index[MAX_STRIDE_LEVEL], unit[MAX_STRIDE_LEVEL];
++    size_t i, j;
++    size_t total;   /* number of 2 dim block */
++    size_t index[MAX_STRIDE_LEVEL], unit[MAX_STRIDE_LEVEL];
+     ARMCI_PR_DBG("enter",stride_levels);
+     
+     if(stride_levels == 0){
+@@ -841,10 +843,10 @@
+                         int count[], char *buf)
+ {
+     int i, j;
+-    long idx;    /* index offset of current block position to ptr */
+-    int n1dim;  /* number of 1 dim block */
+-    int bvalue[MAX_STRIDE_LEVEL], bunit[MAX_STRIDE_LEVEL];
+-    int bytes = count[0];
++    size_t idx;    /* index offset of current block position to ptr */
++    size_t n1dim;  /* number of 1 dim block */
++    size_t bvalue[MAX_STRIDE_LEVEL], bunit[MAX_STRIDE_LEVEL];
++    size_t bytes = count[0];
+ 
+     ARMCI_PR_DBG("enter",stride_levels);
+     /* number of n-element of the first dimension */
+@@ -877,9 +879,9 @@
+ void armci_read_strided2(void *ptr, int stride_levels, int stride_arr[],
+                          int count[], char *buf)
+ {                  
+-    int i, j;
+-    int total;   /* number of 2 dim block */
+-    int index[MAX_STRIDE_LEVEL], unit[MAX_STRIDE_LEVEL];
++    size_t i, j;
++    size_t total;   /* number of 2 dim block */
++    size_t index[MAX_STRIDE_LEVEL], unit[MAX_STRIDE_LEVEL];
+    
+     ARMCI_PR_DBG("enter",stride_levels);
+     if(stride_levels == 0){
+diff -urN ga-5-1~/global/src/ga-mpi.h ga-5-1/global/src/ga-mpi.h
+--- ga-5-1~/global/src/ga-mpi.h	2011-10-14 14:13:57.000000000 -0500
++++ ga-5-1/global/src/ga-mpi.h	2012-04-27 18:22:46.000000000 -0500
+@@ -3,8 +3,16 @@
+ 
+ #include <mpi.h>
+ 
++#ifdef __cplusplus
++extern "C" {
++#endif
++
+ extern MPI_Comm GA_MPI_Comm();
+ extern MPI_Comm GA_MPI_Comm_pgroup(int pgroup);
+ extern MPI_Comm GA_MPI_Comm_pgroup_default();
+ 
++#ifdef __cplusplus
++}
++#endif
++
+ #endif /* GA_MPI_H_ */
