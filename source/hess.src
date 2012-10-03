@@ -1,3 +1,4 @@
+C 03 Oct 12 - NDS - BUG FIX: MP2 FULL NUMERICAL HESSIAN
 C  2 Sep 12 - MWS - synchronize MCINP
 C 21 JUN 12 - DGF - CHANGES FOR FMO 4.3
 c 28 may 12 - dgf - remove derivative dipole bug for seminum Hessians 
@@ -3091,6 +3092,77 @@ C
      *         1X,'THIS RUN MUST BE RESTARTED WITH A $VIB GROUP.'//)
       END
 C*MODULE HESS    *DECK HSSFUL
+C
+C> @brief   Compute the Hessian matrix numerically from energy values.  
+C> @details The total number of energy calculations for a N-Cartesian-
+C>          coordinate system is 2N^2+1. The single point energy of the 
+C>          geometry is evaluated first. Then the coordinates are 
+C>          disturbed in the following ways to evaluate the contribution 
+C>          to the force constant matrix (FCM) from the diagonal and 
+C>          off-diagonal elements.
+C>          
+C>          Diagonal elements:
+C>          
+C>          For each diagonal element, disturb only 1 coordinate (x) at 
+C>          a time. Evaluate E(x+dx) and E(x-dx). The 2nd derivative can 
+C>          be derived in the following ways:
+C>          E" = [E'(x+dx/2)-E'(x-dx/2)]/dx
+C>          where 
+C>          E'(x+dx/2)=[E(x+dx)-E(x)]/dx
+C>          E'(x-dx/2)=[E(x)-E(x-dx)]/dx
+C>          Therefore, the contribution to the FCM from the diagonal 
+C>          elements:
+C>          E" = [E(x+dx) + E(x-dx) - 2E(x)]/dx^2
+C>          
+C>          Off-diagonal elements:
+C>          
+C>          For each off-diagonal elements, disturb 2 coordinates 
+C>          (x and y) at the same time. Evaluate E(x-dx,y-dy), 
+C>          E(x-dx,y+dy), E(x+dx,y-dy), and E(x+dx,y+dy). 
+C>          The 2nd derivative can be derived in the following ways:
+C>          E"(x,y) = {[E(x+dx,y+dy)-E(x+dx,E(y-dy))]/2dy  
+C>                   - [E(x-dx,y+dy)-E(x-dx,E(y-dy))]/2dy}/2dx
+C>          E"(x,y) = {[E(x+dx,y+dy)-E(x+dx,E(y-dy))] 
+C>                   - [E(x-dx,y+dy)-E(x-dx,E(y-dy))]}/4dxdy
+C>          where 
+C>          E'(x+dx,y) with respect to y = [E(x+dx,y+dy)
+C>                                        - E(x+dx,E(y-dy))]/2dy
+C>          E'(x-dx,y) with respect to y = [E(x-dx,y+dy)
+C>                                        - E(x-dx,E(y-dy))]/2dy
+C>          Therefore, the contribution to the FCM from the 
+C>          off-diagonal elements:
+C>          E" = [E(x+dx,y+dy) + E(x-dx,y-dy) 
+C>              - E(x-dx, y+dy) - E(x+dx, y-dy)]/4dxdy
+C>          
+C>          In summary, 2N+1 energy calculations need to be done to 
+C>          obtain the N diagonal elements of the energy second 
+C>          derivative matrix (Hessian); 4[N(N-1)/2] energy calculations 
+C>          need to be done to obtain the N(N-1)/2 off-diagonal elements 
+C>          of the Hessian matrix.
+C>          2N+1+4[N(N-1)/2]=2N^2+1
+C>          However, based on the symmetry of the molecule, the code may 
+C>          eliminate significant number of single point energy 
+C>          calculations from the 2N^2+1 estimation. 
+C>          
+C> @param   ESP    : An array of dimension MXSP 
+C>                   containing the single point energies 
+C>                   ESP(ISP), ISP=1,2,...,MXSP
+C> @param   FCM    : A matrix of dimension NC1*NC1
+C>                   containing the force constant matrix elements
+C> @param   SKIP   : A logical variable that determines the symmetry 
+C>                   unique atoms
+C> @param   ITRANS : A matrix of dimension 
+C>                   number of atoms*number of atoms
+C>                   containing the two-body interaction
+C> @param   WRK      N*8 real words of scratch space
+C> @param   MYNAT  : Number of atoms
+C> @param   NC1    : The number of Cartesian coordinates 
+C>                   (number of atoms*3)
+C> @param   MXSP   : Maximum number of single point energy evaluations   
+C> @param   VIBSIZ : Step size for numerical differentiation in Bohr
+C>                   (default =0.01)
+C> @author  Ryan Olson
+C
       SUBROUTINE HSSFUL(ESP,FCM,SKIP,ITRANS,WRK,
      *                  MYNAT,NC1,MXSP,VIBSIZ,GOTEG,SCFOK)
 C
@@ -3439,23 +3511,23 @@ C
                 CALL NUMNRG(ESP,NSP,E1,WRK,MCCI,SCFOK,IFCM)
                 C(ICOORD,IATOM) = CISAVE
 C
-                E2 = E1
+                E2X = E1
                 IF(.NOT.AEQD) THEN
                    C(ICOORD,IATOM) = CISAVE - 2*VIBSIZ
                    IF(MASWRK) THEN
                       IF(ESP(NSP+1).EQ.ZERO) WRITE(IW,9200) NSP+1
                       WRITE(IW,9210) IATOM,XYZ(ICOORD),C(ICOORD,IATOM)
                    END IF
-                   CALL NUMNRG(ESP,NSP,E2,WRK,MCCI,SCFOK,IFCM)
+                   CALL NUMNRG(ESP,NSP,E2X,WRK,MCCI,SCFOK,IFCM)
                    C(ICOORD,IATOM) = CISAVE
                 END IF
 C
 C           CALC CONTRIBUTION TO THE FCM IMMEDIATELY
 C
                 IX = 3*(IATOM-1) + ICOORD
-                FCM(IX,IX) = HTERM*(E1 + E2 - 2*E0)
+                FCM(IX,IX) = HTERM*(E1 + E2X - 2*E0)
 C
-                IF(.NOT.GOTEG) EG(ICOORD,IATOM) = (E1 - E2)/(4*VIBSIZ)
+                IF(.NOT.GOTEG) EG(ICOORD,IATOM) = (E1 - E2X)/(4*VIBSIZ)
 C
                 TAVG = (TIM-TVIB0)/NSP
                 IF (TIMLIM-TIM  .LT.  1.1D+00*TAVG) GO TO 800
@@ -3501,7 +3573,7 @@ C
 C
 C           GET OR CALCULATE BVIB
 C
-              E2 = E1
+              E2X = E1
               IF(.NOT.(AEQB .OR. (AEQC .AND. BEQC))) THEN
                 C(ICOORD,IATOM) = CISAVE + VIBSIZ
                 C(JCOORD,JATOM) = CJSAVE - VIBSIZ
@@ -3510,7 +3582,7 @@ C
                    WRITE(IW,9220) IATOM,XYZ(ICOORD),C(ICOORD,IATOM),
      *                            JATOM,XYZ(JCOORD),C(JCOORD,JATOM)
                 END IF
-                CALL NUMNRG(ESP,NSP,E2,WRK,MCCI,SCFOK,IFCM)
+                CALL NUMNRG(ESP,NSP,E2X,WRK,MCCI,SCFOK,IFCM)
                 C(ICOORD,IATOM) = CISAVE
                 C(JCOORD,JATOM) = CJSAVE
               END IF
@@ -3518,7 +3590,7 @@ C
 C          GET OR CALCULATE CVIB
 C
               E3 = E1
-              IF(BEQC) E3 = E2
+              IF(BEQC) E3 = E2X
               IF(.NOT.(AEQC .OR. BEQC)) THEN
                 C(ICOORD,IATOM) = CISAVE - VIBSIZ
                 C(JCOORD,JATOM) = CJSAVE + VIBSIZ
@@ -3550,7 +3622,7 @@ C
 C
 C          CALC CONTRIBUTION TO THE FCM IMMEDIATELY
 C
-              TMP = HTERM*(E1-E2-E3+E4)
+              TMP = HTERM*(E1-E2X-E3+E4)
               IX = 3*(IATOM-1) + ICOORD
               IY = 3*(JATOM-1) + JCOORD
               FCM(IX,IY) = TMP
