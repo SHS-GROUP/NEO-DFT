@@ -1,3 +1,5 @@
+C 13 Sep 12 - SRP - Addition of dispersion, exchange repulsion
+C                   and charge transfer to EFMO calculations
 C 31 Jul 12 - DGF,CHC - LAST CHANGES FOR FMO 4.3
 C 24 Jul 12 - DGF - code update to finish FMO 4.3
 C 21 JUN 12 - DGF,TN,HN,CHC - CHANGES FOR FMO 4.3
@@ -39,6 +41,17 @@ c  3 Jun 04 - DGF - FMOX: restart bug fixed
 c 19 May 04 - DGF,KK - implement Fragment Molecular Orbital (FMO) method
 c
 C*MODULE fmo     *DECK fmox
+C>
+C>     @brief Main FMO driver
+C>
+C>     @detail Setup and perform FMO calculations
+C>
+C>     @author Dmitri Fedorov
+C>
+C>     @date 10/5/12 - Spencer Pruitt
+C>     - Added dispersion, charge transfer and repulsion EFP information
+C>       to dynamic memory.
+C>
       SUBROUTINE fmox(modeff)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
@@ -62,7 +75,8 @@ C
       Parameter(MXATM=2000,MXAO=8192,MXRT=100,MAXNZ=137,MaxLay=5,
      *          MXSFMO=MaxLay*40,MXGFMO=MaxLay*100,MXAFMO=MaxLay*10,
      *          MAXL=5,MXPTPT=100,MXFGPT=12000,MXFRG=1050,MXDFG=5,
-     *          MXDPPT=MXFRG*MXDFG*12,MXGRID=10,MaxNp=45)
+     *          MXDPPT=MXFRG*MXDFG*12,MXGRID=10,MaxNp=45,MXSH=5000,
+     *          MXGTOT=20000)
       parameter (nstfmo=10,maxpst=10,zero=0.0D+00,one=1.0D+00,maxelm=3,
      *           nextracc=17,nedft=2)
       PARAMETER (MXEFMOPTS=50,MXEFMOPPTS=60,MXNEFMOPTS=27,
@@ -87,11 +101,13 @@ C
      *                IZCORE(MXATM)
       COMMON /EFFMOP/ LEFLDFMO,LEFADDFMO,LDINDFMO,LDINDDFMO,
      *                LDEFEF,LDEFTF,LTORQF
-      COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,IEFMORUN,
-     *                IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,IEFMODIM(2),
-     *                IMODEFE,NATEFMO,IMODEFD
-      COMMON /EFMOPO/ LNEFMOPTS,LEFMOPTS,LEFMOPPTS,LEFMODPTS,LEFMODIMG,
-     *                LEFMOTOTG,LEFMOIPT,LEFMOIGLOB
+      COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,
+     *                IEFMORUN,IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,
+     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,EFMOREPNRG,
+     *                EFMOCHTNRG,EFMOEPEN
+      COMMON /EFMOPO/ LNEFMOPTS,LEFMOPTS,LEFMOPPTS,LEFMODPTS,LNEFMOBAS,
+     *                LEFMOBAS,LEFMOLMO,LEFMOFM,LEFMOCV,LEFMOCF,
+     *                LEFMODIMG,LEFMOTOTG,LEFMOIPT,LEFMOIGLOB
       COMMON /EFPFMO/ RUNEFP,REFFMO,REPNUCEFP,IEFPFMO,ISWENUC,EFPEFP
       COMMON /EFPOTD/ METHOF,ISCCHG,MOVE,nfrag
       COMMON /ELPROP/ ELDLOC,ELMLOC,ELPLOC,ELFLOC,
@@ -107,7 +123,8 @@ C
       COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
      *                NPPTS(MXFRG),NPTTPT,IEFP,
      *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
-     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG),
+     *                NBSFN(MXFRG),NMXMO(MXFRG)
       COMMON /GDDI/   ISCOPE,NGROUPS,MYGROUP,MEGLOB,npglob,nnglob,JBTYP,
      *                ISGDDI,PAROUT,INITGDDI,wasgddi
       COMMON /GLOFMO/ MCMIN
@@ -134,6 +151,8 @@ C
       COMMON /MFRPAR/ MFRZ,NUMFRZ,NORFRZ,IFRZ(MXAO)
       COMMON /MP2PAR/ OSPT,CODEMP,SCSPT,TOL,METHOD,NWDMP2,MEMPRI,MPPROP,
      *                NACORE,NBCORE,NOA,NOB,NORB,NBF,NOMIT,MOCPHF,MAXITC
+      COMMON /OPTLOC/ CVGLOC,MAXLOC,IPRTLO,ISYMLO,IFCORE,NOUTA,NOUTB,
+     *                MOOUTA(MXAO),MOOUTB(MXAO)
       COMMON /OPTSCF/ DIRSCF,FDIFF
       COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
@@ -1835,13 +1854,33 @@ C
       CALL GETFM(NEED1)
 c
 c     efmo memory
+C
+C   SRP: CHANGES FOR DISP, XR AND CT MEMORY
+C
       IF( IEFMORUN.GT.0 ) THEN
+        MXBSFN=0
+        MXMOS=0
+        MXMO2=0
+        LTWO=0
+        DO I=1,NFG
+        MXBSFN=MAX(MXBSFN,NBSFN(I))
+        MXMOS=MAX(MXMOS,NMXMO(I))
+        ENDDO
+        MXMO2=(MXMOS*MXMOS+MXMOS)/2
+        LTWO=(MXBSFN*MXBSFN+MXBSFN)/2
+C
         CALL VALFM(LOADFM)
         lnefmopts = LOADFM + 1
-        lefmopts = lnefmopts + (3*nfg-1)/NWDVAR + 1
+        lefmopts = lnefmopts + (7*nfg-1)/NWDVAR + 1
         lefmoppts = lefmopts + nfg*MXNEFMOPTS*MXEFMOPTS
         lefmodpts = lefmoppts + nfg*MXNEFMOPPTS*MXEFMOPPTS
-        lefmodimg = lefmodpts + 12*nfg*MXNEFMOPPTS*MXEFMOPPTS
+        lnefmobas = lefmodpts + 12*nfg*MXNEFMOPPTS*MXEFMOPPTS
+        lefmobas =  lnefmobas + nfg*7*MXSH
+        lefmolmo = lefmobas + nfg*10*MXGTOT
+        lefmofm = lefmolmo + nfg*MXBSFN*MXMOS
+        lefmocv = lefmofm + nfg*MXMO2
+        lefmocf = lefmocv + nfg*MXBSFN*MXBSFN
+        lefmodimg = lefmocf + nfg*LTWO
 c       this next definition is a bit wierd for lefmodimg, but we
 c       need to store ALL of the efp gradient, i.e. the number
 c       of atoms + whatever common atoms that the fragments have.
@@ -1851,10 +1890,16 @@ c       of atoms + whatever common atoms that the fragments have.
         last = lefmoiglob + (MXATM-1)/NWDVAR+1
         NEEDEFMO = last - loadfm -1
         CALL GETFM(NEEDEFMO)
-        call viclr(x(lnefmopts),1,3*nfg)
+        call viclr(x(lnefmopts),1,7*nfg)
         call vclr(x(lefmopts),1,nfg*MXNEFMOPTS*MXEFMOPTS)
         call vclr(x(lefmoppts),1,nfg*MXNEFMOPPTS*MXEFMOPPTS)
         call vclr(x(lefmodpts),1,12*nfg*MXNEFMOPPTS*MXEFMOPPTS)
+        call viclr(x(lnefmobas),1,nfg*7*MXSH)
+        call vclr(x(lefmobas),1,nfg*10*MXGTOT)
+        call vclr(x(lefmolmo),1,nfg*MXBSFN*MXMOS)
+        call vclr(x(lefmofm),1,nfg*MXMO2)
+        call vclr(x(lefmocv),1,nfg*MXBSFN*MXBSFN)
+        call vclr(x(lefmocf),1,nfg*LTWO)
         call vclr(x(lefmodimg),1,3*natfmo+3*nbndfg)
         call vclr(x(lefmototg),1,3*natfmo)
         call viclr(x(lefmoipt),1,nfg)
@@ -4433,9 +4478,10 @@ C*MODULE fmo     *DECK monoscf
       COMMON /DMPING/ SHIFTO,SHIFTV,DMPCUT,SWDIIS,DIRTHR
       COMMON /EFPFM2/ fk_cntp,poltot,labfldt,ldindf2,ldinddf2,ldelabfld,
      *                ldeldind,ldeldindd
-      COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,IEFMORUN,
-     *                IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,IEFMODIM(2),
-     *                IMODEFE,NATEFMO,IMODEFD
+      COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,
+     *                IEFMORUN,IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,
+     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,EFMOREPNRG,
+     *                EFMOCHTNRG,EFMOEPEN
       COMMON /EFPFMO/ RUNEFP,REFFMO,REPNUCEFP,IEFPFMO,ISWENUC,EFPEFP
       COMMON /ELPROP/ ELDLOC,ELMLOC,ELPLOC,ELFLOC,
      *                IEDEN,IEMOM,IEPOT,IEFLD,MODENS,
@@ -4446,7 +4492,8 @@ C*MODULE fmo     *DECK monoscf
       COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
      *                NPPTS(MXFRG),NPTTPT,IEFP,
      *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
-     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG),
+     *                NBSFN(MXFRG),NMXMO(MXFRG)
       COMMON /GDDI/   ISCOPE,NGROUPS,MYGROUP,MEGLOB,npglob,nnglob,JBTYP,
      *                ISGDDI,PAROUT,INITGDDI,wasgddi
       COMMON /GRDPAR/ ORIGIN(3),XVEC(3),YVEC(3),ZVEC(3),UX(3),UY(3),
@@ -5841,7 +5888,8 @@ C           RESET EFMO RUNTYPE TO 1
             IF( IEFMORUN.GT.0 ) IEFMORT = 1
 C 
 C           Hessian contribution
-C 
+C
+ 
             if(doprop.and.nder.eq.2.and.runtyp.ne.energy) then
               IEEH = IDAM
               IF (NBODY.GT.1) IEEH = IDAM + IDAD
@@ -6308,6 +6356,17 @@ c
      *              ' took',F8.1,' s.')
       END
 C*MODULE fmo     *DECK edimer
+C
+C     @brief FMO DIMERS
+C
+C     @detail PERFORM FMO DIMER CALCULATIONS
+C
+C     @author DMITRI FEDOROV
+C
+C     @date 10/5/12 - SRP
+C     ADDED DISPERSION, CHARGE TRANSFER, REPULSION AND CHARGE 
+C     PENETRATION ENERGY TO TOTAL FMO ENERGY.
+C
       subroutine edimer(ilay,nder,runtyp,loadhf,jobgrp,loadm,loadd,
      *                 mulfg,layfrg,numfrg,cfrg,iodfmo,maxl30,indat,fmoc
      *                 ,iaglob,idmrec0,haver,da,db,wrk,wrk1,dij,zsave,
@@ -6387,9 +6446,10 @@ C*MODULE fmo     *DECK edimer
      *                NANGPT(MXGRID),NANGPT0(MXGRID),SG1,jans
       COMMON /DFTPAR/ DFTTYP(20),EXENA,EXENB,EXENC,IDFT34,NAUXFUN,
      *                                                    NAUXSHL
-      COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,IEFMORUN,
-     *                IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,IEFMODIM(2),
-     *                IMODEFE,NATEFMO,IMODEFD
+      COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,
+     *                IEFMORUN,IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,
+     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,EFMOREPNRG,
+     *                EFMOCHTNRG,EFMOEPEN
       COMMON /EFPFMO/ RUNEFP,REFFMO,REPNUCEFP,IEFPFMO,ISWENUC,EFPEFP
       COMMON /ENRGYS/ ENUCR,EELCT,ETOT,SZ,SZZ,ECORE,ESCF,EERD,E1,E2,
      *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2),edisp
@@ -6757,15 +6817,22 @@ c         if(ipieda.ne.0.and.nfmopcm.gt.0) then
 c         ijskip=0
 c
           EDISNRG = ZERO
+          EREPNRG = ZERO
+          ECHTNRG = ZERO
+          EPENNRG = ZERO
 C         DO EFMO CALCULATION TO SET UP VARIABLES AND GRADIENT CONTRIBUTIONS
           IF(IEFMORUN.GT.0.AND.IEFMORT.EQ.3) THEN
             ECHNRG = ZERO
             EPOLNRG = ZERO
-            CALL EFMOFRGS(IFG,JFG,ECHNRG,EPOLNRG,EDISNRG,FRGNAM)
+            CALL EFMOFRGS(IFG,JFG,RIJ,ECHNRG,EPOLNRG,EDISNRG,
+     *                    EREPNRG,ECHTNRG,EPENNRG,FRGNAM)
 c           store the dimer negative dimer polarization term
 c           as it will be added later
             if(maswrk) edim(ijfg,2) = -EPOLNRG
-            if(rij.le.resdim) EDISNRG = ZERO
+            if(rij.le.resdim.and..not.maswrk) EDISNRG = ZERO
+            if(rij.le.resdim.and..not.maswrk) EREPNRG = ZERO
+            if(rij.le.resdim.and..not.maswrk) ECHTNRG = ZERO
+            if(rij.le.resdim.and..not.maswrk) EPENNRG = ZERO
           ENDIF
 c
           esd2m=emon(ifg,memon)+emon(jfg,memon)
@@ -6845,8 +6912,8 @@ C               SEPARATED EFMO ENERGY AND GRADIENT CONTRIBUTION
 c               call makemol(ifg,jfg,0,ilay,0,0,0,0,0,0,0,.false.)
                 esd2 = esd2 + echnrg
               ENDIF
-
-              edim(ijfg,1)=edim(ijfg,1)+esd2+edisnrg
+              edim(ijfg,1)=edim(ijfg,1)+esd2+edisnrg+erepnrg+echtnrg
+     *                                 +epennrg
 c             if(nfmopcm.ne.0) esolv(nfg*2+ijfg)=esolv(ifg)+esolv(jfg)
               if((modfmm.eq.0.or.mmdim.eq.0.or.iand(modfmm,2).eq.0)
      *           .and.outesd) then

@@ -1,3 +1,5 @@
+C 13 SEP 12 - SRP - ADDITION OF DISPERSION, EXCHANGE REPULSION
+C                   AND CHARGE TRANSFER TO EFMO
 C 24 JUL 12 - DGF - PAD COMMON FOR FMO 4.3
 C 23 MAR 12 - DGF - PAD COMMON BLOCKS
 C 28 DEC 11 - CS  - CHANGES AND ADDITIONS TO EFMO, INCLUDING
@@ -10,6 +12,20 @@ C 12 DEC 10 - HL  - ADD CALLS TO INDCHG,INDDPL,INDQUA,INDIND
 C  1 OCT 10 - CS  - EFMO FUNCTIONS AND UTILITIES
 C
 C*MODULE EFMO     *DECK EFMOGFRG
+C>
+C>    @brief Generate EFP information for each fragment
+C>
+C>    @author Casper Steinmann
+C>
+C>    @date 10/5/12 - Spencer Pruitt
+C>    - Added ability to turn short-range EFP interactions on and off
+C>
+C>    @param DISPER : Turn dispersion on or off
+C>
+C>    @param EXREP : Turn repulsion on or off
+C>
+C>    @param CHGTRN : Turn charge transfer on or off
+C>
       SUBROUTINE EFMOGFRG(iaglob,indat)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
@@ -26,11 +42,13 @@ C
       LOGICAL POLAR,DISPER,EXREP,CHGTRN,MFRZ,CTVVO
       
 C
-      COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,IEFMORUN,
-     *                IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,IEFMODIM(2),
-     *                IMODEFE,NATEFMO,IMODEFD
-      COMMON /EFMOPO/ LNEFMOPTS,LEFMOPTS,LEFMOPPTS,LEFMODPTS,LEFMODIMG,
-     *                LEFMOTOTG,LEFMOIPT,LEFMOIGLOB
+      COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,
+     *                IEFMORUN,IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,
+     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,EFMOREPNRG,
+     *                EFMOCHTNRG,EFMOEPEN
+      COMMON /EFMOPO/ LNEFMOPTS,LEFMOPTS,LEFMOPPTS,LEFMODPTS,LNEFMOBAS,
+     *                LEFMOBAS,LEFMOLMO,LEFMOFM,LEFMOCV,LEFMOCF,
+     *                LEFMODIMG,LEFMOTOTG,LEFMOIPT,LEFMOIGLOB
       COMMON /EFPFMO/ RUNEFP,REFFMO,REPNUCEFP,IEFPFMO,ISWENUC,EFPEFP
       COMMON /EDCMP / ZIJ(NMO),ZMO(5,NMO),OCCUP(NMO),DPFREQ(50),
      *                MOIDNO(5,NMO),IJMO(2,NMO),MOIJ(NMO),NMOIJ(NMO),
@@ -65,8 +83,8 @@ C
 C      POLAR =.NOT.IAND(IMODEFP,1).NE.0
       POLAR =.TRUE.
       DISPER=IAND(IMODEFD,1).NE.0
-      EXREP =.FALSE.
-      CHGTRN=.FALSE.
+      EXREP =IAND(IMODEFD,1).NE.0
+      CHGTRN=IAND(IMODEFD,1).NE.0
       VDWSCL=ZERO
 C
 C     THE FORMAT IS OVARNAME FOR OLD VALUES
@@ -112,18 +130,18 @@ C
       LIDMYP  = LDLPOL  + 9*LNA
       LNNOPRT = LIDMYP  + L1
       LPOL    = LNNOPRT + L1
-      LCANVEC = LPOL    + 9*LNA*MXIFRQ
-      LCANFOK = LCANVEC + L3
-      LAST    = LCANFOK + L2
+      LCTVEC = Lpol    + 9*LNA*MXIFRQ
+      LCTFOK = LCTVEC + L3
+      LAST    = LCTFOK + L2
       NEED = LAST - LOADFM - 1
       CALL GETFM(NEED)
 C
 C     STORE RESULTS IN COMMON
-      CTVVO = .TRUE.
+      CTVVO = .FALSE.
 c     Nota bene. CTVVO is hardwired but should be used from EFPX.
       CALL EFP2X(X(LVEC),X(LARRAY),X(LFMO),X(LCCHG),X(LWRK2),
-     *            X(LDLPOL),X(LIDMYP),X(LNNOPRT),X(LPOL),X(LCANVEC),
-     *            X(LCANFOK),LNA,LNA2,L1,L2,
+     *            X(LDLPOL),X(LIDMYP),X(LNNOPRT),X(LPOL),X(LCTVEC),
+     *            X(LCTFOK),LNA,LNA2,L1,L2,
      *            POLAR,DISPER,EXREP,CHGTRN,CTVVO,1)
       CALL RETFM(NEED)
 C
@@ -131,7 +149,6 @@ C
       POLDYN = OPOLDYN
       POLDCM = OPOLDCM
       POLNUM = OPOLNUM
-      NPTSTN = ONPTSTN
 C
       IEFPFMO = 0
 C
@@ -169,6 +186,7 @@ C     GENERATE SCREENING STATISTICS
         CALL CGPX(1)
       endif
 C
+      NPTSTN = ONPTSTN
  9000 FORMAT (/5X,50(1H-)/
      *         5X,'GENERATING EFMO PARAMETERS FOR FMO MONOMER #',I5/
      *         5X,50(1H-))
@@ -180,6 +198,22 @@ C
 C
 C
 C*MODULE EFMO     *DECK EFMOTOT
+C>
+C>    @brief Calculate the total EFP polarization energy
+C>
+C>    @author Casper Steinmann
+C>
+C>    @date 10/5/12 - Spencer Pruitt
+C>    - Added code to calculate the total number of basis functions
+C>      and MOs required for repulsion and dispersion energy later.
+C>    - Proper dimensioning of arrays passed using GDDI that are used
+C>      by short-range energy terms.
+C>
+C>    @param MXBSFN : Maximum number of basis functions for all
+C>    fragments (i.e. # for largest fragment).
+C>
+C>    @param MXMOS : See MXBSFN above but change "basis functions" to "MOs"
+C>
       SUBROUTINE EFMOTOT(FMODE,FRGNAM)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
@@ -187,7 +221,7 @@ C
       PARAMETER(MXFRG=1050,MXDFG=5,
      *          MXDPPT=MXFRG*MXDFG*12)
       PARAMETER (MXEFMOPTS=50,MXEFMOPPTS=60,MXNEFMOPTS=27,
-     *           MXNEFMOPPTS=15)
+     *           MXNEFMOPPTS=15,MXGTOT=20000,MXSH=5000)
 C
       INTEGER DDI_WORLD,DDI_GROUP
       LOGICAL GOPARR,DSKWRK,MASWRK,ISGDDI,PAROUT,INITGDDI,wasgddi
@@ -196,11 +230,13 @@ C
       
       DIMENSION FMODE(3,NATFMO,*),FRGNAM(*)
 C
-      COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,IEFMORUN,
-     *                IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,IEFMODIM(2),
-     *                IMODEFE,NATEFMO,IMODEFD
-      COMMON /EFMOPO/ LNEFMOPTS,LEFMOPTS,LEFMOPPTS,LEFMODPTS,LEFMODIMG,
-     *                LEFMOTOTG,LEFMOIPT,LEFMOIGLOB
+      COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,
+     *                IEFMORUN,IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,
+     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,EFMOREPNRG,
+     *                EFMOCHTNRG,EFMOEPEN
+      COMMON /EFMOPO/ LNEFMOPTS,LEFMOPTS,LEFMOPPTS,LEFMODPTS,LNEFMOBAS,
+     *                LEFMOBAS,LEFMOLMO,LEFMOFM,LEFMOCV,LEFMOCF,
+     *                LEFMODIMG,LEFMOTOTG,LEFMOIPT,LEFMOIGLOB
       COMMON /FMCOM / X(1)
       COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
       COMMON /FMOPNT/ LICHFG,LMULFG,LIDMREC,LFRGNAM,LLAYFRG,LINDAT,
@@ -220,7 +256,8 @@ C
       COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
      *                NPPTS(MXFRG),NPTTPT,IEFP,
      *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
-     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG),
+     *                NBSFN(MXFRG),NMXMO(MXFRG)
       COMMON /GDDI/   ISCOPE,NGROUPS,MYGROUP,MEGLOB,NPGLOB,NNGLOB,JBTYP,
      *                ISGDDI,PAROUT,INITGDDI,wasgddi
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
@@ -235,35 +272,66 @@ C
 C     --- CALCULATE TOTAL EFP POLARIZATION ENERGY ---
 C
       IF(IAND(IMODEFP,1).NE.0) RETURN
+        MXBSFN=0
+        MXMOS=0
+        MXMO2=0
+        LTWO=0
+        DO I=1,NFG
+        MXBSFN=MAX(MXBSFN,NBSFN(I))
+        MXMOS=MAX(MXMOS,NMXMO(I))
+        ENDDO
+        MXMO2=(MXMOS*MXMOS+MXMOS)/2
+        LTWO=(MXBSFN*MXBSFN+MXBSFN)/2
       NFRG  = IEFMONFRG
       CALL VCLR(X(LEFMODIMG),1,3*NATFMO+3*NBDFG)
-      L1 = 3*NFRG
+      L1 = 7*NFRG
       L2 = NFRG*MXEFMOPTS*MXNEFMOPTS
       L3 = NFRG*MXEFMOPPTS*MXNEFMOPPTS
       L4 = NFRG*MXEFMOPPTS*MXNEFMOPPTS*12
-
+      L5 = NFRG*7*MXSH
+      L6 = NFRG*10*MXGTOT
+      L7 = NFRG*MXBSFN*MXMOS
+      L8 = NFRG*MXMO2
+      L9 = NFRG*MXBSFN*MXBSFN
+      L10 = NFRG*LTWO
 C
       IF( ISGDDI )
      *  CALL EFMOEXCH(NFRG,X(LNEFMOPTS),X(LEFMOPTS),X(LEFMOPPTS),
-     *                X(LEFMODPTS),X(LEFMOIPT),
-     *                L1,L2,L3,L4)
+     *                X(LEFMODPTS),X(LNEFMOBAS),X(LEFMOBAS),
+     *                X(LEFMOLMO),X(LEFMOFM),X(LEFMOCV),X(LEFMOCF),
+     *                X(LEFMOIPT),L1,L2,L3,L4,L5,L6,L7,L8,L9,L10)
 C
-      IF( GOPARR ) THEN
-        CALL DDI_BCAST(2614,'I',X(LNEFMOPTS),L1,MASTER)
-        CALL DDI_BCAST(2615,'F',X(LEFMOPTS),L2,MASTER)
-        CALL DDI_BCAST(2616,'F',X(LEFMOPPTS),L3,MASTER)
-        CALL DDI_BCAST(2617,'F',X(LEFMODPTS),L4,MASTER)
-        CALL DDI_BCAST(2618,'I',X(LEFMOIPT),NFRG,MASTER)
+       IF( GOPARR ) THEN
+         CALL DDI_BCAST(2614,'I',X(LNEFMOPTS),L1,MASTER)
+         CALL DDI_BCAST(2615,'F',X(LEFMOPTS),L2,MASTER)
+         CALL DDI_BCAST(2616,'F',X(LEFMOPPTS),L3,MASTER)
+         CALL DDI_BCAST(2617,'F',X(LEFMODPTS),L4,MASTER)
+         CALL DDI_BCAST(2618,'I',X(LNEFMOBAS),L5,MASTER)
+         CALL DDI_BCAST(2619,'F',X(LEFMOBAS),L6,MASTER)
+         CALL DDI_BCAST(2620,'F',X(LEFMOLMO),L7,MASTER)
+         CALL DDI_BCAST(2621,'F',X(LEFMOFM),L8,MASTER)
+         CALL DDI_BCAST(2622,'F',X(LEFMOCV),L9,MASTER)
+         CALL DDI_BCAST(2623,'F',X(LEFMOCF),L10,MASTER)
+         CALL DDI_BCAST(2624,'I',X(LEFMOIPT),NFRG,MASTER)
       ENDIF
+C
       IF(MASWRK) WRITE(IW,9000)
 C
       OILOCAL = ILOCAL
       OICOORD = ICOORD
+      MXBSFN = 0
+      MXMOS = 0
+       DO I=1,IEFMONFRG
+         MXBSFN=MAX(MXBSFN,NBSFN(I))
+         MXMOS=MAX(MXMOS,NMXMO(I))
+       ENDDO
 C
       CALL EFMOPOPEFP(IEFMONFRG,X(LNEFMOPTS),X(LEFMOPTS),X(LEFMOPPTS),
-     *                X(LEFMODPTS),X(LEFMOIPT),FRGNAM)
+     *                X(LEFMODPTS),X(LNEFMOBAS),X(LEFMOBAS),X(LEFMOLMO),
+     *                X(LEFMOFM),X(LEFMOCV),X(LEFMOCF),X(LEFMOIPT),
+     *                FRGNAM,MXBSFN,MXMOS,RIJ)
       IEFP = 1
-      IEFDP = 0
+      IEFDP = 1
       IEFC = 1
       IF( ISGDDI ) CALL GDDI_SCOPE( DDI_WORLD )
       CALL EFSP
@@ -317,10 +385,34 @@ C
       RETURN
       END
 C
-C
-C
 C*MODULE EFMO     *DECK EFMOFRGS
-      SUBROUTINE EFMOFRGS(IFG,JFG,ECHNRG,EPOLNRG,EDISNRG,FRGNAM)
+C>
+C>    @brief Calculate total EFP dier interaction energy
+C>
+C>    @author Casper Steinmann
+C>
+C>    @date 10/5/12 - Spencer Pruitt
+C>    - Added code to calculate the total number of basis functions 
+C>      and MOs required for repulsion and dispersion energy calculation.
+C>    - Saved repulsion, charge transfer and charge penetration energy to
+C>      common block.
+C>
+C>    @param EDISNRG : EFMO dispersion energy
+C>
+C>    @param ECHTNRG : EFMO charge transfer energy
+C>
+C>    @param EREPNRG : EFMO repulsion energy
+C>
+C>    @param EPENNRG : EFMO charge penetration energy
+C>
+C>    @param NMXMO : Number of MOs for the fragment
+C>
+C>    @param NBSFN : Number of basis functions for the fragment
+C>
+
+C>
+      SUBROUTINE EFMOFRGS(IFG,JFG,RIJ,ECHNRG,EPOLNRG,EDISNRG,
+     *                    EREPNRG,ECHTNRG,EPENNRG,FRGNAM)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
@@ -332,18 +424,21 @@ C      CHARACTER*8 POLNAM,DPOLNAM,FRGNME
       LOGICAL EFMODOEFPC
       INTEGER OILOCAL,OICOORD
       
-      DIMENSION FRGNAM(*)
-      COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,IEFMORUN,
-     *                IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,IEFMODIM(2),
-     *                IMODEFE,NATEFMO,IMODEFD
-      COMMON /EFMOPO/ LNEFMOPTS,LEFMOPTS,LEFMOPPTS,LEFMODPTS,LEFMODIMG,
-     *                LEFMOTOTG,LEFMOIPT,LEFMOIGLOB
+      DIMENSION FRGNAM(*),RIJ(1)
+      COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,
+     *                IEFMORUN,IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,
+     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,EFMOREPNRG,
+     *                EFMOCHTNRG,EFMOEPEN
+      COMMON /EFMOPO/ LNEFMOPTS,LEFMOPTS,LEFMOPPTS,LEFMODPTS,LNEFMOBAS,
+     *                LEFMOBAS,LEFMOLMO,LEFMOFM,LEFMOCV,LEFMOCF,
+     *                LEFMODIMG,LEFMOTOTG,LEFMOIPT,LEFMOIGLOB
       COMMON /FMCOM / X(1)
       COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
       COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
      *                NPPTS(MXFRG),NPTTPT,IEFP,
      *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
-     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG),
+     *                NBSFN(MXFRG),NMXMO(MXFRG)
       COMMON /PRPOPT/ ETOLLZ,ILOCAL,IAHARD
       COMMON /ZMTALT/ NZMAT2,NZVAR2,NVAR2,NZMTRD,ICOORD
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
@@ -362,15 +457,24 @@ C
 C     THE FORMAT IS OVARNAME FOR OLD VALUES
       OILOCAL = ILOCAL
       OICOORD = ICOORD
-C
+      MXBSFN = 0
+      MXMOS = 0
+       DO I=1,IEFMONFRG
+         MXBSFN=MAX(MXBSFN,NBSFN(I))
+         MXMOS=MAX(MXMOS,NMXMO(I))
+       ENDDO
 C     SETUP DEFAULT VALUES FOR EFP RUN. (TAKEN FROM SUBROUTINE START)
       NFRG  = 2
       CALL VCLR(X(LEFMODIMG),1,3*NATFMO+3*NBDFG)
       CALL EFMOPOPEFP(IEFMONFRG,X(LNEFMOPTS),X(LEFMOPTS),X(LEFMOPPTS),
-     *                X(LEFMODPTS),X(LEFMOIPT),FRGNAM)
+     *                X(LEFMODPTS),X(LNEFMOBAS),X(LEFMOBAS),X(LEFMOLMO),
+     *                X(LEFMOFM),X(LEFMOCV),X(LEFMOCF),X(LEFMOIPT),
+     *                FRGNAM,MXBSFN,MXMOS,RIJ)
       IEFP = 0
       IEFC = 0
       IEFDP = 0
+      IREP = 0
+      ILJP = 0
       IF(.NOT.EFMODOEFPC(IFG,JFG)) IEFP = 1
       IF(.NOT.EFMODOEFPC(IFG,JFG)) IEFC = 1
       IF(EFMODOEFPC(IFG,JFG)) IEFDP = 1
@@ -379,6 +483,7 @@ C     SETUP DEFAULT VALUES FOR EFP RUN. (TAKEN FROM SUBROUTINE START)
       IEFP = 0
       IEFC = 0
       IEFDP = 0
+      IREP = 0
 C
 C     GET THE GRADIENTS OF THE INDUCED DIPOLES FOR FRAGMENTS
 C     I AND J, BUT ONLY IF WE ARE DOING QM     
@@ -413,7 +518,9 @@ C
       ECHNRG  = EFMOESERG
       EPOLNRG = EFMOPOLERG
       EDISNRG = EFMODISERG
-
+      EREPNRG = EFMOREPNRG
+      ECHTNRG = EFMOCHTNRG
+      EPENNRG = EFMOEPEN
 C     RESTORE VALUES
       ILOCAL = OILOCAL
       ICOORD = OICOORD
@@ -448,8 +555,9 @@ C
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
-      COMMON /EFMOPO/ LNEFMOPTS,LEFMOPTS,LEFMOPPTS,LEFMODPTS,LEFMODIMG,
-     *                LEFMOTOTG,LEFMOIPT,LEFMOIGLOB
+      COMMON /EFMOPO/ LNEFMOPTS,LEFMOPTS,LEFMOPPTS,LEFMODPTS,LNEFMOBAS,
+     *                LEFMOBAS,LEFMOLMO,LEFMOFM,LEFMOCV,LEFMOCF,
+     *                LEFMODIMG,LEFMOTOTG,LEFMOIPT,LEFMOIGLOB
       COMMON /FMCOM / X(1)
 C
 C     --- SIMPLE WRAPPER FOR EFMOESG ---
@@ -470,9 +578,10 @@ C
      *        ATMIP,ATMJP
       LOGICAL DOTORQ
       DIMENSION ATMS(3,3),DA(3),DI(3),DJ(3),DC(3),EFMODIMG(3,*)
-      COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,IEFMORUN,
-     *                IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,IEFMODIM(2),
-     *                IMODEFE,NATEFMO,IMODEFD
+      COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,
+     *                IEFMORUN,IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,
+     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,EFMOREPNRG,
+     *                EFMOCHTNRG,EFMOEPEN
       COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
       DATA OPTMIZ /8HOPTIMIZE/, SADPT  /8HSADPOINT/
       DATA GRAD  /8HGRADIENT/
@@ -561,9 +670,10 @@ C
       CHARACTER*8 FRGNME
       
 C
-      COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,IEFMORUN,
-     *                IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,IEFMODIM(2),
-     *                IMODEFE,NATEFMO,IMODEFD
+      COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,
+     *                IEFMORUN,IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,
+     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,EFMOREPNRG,
+     *                EFMOCHTNRG,EFMOEPEN
       COMMON /EFMULT/ EFC(3,MXFGPT),EFCHG(2,MXFGPT),EFATRM(MXFGPT),
      *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
      *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
@@ -571,7 +681,8 @@ C
       COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
      *                NPPTS(MXFRG),NPTTPT,IEFP,
      *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
-     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG),
+     *                NBSFN(MXFRG),NMXMO(MXFRG)
 C
       INTEGER I,IFRG,IP,OFFSET
       DIMENSION ATMS(3,3)
@@ -680,9 +791,10 @@ C
 C
       CHARACTER*8 POLNAM,DPOLNAM,FRGNME
 C
-      COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,IEFMORUN,
-     *                IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,IEFMODIM(2),
-     *                IMODEFE,NATEFMO,IMODEFD
+      COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,
+     *                IEFMORUN,IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,
+     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,EFMOREPNRG,
+     *                EFMOCHTNRG,EFMOEPEN
       COMMON /EFMULT/ EFC(3,MXFGPT),EFCHG(2,MXFGPT),EFATRM(MXFGPT),
      *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
      *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
@@ -690,7 +802,8 @@ C
       COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
      *                NPPTS(MXFRG),NPTTPT,IEFP,
      *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
-     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG),
+     *                NBSFN(MXFRG),NMXMO(MXFRG)
       COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
      *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
      *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
@@ -887,9 +1000,10 @@ C
       LOGICAL GOPARR,DSKWRK,MASWRK
 C
 C      COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
-      COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,IEFMORUN,
-     *                IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,IEFMODIM(2),
-     *                IMODEFE,NATEFMO,IMODEFD
+      COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,
+     *                IEFMORUN,IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,
+     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,EFMOREPNRG,
+     *                EFMOCHTNRG,EFMOEPEN
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
       common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
@@ -964,9 +1078,10 @@ C 9031 FORMAT (/5X,'OTHER OPTIONS:')
  9046 FORMAT (5X,'  Distribute gradient equally between close atoms.')
  9047 FORMAT (5X,'  Distribute gradient by percentage ',
      *              'between close atoms')
- 9050 FORMAT (/5X,'EFP Dispersion Options')
- 9051 FORMAT (5X,'  Dispersion interaction for separated pairs')
- 9052 FORMAT (5X,'  No dispersion')
+ 9050 FORMAT (/5X,'Short-range EFP terms')
+ 9051 FORMAT (5X,'  Dispersion, repulsion and charge transfer ',
+     *              'calculated for separated pairs')
+ 9052 FORMAT (5X,'  No short-range interactions')
  9100 FORMAT(/1X,70(1H-))
  
       RETURN
@@ -1031,6 +1146,32 @@ C
       END
 C
 C*MODULE EFMO     *DECK EFMOSTORDP
+C>
+C>    @brief MAKEFP info storage
+C>
+C>    @detail This routine stores EFP dyanmic polarizable point
+C>    information in dynamic memory.  See EFINP.SRC --> SUBROUTINE EFP2X
+C>    for different values stored.
+C>
+C>    @author Spencer Pruitt
+C>
+C>    @date 10/5/12 - Spencer Pruitt
+C>    - Created subroutine
+C>
+C>    @param I : Current EFMO fragmentT
+C>
+C>    @param K : Current dynamic polarizable frequency (NDFREQ)
+C>
+C>    @param J : LNA (LNA = NA - NOUTA)
+C>
+C>    @param IDX : 1 through 12
+C>
+C>    @param EFMODPTS : Allocated space in dynamic memory
+C>
+C>    @param N : Number of EFMO fragments
+C>
+C>    @param VALUE : Passed value from subroutine EFP2X
+C>
       SUBROUTINE EFMOSTORDP(I,K,J,IDX,EFMODPTS,N,VALUE)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       PARAMETER (MXEFMOPPTS=60,MXNEFMOPPTS=15)
@@ -1058,18 +1199,353 @@ C
       RETURN
       END
 C
+CC*MODULE EFMO     *DECK EFMOSTORNBAS
+C>
+C>    @brief MAKEFP info storage
+C>
+C>    @detail Store EFP exchange repulsion basis set integer type data
+C>    in dynamic memory.  See EFINP.SRC --> SUBROUTINE EFP2X
+C>    for different values stored.
+C>
+C>    @author  Spencer Pruitt
+C>
+C>    @date 10/5/12 - Spencer Pruitt
+C>    - Created subroutine
+C>
+C>    @param I : CurrentT EFMO fragment
+C>
+C>    @param K : 1 through NSHELL
+C>
+C>    @param N : Number of  EFMO fragments
+C>
+C>    @param NEFMOBAS : Allocated space in dynamic memory
+C>
+C>    @param J : Indexing
+C>
+C>    @param IVALUE : Passed value from SUBROUTINE EFP2X
+C>
+      SUBROUTINE EFMOSTORNBAS(I,K,N,NEFMOBAS,J,IVALUE)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (MXSH=5000)
+      DIMENSION NEFMOBAS(N,7,MXSH)
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
 C
+C  SRP: STORE EFP-EXCHANGE-REPULSION BASIS SET INTEGER TYPE DATA
+C       IN DYNAMIC MEMORY.  SEE EFINP.SRC --> SUBROUTINE EFP2X
+C       FOR DIFFERENT VALUES STORED.
+C
+      IERR = 0
+      IF( I.GT.N ) IERR = IERR + 1
+      IF( J.GT.7 ) IERR = IERR + 1
+      IF( K.GT.MXSH ) IERR = IERR + 1
+      IF( IERR.GT.0 ) THEN
+        IF( MASWRK ) WRITE(IW,9000)
+        CALL ABRT
+      ENDIF
+C
+C     NO ERRORS, STORE THE VALUE
+C
+       NEFMOBAS(I,J,K) = IVALUE
+C
+ 9000 FORMAT (/5X,"EFMO STORAGE FAILED.",/)
+      RETURN
+      END
+C
+CC*MODULE EFMO     *DECK EFMOSTORBAS
+C>
+C>    @brief MAKEFP info storage
+C>
+C>    @detail Store EFP exchange repulsion basis set FP type data
+C>    in dynamic memory.  See EFINP.SRC --> SUBROUTINE EFP2X
+C>    for different values stored.
+C>
+C>    @author Spencer Pruitt
+C>
+C>    @date 10/5/12 - Spencer Pruitt
+C>    - Created subroutine
+C>
+C>    @param I : Current EFMO fragment
+C>
+C>    @param M : IAT or IG depending on call (SEE EFP2X)
+C>
+C>    @param N : Number of EFMO fragments
+C>
+C>    @param EFMOBAS : Allocated space in dynamic memory
+C>
+C>    @param J : Indexing
+C>
+C>    @param VALUE : Passed value from SUBROUTINE EFP2X
+C>
+      SUBROUTINE EFMOSTORBAS(I,M,N,EFMOBAS,J,VALUE)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (MXGTOT=20000)
+      DIMENSION EFMOBAS(N,10,MXGTOT)
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+C  SRP: STORE EFP-EXCHANGE-REPULSION BASIS SET FP TYPE DATA
+C       IN DYNAMIC MEMORY.  SEE EFINP.SRC --> SUBROUTINE EFP2X
+C       FOR DIFFERENT VALUES STORED.
+C
+      IERR = 0
+      IF( I.GT.N ) IERR = IERR + 1
+      IF( J.GT.10 ) IERR = IERR + 1
+      IF( IERR.GT.0 ) THEN
+        IF( MASWRK ) WRITE(IW,9000)
+        CALL ABRT
+      ENDIF
+C
+C     NO ERRORS, STORE THE VALUE
+C
+       EFMOBAS(I,J,M) = VALUE
+C
+ 9000 FORMAT (/5X,"EFMO STORAGE FAILED.",/)
+      RETURN
+      END
+C
+C*MODULE EFMO     *DECK EFMOSTORLMO
+C>
+C>    @brief MAKEFP info storage
+C>
+C>    @detail Store LMOs in dynamic memory.
+C>    See EFINP.SRC --> SUBROUTINE EFP2X for different values stored.
+C>
+C>    @author Spencer Pruitt
+C>
+C>    @date 10/5/12 - Spencer Pruitt
+C>    - Created subroutine
+C>
+C>    @param I : Current EFMO fragment
+C>
+C>    @param K : 1 through LNA
+C>
+C>    @param J : 1 through L1
+C>
+C>    @param L1 : Maximum number of basis functions
+C>
+C>    @param LNA : Maximum number of MOs
+C>
+C>    @param EFMOLMO : Allocated space in dynamic memory
+C>
+C>    @param N : Number of EFMO fragments
+C>
+C>    @param VALUE : Passed value from subroutine EFP2X
+C>
+      SUBROUTINE EFMOSTORLMO(I,K,J,L1,LNA,EFMOLMO,N,VALUE)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      DIMENSION EFMOLMO(N,L1,LNA)
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+C     --- STORE LMOS IN DYNAMIC STORAGE ---
+C
+      IERR = 0
+      IF( I.GT.N ) IERR = IERR + 1
+      IF( J.GT.LNA ) IERR = IERR + 1
+      IF( K.GT.L1 ) IERR = IERR + 1
+      IF( IERR.GT.0 ) THEN
+        IF( MASWRK ) WRITE(IW,9000)
+        CALL ABRT
+      ENDIF
+C
+C     NO ERRORS, STORE THE VALUE
+C
+       EFMOLMO(I,K,J) = VALUE
+C
+ 9000 FORMAT (/5X,"EFMO STORAGE FAILED.",/)
+      RETURN
+      END
+C
+C*MODULE EFMO     *DECK EFMOSTORFM
+C>
+C>    @brief MAKEFP info storage
+C>
+C>    @detail Store fock matrix in dynamic memory.
+C>    See EFINP.SRC --> SUBROUTINE EFP2X for different values stored.
+C>
+C>    @author Spencer Pruitt
+C>
+C>    @date 10/5/12 - Spencer Pruitt
+C>    - Created subroutine
+C>
+C>    @param I : Current EFMO fragment
+C>
+C>    @param K : MXMO2 ((MXMOS*MXMOS+MXMOS)/2)
+C>
+C>    @param J : 1 through LNA2
+C>
+C>    @param EFMOFM : Allocated space in dynamic memory
+C>
+C>    @param N : Number of EFMO fragments
+C>
+C>    @param VALUE : Passed value from SUBROUTINE EFP2X
+C>
+      SUBROUTINE EFMOSTORFM(I,K,J,EFMOFM,N,VALUE)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      DIMENSION EFMOFM(N,K)
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+C     --- STORE FOCK MATRIX IN DYNAMIC STORAGE ---
+C
+      IERR = 0
+      IF( I.GT.N ) IERR = IERR + 1
+      IF( IERR.GT.0 ) THEN
+        IF( MASWRK ) WRITE(IW,9000)
+        CALL ABRT
+      ENDIF
+C
+C     NO ERRORS, STORE THE VALUE
+C
+       EFMOFM(I,J) = VALUE
+C
+ 9000 FORMAT (/5X,"EFMO STORAGE FAILED.",/)
+      RETURN
+      END
+C
+C
+C*MODULE EFMO     *DECK EFMOSTORCV
+C>
+C>    @brief MAKEFP info storage
+C>
+C>    @detail Store VVO's in dynamic memory.
+C>    See EFINP.SRC --> SUBROUTINE EFP2X for different values stored.
+C>
+C>    @author Spencer Pruitt
+C>
+C>    @date 10/5/12 - Spencer Pruitt
+C>    - Created subroutine
+C>
+C>    @param I : Current EFMO fragment
+C>
+C>    @param J : Depends on context (CTVVO = TRUE OR FALSE)
+C>
+C>    @param L1 : Depends on context (CTVVO = TRUE OR FALSE)
+C>
+C>    @param EFMOCV : Allocated space in dynamic memory
+C>
+C>    @param N : Number of EFMO fragments
+C>
+C>    @param VALUE : Passed value from SUBROUTINE EFP2X
+C>
+      SUBROUTINE EFMOSTORCV(I,J,L1,EFMOCV,N,VALUE)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      DIMENSION EFMOCV(N,L1*L1)
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+C     --- STORE VVO'S IN DYNAMIC STORAGE ---
+C
+      IERR = 0
+      IF( I.GT.N ) IERR = IERR + 1
+      IF( IERR.GT.0 ) THEN
+        IF( MASWRK ) WRITE(IW,9000)
+        CALL ABRT
+      ENDIF
+C
+C     NO ERRORS, STORE THE VALUE
+C
+       EFMOCV(I,J) = VALUE
+C
+ 9000 FORMAT (/5X,"EFMO STORAGE FAILED.",/)
+      RETURN
+      END
+C
+C*MODULE EFMO     *DECK EFMOSTORCF
+C>
+C>    @brief MAKEFP info storage
+C>
+C>    @detail Store fock matrix over VVO's in dynamic memory.
+C>    See EFINP>SRC --> SUBROUTINE EFP2X for different values stored.
+C>
+C>    @author Spencer Pruitt
+C>
+C>    @date 10/5/12 - Spencer Pruitt
+C>    - Created subroutine
+C>
+C>    @param I : Current EFMO fragment
+C>
+C>    @param J : 1 through NA
+C>
+C>    @param L2 : Dimensioning
+C>
+C>    @param EFMOCF : Allocated space in dynamic memory
+C>
+C>    @param N : Number of EFMO fragments
+C>
+C>    @param VALUE : Passed value from SUBROUTINE EFP2X
+C>
+      SUBROUTINE EFMOSTORCF(I,J,L2,EFMOCF,N,VALUE)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      DIMENSION EFMOCF(N,L2)
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+C     --- STORE FOCK MATRIX OVER VVO'S IN DYNAMIC STORAGE ---
+C
+      IERR = 0
+      IF( I.GT.N ) IERR = IERR + 1
+      IF( IERR.GT.0 ) THEN
+        IF( MASWRK ) WRITE(IW,9000)
+        CALL ABRT
+      ENDIF
+C
+C     NO ERRORS, STORE THE VALUE
+C
+       EFMOCF(I,J) = VALUE
+C
+ 9000 FORMAT (/5X,"EFMO STORAGE FAILED.",/)
+      RETURN
+      END
 C
 C*MODULE EFMO     *DECK EFMOPNTSAV
+C>
+C>    @brief MAKEFP info storage
+C>
+C>    @detail Store a variety of EFP information
+C>
+C>    @author Casper Steinmann
+C>
+C>    @date 10/5/12 - Spencer Pruitt
+C>    - Added modes 3, 4, 5, 6 and 7
+C>
+C>    @param NEFMOPTS : 
+C>
+C>    @param NFG : Number of fragments
+C>
+C>    @param N : Current fragment
+C>
+C>    @param MODE : EFP information being stored
+C>    MODE = 1 Static multipole point
+C>    MODE = 2 Polarizable point
+C>    MODE = 3 Dynamic polarizable points
+C>    MODE = 4 Number of basis functions/fragment
+C>    MODE = 5 Number of basis shells/fragment
+C>    MODE = 6 Multiplicity of fragment
+C>    MODE = 7 # of occupied orbitals in fragment
+C>
+C>    @param IVALUE : Passed value from SUBROUTINE EFP2X
+C>
       SUBROUTINE EFMOPTNSAV(NEFMOPTS,NFG,N,MODE,IVALUE)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-      DIMENSION NEFMOPTS(3,NFG)
+      DIMENSION NEFMOPTS(7,NFG)
 C
-C     --- STORE NUMBER OF MULTIPOLE/POLARIZABLE POINTS ---
+C     --- STORAGE FOR A VARIETY OF EFP INFORMATION ---
 C
 C        MODE = 1  :        STATIC MULTIPOLE POINT
 C        MODE = 2  :        POLARIZABLE POINT
 C        MODE = 3  :        DYNAMIC POLARIZABILITY POINTS
+C        MODE = 4  :        NUMBER OF BASIS FUNCTIONS/FRAGMENT
+C        MODE = 5  :        NUMBER OF BASIS SHELLS/FRAGMENT
+C        MODE = 6  :        MULTIPLICITY OF FRAGMENT
+C        MODE = 7  :        # OF OCCUPIED ORBITALS IN FRG
 C
       NEFMOPTS(MODE,N) = IVALUE
 C
@@ -1091,8 +1567,43 @@ C
 C
 C
 C*MODULE EFMO     *DECK EFMOPOPEFP
+C
+C     @brief Populate EFP common blocks
+C
+C     @detail Populate EFP common blocks with MAKEFP information in 
+C     dynamic memory before EFP total polarization calculation and/or
+C     separated EFP dimer calculations.
+C
+C     @author Casper Steinmann
+C
+C     @date 10/5/12 - Spencer Pruitt
+C     - Added population of dispersion, charge transfer and repulsion
+C       EFP information for calculations of EFP-EFP dimer short-range energy
+C       terms listed.
+C
+C     @param EFMODPTS : Dynamic polarizable points
+C
+C     @param NEFMOBAS : Integer type basis set information
+C
+C     @param EFMOBAS : FP type basis set information
+C
+C     @param EFMOLMO : Localized molecular orbitals
+C
+C     @param EFMOFM : Fock matrix
+C
+C     @param EFMOCV : VVO's or CMO's depending on CTVVO = .T. OR .F.
+C
+C     @param EFMOCF : FM over VVO's or CMO's depending on CTVVO
+C
+C     @param MXBSFN : Maximum number of basis functions
+C
+C     @param MXMOS : Maximum number of MO's
+C
+C     @param RIJ : Distance between fragments from FMO code
+C
       SUBROUTINE EFMOPOPEFP(NFG,NEFMOPTS,EFMOPTS,EFMOPPTS,EFMODPTS,
-     *           NEFMOIPT,FMOFRGNAM)
+     *           NEFMOBAS,EFMOBAS,EFMOLMO,EFMOFM,EFMOCV,EFMOCF,
+     *           NEFMOIPT,FMOFRGNAM,MXBSFN,MXMOS,RIJ)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
@@ -1101,31 +1612,52 @@ C
       CHARACTER*6 FRGNAM
       CHARACTER*8 PTNAM
       LOGICAL DOMONO,DODIPO,DOQUAD,DOOCTU,DOEXPDAM
+      LOGICAL POLAR,DISPER,EXREP,CHGTRN,MFRZ,CTVVO
 C
-      PARAMETER(MXFGPT=12000,MXFRG=1050,MXDFG=5,
-     *          MXDPPT=MXFRG*MXDFG*12,MXIFRQ=12,MXPT=2000)
+      PARAMETER(MXFGPT=12000,MXFRG=1050,MXDFG=5,MXAO=8192,MXGEFP=4000,
+     *          MXSHEF=1000,MXDPPT=MXFRG*MXDFG*12,MXIFRQ=12,MXPT=2000)
       PARAMETER (MXEFMOPTS=50,MXEFMOPPTS=60,MXNEFMOPTS=27,
-     *           MXNEFMOPPTS=15)
+     *           MXNEFMOPPTS=15,MXSH=5000,MXGTOT=20000,MXATM=1050)
 C
       DIMENSION EFMOPTS(NFG,MXEFMOPTS,MXNEFMOPTS),
      *          EFMOPPTS(NFG,MXEFMOPPTS,MXNEFMOPPTS),
-     *          NEFMOPTS(3,NFG),NEFMOIPT(NFG),FMOFRGNAM(*),
-     *          EFMODPTS(NFG,MXEFMOPPTS,12,MXNEFMOPPTS)
+     *          NEFMOPTS(7,NFG),NEFMOIPT(NFG),FMOFRGNAM(*),
+     *          EFMODPTS(NFG,MXEFMOPPTS,12,MXNEFMOPPTS),
+     *          NEFMOBAS(NFG,7,MXSH),
+     *          EFMOBAS(NFG,10,MXGTOT),
+     *          EFMOLMO(NFG,MXBSFN,MXMOS),
+     *          EFMOFM(NFG,((MXMOS*MXMOS+MXMOS)/2)),
+     *          EFMOCV(NFG,MXBSFN*MXBSFN),
+     *          EFMOCF(NFG,((MXBSFN*MXBSFN+MXBSFN)/2))
 C
       COMMON /DOMULT/ DOMONO(MXFGPT),DODIPO(MXFGPT),DOQUAD(MXFGPT),
      *                DOOCTU(MXFGPT)
-      COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,IEFMORUN,
-     *                IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,IEFMODIM(2),
-     *                IMODEFE,NATEFMO,IMODEFD
+      COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,
+     *                IEFMORUN,IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,
+     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,EFMOREPNRG,
+     *                EFMOCHTNRG,EFMOEPEN
       COMMON /EFMULT/ EFC(3,MXFGPT),EFCHG(2,MXFGPT),EFATRM(MXFGPT),
      *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
      *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
      *                EFOCT(10,MXFGPT),FRGNME(MXFGPT)
+      COMMON /EFPBAS/ EX(MXGEFP,MXDFG),CS(MXGEFP,MXDFG),
+     *                CP(MXGEFP,MXDFG),CD(MXGEFP,MXDFG),
+     *                CF(MXGEFP,MXDFG),CG(MXGEFP,MXDFG),
+     *                PRNAME(MXFGPT),PRCORD(3,MXFGPT),EFZNUC(MXFGPT),
+     *                KSTART(MXSHEF,MXDFG),KATOM(MXSHEF,MXDFG),
+     *                KTYPE(MXSHEF,MXDFG),KNG(MXSHEF,MXDFG),
+     *                KLOC(MXSHEF,MXDFG),KMIN(MXSHEF,MXDFG),
+     *                KMAX(MXSHEF,MXDFG),NSHELL(MXDFG),NGAUSS(MXDFG),
+     *                NAT(MXDFG),NUM(MXDFG),NTPATM
+      COMMON /EFPCT / NOCC(MXDFG),NVIR(MXDFG),NAO(MXDFG),NTAO,
+     *                CTFOK(MXAO,MXDFG),NCTMO(MXDFG),NTCTMO
+      COMMON /EFPIO / MULMAT(MXFRG)
       COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
      *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
      *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
      *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ*MXFGPT),
      *                POLSCR(MXFGPT),IPLSCR,INDSCR
+      COMMON /FMCOM / X(1)
       COMMON /FRAGMT/ XCRD(50,MXFRG),YCRD(50,MXFRG),ZCRD(50,MXFRG),
      *                PTNAM(50,MXFRG),FRGNAM(MXFRG)
       COMMON /EFPSCR/ POLAB(MXFRG),B,SCROFF,IELECS,IDISPS,NEW_POL
@@ -1135,15 +1667,21 @@ C
      *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
      *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
      *                modlmo,nopden,mofock,modfd,modfmm,ncentm
+      COMMON /INFOA / NAT1,ICH,MUL,NUM1,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
       COMMON /PRPOPT/ ETOLLZ,ILOCAL,IAHARD
       COMMON /ZMTALT/ NZMAT2,NZVAR2,NVAR2,NZMTRD,ICOORD
       COMMON /FRGTYP/ NDFRG,ISET(MXFRG),NAMIDX(MXDFG)
       COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
      *                NPPTS(MXFRG),NPTTPT,IEFP,
      *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
-     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG),
+     *                NBSFN(MXFRG),NMXMO(MXFRG)
       COMMON /FRGMSS/ FPMASS(MXPT),FMASS(MXFGPT),
      *                FPNUC(MXPT),FGNUC(MXFGPT)
+      COMMON /PAULMO/ CENTNM(MXFGPT),CENTCD(3,MXFGPT),NORB(MXFRG),
+     *                NPBF(MXFRG),NTMO
       DATA ZERO/0.0D+00/
 C
 C     --- POPULATE EFP COMMON BLOCKS WITH EFMO DATA ---
@@ -1156,17 +1694,17 @@ C     SETUP DEFAULT VALUES FOR EFP RUN. (TAKEN FROM ROUTINE START/EFPX)
       ILOCAL = 2
       ICOORD = 4
       SCROFF= 1.0D+04
-      IDISPS = 0
-      IELECS = 0
+      IDISPS = 1
+      IELECS = 1
       INDSCR = 0
       NEW_POL = 1
       IPLSCR = 0
-      ICHGP = 0
+      ICHGP = -1
       IF(DOEXPDAM) THEN
         new_pol = -1
         iplscr = 1
         ichgp = 7
-      endif
+      ENDIF
 C
 C     IN EFMO, THE NUMBER OF ATOMS IS
 C     ALWAYS THE NUMBER OF MULTIPOLE POINTS
@@ -1181,6 +1719,54 @@ C     WHICH IS NOT A BOND MIDPOINT
       NPTTPT = 0
       NDPTTPT = 0
       NDPST = 0
+      IDIM = 0
+C
+C  SRP: SET UP DYNAMIC MEMORY AND VARIABLES FOR EXCHANGE REPULSION
+C
+      IF(IAND(IMODEFD,1).NE.0.AND.NFRG.EQ.2.AND.RIJ.GT.RESDIM)THEN
+        MXBF = 0
+        MXMO = 0
+        MXMO2 = 0
+        NTMOF = 0
+        NTAOF = 0
+        NTMO = 0
+        NTAO = 0
+        NTMO = NEFMOPTS(3,IEFMODIM(1)) + NEFMOPTS(3,IEFMODIM(2))
+        NTAO = NEFMOPTS(4,IEFMODIM(1)) + NEFMOPTS(4,IEFMODIM(2))
+        ISET(1)=1
+        ISET(2)=2
+        NTMOF=NFRG*MXMOS
+        NTAOF=NFRG*MXBSFN
+        NTCTMO=NTAOF
+      DO I = 1, NFRG
+        MXMO=MAX(MXMO,NEFMOPTS(3,IEFMODIM(I)))
+        MXBF=MAX(MXBF,NEFMOPTS(4,IEFMODIM(I)))
+      ENDDO
+C
+        MXMO2=(MXMO*MXMO+MXMO)/2
+C
+      CALL VALFM(LOADFM)
+        LPROVEC = LOADFM  + 1
+        LFOCKMA = LPROVEC + MXBF*NTMOF
+        LCTVEC = LFOCKMA + MXMO2*NFRG
+        LAST    = LCTVEC  + MXBF*MXBF*NFRG
+        NEED = LAST-LOADFM-1
+      CALL GETFM(NEED)
+         CALL VCLR(X(LPROVEC),1,MXBSFN*NTMOF)
+         CALL VCLR(X(LFOCKMA),1,((MXMOS*MXMOS+MXMOS)/2)*NFRG)
+         CALL VCLR(X(LCTVEC),1,MXBSFN*NTAOF)
+        LENPV=0
+        LENFM=0
+        LENCV=0
+        LENPV=MXBSFN*NTMOF
+        LENFM=((MXMOS*MXMOS+MXMOS)/2)*NFRG
+        LENCV=MXBSFN*NTCTMO
+C     
+        CALL DAWRIT(IDAF,IODA,X(LPROVEC),LENPV,267,0) 
+        CALL DAWRIT(IDAF,IODA,X(LFOCKMA),LENFM,268,0) 
+        CALL DAWRIT(IDAF,IODA,X(LCTVEC),LENCV,269,0)
+      ENDIF
+C
       DO IDX=1,NFRG
         I=IDX
         IF( NFRG.EQ.2 .AND. IEFMORT.EQ.3 ) I = IEFMODIM(IDX)
@@ -1189,7 +1775,10 @@ C     WHICH IS NOT A BOND MIDPOINT
         NDPPTS(IDX) = 12*NEFMOPTS(3,I)
         NMTTPT = NMTTPT + NMPTS(IDX)
         NPTTPT = NPTTPT + NPPTS(IDX)
-        NDPTTPT = NDPTTPT + NDPPTS(IDX)
+        IF( NFRG.EQ.2 .AND. IEFMORT.EQ.3 .AND. RIJ .GT. RESDIM )
+     *     NDPTTPT = NDPTTPT + NDPPTS(IDX)
+        IF( NFRG.EQ.2 .AND. IEFMORT.EQ.3 .AND. RIJ .GT. RESDIM )
+     *     NCTMO(IDX)=MXBSFN
         LSTMPTS(IDX+1) = LSTMPTS(IDX) + NMPTS(IDX)
         POLAB(IDX) = ascreen(1)
         FRGNAM(IDX) = FMOFRGNAM(I)(1:6)
@@ -1241,10 +1830,17 @@ C     WHICH IS NOT A BOND MIDPOINT
           IPOLPOL = IPOLPOL + 1
           IOFFSET = 3
           POLNAM(IPOLPOL) = FMOFRGNAM(I)
+C  SRP: STORING CENTROIDS FOR EACH FRAGMENT HERE
           IF(IAND(IMODEFP,32).EQ.0) THEN
             EFP(1,IPOLPOL)   = EFMOPPTS(I,J,1)
             EFP(2,IPOLPOL)   = EFMOPPTS(I,J,2)
             EFP(3,IPOLPOL)   = EFMOPPTS(I,J,3)
+            IF(IAND(IMODEFD,1).NE.0.AND.NFRG.EQ.2.AND.RIJ.GT.RESDIM)THEN
+C            IF(NFRG.EQ.2.AND.RIJ.GT.RESDIM)THEN
+              CENTCD(1,IPOLPOL) = EFMOPPTS(I,J,1)
+              CENTCD(2,IPOLPOL) = EFMOPPTS(I,J,2)
+              CENTCD(3,IPOLPOL) = EFMOPPTS(I,J,3)
+            ENDIF
           ELSE
             JJ=-1
             CALL EFMOGCA(NFG,EFMOPPTS,EFMOPTS,I,NMPTS(IDX),J,JJ)
@@ -1273,12 +1869,16 @@ c         the screen(2) parameter
             POLAB(IDX) = ascreen(2)
           ENDIF
         ENDDO
-C       SRP: TRANSFERRING DYNAMIC POINTS FROM EFP TO EFMO
+C
+C  SRP: TRANSFERRING DYNAMIC POLARIZABILITY TENSORS
+C       FROM EFMO TO EFP FOR DISPERSION.
+C 
+      IF(IAND(IMODEFD,1).NE.0.AND.NFRG.EQ.2.AND.RIJ.GT.RESDIM)THEN
        DO  IDYNPOL=1,12 
         DO J=1,NPPTS(IDX)
            IOFFSET = 3
            NDPST = NDPST + 1
-           DPOLNAM(NDPST)  = FMOFRGNAM(I)
+           DPOLNAM(NDPST)  = FMOFRGNAM(I)(1:6)
            EFDP(1,NDPST)   = J
            EFDP(2,NDPST)   = EFMODPTS(I,J,IDYNPOL,1)
            EFDP(3,NDPST)   = EFMODPTS(I,J,IDYNPOL,2)
@@ -1293,8 +1893,210 @@ C       SRP: TRANSFERRING DYNAMIC POINTS FROM EFP TO EFMO
            EFDPOL(9,NDPST) = EFMODPTS(I,J,IDYNPOL,IOFFSET + 8)
          ENDDO
         ENDDO
+C
+C  SRP: STORING/TRANSFERRING XR DATA FROM EFMO TO EFP.
+C       THIS IS ONLY DONE FOR DIMERS.
+C
+        M=0
+        ICTOFFSET = 0
+C
+C  SRP: STORING ZNUC, COORDINATES, PROVEC (LMOS) AND FOCKMA FOR EACH
+C       FRAGMENT, THE LAST TWO IN MEMORY.  THIS HAD TO BE DONE TO 
+C       PROPERLY ORDER THE LMOS AND FOCK MATRIX BEFORE HANDING THEM
+C       OFF TO THE EFP CODE.
+C
+        IF(I.EQ.IEFMODIM(1))THEN
+          NORB(1) = NEFMOPTS(3,I)
+          NPBF(1) = NEFMOPTS(4,I)
+          NAO(1) = NEFMOPTS(4,I)
+          NOCC(1) = NEFMOPTS(7,I)
+          NVIR(1) = NAO(1) - NOCC(1)
+          NAT(1)  = NATEFMO
+          NSHELL(1) = NEFMOPTS(5,I)
+          MULMAT(1) = NEFMOPTS(6,I)
+C
+C  SRP: STORING BASIS SET INTEGER TYPE DATA IN /EFPBAS/
+C
+          DO J=1,NSHELL(1)
+            KSTART(J,1) = NEFMOBAS(I,1,J)
+            KATOM(J,1)  = NEFMOBAS(I,2,J)
+            KTYPE(J,1)  = NEFMOBAS(I,3,J)
+            KNG(J,1)    = NEFMOBAS(I,4,J)
+            KLOC(J,1)   = NEFMOBAS(I,5,J)
+            KMIN(J,1)   = NEFMOBAS(I,6,J)
+            KMAX(J,1)   = NEFMOBAS(I,7,J)
+          ENDDO
+
+C
+C  SRP: STORING NGAUSS FOR EACH FRAGMENT
+C
+          NGAUSS(1) = KSTART(NSHELL(1),1)
+C
+C  SRP: STORING BASIS SET FP TYPE DATA IN /EFPBAS/
+C
+          DO J=1,NGAUSS(1)
+            EX(J,1) = EFMOBAS(I,5,J)
+            CS(J,1) = EFMOBAS(I,6,J)
+            CP(J,1) = EFMOBAS(I,7,J)
+            CD(J,1) = EFMOBAS(I,8,J)
+            CF(J,1) = EFMOBAS(I,9,J)
+            CG(J,1) = EFMOBAS(I,10,J)
+          ENDDO
+C
+C  SRP: STORING ZNUC
+C
+          DO J=1,NAT(1)
+            EFZNUC(J) = EFMOBAS(I,4,J)
+          ENDDO
+C
+C  SRP: STORING COORDINATES 
+C
+          DO K=1,NAT(1)
+            PRCORD(1,K) = EFMOBAS(I,1,K)
+            PRCORD(2,K) = EFMOBAS(I,2,K)
+            PRCORD(3,K) = EFMOBAS(I,3,K)
+          ENDDO
+C
+          DO J=1,NORB(1)
+            DO K=1,NPBF(1)
+              M = 1
+              CALL EFMOSTORXR(NFG,1,M,K,J,X(LPROVEC),X(LFOCKMA),
+     *                        MXBF,NTAOF,MXMOS,MXMO2,
+     *                        NTMO,EFMOLMO(I,K,J))
+            ENDDO
+          ENDDO
+C
+          DO K=1,MXMO2
+            M = 2
+              CALL EFMOSTORXR(NFG,1,M,K,L,X(LPROVEC),X(LFOCKMA),
+     *                        MXBF,NTAOF,MXMOS,MXMO2,
+     *                        NTMO,EFMOFM(I,K))
+          ENDDO
+C
+C  SRP: STORING CTVEC FOR IEFMODIM(1)
+C
+          DO J=1,NPBF(1)
+            DO K=1,NPBF(1)
+              CALL EFMOSTORCT(NFG,K,J,X(LCTVEC),NTAOF,MXBF,
+     *                        EFMOCV(I,K+ICTOFFSET))
+            ENDDO
+                ICTOFFSET=ICTOFFSET + NPBF(1)
+          ENDDO
+C
+C  SRP: STORING CTFOK FOR IEFMODIM(1)
+C
+          DO J=1,MXBSFN
+            CTFOK(J,1)=EFMOCF(I,J)
+          ENDDO
+        ENDIF
+C
+        IF(I.EQ.IEFMODIM(2))THEN
+          NORB(2) = NEFMOPTS(3,I)
+          NPBF(2) = NEFMOPTS(4,I)
+          NAO(2) = NEFMOPTS(4,I)
+          NOCC(2) = NEFMOPTS(7,I)
+          NVIR(2) = NAO(2) - NOCC(2)
+          NSHELL(2) = NEFMOPTS(5,I)
+          MULMAT(2) = NEFMOPTS(6,I)
+          IPOFFSET = NORB(1)
+          ICOFFSET = NPBF(1)
+          NAT(2) = NATEFMO - NAT(1)
+C
+C  SRP: STORING BASIS SET INTEGER TYPE DATA IN /EFPBAS/
+C
+          DO J=1,NSHELL(2)
+            KSTART(J,2) = NEFMOBAS(I,1,J)
+            KATOM(J,2)  = NEFMOBAS(I,2,J)
+            KTYPE(J,2)  = NEFMOBAS(I,3,J)
+            KNG(J,2)    = NEFMOBAS(I,4,J)
+            KLOC(J,2)   = NEFMOBAS(I,5,J)
+            KMIN(J,2)   = NEFMOBAS(I,6,J)
+            KMAX(J,2)   = NEFMOBAS(I,7,J)
+          ENDDO
+
+C
+C  SRP: STORING NGAUSS
+C
+          NGAUSS(2) = KSTART(NSHELL(2),2)
+C
+C  SRP: STORING BASIS SET FP TYPE DATA IN /EFPBAS/
+C
+          DO J=1,NGAUSS(2)
+            EX(J,2) = EFMOBAS(I,5,J)
+            CS(J,2) = EFMOBAS(I,6,J)
+            CP(J,2) = EFMOBAS(I,7,J)
+            CD(J,2) = EFMOBAS(I,8,J)
+            CF(J,2) = EFMOBAS(I,9,J)
+            CG(J,2) = EFMOBAS(I,10,J)
+          ENDDO
+
+C
+          DO J=1,NAT(2)
+            JOFFSET = NAT(1)
+            EFZNUC(J+JOFFSET) = EFMOBAS(I,4,J)
+          ENDDO
+C
+          DO K=1,NAT(2)
+            KOFFSET=NAT(1)
+            PRCORD(1,K+KOFFSET) = EFMOBAS(I,1,K)
+            PRCORD(2,K+KOFFSET) = EFMOBAS(I,2,K)
+            PRCORD(3,K+KOFFSET) = EFMOBAS(I,3,K)
+          ENDDO
+C
+          DO J=1,NORB(2)
+            DO K=1,NPBF(2)
+              L = J + IPOFFSET
+              M = 1
+              CALL EFMOSTORXR(NFG,2,M,K,L,X(LPROVEC),X(LFOCKMA),
+     *                        MXBF,NTAOF,MXMOS,MXMO2,
+     *                        NTMO,EFMOLMO(I,K,J))
+            ENDDO
+          ENDDO
+C
+          DO K=1,MXMO2
+            M = 2
+              CALL EFMOSTORXR(NFG,2,M,K,L,X(LPROVEC),
+     *                        X(LFOCKMA),MXBF,NTAOF,MXMOS,MXMO2,
+     *                        NTMO,EFMOFM(I,K))
+          ENDDO
+C
+C  SRP: STORING CTVEC FOR IEFMODIM(2)
+C
+          DO J=1,NPBF(2)
+            DO K=1,NPBF(2)
+              L = J + ICOFFSET
+              CALL EFMOSTORCT(NFG,K,L,X(LCTVEC),NTAOF,MXBF,
+     *                        EFMOCV(I,K+ICTOFFSET))
+            ENDDO
+                ICTOFFSET=ICTOFFSET + NPBF(2)
+          ENDDO
+C
+C  SRP: STORING CTFOK FOR IEFMODIM(2)
+C
+          DO J=1,MXBSFN
+            CTFOK(J,2)=EFMOCF(I,J)
+          ENDDO
+        ENDIF
+      ENDIF
       ENDDO
 C
+C  SRP: ABOUT TO WRITE PROVEC AND FOCKMA TO DAFS 267 & 268.
+C       THESE DAFS ARE THEN READ DIRECTLY BY THE EFP CODE IN 
+C       EFDRVR.SRC --> SUBROUTINE EFSP.
+C
+      IF(IAND(IMODEFD,1).NE.0.AND.NFRG.EQ.2.AND.RIJ.GT.RESDIM)THEN
+        LENPV=0
+        LENFM=0
+        LENCV=0
+        LENPV=MXBSFN*NTMOF
+        LENFM=((MXMOS*MXMOS+MXMOS)/2)*NFRG
+        LENCV=MXBSFN*NTCTMO
+C
+        CALL DAWRIT(IDAF,IODA,X(LPROVEC),LENPV,267,0) 
+        CALL DAWRIT(IDAF,IODA,X(LFOCKMA),LENFM,268,0) 
+        CALL DAWRIT(IDAF,IODA,X(LCTVEC),LENCV,269,0)
+        CALL RETFM(NEED)
+      ENDIF
 C     PUNCH OUT INFORMATION
 C
       IF(IAND(NPRFMO,256).NE.0) THEN
@@ -1305,17 +2107,119 @@ C
       END
 C
 C
+C*MODULE EFMO     *DECK EFMOSTORXR
+C>
+C>    @brief Temporary PROVEC and FOCKMA storage
+C>
+C>    @detail Subroutine to temporarily store PROVEC and FOCKMA in 
+C>    dynamic memory to reorder them before storage in DAFs.
+C>
+C>    @author Spencer Pruitt
+C>
+C>    @date 10/5/12 - Spencer Pruitt
+C>    - Created subroutine
+C>
+C>    @param NFG : Number of fragments
+C>
+C>    @param I : Current fragment (1 or 2)
+C>
+C>    @param M : 1 for LMOs, 2 for fock matrix
+C>
+C>    @param K : 1 through NPBF
+C>
+C>    @param J : 1 through NORB
+C>
+C>    @param PROVEC : LMO's
+C>
+C>    @param FOCKMA : Fock matrix
+C>
+C>    @param MXBF : Maximum number of basis functions
+C>
+C>    @param NTAOF : NFRG*MXBSFN
+C>
+C>    @param MXMOS : Maximum number of MOs
+C>
+C>    @param MXMO2 : (MXMO*MXMO+MXMO)/2
+C>
+C>    @param NTMO : Total number of dynamic polarizable points
+C>
+C>    @param VALUE : Value passed from EFMOPOPEFP
+C>
+      SUBROUTINE EFMOSTORXR(NFG,I,M,K,J,PROVEC,FOCKMA,
+     *                      MXBF,NTAOF,MXMOS,MXMO2,NTMO,VALUE)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      DIMENSION PROVEC(MXBF,NTMO),
+     *          FOCKMA(MXMO2,NFG)
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+C  SRP: SUBROUTINE TO TEMPORARILY STORE PROVEC AND FOCKMA IN 
+C       DYNAMIC MEMORY TO REORDER THEM BEFORE STORAGE IN DAFS.
+C
+       IF(M.EQ.1)THEN
+         PROVEC(K,J) = VALUE
+       ENDIF
+       IF(M.EQ.2)THEN
+         FOCKMA(K,I) = VALUE
+       ENDIF
+C
+      RETURN
+      END
+C
+C
+C*MODULE EFMO     *DECK EFMOSTORCT
+C>
+C>    @brief Temporary PROVEC and FOCKMA storage
+C>
+C>    @detail Subroutine to temporarily store PROVEC and FOCKMA in 
+C>    dynamic memory to reorder them before storage in DAFs.
+C>
+C>    @author Spencer Pruitt
+C>
+C>    @date 10/5/12 - Spencer Pruitt
+C>    - Created subroutine
+C>
+C>    @param NFG : Number of fragments
+C>
+C>    @param K : 1 through NPBF
+C>
+C>    @param L : 1 through NPBF
+C>
+C>    @param CTVEC : VVOs for charge transfer
+C>
+C>    @param MXBF : Maximum number of basis functions
+C>
+C>    @param NTAOF : NFRG*MXBSFN
+C>
+C>    @param VALUE : Value passed from EFMOPOPEFP
+C>
+      SUBROUTINE EFMOSTORCT(NFG,K,L,CTVEC,NTAOF,MXBF,VALUE)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      DIMENSION CTVEC(MXBF,NTAOF)
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+C  SRP: SUBROUTINE TO TEMPORARILY STORE CTVEC IN DYNAMIC
+C       MEMORY TO REORDER BEFORE STORAGE IN DAFS.
+C
+         CTVEC(K,L) = VALUE
+C
+      RETURN
+      END
+C
 C
 C*MODULE EFMO     *DECK EFMODEG
       SUBROUTINE EFMODEG(IDA,FMODE,IAGLOB,EFMOG)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       DIMENSION FMODE(3,*),IAGLOB(*),EFMOG(3,*)
 C      PARAMETER (MXATM=2000)
-      COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,IEFMORUN,
-     *                IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,IEFMODIM(2),
-     *                IMODEFE,NATEFMO,IMODEFD
-C      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
-C     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,
+     *                IEFMORUN,IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,
+     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,EFMOREPNRG,
+     *                EFMOCHTNRG,EFMOEPEN
 C      COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
 C
 C     --- EFMO GRADIENT UPDATER ---
@@ -1332,25 +2236,57 @@ C
 C
 C
 C*MODULE EFMO     *DECK EFMOEXCH
-      SUBROUTINE EFMOEXCH(NFG,NEFMOPTS,EFMOPTS,EFMOPPTS,
-     *                    EFMODPTS,NEFMOIPT,L1,L2,L3,L4)
+C>
+C>    @brief GDDI data exchange
+C>
+C>    @detail Broadcast and accumulate EFMO data across nodes.
+C>
+C>    @author Casper Steinmann
+C>
+C>    @date 10/5/12 - Spencer Pruitt
+C>    - Added exchange of dispersion, charge transfer and repulsion
+C>      EFP information.
+C>
+C>    @param EFMODPTS : Dyanmic polarizable points
+C>
+C>    @param NEFMOBAS : Integer type basis set information
+C>
+C>    @param EFMOBAS : FP type basis set information
+C>
+C>    @param EFMOLMO : Localized molecular orbitals
+C>
+C>    @param EFMOFM : Fock matrix
+C>
+C>    @param EFMOCV : VVO'S or CMO'S depending on CTVVO = .T. or .F.
+C>
+C>    @param EFMOCF : FM over VVO'S or CMO'S depending on CTVVO
+C>
+      SUBROUTINE EFMOEXCH(NFG,NEFMOPTS,EFMOPTS,EFMOPPTS,EFMODPTS,
+     *                    NEFMOBAS,EFMOBAS,EFMOLMO,EFMOFM,EFMOCV,
+     *                    EFMOCF,NEFMOIPT,L1,L2,L3,L4,L5,L6,L7,
+     *                    L8,L9,L10)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
+      LOGICAL GOPARR,DSKWRK,MASWRK
       INTEGER DDI_WORLD,DDI_GROUP
       PARAMETER(DDI_WORLD=0,DDI_GROUP=1)
-C      DIMENSION EFMOPTS(NFG,MXEFMOPTS,MXNEFMOPTS),
-C     *          EFMOPPTS(NFG,MXEFMOPPTS,MXNEFMOPPTS),
-C     *          NEFMOPTS(2,NFG),NEFMOIPT(NFG)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
 C
 C     --- BROADCAST AND ACCUMULATE EFMO DATA ACROSS NODES ---
 C
 C     SUM UP ACROSS GROUPS IF GDDI
       CALL GDDI_SCOPE(DDI_WORLD)
       CALL DDI_GSUMI(2601,NEFMOPTS,L1)
-      CALL DDI_GSUMI(2602,NEFMOIPT,NFG)
-      CALL DDI_GSUMF(2603,EFMOPTS,L2)
-      CALL DDI_GSUMF(2604,EFMOPPTS,L3)
-      CALL DDI_GSUMF(2605,EFMODPTS,L4)
+      CALL DDI_GSUMI(2602,NEFMOBAS,L5)
+      CALL DDI_GSUMI(2603,NEFMOIPT,NFG)
+      CALL DDI_GSUMF(2604,EFMOPTS,L2)
+      CALL DDI_GSUMF(2605,EFMOPPTS,L3)
+      CALL DDI_GSUMF(2606,EFMODPTS,L4)
+      CALL DDI_GSUMF(2607,EFMOBAS,L6)
+      CALL DDI_GSUMF(2608,EFMOLMO,L7)
+      CALL DDI_GSUMF(2609,EFMOFM,L8)
+      CALL DDI_GSUMF(2610,EFMOCV,L9)
+      CALL DDI_GSUMF(2611,EFMOCF,L10)
       CALL GDDI_SCOPE(DDI_GROUP)
       RETURN
       END
@@ -1390,7 +2326,6 @@ C
      *     IATFRG,IGLOB)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       DIMENSION NATFRG(*),INDFRG(*),IATFRG(*),IGLOB(*)
-C      COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
 C
 C     --- MAKE ALTERNATIVE IAGLOB SO IT IS CORRECT FOR ---
 C     --- DIMERS IN EFMO, THIS IS GREATLY INSPIRED BY  ---
@@ -1423,40 +2358,97 @@ C
 C
 C
 *MODULE EFMO     *DECK EFMORESET
+C>
+C>    @brief EFMO parameter/array reset
+C>
+C>    @detail Zero out and clear parameters and arrays used by EFMO
+C>
+C>    @author Casper Steinmann
+C>
+C>    @date 10/5/12 - Spencer Pruitt
+C>    - Added clearing of dispersion, charge transfer and repulsion
+C>      EFP information.
+C>
       SUBROUTINE EFMORESET
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
       CHARACTER*8 POLNAM,DPOLNAM,FRGNME
 C
-      PARAMETER(MXFGPT=12000,MXFRG=1050,MXDFG=5,
-     *          MXDPPT=MXFRG*MXDFG*12,MXIFRQ=12,MXPT=2000)
+      PARAMETER(MXFGPT=12000,MXFRG=1050,MXDFG=5,MXSHEF=1000,MXGEFP=4000,
+     *          MXDPPT=MXFRG*MXDFG*12,MXIFRQ=12,MXPT=2000,MXAO=8192)
 C
       COMMON /EFMULT/ EFC(3,MXFGPT),EFCHG(2,MXFGPT),EFATRM(MXFGPT),
      *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
      *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
      *                EFOCT(10,MXFGPT),FRGNME(MXFGPT)
+      COMMON /EFPBAS/ EX(MXGEFP,MXDFG),CS(MXGEFP,MXDFG),
+     *                CP(MXGEFP,MXDFG),CD(MXGEFP,MXDFG),
+     *                CF(MXGEFP,MXDFG),CG(MXGEFP,MXDFG),
+     *                PRNAME(MXFGPT),PRCORD(3,MXFGPT),EFZNUC(MXFGPT),
+     *                KSTART(MXSHEF,MXDFG),KATOM(MXSHEF,MXDFG),
+     *                KTYPE(MXSHEF,MXDFG),KNG(MXSHEF,MXDFG),
+     *                KLOC(MXSHEF,MXDFG),KMIN(MXSHEF,MXDFG),
+     *                KMAX(MXSHEF,MXDFG),NSHELL(MXDFG),NGAUSS(MXDFG),
+     *                NAT(MXDFG),NUM(MXDFG),NTPATM
+      COMMON /EFPCT / NOCC(MXDFG),NVIR(MXDFG),NAO(MXDFG),NTAO,
+     *                CTFOK(MXAO,MXDFG),NCTMO(MXDFG),NTCTMO
       COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
      *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
      *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
      *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ*MXFGPT),
      *                POLSCR(MXFGPT),IPLSCR,INDSCR
+      COMMON /EFPIO / MULMAT(MXFRG)
       COMMON /EFPSCR/ POLAB(MXFRG),B,SCROFF,IELECS,IDISPS,NEW_POL
       COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
      *                NPPTS(MXFRG),NPTTPT,IEFP,
      *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
-     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG),
+     *                NBSFN(MXFRG),NMXMO(MXFRG)
+      COMMON /FRGTYP/ NDFRG,ISET(MXFRG),NAMIDX(MXDFG)
       COMMON /FRGMSS/ FPMASS(MXPT),FMASS(MXFGPT),
      *                FPNUC(MXPT),FGNUC(MXFGPT)
+      COMMON /PAULMO/ CENTNM(MXFGPT),CENTCD(3,MXFGPT),NORB(MXFRG),
+     *                NPBF(MXFRG),NTMO
       NMTTPT = 0
       NPTTPT = 0
+      NRTTPT = 0
       NDPTTPT = 0
-C      IEFPFMO = 0
       NFRG = 0
+      NTAO = 0
       CALL VICLR(NMPTS,1,MXFRG)
       CALL VICLR(NPPTS,1,MXFRG)
       CALL VICLR(LSTMPTS,1,MXFRG)
-      CALL VICLR(NDPPTS,1,MXFRG)
+      CALL VICLR(NDPPTS,1,MXDPPT)
+      CALL VICLR(ISET,1,MXFRG)
+      CALL VICLR(KSTART,1,MXSHEF*MXDFG)
+      CALL VICLR(KATOM,1,MXSHEF*MXDFG)
+      CALL VICLR(KTYPE,1,MXSHEF*MXDFG)
+      CALL VICLR(KNG,1,MXSHEF*MXDFG)
+      CALL VICLR(KLOC,1,MXSHEF*MXDFG)
+      CALL VICLR(KMIN,1,MXSHEF*MXDFG)
+      CALL VICLR(KMAX,1,MXSHEF*MXDFG)
+      CALL VICLR(NAT,1,MXDFG)
+      CALL VICLR(NSHELL,1,MXDFG)
+      CALL VICLR(NGAUSS,1,MXDFG)
+      CALL VICLR(NUM,1,MXDFG)
+      CALL VICLR(MULMAT,1,MXFRG)
+      CALL VICLR(NORB,1,MXFRG)
+      CALL VICLR(NPBF,1,MXFRG)
+      CALL VICLR(NAO,1,MXDFG)
+      CALL VICLR(NOCC,1,MXDFG)
+      CALL VICLR(NVIR,1,MXDFG)
       CALL VCLR(POLAB,1,MXFRG)
+      CALL VCLR(CENTCD,1,3*MXFGPT)
+      CALL VCLR(CTFOK,1,MXAO*MXDFG)
+      CALL VCLR(NCTMO,1,MXDFG)
+      CALL VCLR(EX,1,MXFRG*MXDFG)
+      CALL VCLR(CS,1,MXFRG*MXDFG)
+      CALL VCLR(CP,1,MXFRG*MXDFG)
+      CALL VCLR(CD,1,MXFRG*MXDFG)
+      CALL VCLR(CF,1,MXFRG*MXDFG)
+      CALL VCLR(CG,1,MXFRG*MXDFG)
+      CALL VCLR(PRCORD,1,3*MXFGPT)
+      CALL VCLR(EFZNUC,1,MXFGPT)
       CALL VCLR(EFC,1,3*MXFGPT)
       CALL VCLR(FMASS,1,MXFGPT)
       CALL VCLR(EFCHG,1,2*MXFGPT)
@@ -1545,9 +2537,10 @@ C
 *MODULE EFMO     *DECK EFMOSCREENSETUP
       SUBROUTINE EFMOSCREENSETUP(NBDFG)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-      COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,IEFMORUN,
-     *                IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,IEFMODIM(2),
-     *                IMODEFE,NATEFMO,IMODEFD
+      COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,
+     *                IEFMORUN,IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,
+     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,EFMOREPNRG,
+     *                EFMOCHTNRG,EFMOEPEN
       common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
      *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
      *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
