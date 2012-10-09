@@ -412,6 +412,12 @@ C
 C GAMESS CAME ORIGINALLY WITH 400,000 WORDS OF FAST MEMORY
 C
 C*MODULE GAMESS  *DECK GAMESS
+!> @brief Main GAMESS program
+!>
+!> @author Unknown
+!> @date October 2012 - Albert DeFusco
+!> - Added Wei Li to list of contributors
+!> - Added support for CIM subsystem branch
       PROGRAM GAMESS
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
@@ -783,8 +789,8 @@ C
      *  5X,'UNIVERSITY OF NEW ENGLAND: MARK SPACKMAN'/
      *  5X,'MIE UNIVERSITY: HIROAKI UMEDA'/
      *  5X,'MICHIGAN STATE UNIVERSITY:'/
-     * 10X,'KAROL KOWALSKI, MARTA WLOCH, JEFFREY GOUR, JESSE LUTZ,',
-     *     ' PIOTR PIECUCH'/
+     * 10X,'KAROL KOWALSKI, MARTA WLOCH, JEFFREY GOUR, JESSE LUTZ,'/
+     * 10X,'WEI LI, PIOTR PIECUCH'/
      *  5X,'UNIVERSITY OF SILESIA: MONIKA MUSIAL, STANISLAW KUCHARSKI'/
      *  5X,'FACULTES UNIVERSITAIRES NOTRE-DAME DE LA PAIX:'/
      * 10X,'OLIVIER QUINET, BENOIT CHAMPAGNE'/
@@ -803,6 +809,7 @@ C
      *  5X,'WASEDA UNIVERSITY:'/
      *    10X,'MASATO KOBAYASHI, TOMOKO AKAMA, TSUGUKI TOUMA,'/
      *    10X,'TAKESHI YOSHIKAWA, YASUHIRO IKABATA, HIROMI NAKAI'/
+     *  5X,'NANJING UNIVERSITY: SHUHUA LI'/
      *  5X,'UNIVERSITY OF NEBRASKA:'/
      * 10X,'PEIFENG SU, DEJUN SI, NANDUN THELLAMUREGE, YALI WANG,',
      *     ' HUI LI'/
@@ -845,6 +852,7 @@ C
       DATA NACME  /8HNACME   /, G3MP2  /8HG3MP2   /, GAMMA  /8HGAMMA   /
       DATA LMOEDA /8HLMOEDA  /, FMOHESS/8HFMOHESS /, COMP   /8HCOMP    /
       DATA CONICL /8HCONICAL /, QMEFPEA/8HQMEFPEA /
+      DATA CIMFINAL/8HCIMFINAL/,CIMSUB /8HCIMSUB  /
 C
 C     ----- BRANCH ACCORDING TO RUNTYP TO APPROPRIATE DRIVER -----
 C
@@ -916,6 +924,7 @@ C
       IF(RUNTYP.EQ.COMP)   CALL COMPX
       IF(RUNTYP.EQ.NACME)  CALL NACMEX(.TRUE.)
       IF(RUNTYP.EQ.LMOEDA) CALL LMOEDAX
+      if(runtyp.eq.cimsub.or.runtyp.eq.cimfinal) call cimx(runtyp)
       IF(RUNTYP.EQ.QMEFPEA) CALL QMEFPEAX
       IF(NFG.NE.0) CALL CLOSEFRG
       IF(RUNTYP.EQ.FMOHESS) CALL FMOHESSX(.FALSE.,.FALSE.)
@@ -1972,6 +1981,11 @@ C
       RETURN
       END
 C*MODULE GAMESS  *DECK WFN
+!> @brief Main wavefunction driver
+!>
+!> @author Unkown
+!> @date September 2010 - Albert DeFusco
+!> - Added the cluster-in-molecules post-scf method
       SUBROUTINE WFN
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
@@ -2018,6 +2032,13 @@ C
 C
       PARAMETER (ZERO=0.0D+00)
 C
+      LOGICAL MOSORT,ORTHO,SUBRHF,FCORE,restrt,runsub
+      common /CIMPAR/ bufdst,cconv,submtd,subtypc,atmmlk,
+     *                eta,zeta,zeta1,zeta2,cimtyp,enrgml,
+     *                mtdatm(mxatm),MOFIX,mrgsub,
+     *                mosort,ortho,subrhf,fcore,restrt,runsub
+C
+
       DATA RMC/8HMCSCF   /
       DATA RHF,UHF,ROHF,GVB/8HRHF     ,8HUHF     ,8HROHF    ,8HGVB     /
       DATA CHECK/8HCHECK   /,RNONE/8HNONE    /, MD     /8HMD      /
@@ -2140,6 +2161,24 @@ C     ++++ IN THE DIVERGED CASES BELOW FMO IS ALLOWED TO RETURN BECAUSE
 C     ++++ IT MAY RUN THE SAME SCF AGAIN WITH A DIFFERENT CONVERGER.
 C
 C
+C     ----- CARRY OUT OPTIONAL CLUSTER-IN-MOLECULES COMPUTATION -----
+C
+      if (cimtyp.ne.rnone) then
+         IF(E.EQ.ZERO  .AND.  EXETYP.NE.CHECK) THEN
+            IF(MASWRK) WRITE(IW,9050) CIMTYP
+            CALL ABRT
+         END IF
+         call cimprint
+         if(exetyp.eq.check.and.maswrk) then
+            write(iw,*)
+            write(iw,*) 'CHECK IS NOT AVAILABLE FOR CIM'
+            write(iw,*)
+         else
+            if(maswrk) call cimi(nsubsystems)
+            call runcimsub(nsubsystems)
+         endif
+      endif
+C
 C     ----- CARRY OUT OPTIONAL 2ND ORDER PERTURBATION COMPUTATION -----
 C
       IF(MPLEVL.GT.0) THEN
@@ -2230,6 +2269,7 @@ C
  9020 FORMAT(/1X,'SCF DID NOT CONVERGE...NO CITYP=',A8,' CALCULATION')
  9030 FORMAT(/1X,'SCF DID NOT CONVERGE...NO VBTYP=',A8,' CALCULATION')
  9040 FORMAT(/1X,'SCF DID NOT CONVERGE...NO TDDFT=',A8,' CALCULATION')
+ 9050 FORMAT(/1X,'SCF DID NOT CONVERGE...NO CIMTYP=',A8,' CALCULATION')
       END
 C*MODULE GAMESS  *DECK WFNCC
 C> @brief   interface to Coupled Cluster programs
@@ -2237,6 +2277,8 @@ C> @details selects from Michigan State's serial closed/open shell
 C>          ground/excited state programs, Olson/Benz' parallel
 C>          closed shell program, Asadchev's LIBCCHEM program.
 C> @author  Mike Schmidt August 2002
+!> @date September 2010 - Albert DeFusco
+!> - Add calls to cim-specific drivers for correlated subsystems
       SUBROUTINE WFNCC
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
@@ -2293,6 +2335,7 @@ C
      *   /8HEOM-CCSD,8HCR-EOM  ,8HCR-EOML ,8HCR-CCL  /
       DATA CHECK/8HCHECK   /
       DATA NANGM/4,4,6,10,15,21,28/
+      DATA CIMSUB/8HCIMSUB  /
 C
 C        ---- DRIVER FOR COUPLED CLUSTER CALCULATION ----
 C     IT IS USEFUL TO REMEMBER THAT
@@ -2476,8 +2519,13 @@ C        IN THE VIRTUAL ORBITAL SPACE
       END IF
       CALL RETFM(NEED)
 C
-      CALL TRFMCX(NPRINT,NCORBS,NOCCMO,NTOTMO,.FALSE.,.FALSE.,DDITRF,
+      IF (RUNTYP.EQ.CIMSUB) THEN
+         CALL TRFMCX_CIM(NPRINT,NCORBS,NOCCMO,NTOTMO,.FALSE.,.FALSE.,
+     *        DDITRF,NDINTS,NDINTS,NDINTS,NDINTS,NDINTS,.FALSE.,DOCORE)
+      ELSE
+         CALL TRFMCX(NPRINT,NCORBS,NOCCMO,NTOTMO,.FALSE.,.FALSE.,DDITRF,
      *            NDINTS,NDINTS,NDINTS,NDINTS,NDINTS,.FALSE.,DOCORE)
+      END IF
 C
 C        PERFORM THE COUPLED CLUSTER CALCULATION
 C
@@ -2489,12 +2537,20 @@ C
          EOM = CCTYP.EQ.EOMSD .OR. CCTYP.EQ.CREOM .OR. CCTYP.EQ.CREOML
      *                        .OR. CCTYP.EQ.CRCCL
          IF(MASWRK  .AND.  EOM) WRITE(IW,9040) CCTYP
-         CALL   CCDRVR(BESTCC,EOM)
+         IF (RUNTYP.EQ.CIMSUB) THEN
+            CALL   CCDRVR_CIM(BESTCC,EOM)
+         ELSE
+            CALL   CCDRVR(BESTCC,EOM)
+         END IF
       END IF
 C
       IF(SCFTYP.EQ.ROHF) THEN
          EOM = CCTYP.EQ.EOMSD .OR. CCTYP.EQ.CREOM
-         CALL ROCCDRVR(BESTCC,EOM)
+         IF (RUNTYP.EQ.CIMSUB) THEN
+            CALL ROCCDRVR_CIM(BESTCC,EOM)
+         ELSE
+            CALL ROCCDRVR(BESTCC,EOM)
+         END IF
       END IF
 C
 C        CARRY OUT POSSIBLE CLOSED SHELL EQUATION OF MOTION CALCULATION
@@ -2507,7 +2563,11 @@ C
          IF(EOM) THEN
             IF(MASWRK) WRITE(IW,9050)
             ECCSD = BESTCC
-            CALL EOMDRV(CCTYP,ESCF,ECCSD,BESTEOM)
+            IF (RUNTYP.EQ.CIMSUB) THEN
+               CALL EOMDRV_CIM(CCTYP,ESCF,ECCSD,BESTEOM)
+            ELSE
+               CALL EOMDRV(CCTYP,ESCF,ECCSD,BESTEOM)
+            END IF
             BESTCC = BESTEOM
          END IF
 C     PROBABLY, FILE CLOSING IN CCFCLO SHOULD BE DONE WITHOUT IFS.
@@ -3042,6 +3102,11 @@ C
  9150 FORMAT(/1X,'.... DONE WITH CIS ENERGY + 1-PARTICLE DENSITY ....'/)
       END
 C*MODULE GAMESS  *DECK WFNMP2
+!> @brief Main second-order perturbation theory driver
+!>
+!> @author Michael W. Schmidt
+!> @date September 2010 - Albert DeFusco
+!> - Add calls to cim-specific drivers for correlated subsystems
       SUBROUTINE WFNMP2
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
@@ -3128,6 +3193,7 @@ C
      *    /8HSERIAL  ,8HDDI     ,8HIMS     ,8HRIMP2   ,8HCCHEM   /
       DATA G3MP2/8HG3MP2   /
       DATA RNONE/8HNONE    /
+      DATA CIMSUB/8HCIMSUB  /
 C
 C     ----- DRIVER FOR SECOND ORDER PERTURBATION THEORY -----
 C
@@ -3259,7 +3325,13 @@ C                     DIVIDE-AND-CONQUER MP2 RUNS
 C                     STANDARD CLOSED SHELL MP2
             ELSE
                IF(CODEMP.EQ.DDI)    CALL MP2DDI
-               IF(CODEMP.EQ.SERIAL) CALL MP2NRG
+               IF(CODEMP.EQ.SERIAL) THEN
+                  IF (RUNTYP.EQ.CIMSUB) THEN
+                     CALL MP2NRG_CIM
+                  ELSE
+                     CALL MP2NRG
+                  ENDIF
+               ENDIF
                IF(CODEMP.EQ.IMS)    CALL MP2IMS
                IF(CODEMP.EQ.CCHEM)  CALL MP2CCHEM
                IF(CODEMP.EQ.RIMP2)  CALL RIMP2DRIVER

@@ -1,0 +1,378 @@
+#!/usr/bin/env python
+import sys, math, os, stat, os.path, re, glob, getpass
+#
+nargv   = len(sys.argv)
+command = sys.argv[0]
+nproc0  = 1
+np0     = 1
+paratyp = 'NONE'
+sbmttyp = 'NONE'
+FILLST  = []
+#
+GMS_PATH = 'None'
+JOB_PATH = 'None'
+PBS_MAIL = 'None'
+MPI_EXEC = 'mpirun'
+#
+USER     = os.getlogin()
+PID      = os.getpid()
+SYSNAME  = os.uname()[0]
+NODENAME = os.uname()[1]
+RELEASE  = os.uname()[2]
+MACHINE  = os.uname()[4]
+#
+#
+cmdsub = command.split('/')
+CMD  = cmdsub[-1]
+LCMD = CMD.upper()
+#
+# --- Read FILNAMs and arguments or print information for the program ---
+#
+if nargv == 2:
+    argv = sys.argv[1]
+    if argv == '-h' or argv == '--help':
+        print LCMD + " - Make scripts for running CIM subsystems"
+        print "          Default file extension is .out"
+        print ""
+        print "usage: "+CMD+" [arguments] [file ..]       edit specified file(s)"
+        print ""
+        print "Arguments:"
+        print "-h			Print help (this message) and exit"
+        print "-v			Print version information and exit"
+        print "--np k			k: the number of processors for parallel (default k=1)"
+        print "--para k		The way for running parallel task"
+        print "			k=none: run serial task using script (default)"
+        print "			k=omp:  run OpenMP task using ompjob (default if k>1 in \"--np k\")"
+        print "			k=mpi:  run MPI task using mpijob (k>2)"
+        print "--submit k		The way for submitting job(s)"
+        print "			k=none: submit job(s) directly (default)"
+        print "			k=pbs:  submit job(s) using PBS"
+        print "--JOB_PATH name		Define the directory for running the jobs"
+        print "			NOTDEF: set current directory as JOB_PATH"
+        print "--GMS_PATH name		Define the directory for GAMESS where rungms is"
+        print "			NOTDEF: 1. Search the environment variable $GMS_PATH"
+        print "			            e.g. \"export GMS_PATH=$HOME/gamess_dir\" in ~/.bashrc"
+        print "			              or \"setenv GMS_PATH $HOME/gamess_dir\" in ~/.cshrc"
+        print "			         2. Define $GMS_PATH=$JOB_PATH/../ if rungms is found there"
+        print "			            if can not get the value of GMS_PATH from 1"
+        print "			         3. Define $GMS_PATH=$JOB_PATH with 'Running' replaced by"
+        print "			            'Program', if rungms is found there"
+        print "			            if can not get the value of GMS_PATH from 1 and 2"
+        print "--MPI_EXEC name		Define the executable file for MPI"
+        print "			Default: 1. mpirun"
+        print "			         2. mpiexec"
+        print "--PBS_MAIL name		Define the email for submitting PBS jobs"
+        sys.exit(1)
+    elif argv == '-v' or argv == '--version':
+        print "Version 0.04 (5 Nov 2010, 12:30)"
+        sys.exit(1)
+    elif argv[0] != '-':
+        FILLST.append(argv)
+    else:
+        print CMD+": arguments error: " + argv + "; for help type \""+CMD+" -h or "+CMD+" --help\""
+        sys.exit(1)
+else:
+    for k in range(1, nargv, 1):
+        if k == 1:
+            argp = ' '
+            argn = sys.argv[k+1]
+        elif k == nargv-1:
+            argp = sys.argv[k-1]
+            argn = ' '
+        else:
+            argp = sys.argv[k-1]
+            argn = sys.argv[k+1]
+        argv = sys.argv[k]
+
+        if argv[0] == '-':
+            if argv == '--np':
+                try:
+                    nproc0 = int(argn)
+                except:
+                    print CMD+": arguments error: wrong nproc="+argn+"; for help type \""+CMD+" -h or "+CMD+" --help\""
+                    sys.exit(1)
+            elif argv == '--para':
+                paratyp = argn.upper()
+            elif argv == '--submit':
+                sbmttyp = argn.upper()
+            elif argv == '--JOB_PATH':
+                JOB_PATH = argn
+            elif argv == '--GMS_PATH':
+                GMS_PATH = argn
+            elif argv == '--MPI_EXEC':
+                MPI_EXEC = argn
+            elif argv == '--PBS_MAIL':
+                PBS_MAIL = argn
+            else:
+                print CMD+": arguments error: " + argv + "; for help type \""+CMD+" -h or "+CMD+" --help\""
+                sys.exit(1)
+        else:
+            if argp[0] != '-':
+                FILLST.append(argv)
+            elif argp[0] == '-':
+                try:
+                    itmp = int(argp)
+                    FILLST.append(argv)
+                except:
+                    continue
+#
+#
+# ----------------------------
+#
+if JOB_PATH == 'None':
+    JOB_PATH = os.getcwd()
+    print CMD+": define current directory as $JOB_PATH; for help type \""+CMD+" -h or "+CMD+" --help\""
+print 'JOB_PATH=' + JOB_PATH + '\n'
+
+if GMS_PATH == 'None':  # 1. Search the environment variable $GMS_PATH
+    GMS_PATH = os.getenv('GMS_PATH','None')
+if GMS_PATH == 'None':  # 2. Define $GMS_PATH=$JOB_PATH/../ if rungms is found there
+    jobpaths = JOB_PATH.split('/')
+    GMS_PATH = '/'.join(jobpaths[:-1])
+    print 'try to set GMS_PATH as the parent directory of JOB_PATH'
+else:
+    print 'Find the environment variable $GMS_PATH'
+
+rungms = os.path.isfile(GMS_PATH + '/rungms')
+if not rungms:
+    GMS_PATH = JOB_PATH.replace('Running','Program')
+    print 'try to set GMS_PATH as another directory of JOB_PATH where Running replaced by Program'
+else:
+    print 'Find the $GMS_PATH in a different place'
+print 'GMS_PATH=' + GMS_PATH + '\n'
+#
+rungms = os.path.isfile(GMS_PATH + '/rungms')
+if not rungms:
+    print CMD+": error: can not find " + GMS_PATH + "/rungms; for help type \""+CMD+" -h or "+CMD+" --help\""
+    sys.exit(1)
+#
+if sbmttyp != 'PBS' and PBS_MAIL != 'None':
+    print CMD+": error: can not define PBS_MAIL for a no PBS job; for help type \""+CMD+" -h or "+CMD+" --help\""
+    sys.exit(1)
+#
+#
+# ----------------------------
+if nproc0 > 1 and paratyp == 'NONE':
+    paratyp = 'OMP'
+#
+if paratyp == 'NONE':
+    print 'Run serial task using script'
+elif paratyp == 'OMP':
+    print 'Run OpenMP task using ompjob'
+elif paratyp == 'MPI':
+    print 'Run MPI task using mpijob'
+else:
+    print CMD+": arguments error: " + paratyp + "; for help type \""+CMD+" -h or "+CMD+" --help\""
+    sys.exit(1)
+#
+if paratyp == 'OMP':
+    if nproc0 > 0:
+        print 'The number of processors to be use is ', nproc0
+        np0 = nproc0
+    else:
+        print 'The number of processors could not be ', nproc0
+        sys.exit(1)
+elif paratyp == 'MPI':
+    print 'One processors will be used for main control'
+    if nproc0 > 2:
+        print 'The number of processors to be use is ', nproc0
+        print 'But the maximum number of proc for running subsystems is ', nproc0-1
+        np0 = nproc0
+    elif nproc0 == 2:
+        print 'Only one processor will be used for running subsystem, so why not run in serial?'
+        print "Or you can use OpenMP parallel; for help type \""+CMD+" -h or "+CMD+" --help\""
+        sys.exit(1)
+    else:
+        print 'The number of processors could not be ', nproc0
+        sys.exit(1)
+#
+#
+if sbmttyp == 'NONE':
+    print 'Submit job(s) directly'
+elif sbmttyp == 'PBS':
+    print 'Submit job(s) using PBS'
+else:
+    print CMD+": arguments error: " + sbmttyp + "; for help type \""+CMD+" -h or "+CMD+" --help\""
+    sys.exit(1)
+#
+print ''
+#
+nfiles = len(FILLST)
+nerrfl = 0
+pattern = r'.*MWORDS\s*=\s*(\d+)\s+'  # search MWORDS= or MWORDS =
+#
+# ----------------------------
+#
+for i in range(0, nfiles, 1):
+    np = np0
+    nproc = nproc0
+    NERR = 0
+    FILNAM = FILLST[i]
+    SBNAMS = FILNAM.split('.')
+    FILEXT = SBNAMS[-1].lower()
+    if FILEXT == 'out':
+        INPNAM = FILNAM
+        FILNAM = '.'.join(SBNAMS[:-1])
+    else:
+        INPNAM = FILNAM + '.out'
+    BSHNAM = FILNAM + '.sh'
+    CIMNAM = FILNAM + '.cim'
+    JOBNAM = FILNAM + '.job'
+#
+    BSHFIL = open(BSHNAM, 'w')
+    JOBFIL = open(JOBNAM, 'w')
+#
+#   notes: os.path.exists() works for directory
+    sys.stdout.write("%d %s: " %(i+1,FILNAM))
+    sublist = []
+    submem = []
+    j = 0
+    fileinp = True
+    while(fileinp):
+        j = j + 1
+        subnam = FILNAM + '.Sys-'+str(j)
+        fileinp = os.path.isfile(subnam+'.inp')
+        filelog = os.path.isfile(subnam+'.log')
+        if fileinp:
+            if not filelog:
+                sublist.append(subnam)
+                sys.stdout.write("%d " %j)
+        else:
+            break
+#
+    nsy = len(sublist)
+    sys.stdout.write(" njobs=%d " %nsy)
+    if nsy == 0:
+        sys.stdout.write(" NOT TO BE RUN ")
+        NERR = NERR  + 1
+        break
+#
+    if np > nsy and paratyp == 'OMP':
+        np = nsy
+    elif np > nsy+1 and paratyp == 'MPI':
+        np = nsy+1
+#
+    if paratyp == 'MPI':
+        nproc = np - 1
+    else:
+        nproc = np
+#
+    sys.stdout.write("mcpus=%d " %nproc)
+#
+#
+# --------------------------------------------------------------------
+    for subnam in sublist:
+        inpsnm = subnam+'.inp'
+        inpsfl = open(inpsnm,'r')
+#
+        while 1:
+            line = inpsfl.readline().strip().upper()
+            match = re.search(pattern, line)
+            if match:
+                submem.append(int(match.group(1)))  # Memory in mwords
+                break
+
+        inpsfl.close()
+#
+    lists = zip(sublist,submem)
+    lists = sorted(lists, key=lambda subs: subs[1], reverse=True)
+#
+    JOBFIL.write(" %d\n" %nsy)
+    n = 0
+    mbjob = 0
+    for (sname,mbram) in lists:
+        n = n + 1
+        mbram = mbram*8 + 50  # Memory in MB
+        if (n <= nproc):
+            mbjob = mbjob + mbram
+#
+# ----- Write a .sh file
+        bshsfl = open(sname+'.sh','w')
+        bshsfl.write("#!/usr/bin/env bash\n")
+        bshsfl.write("#\n")
+        if sbmttyp == 'PBS':
+            bshsfl.write("#PBS -l mem="+str(mbram)+"mb\n")
+            bshsfl.write("#PBS -l walltime=168:00:00\n")
+            bshsfl.write("#PBS -l nodes=1:ppn=1\n")
+            if PBS_MAIL != 'None':
+               bshsfl.write("#PBS -m abe\n")
+               bshsfl.write("#PBS -M "+PBS_MAIL+"\n")
+            bshsfl.write("#\n")
+        bshsfl.write("export JOB="+sname+"\n")
+        bshsfl.write("export GMS_PATH="+GMS_PATH+"\n")
+        bshsfl.write("export JOB_PATH="+JOB_PATH+"\n")
+        bshsfl.write("#\n")
+        bshsfl.write("cd $JOB_PATH\n")
+        bshsfl.write("rm -f $JOB.dat $JOB.irc $JOB.sh.*\n")
+        bshsfl.write("$GMS_PATH/rungms $JOB >& $JOB.log\n")
+        bshsfl.write("exit\n")
+        bshsfl.write("#\n")
+
+        bshsfl.close()
+        os.chmod(sname+'.sh', 0755)
+#
+        JOBFIL.write(' ' + sname + '.sh\n')
+        JOBFIL.write(' bash ' + sname + '.sh\n')
+        JOBFIL.write(' ' + sname + '.log\n\n')
+        if paratyp == 'NONE' and sbmttyp == 'NONE':
+            BSHFIL.write('bash ' + sname + '.sh\n')
+#
+# ----- Done with writing a .sh file
+#
+    sys.stdout.write("tmem=%dmb " %mbjob)
+#
+    if paratyp != 'NONE' or sbmttyp != 'NONE':
+        BSHFIL.write("#!/usr/bin/env bash\n")
+        BSHFIL.write("#\n")
+        if sbmttyp == 'PBS':
+            BSHFIL.write("#PBS -l mem="+str(mbjob)+"mb\n")
+            BSHFIL.write("#PBS -l walltime=168:00:00\n")
+            if paratyp == 'MPI':
+                BSHFIL.write("#PBS -l nodes=1:ppn="+str(np)+"\n")
+            else:
+                BSHFIL.write("#PBS -l ncpus="+str(np)+"\n")
+            if PBS_MAIL != 'None':
+                BSHFIL.write("#PBS -m abe\n")
+                BSHFIL.write("#PBS -M "+PBS_MAIL+"\n")
+            BSHFIL.write("#\n")
+        BSHFIL.write("export JOB="+FILNAM+"\n")
+        BSHFIL.write("export GMS_PATH="+GMS_PATH+"\n")
+        BSHFIL.write("export JOB_PATH="+JOB_PATH+"\n")
+        BSHFIL.write("#\n")
+        BSHFIL.write("cd $JOB_PATH\n")
+        BSHFIL.write("#\n")
+        if paratyp == 'MPI':
+            if MPI_EXEC == 'mpiexec':
+                BSHFIL.write("export mpirun=`/usr/bin/which mpiexec`\n")
+                BSHFIL.write("$mpirun -n "+str(np)+" $GMS_PATH/tools/cim/mpijob $JOB\n")
+            else:
+                if sbmttyp == 'PBS':
+                    BSHFIL.write("set machinef=$PBS_NODEFILE\n")
+                else:
+                    BSHFIL.write("set machinef=$JOB.machine # Please edit this file\n")
+                    MACNAM = FILNAM + '.machine'
+                    MACFIL = open(MACNAM, 'w')
+                    for i in range(0,np):
+                        MACFIL.write(NODENAME+"\n")
+                    MACFIL.close()
+                BSHFIL.write("export mpirun=`/usr/bin/which mpirun`\n")
+                BSHFIL.write("$mpirun -np "+str(np)+" -machinefile $machinef $GMS_PATH/tools/cim/mpijob $JOB\n")
+        else:
+            BSHFIL.write("$GMS_PATH/tools/cim/ompjob -np "+str(np)+" $JOB\n")
+        BSHFIL.write("exit\n")
+        BSHFIL.write("#\n")
+#
+# --------------------------------------------------------------------
+#
+    BSHFIL.close()
+    JOBFIL.close()
+    os.chmod(FILNAM+'.sh',  0755)
+#
+    if NERR == 0:
+        sys.stdout.write("Sucessful!\n")
+    else:
+        sys.stdout.write("Warn: %d possible error(s) found!\n" %NERR)
+        nerrfl = nerrfl + 1
+#
+sys.stdout.write("%d of %d files failed!\n" %(nerrfl,nfiles))
+#
