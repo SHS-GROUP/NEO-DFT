@@ -1,3 +1,4 @@
+C 18 Oct 12 - MWS - move UDERWGT to DFT gridding file
 C  2 Sep 12 - NM  - allow SF-TDDFT with EFP1 and/or C-PCM gradients
 C 11 AUG 11 - NM  - NEW MODULE IMPLEMENTING SPIN-FLIP GRADIENTS
 C
@@ -71,7 +72,8 @@ C
       common /frginf/ nmpts(mxfrg),nmttpt,iefc,iefd,iefq,iefo,
      *                nppts(mxfrg),npttpt,iefp,
      *                nrpts(mxfrg),nrttpt,irep,ichgp,nfrg,
-     *                ndppts(mxdppt),ndpttpt,iefdp,lstmpts(mxfrg)
+     *                ndppts(mxdppt),ndpttpt,iefdp,lstmpts(mxfrg),
+     *                NBSFN(MXFRG),NMXMO(MXFRG)
       COMMON /INFGRD/ RHOMIN,ILENG,MAXGRD
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
      *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
@@ -1892,192 +1894,6 @@ C
      *          ' SF-DFT GRADIENT=',I10,' WORDS.')
       END
 C
-C*MODULE SFGRAD   *DECK UDERWGT
-      SUBROUTINE UDERWGT(TOTWT,NAPTS,IANGN,IFACTR,
-     *                   INC0,WGHT,RI,RIJ,WTINTR,AIJ,WTRAD,
-     *                   NCNTR,TOTELE,PTRAD,XDAT,YDAT,ZDAT,
-     *                   ATMXVEC,ATMYVEC,ATMZVEC,BSLRDII,RSQRD,
-     *                   BOHR,IZCORE,UVEC,DWTINT,DWTTOT,DTOTWT,
-     *                   DRHOI_,GRDFUN,NPTGRD,IGPT)
-      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-      LOGICAL GOPARR,DSKWRK,MASWRK,DLB,SG1
-C$$$      PARAMETER (MXATM=2000,ZERO=0.0D+00,TWO=2.0D+00)
-      PARAMETER (MXATM=2000,ZERO=0.0D+00)
-      PARAMETER (MXGRID=10,MXGRIDTYP=10)
-      COMMON /GRAD  / DE(3,MXATM)
-      COMMON /DFGRID/ DFTTHR,DFTGTHR,SWOFF,SW0,BSLRD(137),NDFTFG,
-     *                NRAD,NTHE,NPHI,NRAD0,NTHE0,NPHI0,
-     *                NANGPT(MXGRID),NANGPT0(MXGRID),SG1,JANS
-      COMMON /DFPRUN/ PRUNERADS(MXGRID,MXGRIDTYP),
-     *                PRUNEATOMS(2,MXGRIDTYP),
-     *                IPRUNECUTS(MXATM),NTOTGRIDPOINTS(MXATM),
-     *                NGRIDS,MAXANG,NGRIDTYPS
-      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
-     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
-      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
-      COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
-      COMMON /SCFOPT/ CONVHF,MAXIT,MCONV,NPUNCH,NPREO(4)
-C
-      DIMENSION DRHOI_(NPTGRD,4,2),GRDFUN(*)
-      DIMENSION TOTWT(NAT,*),NAPTS(NAT),IANGN(NAT,2,MXGRID),IFACTR(NAT)
-      DIMENSION PTRAD(*),XDAT(NAT,MAXANG,MXGRID),
-     *          YDAT(NAT,MAXANG,MXGRID),ZDAT(NAT,MAXANG,MXGRID),
-     *          RSQRD(*),BSLRDII(*),IZCORE(*),
-     *          ATMXVEC(NAT,NAT),ATMYVEC(NAT,NAT),ATMZVEC(NAT,NAT),
-     *          WGHT(NAT,MAXANG,MXGRID),RI(NAT),RIJ(NAT,NAT),
-     *          WTINTR(NAT), AIJ(NAT,NAT),WTRAD(*),UVEC(3,NAT),
-     *          DWTINT(3,NAT,NAT), DWTTOT(3,NAT),DTOTWT(3,NAT)
-C
-C=======================================================================
-C     THIS ROUTINE IS A CLONE OF DMATD, SEE ADDITIONAL REFERENCES THERE.
-C     HERE A CONTRIBUTION TO THE ENERGY GRADIENT DUE TO INTEGRATION OVER
-C     GRID POINTS SURROUNDING ATOM NCNTR IS COMPUTED.
-C=======================================================================
-C
-C     CAN'T USE DLB PARALLELIZATION WITH THE COMMONLY USED APPROACH
-C     BECAUSE THE VALUE OF IGPT IS USED TO ACCESS AN ARRAY.
-C     CONSEQUENTLY, CALLS IN DLB RUNS SHOULD SET PARALLEL OFF.
-C     HOWEVER, DLB LOGIC IS LEFT BELOW, IN CASE SOMEONE WANTS TO
-C     COME BACK TO THIS POINT.  SLB DOES RUN IN PARALLEL.
-C
-      NUC=INT(ZAN(NCNTR)+IZCORE(NCNTR))
-      IF(NFG.NE.0) NUC=IAN(NCNTR)
-      RAD=BSLRDII(NUC)/BOHR
-      NPT=NRAD*MAXANG
-C
-      THRV1=ZERO
-      THRV2=1.0D+00
-      IF(DFTGTHR.GT.1.01D+00) THEN
-        THRV2=DFTGTHR
-      ELSE IF(DFTGTHR.LT.0.99D+00) THEN
-        THRV1=DFTGTHR
-      ENDIF
-      IF(DFTTHR.LT.1.1D-15.AND.DFTTHR.NE.ZERO) THRV1=1.0D-15
-C     WCUTOFF=3.0D-05/NPT/THRV2
-      RCUTOFF=1.0D-02/NPT/THRV2
-      IF(THRV1.NE.ZERO) THEN
-C        THRV1=1.0D-15
-C        WCUTOFF=THRV1
-         RCUTOFF=THRV1
-      ENDIF
-      WCUTOFF=1.0D-08/(NPT*NAT)
-      RCUTOFF=CONVHF/(NPT*NAT)
-C
-C     ---- SYMMETRY MULTIPLICATION FACTOR ----
-C
-C      FACT = IIFACT(NCNTR)*IFACTR(INC0)
-      FACT=IFACTR(INC0)
-C      FACT=1
-C
-C     DYNAMIC LOAD BALANCING: DIVIDE ALL POINTS INTO NGRAN*NPROC CHUNKS.
-C     NGRAN CANNOT BE SET IN THE INPUT FILE. THEN EACH NODE GETS A CHUNK
-C     AND TOILS IT OVER UNTIL READY TO ASK FOR MORE.
-C
-      LOOP=0
-      IGRID=1
-      NGRAN=20
-      IF(NGRIDS.EQ.1) THEN
-         NLOOP=NRAD*(IANGN(NCNTR,2,1)-IANGN(NCNTR,1,1)+1)
-      ELSE
-         NLOOP=NRAD*NTOTGRIDPOINTS(NCNTR)
-      ENDIF
-      MCHUNK=(NLOOP-1)/(NGRAN*NPROC)+1
-      NEXT  = -1
-      DLB = IBTYP.EQ.1
-C***********************************************************************
-C     LOOP OVER RADIAL GRIDS
-C     LOOP OVER ANGULAR GRIDS
-C***********************************************************************
-      DO 20 IRADPT = 1, NRAD
-C
-        RADWT=RAD*RAD*RAD*WTRAD(IRADPT)
-        R1= RAD*PTRAD(IRADPT)
-        IF(R1.GE.PRUNERADS(IGRID,IPRUNECUTS(NCNTR))*RAD) THEN
-           IGRID = IGRID + 1
-        ENDIF
-C        WRITE(IW,'(A,I5,2F20.10,I5)')'RAD,PT,IGRID = ',IRADPT,RAD,
-C     *       PTRAD(IRADPT),IGRID
-        DO 10 IANGPT = IANGN(NCNTR,1,IGRID), IANGN(NCNTR,2,IGRID)
-           IPT=(IRADPT-1)*NAPTS(NCNTR)+IANGPT
-C
-          IF(GOPARR) THEN
-            IF(DLB) THEN
-              LOOP=LOOP+1
-              ICHUNK=(LOOP-1)/MCHUNK
-              IF(ICHUNK.GT.NEXT) CALL DDI_DLBNEXT(NEXT)
-              IF(NEXT.NE.ICHUNK) GOTO 10
-            ELSE
-              IF(MOD(IPT,NPROC).NE.ME) GOTO 10
-            ENDIF
-          ENDIF
-          IPTME=(IPT-1)/NPROC+1
-          IF(DLB) IPTME=IPT
-C
-          FTOTWT = TOTWT(NCNTR,IPTME)*FACT
-          FTOTWT0=FTOTWT/FACT
-          IF(FTOTWT0.LT.WCUTOFF) THEN
-             GOTO 10
-          ELSE
-             IGPT=IGPT+1
-          ENDIF
-C
-C         THIS NEEDS TO BE INVERTED
-          XD=R1*XDAT(NCNTR,IANGPT,IGRID)
-          YD=R1*YDAT(NCNTR,IANGPT,IGRID)
-          ZD=R1*ZDAT(NCNTR,IANGPT,IGRID)
-          DO 610 IATM=1,NAT
-            XCDNT=ATMXVEC(NCNTR,IATM)+XD
-            YCDNT=ATMYVEC(NCNTR,IATM)+YD
-            ZCDNT=ATMZVEC(NCNTR,IATM)+ZD
-            RSQRD(IATM)=XCDNT**2+YCDNT**2+ZCDNT**2
-C
-C           NORMALISE THE R(A) VECTOR, = R(I)-R(A)
-C
-            RI(IATM)=SQRT(RSQRD(IATM))
-            UVEC(1,IATM) = XCDNT / RI(IATM)
-            UVEC(2,IATM) = YCDNT / RI(IATM)
-            UVEC(3,IATM) = ZCDNT / RI(IATM)
-C
-  610     CONTINUE
-C$$$          IF(DRHOI_(IGPT,1).LT.RCUTOFF) THEN
-C$$$             GOTO 10
-C$$$          ENDIF
-C@@@
-          IF(DRHOI_(IGPT,1,1).LT.RCUTOFF .AND.
-     *       DRHOI_(IGPT,1,2).LT.RCUTOFF) GO TO 10
-C@@@
-C
-C
-C         COMPUTE THE WEIGHT DERIVATIVE.
-C
-          WGHTNOW=WGHT(NCNTR,IANGPT,IGRID)
-          NITR=4
-          CALL GRDOCT(NAT,NITR,NCNTR,ATMXVEC,ATMYVEC,ATMZVEC,RI,RIJ,AIJ,
-     *          WGHTNOW,RADWT,WTINTR,UVEC,DWTINT,DWTTOT,DTOTWT)
-C
-C         ADD THE WEIGHT DERIVATIVE CONTRIBUTION
-C
-C
-C         NOT NECESSARY TO DO THE MULTIPLICATION
-C         MULTIPLY BY DSCALE TO DIVIDE BY THE NUMBER OF PROCESSORS
-C          ENER=GRDFUN(IGPT)*FACT*DSCALE
-          ENER=GRDFUN(IGPT)*FACT
-C         ENER=DRHOI_(IGPT,1)
-          CALL DAXPY(3*NAT,ENER,DTOTWT,1,DE,1)
-C
-C     ----- THE TOTAL ELCTRON DENSITY -----
-C
-C$$$          TOTELE=TOTELE+FTOTWT*TWO*DRHOI_(IGPT,1)
-          TOTELE=TOTELE+FTOTWT*(DRHOI_(IGPT,1,1)+DRHOI_(IGPT,1,2))
-C
-C     ----- END LOOP 10 OVER ANGULAR POINT -----
-C     ----- END LOOP 20 OVER RADIAL POINT -----
-C
-   10   CONTINUE
-   20 CONTINUE
-      RETURN
-      END
-C
 C*MODULE SFGRAD   *DECK UTDFXCP2
       SUBROUTINE UTDFXCP2(FXC,RHO,XYZGRD,XYZWGT,XYZDCH,VHA,VHB,DRHOI_,
      *                    DTAUI_,DTRAI_,COEF,EX,EC,EX0,EC0,AOMAX,
@@ -2245,7 +2061,8 @@ C
       common /frginf/ nmpts(mxfrg),nmttpt,iefc,iefd,iefq,iefo,
      *                nppts(mxfrg),npttpt,iefp,
      *                nrpts(mxfrg),nrttpt,irep,ichgp,nfrg,
-     *                ndppts(mxdppt),ndpttpt,iefdp,lstmpts(mxfrg)
+     *                ndppts(mxdppt),ndpttpt,iefdp,lstmpts(mxfrg),
+     *                NBSFN(MXFRG),NMXMO(MXFRG)
       COMMON /INFGRD/ RHOMIN,ILENG,MAXGRD
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
      *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
@@ -3572,7 +3389,8 @@ c
       common /frginf/ nmpts(mxfrg),nmttpt,iefc,iefd,iefq,iefo,
      *                nppts(mxfrg),npttpt,iefp,
      *                nrpts(mxfrg),nrttpt,irep,ichgp,nfrg,
-     *                ndppts(mxdppt),ndpttpt,iefdp,lstmpts(mxfrg)
+     *                ndppts(mxdppt),ndpttpt,iefdp,lstmpts(mxfrg),
+     *                NBSFN(MXFRG),NMXMO(MXFRG)
       common /iofile/ ir,iw,ip,is,ipk,idaf,nav,ioda(950)
       common /par   / me,master,nproc,ibtyp,iptim,goparr,dskwrk,maswrk
 c
@@ -3783,7 +3601,8 @@ c
       common /frginf/ nmpts(mxfrg),nmttpt,iefc,iefd,iefq,iefo,
      *                nppts(mxfrg),npttpt,iefp,
      *                nrpts(mxfrg),nrttpt,irep,ichgp,nfrg,
-     *                ndppts(mxdppt),ndpttpt,iefdp,lstmpts(mxfrg)
+     *                ndppts(mxdppt),ndpttpt,iefdp,lstmpts(mxfrg),
+     *                NBSFN(MXFRG),NMXMO(MXFRG)
 c     common /ijpair/ ia(mxao)
       common /pcmpnt/ lxyzre,lssfe,llist,lalpcm,lrinpcm,linapcm,linfpcm,
      *                linipcm,lmepcm,laxyzct,lxyzct2,lnvert,lqsn,lqse,
