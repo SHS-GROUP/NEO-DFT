@@ -1,0 +1,321 @@
+                                                         October 2012
+
+This is the README file for Andrey Asadchev's LIBCCHEM, a C++ library
+for fast quantum chemistry, running on CPU cores, or with the assistance 
+of Nvidia GPUs using CUDA software.  
+
+The LIBCCHEM toolkit was written in 2010-2012 by Andrey Asadchev
+in the Department of Chemistry at Iowa State University.
+
+Three functionalities (kernels) are provided:
+  a) the closed shell SCF energy, at a single geometry.
+  b) the closed shell MP2 energy, at a single geometry.
+  c) the closed shell CCSD(T) energy, at a single geometry.
+The programming includes evaluation of spdfg AO integrals for assembly 
+into a Fock matrix, or to use in a 4-index integral transformation.
+
+GAMESS itself will read the basis set, atomic coordinates, do the 1e-
+integrals, prepare the initial orbital guess, drive the SCF convergence,
+and so forth.  Only the afore-mentioned very time consuming steps are 
+handled by LIBCCHEM threads.
+
+Parallelization differs from GAMESS' normal.  The Global Arrays (GA)
+toolkit is used to distribute memory, typically GA runs over MPI.
+The MPI startup should run only one process per node, with LIBCCHEM
+starting threads on CPUs and any available GPUs when it enters its
+computational kernels.  The GAMESS+LIBCCHEM binary should be used
+only for the afore-mentioned calculations: the DDI to GA translation 
+layer is incomplete for other kinds of runs, and even if other runs
+work, their pure-GAMESS steps are running on only one CPU core/node.
+
+Memory usage differs from GAMESS' normal.  The keyword MEMDDI is
+used to determine the total size of GA's distributed memory pool,
+just as you would expect.  However, MWORDS applies only to the
+pure GAMESS steps: LIBCCHEM kernels receive local memory from an
+environmental variable.  More details are given later.
+
+Disk usage differs from GAMESS' normal.  LIBCCHEM kernels use the
+HDF5 i/o library, and can spill to disk in some circumstances,
+when it is impossible to obtain enough MEMDDI to run entirely in
+memory.  More details are given later.
+
+Arithmetic in the GPU is done at double precision, and thus all results
+are equally accurate to normal GAMESS runs.
+
+The integral algorithm for the GPU is described in
+    Uncontracted Rys Quadrature Implementation of up to G Functions
+                 on Graphical Processing Units.
+    Andrey Asadchev, Veerendra Allada, Jacob Felder, Brett M. Bode,
+               Mark S. Gordon, Theresa L. Windus
+     Journal of Chemical Theory and Computation 6, 696-704(2010).
+
+------------------------------------------------------------------------
+
+            To utilize the LIBCCHEM software with GAMESS:
+
+1. Obtain the quantum chemistry software:
+
+LIBCCHEM and GAMESS are available in a single tar file from:
+      http://www.msg.chem.iastate.edu/GAMESS/GAMESS.html
+After registering for a properly licensed source code copy of GAMESS at
+our web site, for 'linux64' systems, follow its normal installation
+procedures: ~/gamess/misc/readme.unix.  This produces a version of
+GAMESS that does -not- use LIBCCHEM.  
+
+The directions below assume that you compile, link, and execute GAMESS 
+w/o the LIBCCHEM code at this point, before going on.  This binary
+should be saved, as it contains all (non-LIBCCHEM) GAMESS functionality
+and parallelism.
+
+
+2. Obtain additional software:
+
+     a) have a typical 64-bit Linux: GNU compiler suite with their
+libraries, or perhaps a licensed Intel FORTRAN compiler, some
+mathematical library for BLAS such as Intel's MKL, C-shell (tcsh),
+Python, make/automake/libtool, and so forth.  The GNU g++ compiler
+should be OK for version 4.1 on up.  At the present time, our
+scripts assume the MPI library is Intel MPI, but other MPIs could
+probably be made to work.
+
+     b) Nvidia's CUDA software
+        The version is revealed by typing "nvcc -V".
+The CUDA compiler 'nvcc' must be on your path, e.g. /usr/local/cuda/bin,
+The CUDA libraries will be needed when GAMESS is linked, and when the
+program is run: e.g. your LD_LIBRARY_PATH should contain something
+similar to /usr/local/cuda/lib64.  The CUDA libraries on any compute
+nodes must be at the same version number as used at compile time.
+
+     c) Hierarchical Data Format: http://www.hdfgroup.org
+        The version is revealed by "h5ls --version".
+This is an I/O library supporting parallel access.  This software 
+can be found as an RPM, which may be easier than compiling from source.
+HDF5 uses the zlib compression library (-lz), probably already found
+on your computer, e.g. from a zlib-devel RPM: otherwise see www.zlib.net.
+Depending on how HDF5 is built, -lsz may also be needed to find szip.
+
+     d) LIBCCHEM relies on a specific version of BOOST and a specific
+version of GA, both requiring patches.  During the compilation
+process, the correct versions will be downloaded into the libcchem
+directory tree, patched, and compiled.  Thus, there is no need to
+install BOOST or GA prior to compiling LIBCCHEM.
+
+
+3. Compile the quantum chemistry library LIBCCHEM
+
+a) During the first step (installing GAMESS without LIBCCHEM), 
+you ran the 'config' step to set up compilers and libraries for
+GAMESS.  Execute 'config' once again, this time answering 'yes' 
+to the question about using LIBCCHEM.  You will be asked two 
+additional questions, namely paths leading to CUDA and to HDF5.
+
+b) Compiling LIBCCHEM consists of 5 substeps,
+    i) creating the right BOOST library
+   ii) creating the right GA library
+  iii) configuring LIBCCHEM
+   iv) compiling LIBCCHEM
+    v) installing LIBCCHEM libraries
+and there is a 6th step to compile GAMESS' interface to LIBCCHEM,
+   vi) compile GAMESS to LIBCCHEM interface
+All six steps are encapsulated into a single script, using the 
+information collected at step a):
+        chdir ~/gamess/libcchem
+        ./build-cchem >& build-cchem.log &
+
+c) Relink a binary, for example if step 1 made a pure GAMESS gamess.01.x,
+        chdir ~/gamess
+        ./lked gamess cchem.01
+This creates GAMESS+LIBCCHEM binary gamess.cchem.01.x to complement the
+full-functioned gamess.01.x binary from step 1.
+
+Comments about the linking step:
+
+LIBCCHEM produces three .a files for a static link, meaning that
+the libraries only need to be on the head node, and end up included
+inside the binary.  The Boost, GA, and HDF5 libraries are also linked
+as static libraries, therefore, only your head node needs to have
+these libraries.  However, the CUDA link is dynamic, against .so
+libraries, so every compute node needs a CUDA runtime installation,
+and as noted again just below, these CUDA .so libraries need to be
+located at run time.  Similarly Intel software such as FORTRAN, MKL, 
+and MPI are also linked as .so libraries.
+
+The command "ldd gamess.cchem.01.x" will show the full set of dynamically
+linked libraries required to exist on your compute nodes.   The most
+convenient way to locate them is by the LD_LIBRARY_PATH environment
+variable, which can be set inside the 'rungms' script.
+
+
+4. running GAMESS with LIBCCHEM
+
+GAMESS+LIBCCHEM runs using threads:  some running on the CPU(s), and
+some running on the GPU(s).  It also runs using Global Arrays (GA)
+as the parallel support, on top of an MPI.  Correct execution of
+GAMESS/LIBCCHEM/GA involves using the appropriate MPI startup command 
+to launch one process of gamess.cchem.01.x on each node.  An example
+from our Intel MPI-based Infiniband cluster can be found in 'rungms'.
+
+Thread execution is automatic: whenever LIBCCHEM enters one of its
+kernels, CPU and GPU threads are started.  These threads exit when 
+the kernel is finished, leaving just one GAMESS process running in 
+each node.
+
+The first process will appear to consume very large amounts of CPU
+time, as all time used by all CPU threads is charged to this process,
+which started the threads.  The wall clock times in the output file
+remain normal (correct).  Just ignore the CPU timings.
+
+To run GAMESS/LIBCCHEM, you will need to edit the 'rungms' script:
+
+a) The exection target should be chosen as 'ga' near the top.
+Look for the string "ga)" to find the 'ga' execution section.
+
+b) The 'ga' execution section shows the correct 3-step startup to
+place one instance of gamess.cchem.01.x per node.  Note that our
+Linux cluster uses its Infiniband in TCP/IP mode, rather than the
+faster native protocols, and the more modern hydra kickoff also
+doesn't work.  These glitches seem to be associated with GA.
+The MPI kickoff probably does not need any changing, especially 
+if you use the same PBS batch manager we do to assign nodes.
+
+c) The 'ga' execution section also shows examples of how to set up 
+library paths for CUDA, for ifort, for MKL, and for Intel MPI.
+Your system will certainly be different than ours.  The 'ldd'
+command discussed above will help you find library paths.
+
+d) execution of GAMESS/LIBCCHEM is affected by three environment
+variables, set in the 'ga' execution section:
+   a) setenv GMS_CCHEM '1'    
+means LIBCCHEM will be used.  This is intended for debugging, the
+use of '0' turns off using LIBCCHEM.
+   b) setenv CCHEM 'devices=,memory=6g'
+The devices= part of this turns off the use of CPUs, so normally
+CCHEM contains only a memory specifier.  The default is to use
+all available GPUs, when devices is omitted.  The memory setting
+is the local (non-distributed) memory for LIBCCHEM kernels, and
+effectively replaces MWORDS obeyed by all pure GAMESS steps.  The 
+appropriate value seems to be about 1 GByte/core (less for trivial 
+problems).  The units multiplier can be 'm' or 'g'.  The example is 
+appropriate for a 6-core node, using 1 GB/core for its CPU threads.
+   c) setenv OMP_NUM_THREADS 6
+limits the total number of CPU threads.  If this variable is not
+given, all CPU cores are used by default.
+
+The very top of the log file will show how these are interpreted.
+The printing for a node with 6 cores and 2 GPUs running might
+look like this:
+   libcchem:
+   memory: 6144 MB
+   threads: 6
+   gpu: { 0, 1 }
+
+f) Several other customizations in 'rungms' are needed, to define a
+scratch working directory, locate the auxiliary data files needed by 
+GAMESS, as well as locating the GAMESS (and perhaps ddikick.x) binary, 
+and so forth.  But you should have worked all that out at step 1.
+
+                  ----- execution -----
+
+In the absence of a batch manager, execute input file xxx.inp by
+      rungms xxx cchem.01 Nnodes >& xxx.log &
+The 2nd parameter assumes that you named the binary 'gamess.cchem.01.x',
+it is just the middle part of the binary's name.
+The 3rd parameter is the number of nodes to be used.  They probably
+have to be hardwired into the 'ga' section, as our script uses
+node names assigned dynamically by PBS.
+
+It is likely that a GPU cluster will have a proper batch queue manager.
+Please see
+    ~/gamess/misc/gms
+for a script that uses PBS or SGE batch managers on different clusters
+at our university.
+
+                  ----- disk usage -----
+
+The HDF5 library supports a parallel file system.  If the MEMDDI
+allocated in the input does not allow the matrix to be stored
+in memory, it is spilled out to disk.  Here is an example of a
+the output showing that a matrix had to be kept on disk:
+  Not enough distributed memory to allocate mp2.v(b,qs,ij), 82.9728 GB
+  Array::HDF5: mp2.v(b,qs,ij) { 421, 879844, 28 }, 82972.8 MB parallel=0
+compared to one where it was in memory:
+  Array::GA: mp2.v(b,qs,ij) { 1081, 250000, 3 }, 6486 MB parallel=1
+Note the value for 'parallel' and the storage type HDF5 vs. GA.
+
+On our ordinary Linux cluster, there is no parallel file system,
+but each single node has a local scratch disk.  HDF5 treats the
+local scratch disk correctly, when only one node is used, so matrices 
+will store to disk correctly.  However, extra configuration is 
+needed to set up a parallel file system, and since this is not 
+done on our cluster, our multi-node runs must be held in distributed 
+memory (MEMDDI).
+
+Crashes and incorrect results occur when HDF5 is used in multi-node
+runs w/o a true parallel file system.  Note that high end machines 
+like a Cray system would be expected to have an appropriate PFS
+available.
+
+                  ----- memory usage -----
+
+MP2 runs using memory only require MEMDDI to be 
+      Nocc*Nocc*Nao*Nao/2
+where Nocc=correlated valence, Nao= atomic basis size.
+Quite large MP2 runs can be done on a single node using only 
+local disk storage, avoiding distributed memory, by HDF5.
+Enter something trivial like MEMDDI=10 to store MP2 on disk.
+
+Coupled Cluster runs should aim to provide enough distributed
+memory to get at least the first three matrices allocated into
+distributed memory:
+  Array::GA: cc.t(ijab) { 68, 68, 344, 344 }, 4377.49 MB parallel=1
+  Array::GA: cc.u(ijab) { 68, 68, 512, 512 }, 9697.23 MB parallel=1
+  Array::GA: integrals.v(ijab) { 68, 68, 412, 512 }, 7803.24 MB parallel=1
+If not, long run times due to intensive I/O to these files will
+be observed.  Performance should be OK if the other matrices used 
+by CCSD and its (T) step are spilled to disk through HDF5.  Thus
+CCSD(T) should provide at a minimum about
+       3*Nocc*Nocc*Nao*Nao
+for its MEMDDI.  A more exact formula is to let Nvir be the number 
+of empty MOs,
+       Nocc*Nocc*Nvir*Nvir + Nocc*Nocc*Nao*Nao + Nocc*Nocc*(Nocc+Nvir)*Nao
+so the example above is Nocc=68, Nvir=344, Nao=512.
+
+EXETYP=CHECK jobs will print the accurate total MEMDDI requirements
+for MP2 or for CCSD(T) required to keep all data in memory.
+
+
+------------------------------------------------------------------------
+
+                            Timing examples
+
+Only a few examples are given, from a typical 6-core Linux cluster
+  hardware= Atipa node.
+            one hex-core Intel 2.67 GHz X5650 (Gulftown) processor,
+            Qlogic IBA7322 4x DDR Infiniband,
+            24 GBytes RAM, i.e. 12 GB/CPU core,
+            two striped 3 Gbps 7200 RPM SATA disks,
+            some nodes have two and some have four Fermi C2070 cards,
+            each C2070 with 5.25 GBytes of ECC memory.
+  software= RedHat Enterprise Linux 2.6.18-194.17.4.el5
+            ifort 12.0.4.191, g++ 4.1.2, Intel's MKL 12.0,
+            Intel MPI 4.0.2, CUDA nvcc 4.1,
+            Boost 1.46.1, GA 5.1, HDF5 1.8.7
+Since runs will have 
+    setenv CCHEM 'memory=6g'
+each node has about 18 GBytes left over to accept distributed arrays.
+
+digitoxin, 6-31G(d), MP2 energy:    Ncore=54, Nocc=153, Nao=938
+   to run entirely in memory requires MEMDDI=10700, about 85 GBytes.
+   Thus we have to run on at least 5 nodes to have the MEMDDI.
+       12 nodes takes SCF= 85, MP2= 198, total= 290 wall seconds
+   Alternatively, we can run on one node through a HDF5 disk file:
+        1 node  takes SCF=317, MP2=1518, total=1868 wall seconds
+   Because our cluster does not have a parallel file system, the
+   disk-only run has to be limited to one node.
+
+catnip, 6-31G(d), CCSD(T) energy:   Ncore=12, Nocc=33, Nvir=151, Nao=208
+   Both runs use MEMDDI=375 and are entirely memory resident:
+        1 node takes 3785 wall seconds.
+        3 node takes 1911 wall seconds.   (6 cores, 2 GPUs)
+   The serial CCSD(T) program in GAMESS needed about 24,000 seconds 
+   on a slightly slower single core.

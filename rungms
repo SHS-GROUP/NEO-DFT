@@ -1,6 +1,6 @@
 #!/bin/csh
 #
-#  last update = 21 August 2012
+#  last update = 26 October 2012
 #
 #  This is a C-shell script to execute GAMESS, by typing
 #       rungms JOB VERNO NCPUS >& JOB.log &
@@ -774,9 +774,12 @@ endif
 #
 if ($TARGET == ga) then
    #
-   #      Modified from the MPI part just above, but specialized to start
-   #      just one process per node: no data server.
-   #      This means of execution is required by GAMESS built with LIBCCHEM.
+   #      Usage of LIBCCHEM requires running over GA instead of DDI,
+   #      with an MPI library underneath the GA.  We must start only
+   #      one process per assigned node, hence the hardwiring of 
+   #      processes per node to just 1.  In effect, the variable
+   #      NCPUS becomes a node count, not a core count.
+   #
    #      Parallelization inside the nodes is handled by LIBCCHEM threads.
    #      The lack of data servers is due to GA as the message passing agent.
    #      The use of sockets on the Infiniband is due to not knowing how
@@ -784,6 +787,8 @@ if ($TARGET == ga) then
    #
    set PPN=1
    @ NPROCS = $NCPUS
+   #
+   #      ===== set up MPI control files to execute  1 process per node =====
    #
    #  A. build HOSTFILE,
    #
@@ -821,30 +826,34 @@ if ($TARGET == ga) then
    touch $PROCFILE
    #
    if ($NCPUS == 1) then
-      echo "-n $NPROCS -host `hostname` /home/mike/gamess/gamess.$VERNO.x" >> $PROCFILE
+      echo "-n $NPROCS -host `hostname` $GMSPATH/gamess.cchem.$VERNO.x" >> $PROCFILE
    else
       if ($NNODES == 1) then
              # when all processes are inside a single node, it is simple!
              # all MPI processes, whether compute processes or data servers,
              # are just in this node.   (note: NPROCS = 2*NCPUS!)
-         echo "-n $NPROCS -host `hostname` /home/mike/gamess/gamess.$VERNO.x" >> $PROCFILE
+         echo "-n $NPROCS -host `hostname` $GMSPATH/gamess.cchem.$VERNO.x" >> $PROCFILE
       else
          @ n=1
          while ($n <= $NNODES)
             set host=`sed -n -e "$n p" $HOSTFILE`
             set host=$host[1]
-            echo "-n $PPN -host $host /home/mike/gamess/gamess.$VERNO.x" >> $PROCFILE
+            echo "-n $PPN -host $host $GMSPATH/gamess.cchem.$VERNO.x" >> $PROCFILE
             @ n++
          end
       endif
    endif
+   #           uncomment these if you are still setting up...
+   #--echo '-----debug----'
+   #--echo PROCFILE $PROCFILE contains
+   #--cat $PROCFILE
+   #--echo '--------------'
    #
-   #     add Intel MPI to the library path and to the execution path.
+   #     add Intel MPI to the execution path.
    #
-   setenv LD_LIBRARY_PATH /share/apps/intel/impi/4.0.2.003/intel64/lib:$LD_LIBRARY_PATH
    set path=(/share/apps/intel/impi/4.0.2.003/intel64/bin $path)
    #
-   #  add MVAPICH2 to the execution path
+   #     add MVAPICH2 to the execution path
    #--set path=(/usr/mpi/gcc/mvapich2-1.2p1/bin $path)
    #
    #     tunings below are specific to Intel MPI 3.2 and/or 4.0:
@@ -880,54 +889,73 @@ if ($TARGET == ga) then
    #--setenv MV2_USE_BLOCKING 1
    #--setenv MV2_ENABLE_AFFINITY 0
    #
-   #         ... thus ends setting up the process initiation,
-   #             tunings, pathnames, library paths, for the MPI.
+   #         ... thus ends setting up the process initiation files,
+   #             tunings, and pathnames for the MPI.
    #
-   #  set up Intel MKL (math kernel library).  
-   #  LIBCCHEM links to threaded shared object libraries.
-   #  While GAMESS steps run, we want serial execution here, note that
-   #  at times LIBCCHEM manipulates some steps to use threaded MKL.
+   #        ===== locate any shared object libraries we need here =====
+   #       note we are adding onto any pre-existing system's library path,
+   #       placing our choices first means they are sure to be obeyed.
+   #
+   #  a) next line finds Intel MPI libraries
+   #
+   setenv LD_LIBRARY_PATH /share/apps/intel/impi/4.0.2.003/intel64/lib:$LD_LIBRARY_PATH
+   #
+   #  b) next line finds ifort-related compiler libraries
+   setenv LD_LIBRARY_PATH /share/apps/intel/composerxe-2011.4.191/compiler/lib/intel64:$LD_LIBRARY_PATH
+   #
+   #  c) next line finds Intel MKL (math kernel library) libraries
+   #  While pure-GAMESS steps run, we want serial execution here, note that
+   #  at times LIBCCHEM manipulates some of its steps to use threaded MKL.
    setenv LD_LIBRARY_PATH /share/apps/intel/composerxe-2011/mkl/lib/intel64:$LD_LIBRARY_PATH
+   #
    setenv MKL_SERIAL YES
    setenv MKL_NUM_THREADS 1
    #
-   #      We need to find the CUDA runtime libraries here.
+   #  d) next line finds the CUDA runtime libraries
    setenv LD_LIBRARY_PATH /share/apps/cuda4.1/lib64:$LD_LIBRARY_PATH
    #
-   #      Runtime control over LIBCCHEM.
-   #        set GMS_CCHEM to 0 to disable calls into LIBCCHEM.
-   #        set OMP_NUM_THREADS to limit core usage to less than all cores.
-   #        set CCHEM to control use of GPUs, or memory used.
-   #                  for example, setenv CCHEM 'devices=;memory=100m'
-   #                  disables the usage of GPUs,
-   #                  and limits memory/node to 100m (m,g work)
+   #      any issues with run-time libraries can be debugged just below
+   #----------debug----------
+   #---echo the library path is $LD_LIBRARY_PATH
+   #---echo The dynamic link libraries for this binary are
+   #---ldd $GMSPATH/gamess.cchem.$VERNO.x
+   #----------debug----------
+   #
+   #          ===== Runtime control over LIBCCHEM =====
+   #      set GMS_CCHEM to 0 to disable calls into LIBCCHEM.
+   #      set CCHEM to control use of GPUs, or memory used.
+   #                for example, setenv CCHEM 'devices=;memory=100m'
+   #                disables the usage of GPUs,
+   #                and limits memory/node to 100m (m,g work)
+   #      set OMP_NUM_THREADS to limit core usage to less than all cores.
    #    
    setenv GMS_CCHEM '1'
-   echo libcchem launches on $PPN cores/node to use all cores via threads.
-   #      next line is converted to 2 or 4 on our GPU cluster
-   #      during the process of submitting to PBS batch queues.
+   #
+   #      Our 'gms' front end for PBS batch submission changes the value
+   #      of NUMGPU to 2 or 4 depending on user's request, or else
+   #      leaves NUMGPU at 0 if the user decides to ignore any GPUs.
+   #      
+   #      Please set to your number of GPU's if you are not using
+   #      the front end 'gms' to correctly change this value.
+   #      The 0 otherwise leads to ignoring GPUs (OK if you have none).
+   #
+   #      Approximately 1 GByte of memory should be given per CPU thread.
+   #      Our system is hex-core nodes, your memory setting might vary.
    @ NUMGPU=0
    if ($NUMGPU > 0) then
-      echo libcchem launches onto $NUMGPU GPUs per node...
+      echo LIBCCHEM will run threads on $NUMGPU GPUs per node...
+      setenv CCHEM 'memory=6g'
    else
-      echo libcchem is not using any GPUs...
-      setenv CCHEM 'devices='
+      echo LIBCCHEM is not using any GPUs...
+      setenv CCHEM 'devices=;memory=6g'
    endif
-#----------debug----------
-#  echo PROCFILE $PROCFILE contains
-#  cat $PROCFILE
-#  echo HOSTFILE $HOSTFILE contains
-#  cat $HOSTFILE
-#  echo environment is
-#  ldd /home/mike/ccgms/gamess.gpu.00.x
-#----------debug----------
    #
-   #  Now, at last, we can actually kick-off the MPI processes...
+   #  Now, at last, we can actually kick-off the MPI/GA processes...
    #
-   echo "MPI kickoff will run GAMESS on $NCPUS cores in $NNODES nodes."
-   echo "The binary to be executed is /home/mike/gamess/gamess.$VERNO.x"
-   echo "MPI will run $NCPUS compute processes and $NCPUS data servers,"
-   echo "    placing $PPN of each process type onto each node."
+   echo "MPI kickoff will start GAMESS on $NCPUS cores in $NNODES nodes."
+   echo "LIBCCHEM will generate threads on all other cores in each node."
+   echo "LIBCCHEM's control setting for CCHEM is $CCHEM"
+   echo "The binary to be executed is $GMSPATH/gamess.cchem.$VERNO.x"
    echo "The scratch disk space on each node is $SCR, with free space"
    df -k $SCR
    #

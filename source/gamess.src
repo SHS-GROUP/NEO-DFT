@@ -1,3 +1,4 @@
+C 26 Oct 12 - MWS - LIBCCHEM's CCSD(T) check run, bump release number
 C 19 Oct 12 - MWS - synchronize FRGINF common
 C  7 Sep 12 - AA  - update interface to LIBCCHEM
 C  2 Sep 12 - NM  - WFN: skip SCF for the 2nd calc. in the CI search
@@ -732,7 +733,7 @@ C
  9020 FORMAT(10A8)
  9030 FORMAT(1X,'INPUT CARD>',10A8)
  9050 FORMAT(10X,54(1H*)/
-     *     10X,1H*,9X,'GAMESS VERSION =  1 MAY 2012 (R1)',10X,1H*/
+     *     10X,1H*,9X,'GAMESS VERSION =  1 MAY 2012 (R2)',10X,1H*/
      *     10X,1H*,13X,'FROM IOWA STATE UNIVERSITY',13X,1H*/
      *     10X,1H*,1X,
      *  'M.W.SCHMIDT, K.K.BALDRIDGE, J.A.BOATZ, S.T.ELBERT,',1X,1H*/
@@ -2231,6 +2232,11 @@ C
  9040 FORMAT(/1X,'SCF DID NOT CONVERGE...NO TDDFT=',A8,' CALCULATION')
       END
 C*MODULE GAMESS  *DECK WFNCC
+C> @brief   interface to Coupled Cluster programs
+C> @details selects from Michigan State's serial closed/open shell
+C>          ground/excited state programs, Olson/Benz' parallel
+C>          closed shell program, Asadchev's LIBCCHEM program.
+C> @author  Mike Schmidt August 2002
       SUBROUTINE WFNCC
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
@@ -2239,6 +2245,7 @@ C
      *        EOM,DDITRF,NDINTS,DOCORE
       LOGICAL GMS_CCHEM
       DIMENSION ECCHEM(5)
+      DIMENSION NANGM(7)
 C
       PARAMETER (MXRT=100, MXATM=2000, MXAO=8192)
 C
@@ -2285,6 +2292,7 @@ C
       DATA EOMSD,CREOM,CREOML,CRCCL
      *   /8HEOM-CCSD,8HCR-EOM  ,8HCR-EOML ,8HCR-CCL  /
       DATA CHECK/8HCHECK   /
+      DATA NANGM/4,4,6,10,15,21,28/
 C
 C        ---- DRIVER FOR COUPLED CLUSTER CALCULATION ----
 C     IT IS USEFUL TO REMEMBER THAT
@@ -2309,19 +2317,53 @@ C
             END IF
             CALL ABRT
          END IF
+         NACT = NCCOCC - NCCFZC
+         NVIR = NCCTOT - NCCOCC - NCCFZV
+C
+C             MEMORY NEEDS ARE COPIED FROM CCHEM'S OUTPUT
+C          triples use only Tijab and Vijab storage from the CCSD step.
+C
+         NAV = NACT + NVIR
+         CALL BASCHK(LMAX)
+         LANG = NANGM(LMAX+1)
+         NTIJAB =   NACT*NACT*NVIR*NVIR
+         NUIJAB =   NACT*NACT*NUM *NUM
+         NVIJAB =   NACT*NACT*NAV *NUM
+         NVIQRS =   NACT*LANG*NUM *NAV
+         NVIJKA =   NACT*NACT*NACT*NVIR
+         NVIJKL =   NACT*NACT*NACT*NACT
+         NVIAJB =   NACT*NVIR*NACT*NUM
+         NITER  = 4*NACT*NACT*NUM*NUM + NACT*NVIR
+         NVIABC =   NACT*NVIR*NUM*NVIR
+         NCCSD = NTIJAB + NUIJAB
+     *         + NVIJAB + NVIQRS + NVIJKA + NVIJKL + NVIAJB
+     *         + NITER
+         NTRIP = NTIJAB + NVIJAB + NVIABC
+         NCCSD = NCCSD/1000000 + 1
+         NTRIP = NTRIP/1000000 + 1
+C
          IF(MASWRK) THEN
-            WRITE(IW,9200) CCTYP,NCCTOT,NCCOCC,NCCFZC,NCCFZV,
-     *                     MXCCIT,MXRLEIT,ICCCNV,AMPTSH
+            WRITE(IW,9200) CCTYP,NUM,NCCTOT,NCCOCC,NCCFZC,NACT,NVIR,
+     *                     NCCFZV,MXCCIT,MXRLEIT,ICCCNV,AMPTSH
+            WRITE(IW,9210) NCCSD,NTRIP
             WRITE(IW,*) ' '
          END IF
 C
-         CALL GMS_CCHEM_CCSD_ENERGY(ECCHEM)
+         IF(EXETYP.EQ.CHECK) THEN
+            ECCHEM(1) = 0.0D+00
+            ECCHEM(2) = 0.0D+00
+            ECCHEM(3) = 0.0D+00
+            ECCHEM(4) = 0.0D+00
+            ECCHEM(5) = 0.0D+00
+         ELSE
+            CALL GMS_CCHEM_CCSD_ENERGY(ECCHEM)
+         END IF
 C
          E    = ESCF + ECCHEM(4)
          ETOT = ESCF + ECCHEM(4)
          IF(MASWRK) THEN
             WRITE(IW,*) ' '
-            WRITE(IW,9210) ESCF,ESCF+ECCHEM(1),ESCF+ECCHEM(2),
+            WRITE(IW,9220) ESCF,ESCF+ECCHEM(1),ESCF+ECCHEM(2),
      *                          ESCF+ECCHEM(3),ESCF+ECCHEM(4)
             WRITE(IW,*) ' '
             WRITE(IW,*) '.... DONE WITH CCSD(T) ENERGY ....'
@@ -2333,16 +2375,24 @@ C
      *        5X,'CCSD(T) ENERGY CALCULATION USING LIBCCHEM',
      *        5X,'PROGRAM BY A.ASADCHEV'/
      *        5X,41(1H-),5X,21(1H-)/
-     *        1X,'CCTYP                        =',A8/
-     *        1X,'TOTAL NUMBER OF MOS          =',I6/
-     *        1X,'NUMBER OF OCCUPIED MOS       =',I6/
-     *        1X,'NUMBER OF FROZEN CORE MOS    =',I6/
-     *        1X,'NUMBER OF FROZEN VIRTUAL MOS =',I6/
-     *        1X,'MAXIMUM CC ITERATIONS        =',I6/
-     *        1X,'MAXIMUM DIIS ITERATIONS      =',I6/
-     *        1X,'CONVERGENCE CRITERION FOR CC =',I6/
-     *        1X,'AMPLITUDE ACCURACY THRESHOLD =',1P,E8.1)
- 9210 FORMAT(/5X,'LIBCCHEM''S COUPLED CLUSTER CALCULATION RESULTS:'/
+     *        1X,'CCTYP                            =',A8/
+     *        1X,'NUMBER OF ATOMIC BASIS FUNCTIONS =',I6/
+     *        1X,'TOTAL NUMBER OF MOS              =',I6/
+     *        1X,'NUMBER OF OCCUPIED MOS           =',I6/
+     *        1X,'NUMBER OF FROZEN CORE MOS        =',I6/
+     *        1X,'NUMBER OF VALENCE MOS CORRELATED =',I6/
+     *        1X,'NUMBER OF VIRTUAL MOS CORRELATED =',I6/
+     *        1X,'NUMBER OF FROZEN VIRTUAL MOS     =',I6/
+     *        1X,'MAXIMUM CC ITERATIONS            =',I6/
+     *        1X,'MAXIMUM DIIS ITERATIONS          =',I6/
+     *        1X,'CONVERGENCE CRITERION FOR CC     =',I6/
+     *        1X,'AMPLITUDE ACCURACY THRESHOLD     =',1P,E8.1)
+ 9210 FORMAT(/1X,'MEMORY REQUIREMENT FOR CCSD ITERS=',I10,' MWORDS.'/
+     *        1X,'MEMORY REQUIREMENT FOR (T) STEP  =',I10,' MWORDS.'/
+     *        1X,'IF DISTRIBUTED MEMORY (MEMDDI) EXCEEDS THE LARGER',
+     *           ' OF THESE,'/
+     *        1x,'NO HDF5 DISK FILES WILL BE USED.')
+ 9220 FORMAT(/5X,'LIBCCHEM''S COUPLED CLUSTER CALCULATION RESULTS:'/
      *        10X,'E(RHF)     =',F20.10/
      *        10X,'E(MP2)     =',F20.10/
      *        10X,'E(CCSD)    =',F20.10/

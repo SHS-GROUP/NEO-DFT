@@ -1,0 +1,206 @@
+#!/bin/csh
+#
+#   Compile LIBCCHEM (and associated software) into LIBCCHEM's libraries,
+#   running five steps back to back.
+#   Then, a 6th step compiles the GAMESS to LIBCCHEM interface properly.
+#
+#   This script is meant to be executed from within the LIBCCHEM subdirectory:
+#         chdir ~/gamess/libcchem
+#         ./build-cchem >& build-cchem.log &
+#   The GAMESS script 'config' must be run before this script, to provide
+#   the pathnames to CUDA and to HDF5.
+#
+source ../install.info
+#
+if ($GMS_LIBCCHEM == false) then
+   echo "Please repeat the 'config' step of GAMESS to setup LIBCCHEM info."
+   exit 8
+endif
+#
+date
+#
+#   step 1 is to create a patched version of BOOST, and compile it.
+#          Note that the 'make' includes automatically downloading
+#          the desired boost version, patches it, and compiles.
+#          Output from this step is dumped into the BOOST subdirectory.
+#
+if (-e boost/lib/libboost_thread.a) then
+   echo 'the first step, compiling BOOST, seems to be already completed'
+else
+   echo '=========================================='
+   echo 'the first step, compiling BOOST, begins...'
+   echo '=========================================='
+   echo Beginning compilation of BOOST at `date`...
+   chdir boost
+   make >& make.log
+   chdir ..
+   echo End compilation of BOOST at `date`
+#              if we didn't get the only library we need, it failed.
+   if (-e boost/lib/libboost_thread.a) then
+      echo 'Step 1, the compilation of BOOST, succeeded.'
+   else
+      echo 'Something went wrong with the first step, the creation of BOOST.'
+      echo 'Please check file ~/gamess/libcchem/boost/make.log for details.'
+      exit 8
+   endif
+endif
+#
+#   step 2 is to create a patched version of Global Arrays, and compile it.
+#          Note that the 'make' includes automatically downloading
+#          the desired GA version, patches it, and compiles.
+#          The FORTRAN could be either gfortran or ifort.
+#          We assume some MPI is being used to support GA.
+#          Output from this step is dumped into the GA subdirectory.
+#
+if (-e ga/lib/libga.a) then
+   echo 'the second step, compiling GA, seems to be already completed'
+else
+   echo ' '
+   echo '==================================================='
+   echo 'The second step, compiling Global Arrays, begins...'
+   echo '==================================================='
+   echo "GA is being configured to use $GMS_FORTRAN and run over MPI."
+   echo Beginning compilation of GA at `date`...
+   chdir ga
+   make MPICH_F90=$GMS_FORTRAN CONFIGURE='--with-mpi-spawn' >& make.log
+   chdir ..
+   echo End compilation of GA at `date`
+   #              if we didn't get the only library we need, it failed.
+   if (-e ga/lib/libga.a) then
+      echo 'Step 2, the compilation of GA, succeeded.'
+   else
+      echo 'Something went wrong with the second step, the creation of GA.'
+      echo 'Please check file ~/gamess/libcchem/ga/make.log for details.'
+      exit 8
+   endif
+endif
+#
+#   step 3 is to configure the LIBCCHEM software.
+#          Note that only 64-bit builds are supported below.
+#          Note that only Intel's MPI has been tested,
+#               so that is assumed below.
+#               The MPI directory has to lead up to the 'include' files.
+#          Assume Fermi instruction set to avoid the troublesome
+#               option about "Just in Time" compilation of Tesla code.
+#
+echo ' '
+echo '==============================================='
+echo 'the third step, configuring LIBCCHEM, begins...'
+echo '==============================================='
+set echo
+./configure --prefix=$PWD \
+            --with-gamess \
+            --with-integer8 \
+            --with-gpu=fermi  \
+            --with-blas \
+            --with-cuda=$GMS_CUDA_PATH \
+            --with-mpi=$GMS_MPI_PATH/intel64 \
+            --with-hdf5=$GMS_HDF5_PATH \
+            --with-ga=$PWD/ga \
+            --with-boost=$PWD/boost \
+            CXX='g++'  CXXFLAGS='-O3 -msse3' >& configure.log
+unset echo
+#      am not 100% sure if the 'config.h' file's existence proves correctness!
+if (-e config/config.h) then
+   echo 'Step 3, the configuration of LIBCCHEM, succeeded.'
+else
+   echo 'Something went wrong with the third step, configuration of LIBCCHEM.'
+   echo "  check values passed to the coonfigure command above?"
+   echo "  check pathnames in 'install.info'?"
+   echo "  verbose output is captured in two files,"
+   echo "  ~/gamess/libcchem/configure.log and ~/gamess/libcchem/config.log"
+   exit 8
+endif
+#
+#   step 4 is to compile the LIBCCHEM software.
+#          this takes a long time!
+#          Output from this step is dumped into the CCHEM subdirectory.
+#
+echo ' '
+echo '=============================================='
+echo 'the fourth step, compiling LIBCCHEM, begins...'
+echo '=============================================='
+echo Beginning compilation of LIBCCHEM at `date`...
+#
+make >& make.log
+#
+echo End compilation of LIBCCHEM at `date`
+#
+set OK=true
+if (!(-e src/bindings/.libs/libcchem_gamess.a)) set OK=false 
+if (!(-e src/.libs/libcchem.a))                 set OK=false
+if (!(-e rysq/src/.libs/librysq.a))             set OK=false
+#
+if ($OK == true) then
+   echo 'Step 4, the compilation of LIBCCHEM, succeeded.'
+else
+   echo 'Something went wrong with the fourth step, compiling LIBCCHEM.'
+   echo 'Please check ~/gamess/libcchem/make.log to determine the problem.'
+   exit 8
+endif
+#
+#   step 5 is to install the LIBCCHEM software,
+#          namely, copy libraries to final spot inside this directory tree.
+#          Output from this step is dumped into the CCHEM subdirectory.
+echo ' '
+echo '=============================================='
+echo 'the fifth step, installing LIBCCHEM, begins...'
+echo '=============================================='
+echo ' '
+make install >& install.log
+#
+set OK=true
+if (!(-e lib/libcchem_gamess.a)) set OK=false 
+if (!(-e lib/libcchem.a))        set OK=false
+if (!(-e lib/librysq.a))         set OK=false
+#
+if ($OK == true) then
+   echo 'Step 5, the installation of LIBCCHEM, succeeded.'
+else
+   echo 'Something went wrong with the fifth step, installing LIBCCHEM.'
+   echo 'Please check ~/gamess/libcchem/install.log to determine the problem.'
+   exit 8
+endif
+#
+#   step 6 is to compile a few pieces of GAMESS (but not to re-link).
+#
+echo ' '
+echo '====================================================================='
+echo 'the sixth step, compiling the GAMESS to LIBCCHEM interface, begins...'
+echo '====================================================================='
+chdir ..
+set echo
+gcc -c -m64 -DMPI -I$GMS_MPI_PATH/intel64/include \
+                  -o object/zga.o source/zga.c
+./comp ga
+./comp cchem
+unset echo
+chdir libcchem
+#
+set OK=true
+if (!(-e ../object/cchem.o)) set OK=false 
+if (!(-e ../object/ga.o))    set OK=false 
+if (!(-e ../object/zga.o))   set OK=false 
+#
+if ($OK == true) then
+   echo 'Step 6, compiling the GAMESS to LIBCCHEM interface, has succeeded.'
+else
+   echo 'Something went wrong with the sixth step, installing LIBCCHEM.'
+   echo 'Relevant messages are contained here in this file.'
+   exit 8
+endif
+#
+echo ' '
+echo '     ---------- successful compilation of LIBCCHEM -----------'
+echo "You must now relink GAMESS to LIBCCHEM by repeating the 'lked' step."
+echo " "
+echo "Since the GAMESS+LIBCCHEM binary is only for MP2/CCSD(T) energy runs,"
+echo "you should keep your original GAMESS-only binary."
+echo "For example, if you previously created gamess.01.x, try"
+echo "      chdir ~/gamess"
+echo "      ./lked gamess gpu.01 >& lked.log"
+echo "to create the GAMESS+LIBCCHEM binary named gamess.gpu.01.x"
+echo " "
+echo "Use target 'ga' in the 'rungms' script to execute GAMESS+LIBCCHEM."
+#
+date
