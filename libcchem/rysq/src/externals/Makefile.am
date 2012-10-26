@@ -1,4 +1,0 @@
-SUBDIRS = cxx cuda
-SUBDIRS = 
-
-

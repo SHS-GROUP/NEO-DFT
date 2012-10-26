@@ -1,7 +1,0 @@
-set(CCHEM_DFT_SOURCES
-  ${CMAKE_CURRENT_SOURCE_DIR}/dft.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/xc/xc.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/grid/evaluate.cpp
-  PARENT_SCOPE)
-
-	
