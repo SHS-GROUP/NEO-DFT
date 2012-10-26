@@ -1,0 +1,356 @@
+#ifndef _RYSQ_CORE_HPP_
+#define _RYSQ_CORE_HPP_
+
+#include <vector>
+#include <utility>
+#include <boost/array.hpp>
+#include <boost/utility.hpp>
+#include <iostream>
+#include <stdio.h>
+
+#define RYSQ_LMAX @RYSQ_LMAX@
+#if @HAVE_CUDA@
+#define RYSQ_CUDA 1
+#endif
+
+static const int RYSQ_NORMALIZE = 1;
+
+namespace rysq {
+
+    static const double SQRT_4PI5 = 34.986836655249725;
+
+    enum type { SP = -1, S, P, D, F, G, H, I };
+
+    static const type types[] = { SP, S, P, D, F };
+
+    extern const int LX[];
+    extern const int LY[];
+    extern const int LZ[];
+    extern const double NORMALIZE[];
+
+    namespace array {
+
+	template<typename T, size_t N>
+	struct array : boost::array<T,N> {
+	    typedef boost::array<T,N> base;
+	    array() {}
+	    array(const T *A) { std::copy(A, A + N, this->elems); }
+	    array(const base &A) : base(A) {}
+	    operator const T*() const { return this->elems; }
+	};
+
+	template< typename T, size_t N_>
+	class adapter {
+	    const T *front_;
+	public:
+	    typedef T type;
+	    static const size_t N = N_;
+	    const size_t length;
+
+	    adapter(const T *origin, size_t size) : length(size), front_(origin) {}
+
+	    adapter(const std::vector<boost::array<T,N> > &v) : length(v.size()) {
+		front_ = (length > 0) ? &(v.front()[0]) : NULL;
+	    }
+
+	    const T* operator[](int i) const { return &front_[i*N]; }
+	    T* operator[](int i) { return &front_[i*N]; }
+	};
+
+    }
+
+    namespace matrix {
+
+	template <typename T>
+	class adapter {
+	public:
+	    virtual ~adapter() {}
+	    virtual const T* operator()(int i, int j) const = 0;
+	    virtual T* operator()(int i, int j) = 0;
+	};
+
+	typedef matrix::adapter<double> Adapter;
+
+	template<size_t N>
+	struct Density : array::array<const double*, N> {
+	    typedef array::array<const double*,N> super;
+	    Density() {}
+	    Density(const double *A) : super(A) {}
+	    Density(const array::array<const double*,N> &A) : super(A) {}
+	};
+
+	template<size_t N>
+	struct Fock : array::array<double*, N> {
+	    typedef array::array<double*,N> super;
+	    Fock() {}
+	    Fock(double *A) : super(A) {}
+	    Fock(const array::array<double*,N> &A) : super(A) {}
+	};
+
+	template<typename T>
+	array::array<T*,6> index(matrix::adapter<T> &A,
+				 int i, int j, int k, int l) {
+	    T* a[6] = { A(i,j), A(k,l), A(i,k), A(i,l), A(j,k), A(j,l) };
+	    return array::array<T*,6>(a);
+	}
+
+	template<typename T>
+	array::array<const T*,6> index(const matrix::adapter<T> &A,
+				       int i, int j, int k, int l) {
+	    const T* a[6] = { A(i,j), A(k,l), A(i,k), A(i,l), A(j,k), A(j,l) };
+	    return array::array<const T*,6>(a);
+	}
+
+    }
+
+
+    struct shell {
+	struct const_iterator {
+	    typedef std::forward_iterator_tag iterator_category;
+	    typedef int value_type;
+	    typedef int reference;
+	    typedef int difference_type;
+	    typedef const int* pointer;
+	    explicit const_iterator(int value = 0) : value(value) {}
+	    const const_iterator& operator++() const { ++ value; return *this ; }
+	    reference operator[](size_t i) const { return value + i; }
+	    reference operator*() const { return value; }
+	    operator int() const { return value ; }
+	    // operator size_t() const { return size_t(value); }
+	    mutable int value;
+	};
+	const rysq::type type;
+	const int L;
+	const int index;
+	const int size;
+	const int nc;
+	const int K;
+	// shell() : type(rysq::SP), L(0), index(0), size(0), nc(0), K(0) {}
+	shell(int type, int K = 0)
+	    : type(rysq:: type(type)),
+	      L(std::abs(type)), 
+	      index(begin(type)),
+	      size(end(type) - index),
+	      nc(1 + (type < 0)*L),
+	      K(K)
+	{}
+	operator rysq::type() const { return type; }
+	bool is_hybrid() const { return nc > 1; }
+	const_iterator begin() const { return const_iterator(index); }
+	const_iterator end() const { return const_iterator(index + size); }
+    private:
+	static int begin(int a) { return (a >= 0)*((a*(a+1)*(a+2))/6); }
+	static int end(int a) { return begin(std::abs(a)+1); }
+    };
+
+
+    namespace detail {
+
+	template<class F, typename Quartet>
+	typename F::value_type add(const Quartet &q) {
+	    return (F::value(q[0])+F::value(q[1])+F::value(q[2])+F::value(q[3]));
+	}
+
+	template<class F, typename Quartet>
+	typename F::value_type multiply(const Quartet &q) {
+	    return (F::value(q[0])*F::value(q[1])*F::value(q[2])*F::value(q[3]));
+	}
+
+	struct L {
+	    typedef size_t value_type;
+	    static size_t value(const rysq::type &type) { return shell(type).L; }
+	    static size_t value(const rysq::shell &shell) { return shell.L; }
+	    template<typename Quartet>
+	    static value_type add(const Quartet &q) {
+		return detail::add<L>(q);
+	    }
+	};
+
+	struct size {
+	    typedef size_t value_type;
+	    static size_t value(const rysq::type &type) { return shell(type).size; }
+	    static size_t value(const rysq::shell &shell) { return shell.size; }
+	    template<typename Quartet>
+	    static value_type multiply(const Quartet &q) {
+		return detail::multiply<size>(q);
+	    }
+	};
+
+	struct K {
+	    typedef size_t value_type;
+	    static size_t value(const rysq::shell &shell) { return shell.K; }
+	    template<typename Quartet>
+	    static value_type multiply(const Quartet &q) {
+		return detail::multiply<K>(q);
+	    }
+	};
+
+    }
+
+
+    class Shell : public shell, boost::noncopyable {
+    public:
+	Shell(rysq::type type, int K, const double *a, const double* C[])
+	    : shell(type, K) { initialize(a, C); }
+	~Shell() { if (this->data_) delete[] this->data_; }
+	double& operator()(size_t i) const { return a_[i]; }
+	double& operator()(size_t i, size_t k) const { return C_[k][i]; }
+    private:
+	char symbol_[4];
+	double *a_, *C_[2];
+	double *data_;
+	void initialize(const double *a, const double* C[]);
+    };
+    std::ostream& operator<<(std::ostream &os, const Shell &shell);
+
+    template<typename C, typename T>
+    boost::array<C,4> make_array(const T &t0, const T &t1, const T &t2, const T &t3) {
+	boost::array<C,4> q = {{ C(t0), C(t1), C(t2), C(t3) }};
+	return q;
+    }
+
+
+    struct State {
+	State(const Shell &A, const Shell &B) : A(A), B(B) {}
+	size_t K() const { return A.K*B.K; }
+	size_t L() const { return A.L + B.L; }
+	size_t hybrid() const { return  A.is_hybrid() + B.is_hybrid(); }
+	const Shell& operator[](bool i) const { return ((i == 0) ? A : B); }
+    private:
+	const Shell &A, &B;
+    };
+
+    template<class  C>
+    struct quartet_base : boost::array<C,4> {
+	typedef boost::array<C,4> base;
+	typedef C c_type[4];
+	template<typename T>
+	quartet_base(const T &t0, const T &t1, const T &t2, const T &t3)
+	    : base(make(t0, t1, t2, t3)) {}
+	template<typename T>
+	quartet_base(const boost::array<T,4> &q)
+	    : base(make(q[0], q[1], q[2], q[3])) {}
+	operator const c_type&() const { return this->elems; }
+    protected:
+	template<typename T>
+	static base make(const T &t0, const T &t1, const T &t2, const T &t3) {
+	    boost::array<C,4> array = {{ t0, t1, t2, t3 }};
+	    return array;
+	}
+	size_t size() const;// { return base::size(); }
+    };
+
+    template<class C>
+    struct Quartet : quartet_base<C> {
+	typedef quartet_base<C> base;
+	template<typename T>
+	Quartet(const T &t0, const T &t1, const T &t2, const T &t3)
+	    : base(t0, t1, t2, t3) {}
+	template<typename T>
+	Quartet(const T (&q)[4]) : base(q[0], q[1], q[2], q[3]) {}
+	template<typename T>
+   	Quartet(const boost::array<T,4> &q) : base(q[0], q[1], q[2], q[3]) {}
+    };
+
+    template<>
+    struct Quartet<rysq::type> : quartet_base<rysq::type> {
+	typedef quartet_base<rysq::type> base;
+	Quartet(const type &a, const type &b, const type &c, const type &d)
+	    : base(a,b,c,d) {}
+	template<typename T>
+   	Quartet(const boost::array<T,4> &quartet) : base(quartet) {}
+	size_t L() const { return detail::L::add(*this); }
+	size_t size() const { return detail::size::multiply(*this); }
+    };
+
+    template<>
+    struct Quartet<rysq::shell> : quartet_base<rysq::shell> {
+	typedef quartet_base<rysq::shell> base;
+	Quartet(const shell &a, const shell &b, const shell &c, const shell &d)
+	    : base(a,b,c,d) {}
+	template<typename T>
+   	Quartet(const boost::array<T,4> &quartet) : base(quartet) {}
+	size_t L() const { return detail::L::add(*this); }
+	size_t size() const { return detail::size::multiply(*this); }
+	size_t K() const { return detail::K::multiply(*this); }
+    };
+
+    template<>
+    class Quartet<Shell> {
+    public:
+	typedef State Bra, Ket;
+
+	static int size(int a, int b, int c, int d) {
+	    return (shell(a).size*shell(b).size*shell(c).size*shell(d).size);
+	}
+
+	static size_t size(const rysq::type (&quartet)[4]) {
+	    return size(quartet[0], quartet[1], quartet[2], quartet[3]);
+	}
+
+#ifdef __CUDACC__
+	__host__ __device__
+#endif
+	static int symmetry(int i, int j, int k, int l) {
+	    return 1 << ((k == l) + (i == j) + (i == k && j == l));
+	}
+
+	Quartet(const Shell &S0, const Shell &S1, const Shell &S2, const Shell &S3,
+		int transpose_mask = 0);
+	~Quartet() {}
+	const int transpose_mask;
+	const int shuffle_mask;
+	int L() const { return L_; }
+	int size() const { return size_; }
+	int size(int i, int j) const { return (*this)[i].size*(*this)[j].size; }
+	int hybrid() const { return hybrid_; }
+	int nc() const { return nc_; }
+	int K() const { return K_; }
+	const Shell& operator[](size_t i) const { return *shells_[i]; }
+	Quartet<Shell> transposed(int transpose_mask) const;
+	const Bra bra() const { return Bra((*this)[0], (*this)[1]); }
+	const Ket ket() const { return Ket((*this)[2], (*this)[3]); }
+	operator Quartet<rysq::type>() const { return cast<rysq::type>(); }
+	operator Quartet<rysq::shell>() const  { return cast<rysq::shell>(); }
+    private:
+	const Shell* shells_[4];
+	int L_, size_, hybrid_, nc_, K_;
+	template<typename T>
+	Quartet<T> cast() const {
+	    const Quartet &q = *this;
+	    return Quartet<T>(T(q[0]), T(q[1]), T(q[2]), T(q[3]));
+	}
+    };
+
+    inline
+    std::ostream& operator<<(std::ostream &os, const Quartet<Shell> &quartet) {
+	return (os << quartet[0] << quartet[1] << quartet[2] << quartet[3]);
+    }
+
+    class Parameters {
+    public:
+	int flags;
+	double scale;
+	double scale2;
+	double cutoff;
+	Parameters(int flags = 0, double scale = 1.0, double scale2 = 4.0,
+		   double cutoff = 1.0e-10) :
+	    flags(flags), scale(scale), scale2(scale2), cutoff(cutoff) {}
+	static const Parameters Default;
+    };
+
+
+    int initialize();
+
+    int finalize();
+
+    typedef boost::array<double,3> Center;
+    typedef boost::array<int,4> Int4;
+
+}
+
+// #ifdef RYSQ_CUDA
+// #include "rysq-cuda.hpp"
+// #endif
+
+#endif

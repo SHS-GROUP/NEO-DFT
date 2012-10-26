@@ -1,0 +1,285 @@
+Index: armci/src/kr_malloc.c
+===================================================================
+--- armci/src/kr_malloc.c	(revision 9486)
++++ armci/src/kr_malloc.c	(working copy)
+@@ -29,7 +29,7 @@
+  */
+ #define DEFAULT_NALLOC       (4*128*1024)  
+ #define DEFAULT_NALLOC_ALIGN 1024  
+-#define DEFAULT_MAX_NALLOC   (4*1024*1024*16) 
++#define DEFAULT_MAX_NALLOC   (64*1024*1024*16) 
+ 
+ /* mutual exclusion defs go here */
+ #define LOCKED   100
+@@ -73,9 +73,9 @@
+ #endif
+ 
+     if (ctx->total >= ctx->max_nalloc) {
+-#      if DEBUG
++/*#      if DEBUG*/
+          armci_die("kr_malloc: morecore: maximum allocation reached",armci_me);
+-#      endif
++/*#      endif*/
+        return (Header *) NULL;   /* Enforce upper limit on core usage */
+     }
+ 
+@@ -91,8 +91,8 @@
+     (void) printf("%d: morecore: Getting %ld more units of length %d\n",
+ 		  armci_me, (long)nu, sizeof(Header));
+     (void) fflush(stdout);
+-#endif
+-    
++#endif    
++
+     if ((cp =(char *)(*ctx->alloc_fptr)((size_t)nu * sizeof(Header))) == (char *)NULL)
+       return (Header *) NULL;
+ 
+Index: armci/src/dataserv.c
+===================================================================
+--- armci/src/dataserv.c	(revision 9486)
++++ armci/src/dataserv.c	(working copy)
+@@ -104,13 +104,13 @@
+ 
+ 
+ int armci_RecvStridedFromSocket(int sock,void *dst_ptr, int dst_stride_arr[],
+-                     int count[],int stride_levels,struct iovec *iov){
++				int count[],int stride_levels,struct iovec *iov){
+ 
+-char *dst=(char*)dst_ptr;
+-char *dst1;
+-int i,j,k,num_xmit=0,lastiovlength,iovlength,n=0,max_iovec,totalsize=0,vecind;
+-int total_of_2D=1;
+-int index[MAX_STRIDE_LEVEL], unit[MAX_STRIDE_LEVEL];
++    char *dst=(char*)dst_ptr;
++    char *dst1;
++    int i,j,k,num_xmit=0,lastiovlength,iovlength,n=0,max_iovec,totalsize=0,vecind;
++    int total_of_2D=1;
++    size_t index[MAX_STRIDE_LEVEL], unit[MAX_STRIDE_LEVEL];
+ 
+     max_iovec = MAX_IOVEC;
+     if(DEBUG1){
+@@ -172,12 +172,12 @@
+ 
+ 
+ int armci_SendStridedToSocket(int sock,void *src_ptr, int src_stride_arr[],
+-                     int count[], int stride_levels,struct iovec *iov){
+-char *src=(char*)src_ptr;
+-char *src1;
+-int i,j,k,num_xmit=0,lastiovlength,iovlength,n=0,max_iovec,totalsize=0,vecind;
+-int total_of_2D=1;
+-int index[MAX_STRIDE_LEVEL], unit[MAX_STRIDE_LEVEL];
++			      int count[], int stride_levels,struct iovec *iov){
++    char *src=(char*)src_ptr;
++    char *src1;
++    int i,j,k,num_xmit=0,lastiovlength,iovlength,n=0,max_iovec,totalsize=0,vecind;
++    int total_of_2D=1;
++    size_t index[MAX_STRIDE_LEVEL], unit[MAX_STRIDE_LEVEL];
+ 
+     max_iovec = MAX_IOVEC;
+     if(DEBUG1){
+Index: armci/src/memory.c
+===================================================================
+--- armci/src/memory.c	(revision 9486)
++++ armci/src/memory.c	(working copy)
+@@ -873,7 +873,8 @@
+     vampir_begin(ARMCI_MALLOC,__FILE__,__LINE__);
+ #endif
+     if(DEBUG_){ 
+-       fprintf(stderr,"%d bytes in armci_malloc %d\n",armci_me, (int)bytes);
++       fprintf(stderr,"%lu bytes in armci_malloc %d\n",
++	       armci_me, (long unsigned int)bytes);
+        fflush(stderr);
+        armci_msg_barrier();
+     }
+Index: armci/src/strided.c
+===================================================================
+--- armci/src/strided.c	(revision 9486)
++++ armci/src/strided.c	(working copy)
+@@ -481,7 +481,8 @@
+ 		       armci_ihdl_t nb_handle)
+ {
+   char *src = (char*)src_ptr, *dst=(char*)dst_ptr;
+-  int s2, s3, i,j, unlockit=0;
++  armci_size_t s2, s3;
++  int i,j, unlockit=0;
+   int total_of_2D;
+   int index[MAX_STRIDE_LEVEL], unit[MAX_STRIDE_LEVEL];
+ 
+Index: armci/src/sockets.c
+===================================================================
+--- armci/src/sockets.c	(revision 9486)
++++ armci/src/sockets.c	(working copy)
+@@ -282,19 +282,29 @@
+ 
+ #if defined(USE_SOCKET_VECTOR_API) 
+ 
+-int _armci_tcp_writev(int sock, struct iovec *iovptr,int writeiovlength,int currentwritesize,struct iovec *iov){
+-    int n=0;
++size_t _armci_tcp_writev(int sock, struct iovec *iovptr,
++		      int writeiovlength, size_t currentwritesize,
++		      struct iovec *iov){
++    size_t n=0;
+     while(n!=currentwritesize){
+-        int rc;
++        size_t rc;
+         rc=writev(sock,iovptr,writeiovlength);
+-        if(rc<0)perror("writev failed");
+-        if(DEBUG1&&0)if(rc<currentwritesize){printf("\n%d:_armci_tcp_writev write %d bytes of %d bytes writeiovlen=%d",armci_me,rc,currentwritesize,writeiovlength);fflush(stdout);} 
++	if (DEBUG1 && 0) {
++	    if (rc<currentwritesize) {
++		printf("\n%d:_armci_tcp_writev write %d bytes of %d bytes writeiovlen=%d",
++		       armci_me,rc,currentwritesize,writeiovlength);fflush(stdout);
++	    } 
++	}
++        if(rc<0) {
++	    perror("writev failed");
++	    exit(1);
++	}
+         n+=rc;
+         if(n<currentwritesize){
+-            int completediovs=0;
+-            int templength=0;
++            size_t completediovs=0;
++            size_t templength=0;
+             while(templength!=rc){
+-                if(((int)iovptr->iov_len)+templength>rc){
++                if((iovptr->iov_len)+templength>rc){
+                     iovptr->iov_base=(char *)((*iovptr).iov_base)+(rc-templength);
+                     iovptr->iov_len-=(rc-templength);
+                     templength+=(rc-templength);
+@@ -312,19 +322,29 @@
+     return(n);
+ }
+ 
+-int _armci_tcp_readv(int sock, struct iovec *iovptr,int readiovlength,int currentreadsize,struct iovec *iov){
+-    int n=0;
+-    while(n!=currentreadsize){
+-        int rc;
++size_t _armci_tcp_readv(int sock, struct iovec *iovptr,
++		     int readiovlength, size_t currentreadsize,
++		     struct iovec *iov){
++    size_t n=0;
++    while (n!=currentreadsize) {
++        size_t rc;
+         rc=readv(sock,iovptr,readiovlength);
+-        if(rc<0)perror("readv failed");
+-        if(DEBUG1&&0)if(rc<currentreadsize){printf("\n%d:_armci_tcp_readv Read %d bytes of %d bytes readiovlen=%d",armci_me,rc,currentreadsize,readiovlength);fflush(stdout);}
++	if (DEBUG1 && 0) {
++	    if(rc<currentreadsize) {
++		printf("\n%d:_armci_tcp_readv Read %d bytes of %d bytes readiovlen=%d",
++		       armci_me,rc,currentreadsize,readiovlength);fflush(stdout);
++	    }
++	}
++        if(rc<0) {
++	    perror("readv failed");
++	    exit(1);
++	}
+         n+=rc;
+         if(n<currentreadsize){
+-            int completediovs=0;
+-            int templength=0;
++            size_t completediovs=0;
++            size_t templength=0;
+             while(templength!=rc){
+-                if(((int)iovptr->iov_len)+templength>rc){
++                if((iovptr->iov_len)+templength>rc){
+                     iovptr->iov_base=(char *)((*iovptr).iov_base)+(rc-templength);
+                     iovptr->iov_len-=(rc-templength);
+                     templength+=(rc-templength);
+@@ -345,8 +365,9 @@
+ int armci_ReadVFromSocket(int sock,struct iovec *iov, int iovlength, int totalsize)
+ {
+     struct iovec *iovptr;
+-    int i=0,num_xmit=1,lastiovoriglen=0,lastiovnewlen=0,lastiovindex=-1,n=0;
+-    int readiovlength,currentreadsize=totalsize,totalreadsofar=0,byteslefttoread=0;
++    int i=0, num_xmit=1, lastiovindex=-1, readiovlength;
++    size_t lastiovoriglen=0, lastiovnewlen=0, n=0;
++    size_t currentreadsize=totalsize, totalreadsofar=0, byteslefttoread=0;
+     char *lastiovorigbase=NULL;
+     iovptr=iov; 
+     if(totalsize>PACKET_SIZE){
+@@ -361,11 +382,13 @@
+             } 
+             iovlength=0;  
+             
+-            if(totalsize-totalreadsofar<PACKET_SIZE)byteslefttoread=totalsize-totalreadsofar;
++            if(totalsize-totalreadsofar<PACKET_SIZE)
++		byteslefttoread=totalsize-totalreadsofar;
+             else byteslefttoread=PACKET_SIZE;
+ 	    while(currentreadsize<byteslefttoread){
+-                if(((int)iov[i].iov_len)+currentreadsize>byteslefttoread){
+-                    lastiovoriglen=iov[i].iov_len;lastiovorigbase=(char *)iov[i].iov_base;
++                if((iov[i].iov_len)+currentreadsize>byteslefttoread){
++                    lastiovoriglen=iov[i].iov_len;
++		    lastiovorigbase=(char *)iov[i].iov_base;
+                     lastiovindex=i; 
+ 		    iov[i].iov_len=byteslefttoread-currentreadsize;
+ 		    currentreadsize+=iov[i].iov_len; lastiovnewlen=iov[i].iov_len;
+@@ -398,13 +421,13 @@
+ 
+ int armci_WriteVToSocket(int sock,struct iovec *iov, int iovlength, int totalsize){     
+ 
+-    int lastiovoriglen=0,lastiovnewlen=0,lastiovindex=-1,totalwritesofar=0,byteslefttowrite=0;
+-    struct iovec *iovptr; 
+-    int i=0,num_xmit=0,n=0;
+-    int currentwritesize=totalsize,writeiovlength;
+-     char *lastiovorigbase=NULL;
+-    iovptr=iov; 
+-    if(totalsize>PACKET_SIZE){
++    size_t lastiovoriglen=0, lastiovnewlen=0;
++    size_t totalwritesofar=0, byteslefttowrite=0;
++    size_t n=0, currentwritesize = totalsize;
++    char *lastiovorigbase=NULL;
++    int i=0, num_xmit=0, lastiovindex=-1, writeiovlength;
++    struct iovec *iovptr = iov; 
++    if (totalsize>PACKET_SIZE) {
+  	while(totalwritesofar!=totalsize){      
+             currentwritesize=0; 
+             if(lastiovindex>=0)
+@@ -419,7 +442,7 @@
+             if(totalsize-totalwritesofar<PACKET_SIZE)byteslefttowrite=totalsize-totalwritesofar;
+             else byteslefttowrite=PACKET_SIZE;
+             while(currentwritesize<byteslefttowrite){
+-		if(((int)iov[i].iov_len)+currentwritesize>byteslefttowrite){
++		if((iov[i].iov_len)+currentwritesize>byteslefttowrite){
+                     lastiovoriglen=iov[i].iov_len;lastiovorigbase=(char *)iov[i].iov_base;
+                     lastiovindex=i;
+                     iov[i].iov_len=byteslefttowrite-currentwritesize;
+@@ -462,10 +485,11 @@
+ */
+ {
+ 
+-   int nread, status, nintr=0;
+-   char *buf = (char*)buffer;
+-   status = lenbuf;
+-   while (lenbuf > 0) {
++    size_t nread;
++    int status, nintr=0;
++    char *buf = (char*)buffer;
++    status = lenbuf;
++    while (lenbuf > 0) {
+ again:
+      
+      nread = recv(sock, buf, lenbuf, 0);
+@@ -508,7 +532,7 @@
+ */
+ {
+   int status = lenbuf;
+-  int nsent, len;
++  size_t nsent, len;
+   char *buf = (char*)buffer;
+  
+   if(DEBUG_){
+Index: global/src/capi.c
+===================================================================
+--- global/src/capi.c	(revision 9486)
++++ global/src/capi.c	(working copy)
+@@ -2004,7 +2004,7 @@
+ 
+ size_t GA_Memory_avail(void)
+ {
+-    return (size_t)gai_memory_avail(MT_F_BYTE);
++    return (size_t)ga_memory_avail_();
+ }
+ 
+ int GA_Memory_limited(void)
