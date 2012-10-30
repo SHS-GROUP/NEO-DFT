@@ -5716,6 +5716,10 @@ C
  9300 FORMAT(1X,'......END OF GEOMETRY SEARCH......')
       END
 C*MODULE STATPT  *DECK SIGINI
+C> @brief Initialize the geometry search
+C>
+C> @date October 2012
+C>  - Add harmonic constraints
       SUBROUTINE SIGINI(MODE,RUNTYP,NCVAL,NCOORD,METHOD,OUT,GOTEG,
      *                  NPRT,NPUN,ITBMAT,STPT,STSTEP,PROJCT,
      *                  SNZVAR,SOZVAR,MAX,NPRTHS)
@@ -5741,6 +5745,8 @@ C
       COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
       COMMON /FROZNC/ IFREEZ(3*MXATM),NFRZ
       COMMON /FRZCRT/ IFCART(3*MXATM),NFCART,MAPFA(MXATM)
+      COMMON /HAMCON/ NHAMCON,IHMCON(3*MXATM),FHMCON(MXATM),
+     *                SHMCON(MXATM)
       COMMON /HSSCTL/ IHESSM,IHREP,HSSEND
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
      *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
@@ -5762,7 +5768,7 @@ C
 C
       PARAMETER (ZERO=0.0D+00)
 C
-      PARAMETER (NNAM=30)
+      PARAMETER (NNAM=33)
       DIMENSION QNAM(NNAM),KQNAM(NNAM)
       DATA STATPT /8HSTATPT  /
       DATA QNAM /8HMETHOD  ,8HUPHESS  ,8HNSTEP   ,8HNNEG    ,
@@ -5772,9 +5778,10 @@ C
      *           8HNPUN    ,8HPURIFY  ,8HITBMAT  ,8HMOVIE   ,
      *           8HTRUPD   ,8HTRMAX   ,8HTRMIN   ,8HSTPT    ,
      *           8HSTSTEP  ,8HPROJCT  ,8HIFCART  ,8HNPRTHS  ,
-     *           8HKDIAGH  ,8HIACTAT  /
+     *           8HKDIAGH  ,8HIACTAT  ,8HIHMCON  ,8HFHMCON  ,
+     *           8HSHMCON  /
       DATA KQNAM/5,5,1,1,1,3,3,3,3,0,5,3,1,0,1,1,1,0,1,0,0,3,3,0,3,0,
-     *           1,1,1,1/
+     *           1,1,1,1,1,83,83/
 C
       DATA SADPT /8HSADPOINT/, OPT   /8HOPTIMIZE/
       DATA VSCF  /8HVSCF    /, G3MP2 /8HG3MP2   /,COMP   /8HCOMP    /
@@ -5801,6 +5808,7 @@ C
       KQNAM(15) = 3*10*MXATM + 1
       KQNAM(27) = 3*10*MXATM + 1
       KQNAM(30) = 10*MXATM + 1
+      KQNAM(31) = 3*MXATM + 1
 C
       NEOCLR = .TRUE.
       IF(NEORUN.EQ.1) THEN
@@ -5859,6 +5867,11 @@ C
 C
       CALL VICLR(IACTAT,1,NAT)
 C
+      NHAMCON = 0
+      CALL VICLR(IHMCON,1,3*NAT)
+      CALL VCLR(FHMCON,1,NAT)
+      CALL VCLR(SHMCON,1,NAT)
+C
 C     NOTE: THE 2ND NAMEIO CALL BELOW MUST BE KEPT IDENTICAL TO THIS.
 C
       JRET = 0
@@ -5867,7 +5880,7 @@ C
      *            RMAX,RLIM,RESTAR,HESS,OPTTOL,IHREP,HSSEND,
      *            IFREEZ,NPRT,NPUN,PURIFY,ITBMAT,MOVIE,
      *            TRUPD,TRMAX,TRMIN,STPT,STSTEP,PROJCT,IFCART,
-     *            NPRTHS,KDIAGH,IACTAT,0,0,0,0,
+     *            NPRTHS,KDIAGH,IACTAT,IHMCON,FHMCON,SHMCON,0,
      *   0,0,0,0,0,   0,0,0,0,0,
      *   0,0,0,0,0,   0,0,0,0,0,   0,0,0,0,0,   0,0,0,0,0)
 C
@@ -5888,6 +5901,8 @@ C
          IF(METHCX.EQ.1) HSSEND=.TRUE.
          IF(METHCX.NE.1) HSSEND=.FALSE.
       END IF
+C
+      CALL CNTNZ(IHMCON,NHAMCON,MXATM)
 C
 C        AT THIS POINT, WE ASSUME ANY POSSIBLE HESSIAN COMPUTATION
 C        WILL BE PERFORMED ANALYTICALLY.  THIS MIGHT NOT BE TRUE
@@ -6086,7 +6101,7 @@ C
      *               RMAX,RLIM,RESTAR,HESS,OPTTOL,IHREP,HSSEND,
      *               IFREEZ,NPRT,NPUN,PURIFY,ITBMAT,MOVIE,
      *               TRUPD,TRMAX,TRMIN,STPT,STSTEP,PROJCT,IFCART,
-     *               NPRTHS,KDIAGH,IACTAT,0,0,0,0,
+     *               NPRTHS,KDIAGH,IACTAT,IHMCON,FHMCON,SHMCON,0,
      *   0,0,0,0,0,   0,0,0,0,0,
      *   0,0,0,0,0,   0,0,0,0,0,   0,0,0,0,0,   0,0,0,0,0)
          IF(JRET .GE. 2) THEN
@@ -6117,6 +6132,15 @@ C
      *                  PROJCT
          IF(NFRZ.GT.0) WRITE(IW,9050) (IFREEZ(I),I=1,NFRZ)
          IF(NFCART.GT.0) WRITE(IW,9051) (IFCART(I),I=1,NFCART)
+C
+         IF(NHAMCON.GT.0) THEN
+           WRITE(IW,9052)
+           DO I=1,NHAMCON/3
+             IDX=3*(I-1)
+             WRITE(IW,9053) IHMCON(IDX+2),IHMCON(IDX+3),
+     *                      SHMCON(I),FHMCON(I)
+           ENDDO
+         END IF
       END IF
 C
       IF((NFRZ.EQ.0 .AND. NFCART.GT.0) .AND. NZMAT.EQ.0) THEN
@@ -6160,6 +6184,8 @@ C
      *       10X,'STSTEP =',1P,E10.3,10X,'PROJCT= ',L10)
  9050 FORMAT(10X,'FROZEN COORD(S)=',20I4/(26X,(20I4)))
  9051 FORMAT(10X,'FROZEN CARTESIANS=',20I4/(28X,(20I4)))
+ 9052 FORMAT(/10X,'HARMONICALLY CONSTRAINED BOND LENGTHS')
+ 9053 FORMAT(13X,'I=',I5,' J=',I5,' D=',F6.2,' K=',F9.3)
  9055 FORMAT(1X,'***** ERROR IN $STATPT INPUT *****')
  9060 FORMAT(1X,'***   RESTARTING OPTIMIZATION USING INFORMATION ',
      *       'FROM PREVIOUS RUN   ***')
@@ -6506,6 +6532,10 @@ C
       RETURN
       END
 C*MODULE STATPT  *DECK SIGX
+C> @brief Geometry optimization and transition state locator
+C>
+C> @date October 2012
+C> - Add harmonic constraints
       SUBROUTINE SIGX(LNR)
 C
 C     LNR = .FALSE. INDICATE NORMAL USE OF SIGX
@@ -6755,6 +6785,7 @@ C     CONOPM ONLY WORKS IN CARTESIAN COORDINATES AT PRESENT
         NFRGT=NFRG
         NFRG=0
       END IF
+      CALL HARMCON
       IF(IEXIT.EQ.1) CALL ABRT
 C
 C           BEGIN STATIONARY POINT LOCATION CYCLES
@@ -6939,6 +6970,7 @@ C
         NFRGT=NFRG
         NFRG=0
       END IF
+      CALL HARMCON
       IF(IEXIT.EQ.1) GO TO 200
       GO TO 100
 C
@@ -7355,4 +7387,98 @@ C
      *       1X ,' DID NOT CONVERGE IN ',I4,' ITERATIONS.')
  9080 FORMAT(1X,'IN DISPLC, XNEW='/(1X,10F12.7))
  9090 FORMAT(1X,'WARNING! THE RADIUS IN CARTESIANS IS ',F10.5)
+      END
+C
+C
+C
+C*MODULE STATPT    *DECK HARMCON
+C> @brief  Applies harmonic constraints to the current geometry
+C>
+C> @detail The atoms to constrain are given in IHMCON
+C>         The forces of the constraints are in FHMCON
+C>         The distances of the constraints are in SHMCON
+C>
+C> @author Casper Steinmann
+C> - October, 2012
+      SUBROUTINE HARMCON
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER(MXATM=2000)
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
+      COMMON /FMOOPT/ ESPSCA(9),RESPAP(2),RESPPC(2),RESDIM,RESTRI(4),
+     *                RCORSD,RESPCT,CONVFG,CNVDMP,COROFF,RFLMO(4),
+     *                ORSHFT,ORSHFT2,CNVAFO,ASCREEN(4),IXESP,MXITFG,
+     *                NGUESS,NBSSE,MODORB,MODPAR,IRSTSTP,IRSTLAY,NPRFMO,
+     *                NFMOPAL,MODPRP,MAXL1C,IPIEDA,MODGRD,MODESP,IVMUL,
+     *                MODLMO,NOPDEN,MOFOCK,MODFD,modfmm
+      COMMON /FRZCRT/ IFZCRT(3*MXATM),NFZCRT,MAPFA(MXATM)
+      COMMON /FUNCT / ENERGY,F(3*MXATM)
+      COMMON /HAMCON/ NHAMCON,IHMCON(3*MXATM),FHMCON(MXATM),
+     *                SHMCON(MXATM)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+      DATA ZERO,TWO /0.0D+00,2.0D+00/
+      DATA UNITS,TOBOHR /0.000446254D+00,1.88972599D+00/
+      DIMENSION CC(3,2),IC(2),DD(3)
+C
+C     --- APPLIES HARMONIC CONSTRAINTS TO A GEOMETRY ---
+C
+C      IF(.NOT.MASWRK) RETURN
+      IF(NHAMCON.LE.0) RETURN
+      IPARSE=0
+      IHMCONCNT = 0
+      FCON = ZERO
+      SCON = ZERO
+      DO I=1,NHAMCON
+C       DECIPHER EACH ELEMENT
+        IVAL = IHMCON(I)
+        IF(IVAL.EQ.1.AND.IPARSE.EQ.0) THEN
+          IPARSE=2
+          IHMCONCNT = IHMCONCNT +1
+          FCON = FHMCON(IHMCONCNT)*UNITS
+          SCON = SHMCON(IHMCONCNT)*TOBOHR
+          GOTO 20
+        ENDIF
+        IF(NFG.NE.0.AND.MODFD.NE.0) THEN
+C         THIS REQUIRES A REVERSE LOOKUP IN MAPFA
+          DO J=1,NAT
+            IF(MAPFA(J).EQ.IVAL) IVAL = J
+          ENDDO
+        ENDIF
+        IF(IVAL.GT.NAT) THEN
+          WRITE(IW,9000) IVAL,NAT
+          CALL ABRT
+        ENDIF
+        IC(IPARSE) = IVAL
+        DO J=1,3
+          CC(J,IPARSE) = C(J,IVAL)
+        ENDDO
+        IPARSE = IPARSE-1
+C       NOW WE HAVE THE INFORMATION WE NEED TO UPDATE THE GRADIENT
+C       WITH THE HARMONIC CONSTRAINTS ON BOND LENGTHS
+        IF( IPARSE.EQ.0 ) THEN
+          II = IC(1)
+          JJ = IC(2)
+          R = ZERO
+          DO J=1,3
+            DC = CC(J,1)-CC(J,2)
+            R = R + DC*DC
+          ENDDO
+          R = DSQRT(R)
+          DR = SCON - R
+          ENERGY = ENERGY + FCON*DR*DR
+          DO J=1,3
+            DC = CC(J,1)-CC(J,2)
+            F(3*(II-1)+J) = F(3*(II-1)+J) - TWO*DR*FCON*DC/R
+            F(3*(JJ-1)+J) = F(3*(JJ-1)+J) + TWO*DR*FCON*DC/R
+          ENDDO
+        ENDIF
+   20   CONTINUE
+      ENDDO
+      RETURN
+ 9000 FORMAT(/1X,'ERROR! ATOM ',I5,' DOES NOT MAKE SENCE FOR '
+     * 'A MOLECULE WITH ',I5, ' ATOMS.'/)
       END
