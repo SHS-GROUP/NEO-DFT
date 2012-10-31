@@ -20,6 +20,9 @@ C>    @author Casper Steinmann
 C>
 C>    @date 10/5/12 - Spencer Pruitt
 C>    - Added ability to turn short-range EFP interactions on and off
+C>    @date October, 2012 - Colleen Bertoni
+C>    - Modified short-range EFP flags to depend on separate user
+C>      inputs
 C>
 C>    @param DISPER : Turn dispersion on or off
 C>
@@ -41,12 +44,12 @@ C
       LOGICAL OPOLNUM, OPOLDYN, OPOLDCM,DODENMUL
       INTEGER OILOCAL,ONPTSTN
       LOGICAL POLAR,DISPER,EXREP,CHGTRN,MFRZ,CTVVO
-      
+      LOGICAL SHORT_RANGE_ON      
 C
       COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,
      *                IEFMORUN,IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,
-     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,EFMOREPNRG,
-     *                EFMOCHTNRG,EFMOEPEN
+     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,IMODEFER,
+     *                IMODEFCT,EFMOREPNRG,EFMOCHTNRG,EFMOEPEN
       COMMON /EFMOPO/ LNEFMOPTS,LEFMOPTS,LEFMOPPTS,LEFMODPTS,LNEFMOBAS,
      *                LEFMOBAS,LEFMOLMO,LEFMOFM,LEFMOCV,LEFMOCF,
      *                LEFMODIMG,LEFMOTOTG,LEFMOIPT,LEFMOIGLOB
@@ -83,9 +86,19 @@ C
       IF( MASWRK ) WRITE(IW,9000) IEFMOCFRG
 C      POLAR =.NOT.IAND(IMODEFP,1).NE.0
       POLAR =.TRUE.
-      DISPER=IAND(IMODEFD,1).NE.0
-      EXREP =IAND(IMODEFD,1).NE.0
-      CHGTRN=IAND(IMODEFD,1).NE.0
+C
+C     We need to generate all short-range information if any of
+C     them are turned on. We deal with actually turning them off
+C     later.
+C     Set SHORT_RANGE_ON to true if any of the short-range
+C     interactions are on
+      SHORT_RANGE_ON = (IAND(IMODEFD,1).NE.0)
+     *     .OR. (IAND(IMODEFCT,1).NE.0)
+     *     .OR. (IAND(IMODEFER,1).NE.0)
+      DISPER=SHORT_RANGE_ON
+      EXREP=SHORT_RANGE_ON
+      CHGTRN=SHORT_RANGE_ON
+C
       VDWSCL=ZERO
 C
 C     THE FORMAT IS OVARNAME FOR OLD VALUES
@@ -209,6 +222,10 @@ C>    - Added code to calculate the total number of basis functions
 C>      and MOs required for repulsion and dispersion energy later.
 C>    - Proper dimensioning of arrays passed using GDDI that are used
 C>      by short-range energy terms.
+C>    @date October, 2012 - Colleen Bertoni
+C>    - Allows polarization, dispersion, exchange repulsion, and
+C>      charge transfer to be switched off before efsp is called.
+C>    - Moved the clearing of some values to efmoreset. 
 C>
 C>    @param MXBSFN : Maximum number of basis functions for all
 C>    fragments (i.e. # for largest fragment).
@@ -233,8 +250,8 @@ C
 C
       COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,
      *                IEFMORUN,IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,
-     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,EFMOREPNRG,
-     *                EFMOCHTNRG,EFMOEPEN
+     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,IMODEFER,
+     *                IMODEFCT,EFMOREPNRG,EFMOCHTNRG,EFMOEPEN
       COMMON /EFMOPO/ LNEFMOPTS,LEFMOPTS,LEFMOPPTS,LEFMODPTS,LNEFMOBAS,
      *                LEFMOBAS,LEFMOLMO,LEFMOFM,LEFMOCV,LEFMOCF,
      *                LEFMODIMG,LEFMOTOTG,LEFMOIPT,LEFMOIGLOB
@@ -335,11 +352,12 @@ C
       IEFP = 1
       IEFDP = 1
       IEFC = 1
+C     Turn dispersion, exchange repulsion, and charge transfer off
+      call efp_turn_terms_off( .false., .false., .false., .false.,
+     *     .true., .true., .true. )
+C     Polarization is checked at the beginning of the routine
       IF( ISGDDI ) CALL GDDI_SCOPE( DDI_WORLD )
       CALL EFSP
-      IEFP = 0
-      IEFDP = 0
-      IEFC = 0
 C
 C     GET THE GRADIENTS. NOTICE THAT THIS IS SLIGHTLY MODIFIED
 C     FROM WHAT IS DONE ELSEWHERE WITH REGULAR FMO-EFP.
@@ -389,7 +407,7 @@ C
 C
 C*MODULE EFMO     *DECK EFMOFRGS
 C>
-C>    @brief Calculate total EFP dier interaction energy
+C>    @brief Calculate total EFP dimer interaction energy
 C>
 C>    @author Casper Steinmann
 C>
@@ -398,6 +416,10 @@ C>    - Added code to calculate the total number of basis functions
 C>      and MOs required for repulsion and dispersion energy calculation.
 C>    - Saved repulsion, charge transfer and charge penetration energy to
 C>      common block.
+C>    @date October, 2012 - Colleen Bertoni
+C>    - Allows polarization, dispersion, exchange repulsion, and
+C>      charge transfer to be switched off before efsp is called.
+C>    - Moved the clearing of some values to efmoreset. 
 C>
 C>    @param EDISNRG : EFMO dispersion energy
 C>
@@ -419,7 +441,7 @@ C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
       PARAMETER(MXFRG=1050,MXDFG=5,MXATM=1050,
-     *          MXDPPT=MXFRG*MXDFG*12)
+     *     MXDPPT=MXFRG*MXDFG*12)
 
 C      CHARACTER*8 POLNAM,DPOLNAM,FRGNME
       LOGICAL DSKWRK,MASWRK,GOPARR
@@ -429,8 +451,8 @@ C      CHARACTER*8 POLNAM,DPOLNAM,FRGNME
       DIMENSION FRGNAM(*),RIJ(1)
       COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,
      *                IEFMORUN,IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,
-     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,EFMOREPNRG,
-     *                EFMOCHTNRG,EFMOEPEN
+     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,IMODEFER,
+     *                IMODEFCT,EFMOREPNRG,EFMOCHTNRG,EFMOEPEN
       COMMON /EFMOPO/ LNEFMOPTS,LEFMOPTS,LEFMOPPTS,LEFMODPTS,LNEFMOBAS,
      *                LEFMOBAS,LEFMOLMO,LEFMOFM,LEFMOCV,LEFMOCF,
      *                LEFMODIMG,LEFMOTOTG,LEFMOIPT,LEFMOIGLOB
@@ -476,15 +498,17 @@ C     SETUP DEFAULT VALUES FOR EFP RUN. (TAKEN FROM SUBROUTINE START)
       IEFC = 0
       IEFDP = 0
       IREP = 0
+C     Check the distance between the fragments
       IF(.NOT.EFMODOEFPC(IFG,JFG)) IEFP = 1
       IF(.NOT.EFMODOEFPC(IFG,JFG)) IEFC = 1
       IF(EFMODOEFPC(IFG,JFG)) IEFDP = 1
-      IF(IEFP.EQ.1 .AND. IAND(IMODEFP,1).NE.0) IEFP = 0
+C     Turn polarization, dispersion, exchange repulsion, and charge
+C     transfer off if asked.
+      call efp_turn_terms_off( .false., .false., IAND(IMODEFP,1).eq.1,
+     *     IAND(IMODEFP,1).eq.1, IAND(IMODEFER,1).eq.0,
+     *     IAND(IMODEFCT,1).eq.0, IAND(IMODEFD,1).eq.0 )
+C
       CALL EFSP
-      IEFP = 0
-      IEFC = 0
-      IEFDP = 0
-      IREP = 0
 C
 C     GET THE GRADIENTS OF THE INDUCED DIPOLES FOR FRAGMENTS
 C     I AND J, BUT ONLY IF WE ARE DOING QM     
@@ -581,8 +605,8 @@ C
       DIMENSION ATMS(3,3),DA(3),DI(3),DJ(3),DC(3),EFMODIMG(3,*)
       COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,
      *                IEFMORUN,IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,
-     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,EFMOREPNRG,
-     *                EFMOCHTNRG,EFMOEPEN
+     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,IMODEFER,
+     *                IMODEFCT,EFMOREPNRG,EFMOCHTNRG,EFMOEPEN
       COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
       DATA OPTMIZ /8HOPTIMIZE/, SADPT  /8HSADPOINT/
       DATA GRAD  /8HGRADIENT/
@@ -673,8 +697,8 @@ C
 C
       COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,
      *                IEFMORUN,IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,
-     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,EFMOREPNRG,
-     *                EFMOCHTNRG,EFMOEPEN
+     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,IMODEFER,
+     *                IMODEFCT,EFMOREPNRG,EFMOCHTNRG,EFMOEPEN
       COMMON /EFMULT/ EFC(3,MXFGPT),EFCHG(2,MXFGPT),EFATRM(MXFGPT),
      *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
      *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
@@ -794,8 +818,8 @@ C
 C
       COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,
      *                IEFMORUN,IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,
-     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,EFMOREPNRG,
-     *                EFMOCHTNRG,EFMOEPEN
+     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,IMODEFER,
+     *                IMODEFCT,EFMOREPNRG,EFMOCHTNRG,EFMOEPEN
       COMMON /EFMULT/ EFC(3,MXFGPT),EFCHG(2,MXFGPT),EFATRM(MXFGPT),
      *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
      *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
@@ -993,7 +1017,18 @@ C       TO GET THE REAL SIZE OF THE ROTATION
 C
 C
 C
-C*MODULE EFMO     *DECK EFMOM
+C*MODULE EFMO     *DECK EFMOOUT
+C>
+C>    @brief Print the EFMO options set for this run
+C>
+C>    @author Casper Steinmann
+C>
+C>    @date October, 2012 - Colleen Bertoni
+C>    - Added output that documents which of the short-range EFP
+C>      terms were turned on/off. 
+C>
+C>    @param IREQMEM : Words of memory needed for this EFMO run
+C>
       SUBROUTINE EFMOOUT(IREQMEM)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
@@ -1003,8 +1038,8 @@ C
 C      COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
       COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,
      *                IEFMORUN,IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,
-     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,EFMOREPNRG,
-     *                EFMOCHTNRG,EFMOEPEN
+     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,IMODEFER,
+     *                IMODEFCT,EFMOREPNRG,EFMOCHTNRG,EFMOEPEN
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
       common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
@@ -1041,11 +1076,28 @@ C
         IF(IAND(IMODEFP,16).NE.0) WRITE(IW,9040)
         IF(IAND(IMODEFP,32).NE.0) WRITE(IW,9045)
         IF(IAND(IMODEFP,64).NE.0) WRITE(IW,9041)
+C       Dispersion
         WRITE(IW,9050)
         IF(IAND(IMODEFD,1).NE.0) THEN
           WRITE(IW,9051)
         ELSE
           WRITE(IW,9052)
+        ENDIF
+        IF(IAND(IMODEFD,4).NE.0) WRITE(IW,9047)
+        IF(IAND(IMODEFD,8).NE.0) WRITE(IW,9039)
+C       Charge transfer
+        WRITE(IW,9053)
+        IF(IAND(IMODEFCT,1).NE.0) THEN
+          WRITE(IW,9054)
+        ELSE
+          WRITE(IW,9055)
+        ENDIF
+C       Exchange repulsion
+        WRITE(IW,9056)
+        IF(IAND(IMODEFER,1).NE.0) THEN
+          WRITE(IW,9057)
+        ELSE
+          WRITE(IW,9058)
         ENDIF
         WRITE(IW,9100)
       ENDIF
@@ -1079,10 +1131,15 @@ C 9031 FORMAT (/5X,'OTHER OPTIONS:')
  9046 FORMAT (5X,'  Distribute gradient equally between close atoms.')
  9047 FORMAT (5X,'  Distribute gradient by percentage ',
      *              'between close atoms')
- 9050 FORMAT (/5X,'Short-range EFP terms')
- 9051 FORMAT (5X,'  Dispersion, repulsion and charge transfer ',
-     *              'calculated for separated pairs')
- 9052 FORMAT (5X,'  No short-range interactions')
+ 9050 FORMAT (/5X,'EFP Dispersion Options')
+ 9051 FORMAT (5X,'  Dispersion interaction for separated pairs')
+ 9052 FORMAT (5X,'  No Dispersion')
+ 9053 FORMAT (/5X,'EFP Charge Transfer Options')
+ 9054 FORMAT (5X,'  Charge Transfer interaction for separated pairs')
+ 9055 FORMAT (5X,'  No Charge Transfer')
+ 9056 FORMAT (/5X,'EFP Exchange Repulsion Options')
+ 9057 FORMAT (5X,'  Exchange Repulsion interaction for separated pairs')
+ 9058 FORMAT (5X,'  No Exchange Repulsion')
  9100 FORMAT(/1X,70(1H-))
  
       RETURN
@@ -1150,7 +1207,7 @@ C*MODULE EFMO     *DECK EFMOSTORDP
 C>
 C>    @brief MAKEFP info storage
 C>
-C>    @detail This routine stores EFP dyanmic polarizable point
+C>    @details This routine stores EFP dyanmic polarizable point
 C>    information in dynamic memory.  See EFINP.SRC --> SUBROUTINE EFP2X
 C>    for different values stored.
 C>
@@ -1204,7 +1261,7 @@ CC*MODULE EFMO     *DECK EFMOSTORNBAS
 C>
 C>    @brief MAKEFP info storage
 C>
-C>    @detail Store EFP exchange repulsion basis set integer type data
+C>    @details Store EFP exchange repulsion basis set integer type data
 C>    in dynamic memory.  See EFINP.SRC --> SUBROUTINE EFP2X
 C>    for different values stored.
 C>
@@ -1258,7 +1315,7 @@ CC*MODULE EFMO     *DECK EFMOSTORBAS
 C>
 C>    @brief MAKEFP info storage
 C>
-C>    @detail Store EFP exchange repulsion basis set FP type data
+C>    @details Store EFP exchange repulsion basis set FP type data
 C>    in dynamic memory.  See EFINP.SRC --> SUBROUTINE EFP2X
 C>    for different values stored.
 C>
@@ -1311,7 +1368,7 @@ C*MODULE EFMO     *DECK EFMOSTORLMO
 C>
 C>    @brief MAKEFP info storage
 C>
-C>    @detail Store LMOs in dynamic memory.
+C>    @details Store LMOs in dynamic memory.
 C>    See EFINP.SRC --> SUBROUTINE EFP2X for different values stored.
 C>
 C>    @author Spencer Pruitt
@@ -1365,7 +1422,7 @@ C*MODULE EFMO     *DECK EFMOSTORFM
 C>
 C>    @brief MAKEFP info storage
 C>
-C>    @detail Store fock matrix in dynamic memory.
+C>    @details Store fock matrix in dynamic memory.
 C>    See EFINP.SRC --> SUBROUTINE EFP2X for different values stored.
 C>
 C>    @author Spencer Pruitt
@@ -1414,7 +1471,7 @@ C*MODULE EFMO     *DECK EFMOSTORCV
 C>
 C>    @brief MAKEFP info storage
 C>
-C>    @detail Store VVO's in dynamic memory.
+C>    @details Store VVO's in dynamic memory.
 C>    See EFINP.SRC --> SUBROUTINE EFP2X for different values stored.
 C>
 C>    @author Spencer Pruitt
@@ -1462,7 +1519,7 @@ C*MODULE EFMO     *DECK EFMOSTORCF
 C>
 C>    @brief MAKEFP info storage
 C>
-C>    @detail Store fock matrix over VVO's in dynamic memory.
+C>    @details Store fock matrix over VVO's in dynamic memory.
 C>    See EFINP>SRC --> SUBROUTINE EFP2X for different values stored.
 C>
 C>    @author Spencer Pruitt
@@ -1510,7 +1567,7 @@ C*MODULE EFMO     *DECK EFMOPNTSAV
 C>
 C>    @brief MAKEFP info storage
 C>
-C>    @detail Store a variety of EFP information
+C>    @details Store a variety of EFP information
 C>
 C>    @author Casper Steinmann
 C>
@@ -1569,38 +1626,44 @@ C
 C
 C*MODULE EFMO     *DECK EFMOPOPEFP
 C
-C     @brief Populate EFP common blocks
-C
-C     @detail Populate EFP common blocks with MAKEFP information in 
-C     dynamic memory before EFP total polarization calculation and/or
-C     separated EFP dimer calculations.
-C
-C     @author Casper Steinmann
-C
-C     @date 10/5/12 - Spencer Pruitt
-C     - Added population of dispersion, charge transfer and repulsion
-C       EFP information for calculations of EFP-EFP dimer short-range energy
-C       terms listed.
-C
-C     @param EFMODPTS : Dynamic polarizable points
-C
-C     @param NEFMOBAS : Integer type basis set information
-C
-C     @param EFMOBAS : FP type basis set information
-C
-C     @param EFMOLMO : Localized molecular orbitals
-C
-C     @param EFMOFM : Fock matrix
-C
-C     @param EFMOCV : VVO's or CMO's depending on CTVVO = .T. OR .F.
-C
-C     @param EFMOCF : FM over VVO's or CMO's depending on CTVVO
-C
-C     @param MXBSFN : Maximum number of basis functions
-C
-C     @param MXMOS : Maximum number of MO's
-C
-C     @param RIJ : Distance between fragments from FMO code
+C>    @brief Populate EFP common blocks
+C>
+C>    @details Populate EFP common blocks with MAKEFP information in 
+C>    dynamic memory before EFP total polarization calculation and/or
+C>    separated EFP dimer calculations.
+C>
+C>    @author Casper Steinmann
+C>
+C>    @date 10/5/12 - Spencer Pruitt
+C>    - Added population of dispersion, charge transfer and repulsion
+C>      EFP information for calculations of EFP-EFP dimer short-range energy
+C>      terms listed.
+C>    @date October, 2012 - Colleen Bertoni
+C>    - Previously, all short-range interactions were calculated if imodefd
+C>      was set. Since the code's been modified to depend on different
+C>      flags for each short-range term, all checks of imodefd have been
+C>      changed to checks of a flag which is true if any of the short-range
+C>      terms are on.
+C>
+C>    @param EFMODPTS : Dynamic polarizable points
+C>
+C>    @param NEFMOBAS : Integer type basis set information
+C>
+C>    @param EFMOBAS : FP type basis set information
+C>
+C>    @param EFMOLMO : Localized molecular orbitals
+C>
+C>    @param EFMOFM : Fock matrix
+C>
+C>    @param EFMOCV : VVO's or CMO's depending on CTVVO = .T. OR .F.
+C>
+C>    @param EFMOCF : FM over VVO's or CMO's depending on CTVVO
+C>
+C>    @param MXBSFN : Maximum number of basis functions
+C>
+C>    @param MXMOS : Maximum number of MO's
+C>
+C>    @param RIJ : Distance between fragments from FMO code
 C
       SUBROUTINE EFMOPOPEFP(NFG,NEFMOPTS,EFMOPTS,EFMOPPTS,EFMODPTS,
      *           NEFMOBAS,EFMOBAS,EFMOLMO,EFMOFM,EFMOCV,EFMOCF,
@@ -1613,6 +1676,7 @@ C
       CHARACTER*6 FRGNAM
       CHARACTER*8 PTNAM
       LOGICAL DOMONO,DODIPO,DOQUAD,DOOCTU,DOEXPDAM
+      LOGICAL SHORT_RANGE_ON
 C
       PARAMETER(MXFGPT=12000,MXFRG=1050,MXDFG=5,MXAO=8192,MXGEFP=4000,
      *          MXSHEF=1000,MXDPPT=MXFRG*MXDFG*12,MXIFRQ=12,MXPT=2000)
@@ -1634,8 +1698,8 @@ C
      *                DOOCTU(MXFGPT)
       COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,
      *                IEFMORUN,IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,
-     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,EFMOREPNRG,
-     *                EFMOCHTNRG,EFMOEPEN
+     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,IMODEFER,
+     *                IMODEFCT,EFMOREPNRG,EFMOCHTNRG,EFMOEPEN
       COMMON /EFMULT/ EFC(3,MXFGPT),EFCHG(2,MXFGPT),EFATRM(MXFGPT),
      *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
      *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
@@ -1718,9 +1782,15 @@ C     WHICH IS NOT A BOND MIDPOINT
       NDPTTPT = 0
       NDPST = 0
 C
+C     Set SHORT_RANGE_ON to true if any of the short-range
+C     interactions are on
+      SHORT_RANGE_ON = (IAND(IMODEFD,1).NE.0)
+     *     .OR. (IAND(IMODEFCT,1).NE.0)
+     *     .OR. (IAND(IMODEFER,1).NE.0)
+C
 C  SRP: SET UP DYNAMIC MEMORY AND VARIABLES FOR EXCHANGE REPULSION
 C
-      IF(IAND(IMODEFD,1).NE.0.AND.NFRG.EQ.2.AND.RIJ.GT.RESDIM)THEN
+      IF(SHORT_RANGE_ON.AND.NFRG.EQ.2.AND.RIJ.GT.RESDIM)THEN
         MXBF = 0
         MXMO = 0
         MXMO2 = 0
@@ -1833,11 +1903,11 @@ C  SRP: STORING CENTROIDS FOR EACH FRAGMENT HERE
             EFP(1,IPOLPOL)   = EFMOPPTS(I,J,1)
             EFP(2,IPOLPOL)   = EFMOPPTS(I,J,2)
             EFP(3,IPOLPOL)   = EFMOPPTS(I,J,3)
-            IF(IAND(IMODEFD,1).NE.0.AND.NFRG.EQ.2.AND.RIJ.GT.RESDIM)THEN
-C            IF(NFRG.EQ.2.AND.RIJ.GT.RESDIM)THEN
-              CENTCD(1,IPOLPOL) = EFMOPPTS(I,J,1)
-              CENTCD(2,IPOLPOL) = EFMOPPTS(I,J,2)
-              CENTCD(3,IPOLPOL) = EFMOPPTS(I,J,3)
+            IF(SHORT_RANGE_ON.AND.NFRG.EQ.2.AND.RIJ.GT.RESDIM)THEN
+C     IF(NFRG.EQ.2.AND.RIJ.GT.RESDIM)THEN
+               CENTCD(1,IPOLPOL) = EFMOPPTS(I,J,1)
+               CENTCD(2,IPOLPOL) = EFMOPPTS(I,J,2)
+               CENTCD(3,IPOLPOL) = EFMOPPTS(I,J,3)
             ENDIF
           ELSE
             JJ=-1
@@ -1871,26 +1941,26 @@ C
 C  SRP: TRANSFERRING DYNAMIC POLARIZABILITY TENSORS
 C       FROM EFMO TO EFP FOR DISPERSION.
 C 
-      IF(IAND(IMODEFD,1).NE.0.AND.NFRG.EQ.2.AND.RIJ.GT.RESDIM)THEN
-       DO  IDYNPOL=1,12 
-        DO J=1,NPPTS(IDX)
-           IOFFSET = 3
-           NDPST = NDPST + 1
-           DPOLNAM(NDPST)  = FMOFRGNAM(I)(1:6)
-           EFDP(1,NDPST)   = J
-           EFDP(2,NDPST)   = EFMODPTS(I,J,IDYNPOL,1)
-           EFDP(3,NDPST)   = EFMODPTS(I,J,IDYNPOL,2)
-           EFDPOL(1,NDPST) = EFMODPTS(I,J,IDYNPOL,IOFFSET + 1)
-           EFDPOL(2,NDPST) = EFMODPTS(I,J,IDYNPOL,IOFFSET + 5)
-           EFDPOL(3,NDPST) = EFMODPTS(I,J,IDYNPOL,IOFFSET + 9)
-           EFDPOL(4,NDPST) = EFMODPTS(I,J,IDYNPOL,IOFFSET + 2)
-           EFDPOL(5,NDPST) = EFMODPTS(I,J,IDYNPOL,IOFFSET + 3)
-           EFDPOL(6,NDPST) = EFMODPTS(I,J,IDYNPOL,IOFFSET + 6)
-           EFDPOL(7,NDPST) = EFMODPTS(I,J,IDYNPOL,IOFFSET + 4)
-           EFDPOL(8,NDPST) = EFMODPTS(I,J,IDYNPOL,IOFFSET + 7)
-           EFDPOL(9,NDPST) = EFMODPTS(I,J,IDYNPOL,IOFFSET + 8)
-         ENDDO
-        ENDDO
+        IF(SHORT_RANGE_ON.AND.NFRG.EQ.2.AND.RIJ.GT.RESDIM)THEN
+           DO  IDYNPOL=1,12 
+              DO J=1,NPPTS(IDX)
+                 IOFFSET = 3
+                 NDPST = NDPST + 1
+                 DPOLNAM(NDPST)  = FMOFRGNAM(I)(1:6)
+                 EFDP(1,NDPST)   = J
+                 EFDP(2,NDPST)   = EFMODPTS(I,J,IDYNPOL,1)
+                 EFDP(3,NDPST)   = EFMODPTS(I,J,IDYNPOL,2)
+                 EFDPOL(1,NDPST) = EFMODPTS(I,J,IDYNPOL,IOFFSET + 1)
+                 EFDPOL(2,NDPST) = EFMODPTS(I,J,IDYNPOL,IOFFSET + 5)
+                 EFDPOL(3,NDPST) = EFMODPTS(I,J,IDYNPOL,IOFFSET + 9)
+                 EFDPOL(4,NDPST) = EFMODPTS(I,J,IDYNPOL,IOFFSET + 2)
+                 EFDPOL(5,NDPST) = EFMODPTS(I,J,IDYNPOL,IOFFSET + 3)
+                 EFDPOL(6,NDPST) = EFMODPTS(I,J,IDYNPOL,IOFFSET + 6)
+                 EFDPOL(7,NDPST) = EFMODPTS(I,J,IDYNPOL,IOFFSET + 4)
+                 EFDPOL(8,NDPST) = EFMODPTS(I,J,IDYNPOL,IOFFSET + 7)
+                 EFDPOL(9,NDPST) = EFMODPTS(I,J,IDYNPOL,IOFFSET + 8)
+              ENDDO
+           ENDDO
 C
 C  SRP: STORING/TRANSFERRING XR DATA FROM EFMO TO EFP.
 C       THIS IS ONLY DONE FOR DIMERS.
@@ -2079,7 +2149,7 @@ C  SRP: ABOUT TO WRITE PROVEC AND FOCKMA TO DAFS 267 & 268.
 C       THESE DAFS ARE THEN READ DIRECTLY BY THE EFP CODE IN 
 C       EFDRVR.SRC --> SUBROUTINE EFSP.
 C
-      IF(IAND(IMODEFD,1).NE.0.AND.NFRG.EQ.2.AND.RIJ.GT.RESDIM)THEN
+      IF(SHORT_RANGE_ON.AND.NFRG.EQ.2.AND.RIJ.GT.RESDIM)THEN
         LENPV=0
         LENFM=0
         LENCV=0
@@ -2106,7 +2176,7 @@ C*MODULE EFMO     *DECK EFMOSTORXR
 C>
 C>    @brief Temporary PROVEC and FOCKMA storage
 C>
-C>    @detail Subroutine to temporarily store PROVEC and FOCKMA in 
+C>    @details Subroutine to temporarily store PROVEC and FOCKMA in 
 C>    dynamic memory to reorder them before storage in DAFs.
 C>
 C>    @author Spencer Pruitt
@@ -2165,7 +2235,7 @@ C*MODULE EFMO     *DECK EFMOSTORCT
 C>
 C>    @brief Temporary PROVEC and FOCKMA storage
 C>
-C>    @detail Subroutine to temporarily store PROVEC and FOCKMA in 
+C>    @details Subroutine to temporarily store PROVEC and FOCKMA in 
 C>    dynamic memory to reorder them before storage in DAFs.
 C>
 C>    @author Spencer Pruitt
@@ -2207,8 +2277,8 @@ C*MODULE EFMO     *DECK EFMODEG
 C      PARAMETER (MXATM=2000)
       COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,
      *                IEFMORUN,IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,
-     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,EFMOREPNRG,
-     *                EFMOCHTNRG,EFMOEPEN
+     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,IMODEFER,
+     *                IMODEFCT,EFMOREPNRG,EFMOCHTNRG,EFMOEPEN
 C      COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
 C
 C     --- EFMO GRADIENT UPDATER ---
@@ -2228,7 +2298,7 @@ C*MODULE EFMO     *DECK EFMOEXCH
 C>
 C>    @brief GDDI data exchange
 C>
-C>    @detail Broadcast and accumulate EFMO data across nodes.
+C>    @details Broadcast and accumulate EFMO data across nodes.
 C>
 C>    @author Casper Steinmann
 C>
@@ -2348,13 +2418,15 @@ C
 C>
 C>    @brief EFMO parameter/array reset
 C>
-C>    @detail Zero out and clear parameters and arrays used by EFMO
+C>    @details Zero out and clear parameters and arrays used by EFMO
 C>
 C>    @author Casper Steinmann
 C>
 C>    @date 10/5/12 - Spencer Pruitt
 C>    - Added clearing of dispersion, charge transfer and repulsion
 C>      EFP information.
+C>    @date October, 2012 - Colleen Bertoni
+C>    - Added clearing of screening information.
 C>
       SUBROUTINE EFMORESET
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
@@ -2402,6 +2474,16 @@ C
       NDPTTPT = 0
       NFRG = 0
       NTAO = 0
+      NTMO = 0
+      NTCTMO = 0
+      NTPATM = 0
+      IEFP = 0
+      IEFC = 0
+      IEFDP = 0
+      IREP = 0
+      IPLSCR = 0
+      IDISPS = 0
+      NEW_POL = 0
       CALL VICLR(NMPTS,1,MXFRG)
       CALL VICLR(NPPTS,1,MXFRG)
       CALL VICLR(LSTMPTS,1,MXFRG)
@@ -2526,8 +2608,8 @@ C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,
      *                IEFMORUN,IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,
-     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,EFMOREPNRG,
-     *                EFMOCHTNRG,EFMOEPEN
+     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,IMODEFER,
+     *                IMODEFCT,EFMOREPNRG,EFMOCHTNRG,EFMOEPEN
       common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
      *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
      *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
