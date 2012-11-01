@@ -31,6 +31,48 @@ C  1 Jun 05 - DGF - fixes for the 2nd release
 c 31 Jan 05 - DGF,KK - add I/O module for the FMO method
 c
 C*MODULE fmoio   *DECK fmominp
+C>
+C>    @brief Reads in input parameters from $fmo
+C>
+C>    @author Dimitri Fedorov, Kazuo Kitaura
+C>
+C>    @date October, 2012 - Colleen Bertoni
+C>    - Added two additional parameters to the EFMO modefmo array so
+C>      the user can turn dispersion, charge transfer, and/or
+C>      exchange repulsion on or off. 
+C>    - Modified EFMO check code to read the two additional spots
+C>      in the EFMO modefmo array and set the appropriate flags. 
+C>
+C>    @param itask :
+C>    @param nder :
+C>    @param ifgfmo0 :
+C>    @param ichfg :
+C>    @param mulfg :
+C>    @param frgnam :
+C>    @param layfrg :
+C>    @param indat :
+C>    @param scffrg :
+C>    @param fmoscf :
+C>    @param fmoci :
+C>    @param fmodft :
+C>    @param fmocc :
+C>    @param mpnfmo :
+C>    @param fmotd :
+C>    @param nacut :
+C>    @param modmol :
+C>    @param molfrg :
+C>    @param nprfrg :
+C>    @param lbody :
+C>    @param gcorrel :
+C>    @param fmoq :
+C>    @param iexcit :
+C>    @param exfid :
+C>    @param modcha :
+C>    @param atchrg :
+C>    @param iactfg :
+C>    @param nactfg :
+C>
+C>
       SUBROUTINE fmominp(itask,nder,ifgfmo0,ichfg,mulfg,frgnam,layfrg,
      *                   indat,scffrg,fmoscf,fmoci,fmodft,fmocc,mpnfmo,
      *                   fmotd,nacut,modmol,molfrg,nprfrg,lbody,gcorrel,
@@ -45,8 +87,8 @@ C*MODULE fmoio   *DECK fmominp
      *          nprfrg(*),lbody(*),iexcit(5),atchrg(*),iactfg(*)
       COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,
      *                IEFMORUN,IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,
-     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,EFMOREPNRG,
-     *                EFMOCHTNRG,EFMOEPEN
+     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,IMODEFER,
+     *                IMODEFCT,EFMOREPNRG,EFMOCHTNRG,EFMOEPEN
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
       COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
@@ -68,7 +110,7 @@ C*MODULE fmoio   *DECK fmominp
       EQUIVALENCE (tstring,dstring)
       DATA KQNAM /1,1,1,1,1, 5,1,23,23,3, 43,1,1,1,1, 1,5,5,5,5,
      *            1,1,3,1,1, 1,1,5,3,1,    1,1,1,1,51, 5,3,1,3,43,
-     *            1,1,1,1,3, 43,1,1,1,41,  1/
+     *            1,1,1,1,3, 43,1,1,1,51,  1/
       DATA QNAM/8HNFRAG   ,8HNLAYER  ,8HICHARG  ,8HMULT    ,8HINDAT   ,
      *          8HFRGNAM  ,8HLAYER   ,8HRESPAP  ,8HRESPPC  ,8HRESDIM  ,
      *          8HRITRIM  ,8HMAXKND  ,8HMAXCAO  ,8HNBSSE   ,8HMPLEVL  ,
@@ -81,7 +123,7 @@ C*MODULE fmoio   *DECK fmominp
      *          8HSCREEN  ,8HIEFMO   ,8HMODFD   ,8HIACTFG  ,8HMODEFM  ,
      *          8HMODMUL  /
       data fmogrp/8HFMO     /,rnone/8HNONE    /
-      dimension modefmo(4)
+      dimension modefmo(5)
 c
 c     this subroutine reads FMO input.
 c     itask=1 light version: only read dimensions and options
@@ -226,7 +268,7 @@ c         (meaningful for correlation or GRADIENT only).
       call vclr(ascreen,1,4)
 c     EFMO
       IEFMORUN=0
-      call viclr(modefmo,1,4)
+      call viclr(modefmo,1,5)
       IMODEFE=0
 c     IMODEFE:
 c     change the behavior of electrostatics from EFPs
@@ -260,8 +302,22 @@ c
 c     IMODEFD
 c     change the behavior of dispersion from EFPs
 c     in the EFMO method
-c     0'disable this feature (default for RHF runs)
-c     1 enable this feature (default for MP2 runs)
+c     0'disable this feature
+c     1 enable this feature
+c
+      IMODEFCT=0
+c     IMODEFCT
+c     change the behavior of charge transfer from EFPs
+c     in the EFMO method
+c     0'disable this feature
+c     1 enable this feature
+c
+      IMODEFER=0
+c     IMODEFER
+c     change the behavior of exchange repulsion from EFPs
+c     in the EFMO method
+c     0'disable this feature
+c     1 enable this feature
 c
       modfd=0
 c
@@ -492,8 +548,10 @@ c     endif
         endif
       endif
       IF( IEFMORUN.EQ.0 .AND.
-     *  (IMODEFE.GT.0.OR.IMODEFP.GT.0.OR.IMODEFD.GT.0)) THEN
-        write(iw,*) 'MODEFE,MODEFP,MODEFD needs IEFMO=1)'
+     *     ((IMODEFE + IMODEFP + IMODEFD + IMODEFCT + IMODEFER)
+     *     .GT.0)) THEN
+         write(iw,*) 'MODEFE, MODEFP, MODEFD, MODEFCT, and MODEFER'
+         write(iw,*) ' need IEFMO=1)'
         call abrt
       ENDIF
 c     EFMO requires special settings
@@ -507,11 +565,15 @@ c     EFMO requires special settings
           call abrt
         endif
 c       assign efmo options
-        imodefe = modefmo(1)
-        imodefp = modefmo(2)
-        imodefd = modefmo(3)
+        imodefe  = modefmo(1)
+        imodefp  = modefmo(2)
+        imodefd  = modefmo(3)
+        imodefct = modefmo(4)
+        imodefer = modefmo(5)
         if(imodefe.eq.0) imodefe=8
         if(imodefp.eq.0) imodefp=12
+c       default to no torque and percentage discrimination to atoms
+        if(imodefd.eq.0 .or. imodefd.eq.1) imodefd=imodefd+12
 c       add modgrd
         modgrd = 1
         if(rflmo(1).ne.0) modgrd = modgrd + 16
@@ -2177,8 +2239,8 @@ C*MODULE fmoio   *DECK fmoprop
      *                NANGPT(MXGRID),NANGPT0(MXGRID),SG1,JANS
       COMMON /EFMO  / EFMOETOT,EFMOESERG,EFMOPOLERG,EFMODISERG,
      *                IEFMORUN,IMODEFP,IEFMORT,IEFMOCFRG,IEFMONFRG,
-     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,EFMOREPNRG,
-     *                EFMOCHTNRG,EFMOEPEN
+     *                IEFMODIM(2),IMODEFE,NATEFMO,IMODEFD,IMODEFER,
+     *                IMODEFCT,EFMOREPNRG,EFMOCHTNRG,EFMOEPEN
       COMMON /EFPFMO/ RUNEFP,REFFMO,REPNUCEFP,IEFPFMO,ISWENUC,EFPEFP
       COMMON /ELPROP/ ELDLOC,ELMLOC,ELPLOC,ELFLOC,
      *                IEDEN,IEMOM,IEPOT,IEFLD,MODENS,
