@@ -1329,6 +1329,14 @@ C
       RETURN
       END
 C*MODULE LOCAL   *DECK LMOX
+c> @brief      Orbital localization driver.
+c>
+c> @author     Mike Schmidt
+c>             -1990s
+c> @details    Routine selects initiates different orbital localizations.
+c>
+c> @date November 4, 2012-Aaron West
+c> -Added SVD-localized orbitals option (part 1 of 3).
       SUBROUTINE LMOX
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
@@ -1360,6 +1368,8 @@ C
       IF (ILOCAL.EQ.1) CALL LMOLOC(ILOCAL)
       IF (ILOCAL.EQ.2) CALL LOCENG
       IF (ILOCAL.EQ.3) CALL LMOLOC(ILOCAL)
+      IORBF1=15
+      IF (ILOCAL.EQ.4) CALL LOCAL_LMOSVD(IORBF1)
 C
       IF (RUNTYP.EQ.AMOROK .AND. NMORO.LE.2) RETURN
 C
@@ -1392,8 +1402,9 @@ C
       END IF
 C
 C     ----- ORIENTATION AND BONDING ANALYSIS OF ORBITALS -----
-C     ONLY IF EDMISTON-RUEDENBERG LOCALIZATION PERFORMED
-C     AS THIS IS THE ONLY METHOD THAT SAVES THE DENSITY.
+C     CURRENTLY AVAILABLE FOR:
+C     --EDMISTON-RUEDENBERG ORBITALS
+C     --SVD LOCALIZED ORBITALS
 C
       IF (ORIENT.AND.ILOCAL.EQ.2) CALL DIRLMO
 C
@@ -4808,4 +4819,992 @@ C
          IT=IT+I
   110 CONTINUE
       RETURN
+      END
+C*MODULE LOCAL   *DECK LOCAL_LMOSVD
+c> @brief      Local_lmosvd calls local_ppasvd routines.
+c>
+c> @author     Aaron West and Klaus Ruedenberg
+c>             -November 4, 2012
+c> @details    Local_lmosvd grabs memory and calls svd routines.
+c>
+c> @param IORBF1 indicates daf dict file with starting orbitals
+c>               from which the localized orbitals are formed.
+      SUBROUTINE LOCAL_LMOSVD(IORBF1)
+C-----------------------------------------------------------------------
+      IMPLICIT NONE
+C     VARS
+      LOGICAL MASWRK
+      DOUBLE PRECISION :: ZAN,X
+      INTEGER IORBF1,ISIZSVD,ISIZSVD2,
+     *        L0,L1,L2,L3,NDAWN1,
+     *        LEIG1,LIWRK,LS,LS2,LSAOMO,LSV,LUVEC,LVNACT,LVOLD,LVSAV,
+     *        LVTMP,LVTVEC,LWRKSVD,NCORTOT,NACT
+C     NEW CODING STANDARDS VARS
+      DOUBLE PRECISION ::
+     *       C,CRIT,DWPARM,GLIST,GRPDET,PRTTOL,SDET,SPINS,STSYM,SZDET,
+     *       WSTATE 
+      INTEGER MXRT,IAN,ICH,IDWEIGH,IGPDET,IPURES,IROOT,IWTS,KDET,KSTDET,
+     *        KSTSYM,MAXP,MAXW1,MUL,MXATM,NA,NACTDT,NADET,NAT,NB,NBDET, 
+     *        NCI,NCOR,NCORSV, 
+     *        NGOTMX,LAST,LOADFM,
+     *        NE,NFLGDM,NFTGCI,NITDET,NORBDT,NQMT,NUM,NUMORB 
+      INTEGER LIMLOW,LIMSUP
+      INTEGER IW,IDAF,IODA,IP,IPK,IR,IS,NAV
+C-----------------------------------------------------------------------
+      PARAMETER (MXATM=2000, MXRT=100)
+      COMMON /ATLIM / LIMLOW(MXATM),LIMSUP(MXATM)
+      COMMON /FMCOM / X(1)
+      COMMON /DETWFN/ WSTATE(MXRT),SPINS(MXRT),CRIT,PRTTOL,SDET,SZDET,
+     *                GRPDET,STSYM,GLIST,DWPARM,
+     *                NFLGDM(MXRT),IWTS(MXRT),NCORSV,NCOR,NACTDT,NORBDT,
+     *                NADET,NBDET,KDET,KSTDET,IROOT,IPURES,MAXW1,NITDET,
+     *                MAXP,NCI,IGPDET,KSTSYM,NFTGCI,IDWEIGH
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+C
+C     MEMORY ROUTINE FOR ATOMIC-LIKE ORBITALS.
+C
+C     SET UP SOME DIMENSIONS
+      L0 = NQMT
+      L1 = NUM
+      L2 = (L1*L1+L1)/2
+      L3 = L1*L1
+      NACT=NACTDT
+C
+C
+C     BEFOREHAND, DETERMINE SIZES OF ANY EXTRA WORK ARRAYS
+C     NOTE:  EXPLICITLY DETERMINE LARGEST WORKSPACE
+C            AND
+C            FORCE INTO 1 VARIABLE.
+      ISIZSVD  = MAX(3*MIN(L1,L0)+MAX(L1,L0),5*MIN(L1,L0))
+      ISIZSVD2 = 5*L0
+C     NEXT LINE GIVES SVD
+      ISIZSVD  = MAX(ISIZSVD,ISIZSVD2)
+      ISIZSVD2 = 8*L1
+C     NEXT LINE GIVES GLDIAG
+      ISIZSVD  = MAX(ISIZSVD,ISIZSVD2)
+C     NEXT LINE GIVES A BIT MORE WORKSPACE
+      ISIZSVD  = 40*ISIZSVD
+C
+C     DEFINE MAX SIZE OF LVNACT VAR BELOW.
+      NUMORB=MAX(NACT,NCORSV)
+C
+C
+C     GET ALL MEMORY FOR LOCAL_PPASVD.
+      CALL GOTFM(NGOTMX)
+      CALL VALFM(LOADFM)
+      LS = LOADFM + 1
+      LUVEC = LS + L2
+      LEIG1 = LUVEC + L3
+      LVTVEC = LEIG1 + L1
+      LWRKSVD = LVTVEC + L0*L0
+      LSV = LWRKSVD + ISIZSVD
+      LVOLD = LSV + L3
+      LVNACT = LVOLD + L3
+      LVTMP = LVNACT + L1*NUMORB*NAT
+      LVSAV = LVTMP + L3
+      LSAOMO = LVSAV + L3
+      LS2 = LSAOMO + L3
+      LIWRK = LS2 + L2
+      LAST = LIWRK + L1
+      NDAWN1 = LAST - LOADFM - 1
+      CALL GETFM(NDAWN1)
+C
+C     SETUP LIMLOW AND LIMSUP ARRAYS BY CALLING AOLIM.
+C     LIMLOW CONTAINS INITIAL BASIS FXN INDEX FOR EACH ATOM.
+C     LIMSUP CONTAINS FINAL BASIS FXN INDEX FOR EACH ATOM.
+C     E.G. TRIATOMIC
+C     LIMLOW LIMSUP
+C     1      33
+C     34     57
+C     58     93 = NUM IN INFOA BLOCK
+      CALL AOLIM
+C
+C     MAKE THE CALLS FOR SVD-BASED ORBITALS.
+      NCORTOT=0
+      CALL LOCAL_PPABASIS(ZAN,IAN,NAT,MASWRK,IW)
+      CALL LOCAL_PPASVDCORE(
+     *     NCORTOT,IORBF1,X(LS2),
+     *     X(LS),X(LUVEC),X(LEIG1),X(LVTVEC),
+     *     X(LWRKSVD),X(LIWRK),
+     *     X(LVOLD),X(LVNACT),X(LVTMP),X(LVSAV),
+     *     X(LSV),X(LSAOMO),
+     *     ISIZSVD,NCORSV,L0,L1,L2,L3,
+     *     LIMLOW,LIMSUP,NAT,MASWRK)
+      CALL LOCAL_PPASVD(
+     *     NCORTOT,IORBF1,X(LS2),
+     *     X(LS),X(LUVEC),X(LEIG1),X(LVTVEC),
+     *     X(LWRKSVD),X(LIWRK),
+     *     X(LVOLD),X(LVNACT),X(LVTMP),X(LVSAV),
+     *     X(LSV),X(LSAOMO),
+     *     ISIZSVD,NACT,L0,L1,L2,L3,
+     *     LIMLOW,LIMSUP,NAT,MASWRK)
+      CALL LOCAL_PPADEN(
+     *     X(LVTMP),X(LVSAV),X(LVOLD),X(LSV),
+     *     NCORTOT,NACT,L1,L3,MASWRK)
+C
+C     RELEASE ALL MEMORY FOR ATOMIC-LIKE ORBITALS.
+      CALL RETFM(NDAWN1)
+C
+      RETURN
+      END
+C*MODULE LOCAL   *DECK LOCAL_PPABASIS
+c> @brief      Routine checks basis set for SVD-localization.
+c>
+c> @author     Aaron West and Klaus Ruedenberg
+c>             -November 4, 2012
+c> @details    Routine checks basis set for SVD-localization.
+c>
+c> @param ZAN is from INFOA common.
+c> @param IAN is from INFOA common.
+c> @param NAT is the number of atoms.
+c> @param MASWRK indicates the master process.
+c> @param IW indicates write out to the log file.
+c> @todo  Try to reduce memory usage a bit.
+      SUBROUTINE LOCAL_PPABASIS(ZAN,IAN,NAT,MASWRK,IW)
+C-----------------------------------------------------------------------
+      IMPLICIT NONE
+C     VARS
+      LOGICAL MASWRK
+      INTEGER MXATM
+      PARAMETER (MXATM=2000)
+      DOUBLE PRECISION :: ZAN(MXATM)
+      INTEGER IAN(MXATM)
+      INTEGER NAT,IW,I,IERR,ILAST,NUCZ 
+C-----------------------------------------------------------------------
+C
+C     MAKE SOME MAIN ERROR OUTS FIRST.
+C     --FOR NOW, ABORT IF BASIS IS NOT ALL ELECTRON BASIS.
+      IERR=0
+      ILAST=55
+      DO I=1,NAT
+        NUCZ = INT(ZAN(I) + 1.0D-03)
+        IF(NUCZ.NE.IAN(I).OR.IAN(I).GE.ILAST) IERR=IERR+1
+      ENDDO
+C
+      IF(IERR.GT.0) THEN
+        IF(MASWRK) WRITE(IW,9001)
+        CALL FLSHBF(IW)
+        CALL ABRT
+        STOP
+      ENDIF
+C
+      RETURN
+ 9001 FORMAT(1X,'*** ERROR IN LOCAL_PPABASIS ROUTINE.'/
+     *       1X,'ERROR OCCURS FOR USING BASIS SET.')
+      END
+C*MODULE LOCAL    *DECK LOCAL_NUMVAL 
+c> @brief      Routine returns number of valences orbitals.
+c>
+c> @author     Aaron West and Klaus Ruedenberg
+c>             -November 4, 2012
+c> @details    Routine returns number of valence orbitals for
+c>             atom ITMP2.
+c>
+c> @param ITMP2 is the atom number.
+      INTEGER FUNCTION LOCAL_NUMVAL(ITMP2)
+C-----------------------------------------------------------------------
+      IMPLICIT NONE
+C     VARS
+      INTEGER I,ITMP,ITMP2,NVALAT
+C     NEW CODING STANDARDS VARS
+      DOUBLE PRECISION :: ZAN,C
+      INTEGER MXATM,NAT,ICH,MUL,NUM,NQMT,NEX,NA,NB,IAN
+      PARAMETER (MXATM=2000)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NEX,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+C-----------------------------------------------------------------------
+C
+C     RETURN THE NUMBER OF VALENCE ORBITALS ON A GIVEN ATOM.
+C     ALSO SEE NUMCOR,NVVOS_NUMCOR,AND VVOS ROUTINES.
+C     STILL NEED TO ADDRESS ECPs,ETC.
+C     STILL NEED TO ADDRESS SEMI-CORE ORBS.
+C
+      I=ITMP2
+      ITMP=IAN(I)
+      IF(               ITMP.LE. 2) NVALAT=1
+      IF(ITMP.GE. 3.AND.ITMP.LE. 4) NVALAT=1
+      IF(ITMP.GE. 5.AND.ITMP.LE.10) NVALAT=4
+      IF(ITMP.GE.11.AND.ITMP.LE.12) NVALAT=1
+      IF(ITMP.GE.13.AND.ITMP.LE.18) NVALAT=4
+      IF(ITMP.GE.19.AND.ITMP.LE.20) NVALAT=1
+      IF(ITMP.GE.21.AND.ITMP.LE.30) NVALAT=6
+      IF(ITMP.GE.31.AND.ITMP.LE.36) NVALAT=4
+      IF(ITMP.GE.37.AND.ITMP.LE.38) NVALAT=1
+      IF(ITMP.GE.39.AND.ITMP.LE.48) NVALAT=6
+      IF(ITMP.GE.49.AND.ITMP.LE.54) NVALAT=4
+C
+      LOCAL_NUMVAL=NVALAT
+C
+      RETURN
+      END
+C*MODULE LOCAL   *DECK LOCAL_PPASVDCORE
+c> @brief      Routine makes SVD-localized core orbitals.
+c>
+c> @author     Aaron West and Klaus Ruedenberg
+c>             -November 4, 2012
+c>
+c> @details    Routine makes SVD-localized core orbitals.
+c>             LOCAL_PPASVD contains equivalent and 
+c>             better comments in the routine itself.
+c>
+c> @param NCORTOT is total number of MCSCF core orbitals. 
+c> @param IORBF1 is the dat dict file for initial orbitals.
+c> @param S2 stores AO basis overlaps on each atom.
+c> @param S stores all the AO basis overlaps.
+c> @param UVEC is the u matrix in SVD.
+c> @param EIG holds eigenvalues from SVD.
+c> @param VTVEC is the V-transpose matrix in SVD.
+c> @param WRKSVD is the work array designed for gldiag and svd calls.
+c> @param IWRK is the integer work array used
+c>                    -- for symmetric matrix indices
+c>                    -- for gldiag calls
+c> @param VOLD contains the AO coefficients from IORBF1 daf dict file.
+c> @param VCOR holds AO coefficients for core orbitals.
+c> @param VTMP is temporary storage.
+c> @param VSAV is temporary storage.
+c> @param SV holds the AO basis overlap times AO coefficients matvec.
+c> @param SAOMO is often S_IATM1**(-1/2) * SV on each IATM1 atom.
+c> @param ISIZSVD is the workspace size for WRKSVD array.
+c> @param NCORSV is the total number of core orbitals out of the common.
+c> @param L0 is the length of the MO variational space.
+c> @param L1 is the length of the AO coefficients.
+c> @param L2 is the triangular length of L1.
+c> @param L3 is the square of L1.
+c> @param LIMLOW array contains the lower basis function on an atom.
+c> @param LIMSUP array contains the upper basis function on an atom.
+c> @param NAT is the number of atoms.
+c> @param MASWRK indicates the master process.
+c> @todo  Routine might need gram-schmidt orthogonalization
+c>        instead of symmetric orthogonalization.
+c>        Error outs will indicate.
+c> @see   LOCAL_PPASVD
+      SUBROUTINE LOCAL_PPASVDCORE(
+     *           NCORTOT,IORBF1,S2,
+     *           S,UVEC,EIG,VTVEC,WRKSVD,IWRK,
+     *           VOLD,VCOR,VTMP,VSAV,
+     *           SV,SAOMO,
+     *           ISIZSVD,NCORSV,L0,L1,L2,L3,
+     *           LIMLOW,LIMSUP,NAT,MASWRK)
+C-----------------------------------------------------------------------
+      IMPLICIT NONE
+C     VARS
+      LOGICAL MASWRK
+      INTEGER MXATM
+      PARAMETER (MXATM=2000)
+      DOUBLE PRECISION :: ONE,TOL,TMP
+      INTEGER NAT,LIMLOW(MXATM),LIMSUP(MXATM),
+     *        NVVOS_NUMCOR
+      PARAMETER (ONE=1.0D+00, TOL=1.0D-06)
+      INTEGER I,IATM1,IBAS1,IBAS2,IERR2,IERR3,IERR4,IHACT,
+     *        ILTH,IMO,IORBF1,ISIZSVD,J,JHACT,L0,L1,L2,L3,NCORSV,
+     *        NCORTOT,NUMCOR1,IJ,IJ2
+C     NEW CODING STANDARDS VARS
+      INTEGER IDAF,INFO,IODA,IP,IPK,IR,IS,IW,NAV
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950) 
+C-----------------------------------------------------------------------
+      DOUBLE PRECISION :: 
+     *       S2(L2),S(L2),
+     *       UVEC(L1,L1),EIG(L1),VTVEC(L0,L0),
+     *       WRKSVD(ISIZSVD),
+     *       VOLD(L1,L1),VTMP(L1,L1),VSAV(L1,L1),
+     *       VCOR(L1,NCORSV,NAT),
+     *       SV(L1,L1),SAOMO(L1,L1)
+      INTEGER IWRK(L1)
+C
+C     -------------------------------------------------------
+C     SEE LOCAL_PPASVD ROUTINE FOR ANALOGOUS COMMENTS.
+C     -------------------------------------------------------
+C
+C     SETUP NAME FOR TOTAL # OF CORE ORBITALS = NCORTOT
+C     NOTE:  EASY TO RE-DEFINE # OF CORES IF NEEDED.
+      NCORTOT=NCORSV
+C
+C     READ IN THE DESIRED ORBITALS.
+      CALL DAREAD(IDAF,IODA,VOLD,L3,IORBF1,0)
+C
+C     SV=S*V=AO BASIS OVERLAP*AO COEFFS WITH INNER CONTRACTIN OVER ALL ATOMS.
+C     GET AND SAVE SV FOR ALL ATOMS
+      CALL DAREAD(IDAF,IODA,S,L2,12,0)
+      CALL MTARBR(S,L1,VOLD,L0,SV,L1,1)
+C
+C     VCLR (CORE) NONROTHOGONAL QUASI-ATOMIC ORBITAL TRANSFORMATION.
+      CALL VCLR(VSAV,1,L3)
+C
+C     LOOP OVER ALL ATOMS
+      DO 100 IATM1=1,NAT
+C
+C       SKIP IF NUMCOR1=0.
+        NUMCOR1=NVVOS_NUMCOR(IATM1,1)
+        IF(NUMCOR1.EQ.0) GO TO 100
+C
+C       SET UP BASIS SET DIMENSION FOR IATM1.
+        IBAS1=LIMLOW(IATM1)
+        IBAS2=LIMSUP(IATM1)
+        ILTH=IBAS2-IBAS1+1
+C
+C       (UNFOLDED FORM) OBTAIN S_IATM1**(-1/2) ON IATM1
+        DO I=1,L2
+          IWRK(I) = (I*I-I)/2
+        ENDDO
+        CALL VCLR(S2,1,L2)
+        IJ2=1
+        DO I=IBAS1,IBAS2
+          DO J=IBAS1,I
+            IJ=IWRK(I) + J
+            S2(IJ2)=S(IJ)
+            IJ2=IJ2+1
+          ENDDO
+        ENDDO
+        IERR2=0
+        CALL VCLR(VTMP,1,L3)
+        CALL GLDIAG(L1,ILTH,ILTH,S2,WRKSVD,EIG,VTMP,IERR2,IWRK)
+        IF(IERR2.GT.0) GO TO 8999
+        IERR3=0
+        DO I=1,ILTH
+          IF(EIG(I).LT.TOL) IERR3=IERR3+1
+          EIG(I)=ONE/SQRT(EIG(I))
+C          WRITE(IW,*) "IATM1,I,EIG=",IATM1,I,EIG(I)
+        ENDDO
+        IF(IERR3.GT.0) GO TO 8999
+        CALL VCLR(UVEC,1,L3)
+        DO I=1,ILTH
+          DO J=1,ILTH
+            UVEC(I,J)=VTMP(J,I)
+            UVEC(J,I)=VTMP(I,J)
+          ENDDO
+        ENDDO
+        DO I=1,ILTH
+          CALL DSCAL(ILTH,EIG(I),VTMP(1,I),1)
+        ENDDO
+C       DO MATVEC TO S_IATM1**(-1/2)
+        CALL VCLR(SAOMO,1,L3)
+        CALL MRARBR(VTMP,L1,ILTH,ILTH,UVEC,L1,ILTH,SAOMO,L1)
+        CALL DCOPY(L3,SAOMO,1,VTMP,1)
+C
+C       SAOMO= OVERLAP MATRIX B/T CORE MO AND AOS ON IATM1.
+        CALL VCLR(UVEC,1,L3)
+        DO IMO=1,NCORTOT
+          CALL DCOPY(ILTH,SV(IBAS1,IMO),1,UVEC(1,IMO),1)
+        ENDDO
+        CALL VCLR(SAOMO,1,L3)
+        CALL MRARBR(VTMP,L1,ILTH,ILTH,UVEC,L1,NCORTOT,SAOMO,L1)
+C
+C       PERFORM SVD FOR IATM1
+        CALL VCLR(UVEC,1,L3)
+        CALL VCLR(VTVEC,1,L0*L0)
+        CALL VCLR(EIG,1,L1)
+        CALL DGESVD('A','A',
+     *              ILTH,NCORTOT,SAOMO,L1,EIG,
+     *              UVEC,L1,VTVEC,L0,
+     *              WRKSVD,ISIZSVD,INFO)
+C
+C       WE KEEP ABOVE VCLRS FOR NOW AND ERROR OUT FOR
+C       INAPPROPRIATE ZERO ENTRIES.
+        IERR4=0
+        DO I=1,NCORTOT
+          DO J=1,NCORTOT
+            TMP=ABS(VTVEC(I,J))
+            IF(TMP.LT.TOL) IERR4=IERR4+1
+          ENDDO
+        ENDDO
+        IF(IERR4.GT.0) GO TO 8999
+C
+C       FORM TRANSFORMATION MATRIX VTVEC-TRANS FOR THE NEWLY PROJECTED MOS.
+        CALL TRPOSQ(VTVEC,L0)
+C
+C       FORM AND SAVE VNEW
+        NUMCOR1=NVVOS_NUMCOR(IATM1,1)
+        CALL MRARBR(VOLD,L1,L1,NCORTOT,
+     *              VTVEC,L0,NUMCOR1,
+     *              VCOR(1,1,IATM1),L1)
+C
+C       GRAB OUT THE (CORE) NONORTHOGONAL QUASI-ATOMIC ORBITAL TRANSFORMATION.
+C       NOTE:  COULD RE-WRITE THIS PART LATER.
+        IHACT=0
+        DO I=1,IATM1-1
+          IHACT=IHACT+NVVOS_NUMCOR(I,1)
+        ENDDO
+        DO I=1,NUMCOR1
+          IHACT=IHACT+1
+          CALL DCOPY(NCORTOT,VTVEC(1,I),1,VSAV(1,IHACT),1)
+        ENDDO
+C
+C     END LOOP OVER ALL ATOMS
+  100 CONTINUE
+C
+C     SAVE THE (CORE) NONORTHOGONAL QUASI-ATOMIC ORBITAL TRANSFORMATION.
+      CALL DAWRIT(IDAF,IODA,VSAV,L3,523,0)
+C
+C
+C
+C
+C     FORM SV=NEW OVERLAP B/T NEW MO ORBITALS FROM VCOR ARRAY.
+      CALL VCLR(UVEC,1,L3)
+      CALL VCLR(SV,1,L3)
+      CALL DAREAD(IDAF,IODA,SV,L3,IORBF1,0)
+C
+      IHACT=0
+      DO I=1,NAT
+        NUMCOR1=NVVOS_NUMCOR(I,1)
+        DO J=1,NUMCOR1
+          JHACT=IHACT+J
+          CALL DCOPY(L1,VCOR(1,J,I),1,UVEC(1,JHACT),1)
+        ENDDO
+        IHACT=IHACT+NUMCOR1
+      ENDDO
+C
+      CALL DAWRIT(IDAF,IODA,UVEC,L3,522,0)
+C
+      CALL VCLR(SV,1,L3)
+      CALL DAREAD(IDAF,IODA,S,L2,12,0)
+      CALL MTARBR(S,L1,UVEC,NCORTOT,SV,L1,1)
+      CALL MRTRBR(UVEC,L1,L1,NCORTOT,SV,L1,NCORTOT,VTMP,L1)
+C
+C     FORM VTMP=[ NEW SMO**(-1/2) ] VIA SYM. ORTHOGONALIZATION.
+C     HERE INITIAL VTMP=NEW MO OVERLAPS.
+      DO I=1,L2
+        IWRK(I) = (I*I-I)/2
+      ENDDO
+      CALL VCLR(S2,1,L2)
+      IJ2=1
+      DO I=1,NCORTOT
+        DO J=1,I
+          S2(IJ2)=VTMP(I,J)
+          IJ2=IJ2+1
+        ENDDO
+      ENDDO
+      IERR2=0
+      CALL VCLR(VTMP,1,L3)
+      CALL GLDIAG(L1,NCORTOT,NCORTOT,S2,WRKSVD,EIG,VTMP,IERR2,IWRK)
+      IF(IERR2.GT.0) GO TO 8999
+      IERR3=0
+      DO I=1,NCORTOT
+        IF(EIG(I).LT.TOL) IERR3=IERR3+1
+        EIG(I)=ONE/SQRT(EIG(I))
+C       WRITE(IW,*) "IATM1,I,EIG=",IATM1,I,EIG(I)
+      ENDDO
+      IF(IERR3.GT.0) GO TO 8999
+      DO I=1,NCORTOT
+        DO J=1,NCORTOT
+          SV(I,J)=VTMP(J,I)
+          SV(J,I)=VTMP(I,J)
+        ENDDO
+      ENDDO
+      DO I=1,NCORTOT
+        CALL DSCAL(NCORTOT,EIG(I),VTMP(1,I),1)
+      ENDDO
+C     DO MATVEC TO S_IATM1**(-1/2)
+      CALL VCLR(SAOMO,1,L3)
+      CALL MRARBR(VTMP,L1,NCORTOT,NCORTOT,SV,L1,NCORTOT,SAOMO,L1)
+      CALL DCOPY(L3,SAOMO,1,VTMP,1)
+C
+C     FORM UVEC * [VTMP = NEW SMO**(-1/2)] MATVEC
+C     THIS NEXT PIECE ORTHOGONALIZES THE ALREADY PROJECTED MOS.
+      CALL VCLR(SV,1,L3)
+      CALL MRARBR(UVEC,L1,L1,NCORTOT,VTMP,L1,NCORTOT,SV,L1)
+C     SAVE THE ORTHOGONAL QUASI-ATOMIC ORBITAL TRANSFORMATION NOW.
+      CALL DAWRIT(IDAF,IODA,VTMP,L3,524,0)
+      CALL DAREAD(IDAF,IODA,VTMP,L3,IORBF1,0)
+      DO I=1,NCORTOT
+        CALL DCOPY(L1,SV(1,I),1,VTMP(1,I),1)
+      ENDDO
+C     SAVE THE (CORE) ORTHOGONAL QUASI-ATOMIC ORBITALS.
+      CALL DAWRIT(IDAF,IODA,VTMP,L3,521,0)
+C
+C
+C
+C
+C     PERFORM FINAL ERROR OUTS.
+ 8999 CONTINUE
+      IF(MASWRK) THEN
+        IF(IERR2.GT.0) THEN
+          WRITE(IW,9003)
+        ELSEIF(IERR3.GT.0) THEN
+          WRITE(IW,9004) IERR3
+        ELSEIF(IERR4.GT.0) THEN
+          WRITE(IW,9005)
+        ENDIF
+      ENDIF
+      IF(IERR2.GT.0
+     *  .OR.IERR3.GT.0
+     *  .OR.IERR4.GT.0
+     *  ) THEN
+        CALL FLSHBF(IW)
+        CALL ABRT
+        STOP
+      ENDIF
+C
+      RETURN
+ 9003 FORMAT(1X,'*** ERROR IN LOCAL_PPASVDCORE ROUTINE.'/
+     *       1X,'ERROR OCCURS FOR GLDIAG CALL.')
+ 9004 FORMAT(1X,'*** ERROR IN LOCAL_PPASVDCORE ROUTINE.'/
+     *       1X,'IN SYMMETRIC ORTHOG.,'/
+     *       1X,I4,' EIGENVALUES ARE BELOW TOL.')
+ 9005 FORMAT(1X,'*** ERROR IN LOCAL_PPASVDCORE ROUTINE.'/
+     *       1X,'ERROR OCCURS FOR DGESVD OUTPUT VTVEC.')
+      END
+C*MODULE LOCAL   *DECK LOCAL_PPASVD
+c> @brief      Routine makes SVD-localized valence orbitals.
+c>
+c> @author     Aaron West and Klaus Ruedenberg
+c>             -November 4, 2012
+c>
+c> @details    Routine makes SVD-localized core orbitals.
+c>
+c> @param NCORTOT is total number of MCSCF core orbitals.
+c> @param IORBF1 is the dat dict file for initial orbitals.
+c> @param S2 stores AO basis overlaps on each atom.
+c> @param S stores all the AO basis overlaps.
+c> @param UVEC is the u matrix in SVD.
+c> @param EIG holds eigenvalues from SVD.
+c> @param VTVEC is the V-transpose matrix in SVD.
+c> @param WRKSVD is the work array designed for gldiag and svd calls.
+c> @param IWRK is the integer work array used
+c>                    -- for symmetric matrix indices
+c>                    -- for gldiag calls
+c> @param VOLD contains the AO coefficients from IORBF1 daf dict file.
+c> @param VNACT holds AO coefficients for valence orbitals.
+c> @param VTMP is temporary storage.
+c> @param VSAV is temporary storage.
+c> @param SV holds the AO basis overlap times AO coefficients matvec.
+c> @param SAOMO is often S_IATM1**(-1/2) * SV on each IATM1 atom.
+c> @param ISIZSVD is the workspace size for WRKSVD array.
+c> @param NACT is the total number of active orbitals.
+c> @param L0 is the length of the MO variational space.
+c> @param L1 is the length of the AO coefficients.
+c> @param L2 is the triangular length of L1.
+c> @param L3 is the square of L1.
+c> @param LIMLOW array contains the lower basis function on an atom.
+c> @param LIMSUP array contains the upper basis function on an atom.
+c> @param NAT is the number of atoms.
+c> @param MASWRK indicates the master process.
+c> @todo  Routine might need gram-schmidt orthogonalization
+c>        instead of symmetric orthogonalization.
+c>        Error outs will indicate.
+      SUBROUTINE LOCAL_PPASVD(
+     *           NCORTOT,IORBF1,S2,
+     *           S,UVEC,EIG,VTVEC,WRKSVD,IWRK,
+     *           VOLD,VNACT,VTMP,VSAV,
+     *           SV,SAOMO,
+     *           ISIZSVD,NACT,L0,L1,L2,L3,
+     *           LIMLOW,LIMSUP,NAT,MASWRK)
+C-----------------------------------------------------------------------
+      IMPLICIT NONE
+C     VARS
+      LOGICAL MASWRK
+      INTEGER MXATM
+      PARAMETER (MXATM=2000)
+      DOUBLE PRECISION :: ONE,TOL,TMP
+      PARAMETER (ONE=1.0D+00, TOL=1.0D-06)
+      INTEGER NAT,LIMLOW(MXATM),LIMSUP(MXATM)
+      INTEGER I,IATM1,IBAS1,IBAS2,IERR1,IERR2,IERR3,IERR4,IHACT,
+     *        ILTH,IMO,IORBF1,ISIZSVD,J,JHACT,L0,L1,L2,L3,
+     *        ITMP,JHACT2,JMO,NACT,NCORTOT,NUMVAL1,IJ,IJ2,
+     *        LOCAL_NUMVAL
+C     NEW CODING STANDARDS VARS
+      INTEGER IDAF,INFO,IODA,IP,IPK,IR,IS,IW,NAV  
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+C-----------------------------------------------------------------------
+      DOUBLE PRECISION ::
+     *       S2(L2),S(L2),
+     *       UVEC(L1,L1),EIG(L1),VTVEC(L0,L0),
+     *       WRKSVD(ISIZSVD),
+     *       VOLD(L1,L1),VTMP(L1,L1),VSAV(L1,L1),
+     *       VNACT(L1,NACT,NAT),
+     *       SV(L1,L1),SAOMO(L1,L1)
+      INTEGER IWRK(L1)
+C
+      ITMP=0
+      DO I=1,NAT
+        NUMVAL1=LOCAL_NUMVAL(I)
+        ITMP=ITMP+NUMVAL1
+      ENDDO
+      IERR1=0
+      IF(ITMP.NE.NACT) IERR1=1
+      IF(IERR1.EQ.1) GO TO 8999
+C
+C     READ IN THE DESIRED ORBITALS.
+      CALL DAREAD(IDAF,IODA,VOLD,L3,IORBF1,0)
+C
+C     SV=S*V=AO BASIS OVERLAP*AO COEFFS WITH INNER CONTRACTIN OVER ALL ATOMS.
+C     GET AND SAVE SV FOR ALL ATOMS
+      CALL DAREAD(IDAF,IODA,S,L2,12,0)
+      CALL MTARBR(S,L1,VOLD,L0,SV,L1,1)
+C
+C     READ IN THE (CORE) NONROTHOGONAL QUASI-ATOMIC ORBITAL TRANSFORMATION.
+      CALL DAREAD(IDAF,IODA,VSAV,L3,523,0)
+C
+C     LOOP OVER ALL ATOMS
+C     NOTE:  SEPARATE CASES WITH 1 DIM.
+      DO 100 IATM1=1,NAT
+C
+C       SET UP BASIS SET DIMENSION FOR IATM1.
+        IBAS1=LIMLOW(IATM1)
+        IBAS2=LIMSUP(IATM1)
+        ILTH=IBAS2-IBAS1+1
+C
+C       SET UP NUMBER OF VALENCE ORBITALS FOR IATM1.
+        NUMVAL1=LOCAL_NUMVAL(IATM1)
+        IF(NUMVAL1.EQ.0) GO TO 100
+C
+C       (UNFOLDED FORM) OBTAIN S_IATM1**(-1/2) ON IATM1
+C       --FORM SYM ARRAY
+C       --COPY OUT TO POS 1--> 'L2'
+C       --GLDIAG CALL
+C       --SQRT AND INVERT EIG ARRAY
+C       --MAKE TRANSPOSE OF EVECTORS
+C       --SCALE ORIG. MATRIX
+C       --PERFORM NEEDED MATVEC TO INVERSE
+        DO I=1,L2
+          IWRK(I) = (I*I-I)/2
+        ENDDO
+        CALL VCLR(S2,1,L2)
+        IJ2=1
+        DO I=IBAS1,IBAS2
+          DO J=IBAS1,I
+            IJ=IWRK(I) + J
+            S2(IJ2)=S(IJ)
+            IJ2=IJ2+1
+          ENDDO
+        ENDDO
+        IERR2=0
+        CALL VCLR(VTMP,1,L3)
+        CALL GLDIAG(L1,ILTH,ILTH,S2,WRKSVD,EIG,VTMP,IERR2,IWRK)
+        IF(IERR2.GT.0) GO TO 8999
+        IERR3=0
+        DO I=1,ILTH
+          IF(EIG(I).LT.TOL) IERR3=IERR3+1
+          EIG(I)=ONE/SQRT(EIG(I))
+C         WRITE(IW,*) "IATM1,I,EIG=",IATM1,I,EIG(I)
+        ENDDO
+        IF(IERR3.GT.0) GO TO 8999
+        CALL VCLR(UVEC,1,L3)
+        DO I=1,ILTH
+          DO J=1,ILTH
+            UVEC(I,J)=VTMP(J,I)
+            UVEC(J,I)=VTMP(I,J)
+          ENDDO
+        ENDDO
+        DO I=1,ILTH
+          CALL DSCAL(ILTH,EIG(I),VTMP(1,I),1)
+        ENDDO
+C       DO MATVEC TO S_IATM1**(-1/2)
+        CALL VCLR(SAOMO,1,L3)
+        CALL MRARBR(VTMP,L1,ILTH,ILTH,UVEC,L1,ILTH,SAOMO,L1)
+        CALL DCOPY(L3,SAOMO,1,VTMP,1)
+C
+C       SAOMO= OVERLAP MATRIX B/T ACTIVE MO AND AOS ON IATM1.
+C       SAOMO= (VTMP orthog matrix on one atom)
+C            * (SV already contracted over all atoms)
+C              i.e.  contract inner index over one atom
+C       --GET OUT SV ELEMENTS FOR IATM1.
+C       --CONTRACT OVER INNER AO ELEMENTS ON IATM1.
+        CALL VCLR(UVEC,1,L3)
+        DO IMO=1,NACT
+          JMO=NCORTOT+IMO
+          CALL DCOPY(ILTH,SV(IBAS1,JMO),1,UVEC(1,IMO),1)
+        ENDDO
+        CALL VCLR(SAOMO,1,L3)
+        CALL MRARBR(VTMP,L1,ILTH,ILTH,UVEC,L1,NACT,SAOMO,L1)
+C
+C       PERFORM SVD FOR IATM1
+        CALL VCLR(UVEC,1,L3)
+        CALL VCLR(VTVEC,1,L0*L0)
+        CALL VCLR(EIG,1,L1)
+        CALL DGESVD('A','A',
+     *              ILTH,NACT,SAOMO,L1,EIG,
+     *              UVEC,L1,VTVEC,L0,
+     *              WRKSVD,ISIZSVD,INFO)
+C
+C       WE KEEP ABOVE VCLRS FOR NOW AND ERROR OUT FOR
+C       INAPPROPRIATE ZERO ENTRIES.
+        IERR4=0
+        DO I=1,NACT
+          DO J=1,NACT
+            TMP=ABS(VTVEC(I,J))
+            IF(TMP.LT.TOL) IERR4=IERR4+1
+          ENDDO
+        ENDDO
+        IF(IERR4.GT.0) GO TO 8999
+C
+C       FORM TRANSFORMATION MATRIX VTVEC-TRANS FOR THE NEWLY PROJECTED MOS.
+C       (NACT,NACT) MATRIX SEEMS TO TURN UP IN VTVEC 
+C                   EVEN IF ILTH<NACT. 
+C       NOTE:  COULD USE DO LOOPS AND DO LESS WORK HERE.
+        CALL TRPOSQ(VTVEC,L0)
+C
+C       FORM AND SAVE VNEW
+C       MATVEC --> (L1,NACT)*(NACT,NUMVAL1)
+C              --> HERE WE USE ONLY THE COLUMNS
+C              --> WITH THE LARGEST EIGS FROM SVD.
+C              --> VCLR TO SEE DIMS WORK OUT IF NEEDED.
+        NUMVAL1=LOCAL_NUMVAL(IATM1)
+        CALL MRARBR(VOLD(1,NCORTOT+1),L1,L1,NACT,
+     *              VTVEC,L0,NUMVAL1,
+     *              VNACT(1,1,IATM1),L1)
+C
+C       GRAB OUT THE (VALENCE) NONORTHOGONAL QUASI-ATOMIC ORBITAL TRANSFORMATION.
+C       NOTE:  COULD RE-WRITE THIS PART LATER.
+        IHACT=NCORTOT
+        DO I=1,IATM1-1
+          IHACT=IHACT+LOCAL_NUMVAL(I)
+        ENDDO
+        DO I=1,NUMVAL1
+          IHACT=IHACT+1
+          CALL DCOPY(NACT,VTVEC(1,I),1,VSAV(NCORTOT+1,IHACT),1)
+        ENDDO
+C
+C     END LOOP OVER ALL ATOMS
+  100 CONTINUE
+C
+C     SAVE THE NONORTHOGONAL QUASI-ATOMIC ORBITAL TRANSFORMATION.
+C     FIRST, PUT 1'S ON THE DIAGONAL ABOVE VALENCE.
+      DO I=NCORTOT+NACT+1,L0
+        VSAV(I,I)=1.0D+00
+      ENDDO
+      CALL DAWRIT(IDAF,IODA,VSAV,L3,523,0)
+C
+C
+C
+C
+C     FORM SV=NEW OVERLAP B/T NEW MO ORBITALS FROM VNACT ARRAY.
+C     --PUT VNACT(1,1,IATM) ORBITALS (ALL NACT OF THEM) INTO UVEC AND SV ARRAYS
+C     ------READ IN THE NONORTHOGONAL LOCALIZED MCSCF CORES FROM FILE 522
+C     ------SAVE NONORTHOGONAL QUASIATOMIC ORBITALS(+MCSCF CORES) TO FILE 522 NOW
+C     ------KEEP UVEC ARRAY FOR BIT.
+C     --READ IN S AGAIN
+C     --MAKE SV
+C     --MAKE UNFOLDED MO OVERLAP [ I.E. (V-TRANS)*(SV) ] AND PUT IN VTMP 
+      CALL VCLR(UVEC,1,L3)
+      CALL VCLR(SV,1,L3)
+      CALL DAREAD(IDAF,IODA,SV,L3,522,0)
+      IHACT=0
+      DO I=1,NAT
+        NUMVAL1=LOCAL_NUMVAL(I)
+        DO J=1,NUMVAL1
+          JHACT=IHACT+J
+          JHACT2=IHACT+J+NCORTOT
+          CALL DCOPY(L1,VNACT(1,J,I),1,UVEC(1,JHACT),1)
+          CALL DCOPY(L1,VNACT(1,J,I),1,SV(1,JHACT2),1)
+        ENDDO
+        IHACT=IHACT+NUMVAL1
+      ENDDO
+C
+      CALL DAWRIT(IDAF,IODA,SV,L3,522,0)
+C
+      CALL VCLR(SV,1,L3)
+      CALL DAREAD(IDAF,IODA,S,L2,12,0)
+      CALL MTARBR(S,L1,UVEC,NACT,SV,L1,1)
+      CALL MRTRBR(UVEC,L1,L1,NACT,SV,L1,NACT,VTMP,L1)
+C
+C     FORM VTMP=[ NEW SMO**(-1/2) ] VIA SYM. ORTHOGONALIZATION.
+C     HERE INITIAL VTMP=NEW MO OVERLAPS.
+C     --UVEC REMAINS UNTOUCHED AS THE AO COEFFS OF THE NACT ACTIVE MOS
+C     --PUT VTMP INTO SYM. FORM INTO S2
+C     --TRASH VTMP AND REPLACE WITH EVECTORS.
+C     --TRASH SV AND REPLACE WITH VTMP-TRANS
+      DO I=1,L2
+        IWRK(I) = (I*I-I)/2
+      ENDDO
+      CALL VCLR(S2,1,L2)
+      IJ2=1
+      DO I=1,NACT
+        DO J=1,I
+          S2(IJ2)=VTMP(I,J)
+          IJ2=IJ2+1
+        ENDDO
+      ENDDO
+      IERR2=0
+      CALL VCLR(VTMP,1,L3)
+      CALL GLDIAG(L1,NACT,NACT,S2,WRKSVD,EIG,VTMP,IERR2,IWRK)
+      IF(IERR2.GT.0) GO TO 8999
+      IERR3=0
+      DO I=1,NACT
+        IF(EIG(I).LT.TOL) IERR3=IERR3+1
+        EIG(I)=ONE/SQRT(EIG(I))
+C       WRITE(IW,*) "IATM1,I,EIG=",IATM1,I,EIG(I)
+      ENDDO
+      IF(IERR3.GT.0) GO TO 8999
+      DO I=1,NACT
+        DO J=1,NACT
+          SV(I,J)=VTMP(J,I)
+          SV(J,I)=VTMP(I,J)
+        ENDDO
+      ENDDO
+      DO I=1,NACT
+        CALL DSCAL(NACT,EIG(I),VTMP(1,I),1)
+      ENDDO
+C     DO MATVEC TO S_IATM1**(-1/2)
+      CALL VCLR(SAOMO,1,L3)
+      CALL MRARBR(VTMP,L1,NACT,NACT,SV,L1,NACT,SAOMO,L1)
+      CALL DCOPY(L3,SAOMO,1,VTMP,1)
+C
+C     SAVE THE ORTHOGONAL QUASI-ATOMIC ORBITAL TRANSFORMATION NOW.
+      CALL DAREAD(IDAF,IODA,SAOMO,L3,524,0)
+      DO I=1,NACT
+        CALL DCOPY(NACT,VTMP(1,I),1,SAOMO(NCORTOT+1,NCORTOT+I),1)
+      ENDDO
+      DO I=NCORTOT+NACT+1,L0
+        SAOMO(I,I)=1.0D+00
+      ENDDO
+      CALL DAWRIT(IDAF,IODA,SAOMO,L3,524,0)
+C
+C     FORM UVEC * [VTMP = NEW SMO**(-1/2)] MATVEC
+C     THIS NEXT PIECE ORTHOGONALIZES THE ALREADY PROJECTED MOS.
+C     --UVEC REMAINS UNTOUCHED AS THE AO COEFFS OF THE NACT ACTIVE MOS
+C     --VTMP IS THE (NACT,NACT) ORTHOGONALIZING TRANSFORMATION.
+C     --PERFORM MATVEC AND PUT RESULT INTO SV
+C     --READ IORBF1 ORBITALS AGAIN JUST IN CASE
+C     --REPLACE THE OLD NACT IORBF1 MOS BY THE NEW MOS IN SV
+      CALL VCLR(SV,1,L3)
+      CALL MRARBR(UVEC,L1,L1,NACT,VTMP,L1,NACT,SV,L1)
+      CALL DAREAD(IDAF,IODA,VTMP,L3,521,0)
+      DO I=1,NACT
+        J=NCORTOT+I
+        CALL DCOPY(L1,SV(1,I),1,VTMP(1,J),1)
+      ENDDO
+C
+C
+C
+C     WRITE OUT NEW ORTHOGONAL QUASI-ATOMIC ORBITALS TO FILE 521
+      CALL DAWRIT(IDAF,IODA,VTMP,L3,521,0)
+C
+C     PRINT OUT FINAL ORIENTED ORBITALS TO GAMESS .LOG FILE.
+C-----PRINT OUT CORES+VALENCE ORBITALS ONLY.
+ckeep---      Remove the below line and print out nonorthogonal orbitals.
+ckeep---      CALL DAREAD(IDAF,IODA,VTMP,L3,522,0)
+      IF(MASWRK) THEN
+        WRITE(IW,9070)
+ckeep---        Uncomment the print statement below.
+ckeep---        Check that orient=.f. in the input.
+ckeep---        Now, one can view the SVD orbitals before orientation.
+ckeep---        Uncomment the next line.
+ckeep---        WRITE(IW,9071)
+        CALL PRSQL(VTMP,NCORTOT+NACT,L1,L1)
+      ENDIF
+C
+C     PRINT OUT ORBITALS TO .DAT FILE.
+C-----PRINT OUT CORES+VALENCE ORBITALS ONLY.
+      IF(MASWRK) THEN
+        WRITE(IP,9080)
+        CALL PUSQL(VTMP,NCORTOT+NACT,L1,L1)
+        WRITE(IP,9085)
+      ENDIF
+C
+C
+C
+C
+C     CONSTRUCT AND SAVE THE OVERALL ORBITAL TRANSFORMATION
+C     FROM IORBF1 ORBITALS TO ORTHOGONAL PPASVD ORBITALS.
+      CALL VCLR(VOLD,1,L3)
+      CALL DAREAD(IDAF,IODA,VTMP,L3,523,0)
+      CALL DAREAD(IDAF,IODA,VSAV,L3,524,0)
+      CALL MRARBR(VTMP,L1,L0,L0,VSAV,L1,L0,VOLD,L1)
+      CALL DAWRIT(IDAF,IODA,VOLD,L3,525,0)
+C
+C
+C
+C
+C     PERFORM FINAL ERROR OUTS.
+ 8999 CONTINUE
+      IF(MASWRK) THEN
+        IF(IERR1.GT.0) THEN
+          WRITE(IW,9002)
+        ELSEIF(IERR2.GT.0) THEN
+          WRITE(IW,9003)
+        ELSEIF(IERR3.GT.0) THEN
+          WRITE(IW,9004) IERR3
+        ELSEIF(IERR4.GT.0) THEN
+          WRITE(IW,9005)
+        ENDIF
+      ENDIF
+      IF(IERR1.GT.0
+     *  .OR.IERR2.GT.0
+     *  .OR.IERR3.GT.0
+     *  .OR.IERR4.GT.0
+     *  ) THEN
+        CALL FLSHBF(IW)
+        CALL ABRT
+        STOP
+      ENDIF
+C
+      RETURN
+ 9002 FORMAT(1X,'*** ERROR IN LOCAL_PPASVD ROUTINE.'/
+     *       1X,'NACT MUST EQUAL NUMBER OF MBS VALENCE ORBITALS.')
+ 9003 FORMAT(1X,'*** ERROR IN LOCAL_PPASVD ROUTINE.'/
+     *       1X,'ERROR OCCURS FOR GLDIAG CALL.')
+ 9004 FORMAT(1X,'*** ERROR IN LOCAL_PPASVD ROUTINE.'/
+     *       1X,'IN SYMMETRIC ORTHOG., '
+     *       1X,I4,' EIGENVALUES ARE BELOW TOL.')
+ 9005 FORMAT(1X,'*** ERROR IN LOCAL_PPASVD ROUTINE.'/
+     *       1X,'ERROR OCCURS FOR DGESVD OUTPUT VTVEC.')
+ 9070 FORMAT(/1X,'PPASVD LOCALIZED ORBITALS')
+ckeep--- 9071 FORMAT(//10X,'ORIENTED LOCALIZED ORBITALS')
+ 9080 FORMAT('PPASVD LOCALIZED ORBITALS'/' $VEC')
+ 9085 FORMAT(' $END')
+      END
+C*MODULE LOCAL   *DECK LOCAL_PPADEN
+c> @brief      Routine forms density in orthogonal quasi-atomic MO basis.
+c>
+c> @author     Aaron West and Klaus Ruedenberg
+c>             -November 4, 2012
+c>
+c> @details    Routine forms density in orthogonal quasi-atomic MO basis.
+c>             The density of the canonical orbitals in daf dict. file 15
+c>             is transformed over to the orthogonal quasi-atomic MO basis.
+c>
+c> @param VTMP holds the overall orthogonal orbital transformation.
+c> @param DEN contains the original density in the canonical MO basis.
+c> @param DEN2 will hold the transformed density.
+c> @param SCR is workspace for the transformation.
+c> @param NCORTOT is the total number of MCSCF core orbitals.
+c> @param NACT is the total number of MCSCF active oribtals.
+c> @param L1 is the length of the AO coefficients.
+c> @param L3 is the square of L1.
+c> @param MASWRK indicates master process.
+      SUBROUTINE LOCAL_PPADEN(
+     *           VTMP,DEN,DEN2,SCR,
+     *           NCORTOT,NACT,L1,L3,MASWRK)
+C-----------------------------------------------------------------------
+      IMPLICIT NONE
+C     VARS
+      LOGICAL MASWRK
+      INTEGER L1,L3,NACT,NCORTOT,NOCC,NOCC2 
+C     NEW CODING STANDARDS VARS
+      INTEGER IR,IW,IP,IS,IPK,IDAF,NAV,IODA
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+C----------------------------------------------------------------------
+      DOUBLE PRECISION ::
+     *       VTMP(L1,L1),DEN(L3),DEN2(L3),SCR(L3)
+C
+C     DAF FILE 68 SHOULD CONTAIN THE DENSITY IN THE CANONICAL MO BASIS.
+C     NOTE:  FILE LENGTH = ALL OCCUPIEDS.
+C     DAF FILE 16 SHOULD CONTAIN THE DENSITY IN THE OPTIMIZED MO BASIS.
+C     NOTE:  FILE LENGTH = THE USUAL L2.
+C
+C     DEFINE SOME NEEDED DIMENSIONS.
+      NOCC=NCORTOT+NACT
+      NOCC2 = (NOCC*NOCC+NOCC)/2
+C
+C     READ IN THE DENSITY IN THE BASIS OF CANONICAL ORBITALS.
+      CALL DAREAD(IDAF,IODA,DEN,NOCC2,68,0)
+C
+C     READ IN THE OVERALL ORTHOGONAL QUASI-ATOMIC ORBITAL TRANSFORMATION.
+      CALL DAREAD(IDAF,IODA,VTMP,L3,525,0)
+C
+C     TRANSFORM THE DENSITY BY BLOCK-DIAGONAL TRANFORMATION:
+C     NEW ORBS = ORIG ORBS * VTMP
+C     NEW DENSITY = VTMP-TRANS * DEN * VTMP
+      CALL TFTRI(DEN2,DEN,VTMP,SCR,NOCC,L1,L1)
+      CALL DAWRIT(IDAF,IODA,DEN2,NOCC2,526,0)
+C
+C     PRINT OUT THE DENSITY.
+      IF(MASWRK) WRITE(IW,9000)
+      CALL PRTRI(DEN2,NOCC)
+C
+      RETURN
+ 9000 FORMAT(/1X,'DENSITY MATRIX IN THE',
+     *       1X,'ORTHOGONAL QUASI-ATOMIC SVD MO BASIS IS')
       END
