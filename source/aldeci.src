@@ -72,6 +72,16 @@ C  6 MAY 98 - JI  - ADD NEW FULL CI CODE TO GAMESS
 C
 C*MODULE ALDECI  *DECK ALDECI
 C     ------------------------------
+C> @brief      This routine drives determinant-based CI runs.
+C> 
+C> @author     Joe Ivanic
+C>             -1998
+C> 
+C> @details    This routine drives determinant-based CI runs.
+C> 
+C> @date November 09, 2012-Aaron West
+C> -Added icimalmq argument to detfci and defcci calls.
+C>
       SUBROUTINE ALDECI(NRNFG,NPFLG)
 C     ------------------------------
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
@@ -149,7 +159,7 @@ C
 C
       CLABEL=.FALSE.
       IF(GOPARR) CLABEL=.TRUE.
-      CALL DETFCI(NPFLG(3),CLABEL,DDITRF)
+      CALL DETFCI(NPFLG(3),CLABEL,DDITRF,0)
       IF(DDITRF) CALL DDI_DESTROY(D_OOOO)
 C
 C        ----- 1e- density matrix and natural orbitals -----
@@ -786,7 +796,25 @@ C
       RETURN
       END
 C*MODULE ALDECI  *DECK DETFCI
-      SUBROUTINE DETFCI(NPRINT,CLABEL,DDITRF)
+C> @brief      The routine drive full CI computations.
+C> 
+C> @author     Joe Ivanic
+C>             -1997
+C> 
+C> @details    The routine drive full CI computations.
+C> 
+C> @date November 08, 2012-Aaron West
+C> -Added arguments e.g. icimalq for Malmqvist CI transformation.
+C>
+C> @param NPRINT results in extra print offs when nprint does not
+C>               equal negative 5.
+C> @param CLABEL governs whether transformed integrals
+C>               on file -IJKT- include the core orbitals or not
+C> @param DDITRF controls selection of a distributed memory parallel
+C>               integral transformation.
+C> @param ICIMALMQ results in the Malmqvist CI transformation
+C>                 when icimalmq equals 1.
+      SUBROUTINE DETFCI(NPRINT,CLABEL,DDITRF,ICIMALMQ)
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
 C
@@ -882,7 +910,10 @@ C        Decide necessary double/integer working storage -IDS- and -IIS-
 C
       CALL VALFM(LOADFM)
       LIFA  = LOADFM + 1
-      LAST  = LIFA   + ((NACT+1)*(NACT+1))/NWDVAR + 1
+cdbug--
+      LVTORB  = LIFA   + ((NACT+1)*(NACT+1))/NWDVAR + 1
+      LAST  = LVTORB + L1*L1
+cdbug--
       NEED1 = LAST - LOADFM - 1
       CALL GETFM(NEED1)
 C
@@ -984,7 +1015,8 @@ C
      *           X(LSINT1),X(LSINT2),M2,M4,NORB,NCOR,NCI,NA,NB,
      *           K,KST,MAXP,MAXW1,NITER,CRIT,
      *           X(LIFA),X(LSP),X(LEL),X(LDWRK),IDS,X(LIWRK),IIS,
-     *           IGPDET,KSTSYM,NSYM,X(IBO),NALP,NBLP,ISTAT)
+     *           IGPDET,KSTSYM,NSYM,X(IBO),NALP,NBLP,ISTAT,
+     *           X(LVTORB),L1,NCORSV,ICIMALMQ)
 C
       DO I=1,MIN(K,MXRT)
          ESTATE(I) = X(LEL-1+I) + ECONST
@@ -2351,13 +2383,27 @@ C
       END
 C
 C*MODULE ALDECI  *DECK DAVCI
-C     ----------------------------------------------------------
+C> @brief      This routine contains main determinantal CI code.
+C>
+C> @author     Joe Ivanic
+C>             -1997
+C>
+C> @details    This routine contains main determinantal CI code.
+C>
+C> @date November 08, 2012-Aaron West
+C> -Added vtorb,L1,ncorsv, and icimalmq arguments for Malmqvist.
+C>
+C> @param VTORB contains Malmqvist' factorized orbital transformation.
+C> @param L1 denotes the length of the AO coefficients.
+C> @param NCORSV denotes the number of MCSCF core orbitals.
+C> @param ICIMALMQ results in the Malmqvist CI transformation.
       SUBROUTINE DAVCI(IW,SOME,ECONST,SI1,SI2,NORB,NCOR,NCI,NA,NB,
      *    CI,SPIN,EL,K,KST,MAXP,MAXW1,NITER,CRIT,
      *    AB,Q,B,EF,F,IWRK2,EC,IACON1,IBCON1,IACON2,IBCON2,IPOSA,IPERA,
      *    IIND1,IWRK1,ISD,IDO,IFA,INDEX,IMMA,IMMC,ISYMA,ISYMB,ITAB,
      *    IMUL,ISPA,ISPB,ISAS,ISBS,ISAC,ISBC,NSYM,IOB,NALP,NBLP,
-     *      IHMCON,GR,ISTRB,ISTRP,ISTAR,ISTAT)
+     *      IHMCON,GR,ISTRB,ISTRP,ISTAR,ISTAT,
+     *    VTORB,L1,NCORSV,ICIMALMQ)
 C     --------------------------------------------------------
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
       LOGICAL SOME,GOPARR,DSKWRK,MASWRK,ANALYS,UNSTUCK,DSKSAV,
@@ -2367,6 +2413,7 @@ C
       COMMON /DETPAR/ ICLBBR,ANALYS,SAFLG,IPRTSA
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
 C
+      DIMENSION VTORB(L1,L1)
       DIMENSION SI1(*), SI2(*), CI(NCI,MAXP),AB(NCI,MAXP),Q(NCI)
       DIMENSION F((MAXW1*(MAXW1+1))/2),EF(MAXW1,MAXW1),EL(MAXW1)
       DIMENSION EC(MAXP,MAXP),IWRK2(MAXW1),IWRK1(2*MAXW1),B(8*MAXW1)
@@ -2475,8 +2522,8 @@ C
       DSKSAV = DSKWRK
       DSKWRK = .FALSE.
       CRITSV = CRIT
-      IF(NCI.LE.MAXW1) GO TO 2345
-      IF(ICLBBR.EQ.1)  GO TO 2345
+      IF(NCI.LE.MAXW1.AND.ICIMALMQ.EQ.0) GO TO 2345
+      IF(ICLBBR.EQ.1.AND.ICIMALMQ.EQ.0)  GO TO 2345
 C
       NSTATE = 0
       NVECS  = 0
@@ -2498,7 +2545,7 @@ C
 C
 C         if nothing read, we must make an initial guess
 C
-      IF (NSTATE+NVECS.EQ.0) GO TO 2345
+      IF (NSTATE+NVECS.EQ.0.AND.ICIMALMQ.EQ.0) GO TO 2345
 C
 C         if inconsistency with the disk file, we must terminate
 C
@@ -2623,6 +2670,39 @@ C
          IF (NVECS.EQ.0) WRITE(IW,9010) ELAP
       END IF
 C
+C
+C
+C     PERFORM MALMQVIST TRANSFORMATION IF REQUESTED.
+      IF(ICIMALMQ.EQ.1) THEN
+C
+C       OBTAIN CORRECT ROOT TO ACCESS FOR NEXT ROUTINE.
+C       NOTE:  ALSO CHECK MEMORY IS THERE.
+        CALL MALMQ_CIGRB(ITMPCI,IW,MASWRK)
+        IF(MAXP.LT.2) THEN
+          IF(MASWRK) WRITE(IW,9016)
+          CALL FLSHBF(IW)
+          CALL ABRT
+          STOP
+        ENDIF
+C
+C       CONFIGURATION TRANSFORMATION WITHOUT DOING CI.
+        CALL MALMQ_RINAB(
+     *       VTORB,L1,NCORSV,ITMPCI,KST,
+     *       AB,CI,NORB,NCOR,NCI,NA,NB,
+     *       IACON1,IACON2,IBCON1,IBCON2,IFA,
+     *       ISPA,ISPB,NALP,NBLP)
+C
+C       TAKE CARE OF SPIN
+        CALL RETSPIN(NA,NB,NACT,IACON1,IACON2,IBCON1,IBCON2,
+     *       ISD(1),ISD(NA+1),IDO,CI,AB,NALP,NBLP,IFA,K,NCI,SPIN,
+     *       ISYMA,ISPA,ISPB,ISBS,ISBC,NSYM)
+C
+C       NOW, GET OUR BEFORE WE MUCK UP THE NEW CI COEFFS.
+        RETURN
+      ENDIF
+C
+C
+C
       IF (NA.EQ.NB) THEN
       IF (KST.GT.1) THEN
       CALL RINAB0(SI1,SI2,NORB,NCOR,NCI,NA,NB,CI,IACON1,IBCON1,
@@ -2667,6 +2747,11 @@ C
             EL(II) = EL(II) + CI(KK,II)*AB(KK,II)
    15    CONTINUE
    13 CONTINUE
+C
+C     IF WE WANT TO CHECK SOME ENERGIES FOR MALMQ_CIDRIV,
+C     WE UNCOMMENT THE NEXT LINE AND REMOVE THE RETURN ABOVE.
+C      IF(ICIMALMQ.EQ.1) RETURN
+C
       DO 555 II=1,MAXP
          DO 677 JJ=1,II-1
             EC(II,JJ) = 0.0D+00
@@ -3055,6 +3140,10 @@ C
      *           ' LEFT OVER FROM AN EARLIER RUN.)')
  9007 FORMAT(1X,'INITIAL CI VECTORS READ FROM DISK, NSTATE=',I4)
  9010 FORMAT(1X,'INITIAL CI VECTOR GUESS TIME  :',F13.1)
+ 9016 FORMAT(/1X,'FOR NOW,'
+     *        1X,'ERROR ON THE SIDE OF CAUTION FOR MALMQVIST.',
+     *        1X,'MOST OF THE TIME, TWO STATES IS NOT TOO MUCH',
+     *        1X,'BURDEN.')
  9020 FORMAT(1X,'INITIAL FULL CI ITERATION TIME:',F13.1)
  9040 FORMAT(/1X,'ITERATION',6X,'ENERGY',11X,'GRADIENT')
  9050 FORMAT(1X,I5,F20.10,F15.8)
@@ -7309,16 +7398,33 @@ C--      RETURN
 C--      END
 C--C
 C*MODULE ALDECI  *DECK DETCI
-C     --------------------------------------------------------
+C> @brief      This routine grabs memory for full CI run.
+C>
+C> @author     Joe Ivanic
+C>             -1997
+C>
+C> @details    This routine grabs memory for full CI run and
+C>             davci call, which is the guts of aldeci full CI run.
+C>
+C> @date November 08, 2012-Aaron West
+C> -Added vtorb,L1,ncorsv, and icimalmq arguments for Malmqvist.
+C>
+C> @param VTORB contains Malmqvist' factorized orbital transformation.
+C> @param L1 denotes the length of the AO coefficients.
+C> @param NCORSV denotes the number of MCSCF core orbitals.
+C> @param ICIMALMQ results in the Malmqvist CI transformation
+C>                 when icimalmq equals 1.
       SUBROUTINE DETCI(IW,SOME,ECONST,SI1,SI2,ISI1,ISI2,
      *         NORB,NCOR,NCI,NA,NB,K,KST,MAXP,MAXW1,NITER,CRIT,
      *         IFA,SPIN,EL,CI,IDS,IWRK,IIS,
-     *         IDSYM,ISYM1,NSYM,IOB,NALP,NBLP,ISTAT)
+     *         IDSYM,ISYM1,NSYM,IOB,NALP,NBLP,ISTAT,
+     *         VTORB,L1,NCORSV,ICIMALMQ)
 C     --------------------------------------------------------
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
 C
       LOGICAL SOME
 C
+      DIMENSION VTORB(L1,L1)
       DIMENSION SI1(ISI1)
       DIMENSION SI2(ISI2)
       DIMENSION SPIN(KST),EL(MAXW1)
@@ -7448,7 +7554,8 @@ C
      *       IWRK(IMUL),IWRK(ISPA),IWRK(ISPB),
      *       IWRK(ISAS),IWRK(ISBS),IWRK(ISAC),
      *       IWRK(ISBC),NSYM,IOB,NALP,NBLP,IWRK(IHMCON),
-     *       CI(KGR),IWRK(ISTRB),IWRK(ISTRP),IWRK(ISTAR),ISTAT)
+     *       CI(KGR),IWRK(ISTRB),IWRK(ISTRP),IWRK(ISTAR),ISTAT,
+     *       VTORB,L1,NCORSV,ICIMALMQ)
 C
       RETURN
       END
@@ -9840,6 +9947,7 @@ C
      *        EKT,LINSER,DOFOCK,DOEXCH,JACOBI,
      *        DDITRF,DOOOOO,DOVOOO,DOVVOO,DOVOVO,DOVVVO,DOVVVV,DOCORE,
      *        DOATOMS
+      LOGICAL FINALCI
 C
       COMMON /CIFILS/ NFT11,NFT12,NFT13,NFT14,NFT15,NFT16,IDAF20,NEMEMX
       COMMON /DETWFN/ WSTATE(MXRT),SPINS(MXRT),CRIT,PRTTOL,SDET,SZDET,
@@ -10100,4 +10208,1177 @@ C
          ENDDO
          RETURN
       ENDIF
+      END
+C*MODULE ALDECI  *DECK MALMQ_CIDRIV
+C> @brief      Transform CI coefficients given 2 orbital sets.
+C> 
+C> @author     Aaron West and Klaus Ruedenberg
+C>             -November 08, 2012
+C> 
+C> @details    THIS SUB IS THE MAIN DRIVER FOR OBTAINING
+C>             NEW CI COEFFICIENTS WITHOUT REPEATING A CI RUN.
+C>             (SEE ATCHITY, RUEDENBERG, J. CHEM. PHYS.,
+C>             VOL 111, PG. 2910, 1999.)
+C>             THE CI COEFFICIENTS MUST CORRESPOND TO THE
+C>             INITIAL ORBITAL SET.
+C>             CI TRANSFORMATION COMES FROM MALMQVIST.
+C>
+C> @param IORBF1   is the DAF file for the initial orbital set.
+C> @param IORBF2   is the DAF file for the new orbital set. 
+C> @param ICIMALMQ has the following options
+C>                 option 0 executes a normal CI run
+C>                 option 1 executes a Malmqvist CI transform,
+C>                 option 2 expands ORMAS CI vector from
+C>                 NSPACE>1 to NSPACE=1 form.
+      SUBROUTINE MALMQ_CIDRIV(IORBF1,IORBF2,ICIMALMQ)
+C-----------------------------------------------------------------------
+      IMPLICIT NONE
+C     VARS
+      INTEGER ICIMALMQ,IORBF1,IORBF2,IPRINT,L0,L1,L2,L3,NACT
+      INTEGER LEIG,LIPVT,LIWRK,LS,LSCR,LUVEC,LVMAT,LVSCR,LVTORB,LVTP,
+     *        LVOR,LWRKINV,NEEDMALMQ1
+c      DOUBLE PRECISION ::
+c     *       
+C     NEW CODING STANDARDS VARS
+      LOGICAL ABEL,FINALCI,CANONC,FCORE,FORS,EKT,LINSER
+      INTEGER LOADFM,LAST,NGOTMX
+      INTEGER IAN,IBTYP,ICH,ICUT,IDAF,IDIABAT,IDWEIGH,IGPDET,IGROUP,
+     *        ILABMO,IODA,IP,IPK,IPTIM,IPURES,IR,IROOT,IS,ITOL,IW,IWTS,
+     *        KDET,KSTDET,KSTSYM,MASTER,MAXP,
+     *        MAXW1,ME,MICIT,MOFRZ,MUL,MXATM,MXNORO,MXRT,NA,NB,NACTDT,
+     *        NAT,NAV,MCFMO,NAXIS,NBDET,NADET,NCOR,NCORSV,NE,NCI,NEVALS,
+     *        NFLGDM,NFTGCI,NGLEVL,NHLEVL,NITDET,NOFO,NOPK,NORBDT,
+     *        NORMF,NORMP,NOROT,NPFLG,NPRINT,NPROC,NQMT,NUM,
+     *        NORBMC,NWRDMC
+      DOUBLE PRECISION ::
+     *       X,ACURCY,C,CISTEP,COMPLX,CRIT,DAMP,DWPARM,CHECK,
+     *       ENGTOL,EXETYP,GLIST,GROUP,GRPDET,ORMAS,ALDET,METHOD,PRTTOL,
+     *       RUNTYP,SDET,SPINS,STSYM,SZDET,WSTATE,ZAN
+C-----------------------------------------------------------------------
+      PARAMETER (MXATM=2000, MXRT=100, MXNORO=250)
+      COMMON /DETWFN/ WSTATE(MXRT),SPINS(MXRT),CRIT,PRTTOL,SDET,SZDET,
+     *                GRPDET,STSYM,GLIST,DWPARM,
+     *                NFLGDM(MXRT),IWTS(MXRT),NCORSV,NCOR,NACTDT,NORBDT,
+     *                NADET,NBDET,KDET,KSTDET,IROOT,IPURES,MAXW1,NITDET,
+     *                MAXP,NCI,IGPDET,KSTSYM,NFTGCI,IDWEIGH
+      COMMON /FMCOM / X(1)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /MCINP / METHOD,CISTEP,FINALCI,ACURCY,ENGTOL,DAMP,
+     *                MICIT,NWRDMC,NORBMC,NOROT(2,MXNORO),MOFRZ(15),
+     *                NPFLG(10),NOFO,MCFMO,IDIABAT,
+     *                CANONC,FCORE,FORS,EKT,LINSER
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+ctemp--
+      COMMON /SYMMOL/ GROUP,COMPLX,IGROUP,NAXIS,ILABMO,ABEL
+ctemp--
+      LOGICAL SOME,SAVDSKWRK,DDITRF,GOPARR,DSKWRK,MASWRK
+C-----------------------------------------------------------------------
+C
+C     SET UP SOME DATA
+      DATA ALDET,ORMAS /8HALDET   ,8HORMAS   /
+      DATA CHECK/8HCHECK   /
+C
+C     SET UP SOME DIMENSIONS
+      L0 = NQMT
+      L1 = NUM
+      L2 = (L1*L1+L1)/2
+      L3 = L1*L1
+      NACT=NACTDT
+C
+C     SOME OTHER BASICS
+C     E.G. PRINT INFO
+      SOME = NPRINT.NE.-5 .AND. MASWRK
+C
+C     PRINT OFF MAIN BANNER FOR LOG FILE
+      IF(SOME) WRITE(IW,9000)
+ctemp--
+      IF(IGROUP.NE.1) THEN
+        IF(MASWRK) WRITE(IW,9005)
+        CALL FLSHBF(IW)
+        CALL ABRT
+        STOP
+      ENDIF
+ctemp--
+C
+C
+C     GET ALL MEMORY FOR ORBITAL TRANSFORMATIONS AND CI MANIPULATIONS
+      CALL GOTFM(NGOTMX)
+      CALL VALFM(LOADFM)
+C     ORBITAL MEMORY
+      LVSCR = LOADFM + 1
+      LVTP = LVSCR + L3
+      LVOR  = LVTP + L3
+      LVTORB = LVOR + L3
+      LVMAT  = LVTORB + L3
+C     MORE ORBITAL MEMORY FOR INVERTING MATRICES.
+      LWRKINV = LVMAT + NACT*NACT
+      LIPVT = LWRKINV + L1
+      LEIG = LIPVT + L1
+C     MEMORY FOR OVLSEL ROUTINE
+      LS = LEIG + L1
+      LSCR = LS + L2
+      LIWRK = LSCR + L1*8
+      LUVEC = LIWRK + L1
+C     LAST ITEM IS MORE ORBITAL MEMORY FOR TMP VARS. 
+      LAST = LUVEC + L3
+      NEEDMALMQ1 = LAST - LOADFM - 1
+      CALL GETFM(NEEDMALMQ1)
+      IF(SOME) WRITE(IW,9006) NGOTMX,NEEDMALMQ1
+      CALL FLSHBF(IW)
+C
+C     FAKE OUT EXETYP
+      IF(EXETYP.EQ.CHECK) GO TO 8999
+C
+C     OBTAIN THE TWO SETS OF ORBITALS
+C     ACCOUNT FOR ORBITAL OVERLAPS
+C     NOTE:  SAVE LVOR FOR ALL TIME AFTER HERE.
+C     NOTE:  LAST LINE CONTAINS ALL VARS FOR OVLSEL CALL
+      CALL MALMQ_GETORB(X(LVTP),X(LVOR),L1,L3,IORBF1,IORBF2,
+     *                  X(LEIG),X(LS),X(LSCR),X(LIWRK),X(LUVEC),
+     *                  L0,L2,CISTEP,MASWRK)
+C
+C     OBTAIN ORBITAL TRANSFORMATION
+      CALL MALMQ_TORB(X(LVTP),X(LVOR),X(LVTORB),X(LUVEC),X(LVSCR),
+     *                X(LVMAT),X(LWRKINV),X(LIPVT),X(LS),L0,L1,L2,L3,
+     *                NCORSV,NACT,MASWRK)
+C
+C     ORBITAL TRANSFORMATION CONDITIONS
+      CALL MALMQ_TCHK(X(LVTORB),L1,NACT,NCORSV,CISTEP,MASWRK)
+C
+C     FACTORIZE THE ORBITAL TRANSFORMATION
+C     VIA MALMQVIST METHOD
+      CALL MALMQ_TFACT(X(LVTORB),X(LVTP),X(LVSCR),X(LUVEC),L1,L3,
+     *              NCORSV,NACT,MASWRK)
+C
+C     WRITE OUT FACTORIZED ORBITAL TRANSFORMATION TO FILE
+C     FOR USE IN CI TRANSFORMATION
+      CALL DAWRIT(IDAF,IODA,X(LVTP),L3,520,0)
+C
+C     WRITE OUT ORBITALS TO FILE 15 TO USE NEW ORBITAL SET.
+      CALL DAWRIT(IDAF,IODA,X(LVOR),L3,15,0)
+C
+C     PERFORM MALMQVIST CI TRANSFORMATION.
+C     INSIDE OF THE GIVEN CI ROUTINE, THE FOLLOWING OCCURS:
+C     ---TRANSFORMED CI COEFFICIENTS GO TO NFT15
+C     ---EARLY EXIT PREVENTS INTERFERENCE FROM NON-MALMQVIST ROUTINES
+C        E.G. INSIDE OF DAFCCI
+C     ---ONLY ONE CI ROOT IS UPDATED
+C        I.E. THE LOWEST ROOT OF A GIVEN MULTIPLICITY
+C     ---THE PRINTING IS RE-PRESSED BY IPRINT=-5.
+      IPRINT=-5
+CKEEP      IF(ICIMALMQ.EQ.1) IPRINT=0
+      IF(IPRINT.EQ.-5.AND.SOME) WRITE(IW,9007)
+      DDITRF=GOPARR
+      SAVDSKWRK = DSKWRK
+      DSKWRK = .FALSE.
+      IF(CISTEP.EQ.ALDET) THEN
+        CALL DETFCI(IPRINT,.TRUE.,DDITRF,ICIMALMQ)
+      ELSEIF(CISTEP.EQ.ORMAS) THEN
+        CALL DEFCCI(IPRINT,.TRUE.,DDITRF,0,1,0,IPRINT,ICIMALMQ) 
+      ELSE
+        IF(SOME) WRITE(IW,9008)
+        CALL FLSHBF(IW)
+        CALL ABRT
+        STOP
+      END IF
+      DSKWRK=SAVDSKWRK
+C
+C     COULD RE-RUN CI HERE FROM SCRATCH OR USING THESE GUESS VECTORS.
+C     KEEPING CI RE-RUN IN SEPARATE ROUTINE MAKES FOR EASY CHANGES HERE.
+C
+C     RELEASE ALL MEMORY FOR ORBITAL TRANSFORMATIONS AND CI MANIPULATIONS. 
+ 8999 CONTINUE
+      CALL RETFM(NEEDMALMQ1)
+C
+      RETURN
+C
+ 9000 FORMAT(/5X,55(1H-)/
+     *   5X,'MALMQ_CIDRIV NOW TRANSFORMS CI COEFFICIENTS.'/
+     *   5X,55(1H-))
+ctemp--
+ 9005 FORMAT(/1X,'- MALMQ_CIDRIV - ROUTINE ONLY PROGRAMMED FOR C1 SYM.')
+ctemp--
+ 9006 FORMAT(/1X,'ROTATING CI COEFFICIENTS AWAY FROM INITIAL ORBITALS.',
+     *       /1X,'# OF WORDS AVAILABLE = ',I10,
+     *       /1X,'# OF WORDS REQUIRED  = ',I10)
+ 9007 FORMAT(/1X,'MALMQ_CIDRIV',
+     *        1X,'CURRENTLY REPRESSES MOST CI RUN PRINT OFFS.')
+ 9008 FORMAT(/1X,'- MALMQ_CIDRIV - ROUTINE ONLY PROGRAMMED FOR',
+     *       /1X,' CISTEP=ALDET,ORMAS.')
+      END 
+C*MODULE ALDECI  *DECK MALMQ_GETORB
+C> @brief      This routine prepares orbital sets for Malmqvist transform.
+C> 
+C> @author     Aaron West and Klaus Ruedenberg
+C>             -November 08, 2012
+C> 
+C> @details    This routine prepares orbital sets for Malmqvist transform.
+C>             It reads in two orbital sets (one with corresponding CI coeff)
+C>             and reorders the orbitals for maximum orbital overlap.
+C>             The routine also checks restricts orbital interchanges for
+C>             cistep=ORMAS.
+C> 
+C> @param VOPT is an array for orbital set 1.
+C> @param VOR  is an array for orbital set 2.
+C> @param L1   is the length of the AO coefficients.
+C> @param L3   is the square of L1.
+C> @param IORBF1 is the DAF file for orbital set 1.
+C> @param IORBF2 is the DAF file for orbital set 2.
+C> @param EIG is an array for the eigenvales in the ovlsel call.
+C> @param S   array will hold the AO overlaps.
+C> @param IWRK2 array is a work array for ovlsel call,etc.
+C> @param IWRK  array is a work array for ovlsel call,etc.
+C> @param UVEC  array is a work array for ovlsel call.
+C> @param L0    equals NUM from INFOA.
+C> @param L2    is the triangular piece of L1.
+C> @param CISTEP is a double precision variable that hold cistep in the CI run.
+C> @param MASWRK indicates master process.
+      SUBROUTINE MALMQ_GETORB(
+     *           VOPT,VOR,L1,L3,IORBF1,IORBF2,
+     *           EIG,S,IWRK2,IWRK,UVEC,L0,L2,
+     *           CISTEP,MASWRK)
+C-----------------------------------------------------------------------
+      IMPLICIT NONE
+C     VARS
+      LOGICAL MASWRK
+      INTEGER I,ICHK,IDUM,IEND,IEND2,IORBF1,IORBF2,IST,IST2,
+     *        ITMP,J,JJ,L0,L1,L2,L3
+C     NEW CODING STANDARDS VARS
+      LOGICAL FDIRCT,QCORR
+      INTEGER NSPACE,MSTA,MNUM,MINI,MAXI,IAMI,IAMA,IBMI,IBMA,
+     *        IDIMFCC,LBST,NREF0,
+     *        IR,IW,IP,IS,IPK,NAV,IODA,IDAF
+      DOUBLE PRECISION ::
+     *       C0SQ,CISTEP,ORMAS
+C-----------------------------------------------------------------------
+      COMMON /FCCWFN/ NSPACE,MSTA(51),MNUM(51),MINI(51),MAXI(51),
+     *                IAMI(51),IAMA(51),IBMI(51),IBMA(51),IDIMFCC(51),
+     *                LBST(51),NREF0,FDIRCT,QCORR,C0SQ
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      INTEGER IWRK2(L1*8),IWRK(L1)
+      DOUBLE PRECISION ::
+     *       VOPT(L1,L1),VOR(L1,L1),
+     *       EIG(L1),S(L2),UVEC(L1,L1)
+C
+C     SET UP SOME DATA
+      DATA ORMAS /8HORMAS   /
+C
+C     READ INITIAL MOS
+      CALL DAREAD(IDAF,IODA,VOPT,L3,IORBF1,0)
+C
+C     READ FINAL MOS
+      CALL DAREAD(IDAF,IODA,VOR,L3,IORBF2,0)
+C
+C     OBTAIN MAXIMUM OVERLAP FOR GIVEN ORBITAL SETS
+      CALL DAREAD(IDAF,IODA,S,L2,12,0)
+      CALL DCOPY(L3,VOPT,1,UVEC,1)
+      IDUM=0
+      CALL OVLSEL(VOR,EIG,VOPT,S,UVEC,IWRK2,IWRK,IWRK2,
+     *            IDUM,IDUM,L0,L1,L2,.FALSE.)
+C
+C     PRINT OUT ORBITAL REORDERINGS
+      IF(MASWRK) THEN
+        WRITE(IW,9000)
+        DO I=1,L0
+          IF(I.NE.IWRK2(I).AND.MASWRK) WRITE(IW,9001) I,IWRK2(I)
+        ENDDO
+      ENDIF
+C
+C     APPLY ANY ORMAS RESTRICTIONS TO THE ORBITAL REORDERINGS
+      IF(CISTEP.NE.ORMAS) RETURN
+      CALL VICLR(IWRK,1,L1)
+      IF(MASWRK) WRITE(IW,9002)
+      IST=MSTA(1)
+      IEND=MSTA(NSPACE+1)-1
+      DO I=IST,IEND
+C       GET THE ORMAS SPACE
+        DO JJ=1,NSPACE
+          IST2=MSTA(JJ)
+          IEND2=MSTA(JJ+1)-1
+          IF(IWRK2(I).GE.IST2.AND.IWRK2(I).LE.IEND2) IWRK(I)=JJ
+        ENDDO
+      ENDDO
+C
+      ICHK=0
+      DO I=IST,IEND
+        IF(IWRK(I).NE.0) ICHK=1
+      ENDDO
+C
+      IF(ICHK.EQ.1) THEN
+        DO JJ=1,NSPACE
+          IST2=MSTA(JJ)
+          IEND2=MSTA(JJ+1)-1
+          DO J=IST2,IEND2
+            IF(IWRK(J).NE.JJ) THEN
+              DO I=IST,IEND
+                IF(IWRK(I).EQ.JJ) THEN
+C                 SWAP GROUP LABELS
+                  ITMP=IWRK(J)
+                  IWRK(J)=IWRK(I)
+                  IWRK(I)=ITMP
+C                 SWAP MO LABELS
+                  ITMP=IWRK2(J)
+                  IWRK2(J)=IWRK2(I)
+                  IWRK2(I)=ITMP
+C                 SWAP MOS
+                  CALL DSWAP(L1,VOR(1,J),1,VOR(1,I),1)
+                ENDIF
+              ENDDO
+            ENDIF
+          ENDDO
+        ENDDO
+C
+C       WRITE OUT NEW ORDERINGS
+        DO I=IST,IEND
+          IF(MASWRK) WRITE(IW,9003) I,IWRK2(I),IWRK(I) 
+        ENDDO
+      ENDIF
+C
+      CALL FLSHBF(IW)
+C
+C     RE-READ INITIAL MOS
+      CALL DAREAD(IDAF,IODA,VOPT,L3,IORBF1,0)
+      RETURN
+ 9000 FORMAT(1X,'THE FOLLOWING MOS ARE RE-ORDERED IN THE NEW MOS SET.'/
+     *       1X,'THIS RE-ORDER IS FOR TWO REASONS:'/
+     *       1X,'1.NON-FULL VALENCE RUNS PUT ACTIVE ORBITALS'/
+     *       1X,'                        INTO CORE POSITIONS.'/
+     *       1X,'2.MALMQVIST ORIBTAL FACTORIZATION REQUIRES RE-ORDER.')
+ 9001 FORMAT(1X,'MO SWITCHES COUNT-NEW POSITION',I4,I4)
+ 9002 FORMAT(1X,'3.NOW APPLYING ANY ORMAS SUBSPACE RESTRICTIONS.')
+ 9003 FORMAT(1X,'MO SWITCHES COUNT-POSITION-GROUP',I4,I4,I4)
+      END
+C*MODULE ALDECI  *DECK MALMQ_TORB
+C> @brief      This routine gets orbital transformation for Malmqvist.
+C> 
+C> @author     Aaron West and Klaus Ruedenberg
+C>             -November 08, 2012
+C> 
+C> @details    THIS ROUTINE OBTAINS THE ORBITAL TRANSFORMATION MATRIX BETWEEN
+C>             TWO MO SETS.
+C>             This MO transformation is for Malmqvist, but the correct array
+C>             could be written out to DAF file to grab any MO transformation.
+C>             Another argument into MALMQ_CIDRIV with some mods would work out.
+C> 
+C> @param VOPT   is an array for orbital set 1.
+C> @param VOR    is an array for orbital set 2.
+C> @param VTORB  holds the orbital transformation.
+C> @param SBAR   will hold VOPT-TRANS * S * VOPT.
+C> @param SHAT   will hold VOPT-TRANS * S * VOR.
+C> @param VMAT   is an nact-by-nact work array.
+C> @param WRKINV is a work array for inverting matrices.
+C> @param IPVT   is an integer work array.
+C> @param S      denotes the AO overlap matrix.
+C> @param L0     denotes NUM from INFOA common.
+C> @param L1     is the length of the AO coefficients.
+C> @param L2     is the triangular piece of L1.
+C> @param L3     is the square of L1.
+C> @param NCORSV is the number of MCSCF core orbitals.
+C> @param NACT   is the number of MCSCF active oribtals.
+c> @param MASWRK indicates master process.
+      SUBROUTINE MALMQ_TORB(VOPT,VOR,VTORB,SBAR,SHAT,
+     *                      VMAT,WRKINV,IPVT,S,L0,L1,L2,L3,
+     *                      NCORSV,NACT,MASWRK)
+C-----------------------------------------------------------------------
+      IMPLICIT NONE
+C     VARS
+      LOGICAL MASWRK
+      INTEGER I,L0,L1,L2,L3,NACT,NCORSV
+      DOUBLE PRECISION RCOND
+C     NEW CODING STANDARDS VARS
+      INTEGER IDAF,IODA,IP,IPK,IR,IS,IW,NAV
+C-----------------------------------------------------------------------
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      INTEGER IPVT(L1)
+      DOUBLE PRECISION ::
+     *       VOPT(L1,L1),VOR(L1,L1),VTORB(L1,L1),
+     *       SBAR(L1,L1),SHAT(L1,L1),S(L2),
+     *       VMAT(NACT,NACT),WRKINV(L1),
+     *       DET(2)
+C
+C     SUPPOSE INITIAL ORBITALS = MCSCF OPTIMIZED ORBITALS
+C     SUPPOSE FINAL ORBITALS = ORIENTED ORBITALS
+C
+C     T = ORBITAL TRANSFORMATION
+C     V_OR = V_OPT * T
+C     V_OR * T-INV = V_OPT
+C     T-INV = V_OR-INV * V_OPT
+C
+C     TO OBTAIN THIS SEQUENCE, USE:
+C     SBAR = VOPT-TRANS * S * VOPT
+C     SHAT = VOPT-TRANS * S * VOR
+C     OBTAIN SBAR-INV.
+C     VTORB = SBAR-INV * SHAT
+C     THEN, OBTAIN VTORB-INV.
+C-----------------------------------------------------------------------
+C
+C     PRESERVE IORBF2(=V_OR) ORBITAL ORDERING
+C     I.E. DON'T DESTROY VOR
+C
+C     CLEAR OUR SOME VARS
+      CALL VCLR(SBAR,1,L3)
+      CALL VCLR(SHAT,1,L3)
+      CALL VCLR(VTORB,1,L3)
+C
+C     GET THE METRIC S
+      CALL DAREAD(IDAF,IODA,S,L2,12,0)
+C
+C     FORM SBAR
+      CALL MTARBR(S,L1,VOPT,L0,VTORB,L1,1)
+      CALL MRTRBR(VOPT,L1,L1,L0,VTORB,L1,L0,SBAR,L1)
+C
+C     FORM SHAT
+      CALL MTARBR(S,L1,VOR,L0,VTORB,L1,1)
+      CALL MRTRBR(VOPT,L1,L1,L0,VTORB,L1,L0,SHAT,L1)
+C
+C     FORM SBAR-INV
+      CALL DGECO(SBAR,L1,L0,IPVT,RCOND,WRKINV)
+      CALL DGEDI(SBAR,L1,L0,IPVT,DET,WRKINV,01)
+C
+C     FORM VTORB
+      CALL VCLR(VTORB,1,L3)
+      CALL MRARBR(SBAR,L1,L0,L0,SHAT,L1,L0,VTORB,L1)
+cdsav--
+cdsav--C
+cdsav--C     FORM VTORB-INV
+cdsav--      CALL DGECO(VTORB,L1,L0,IPVT,RCOND,WRKINV)
+cdsav--      CALL DGEDI(VTORB,L1,L0,IPVT,DET,WRKINV,01)
+C
+C     IN ACT-ACT BLOCK, FORM VTORB-INV
+      DO I=1,NACT
+        CALL DCOPY(NACT,VTORB(NCORSV+1,NCORSV+I),1,VMAT(1,I),1)
+      ENDDO
+      CALL DGECO(VMAT,NACT,NACT,IPVT,RCOND,WRKINV)
+      CALL DGEDI(VMAT,NACT,NACT,IPVT,DET,WRKINV,01)
+      DO I=1,NACT
+        CALL DCOPY(NACT,VMAT(1,I),1,VTORB(NCORSV+1,NCORSV+I),1)
+      ENDDO
+C
+C     ERROR OUT IF RCOND TOO SMALL.
+      IF(RCOND.LT.1.0D-10) THEN
+        IF(MASWRK) WRITE(IW,9000)
+        CALL FLSHBF(IW)
+        CALL ABRT
+        STOP
+      ENDIF
+C
+C
+C     LEAVE NON ACT-ACT BLOCKS AS THEY ARE.
+C     WE DO NOT NEED THEM.
+C
+      RETURN
+ 9000 FORMAT(1X,'PROBLEM IN MALMQ_TORB ROUTINE.')
+      END
+C*MODULE ALDECI  *DECK MALMQ_TCHK
+C> @brief      This routine checks orbitals for Malmqvist.
+C> 
+C> @author     Aaron West and Klaus Ruedenberg
+C>             -November 08, 2012
+C> 
+C> @details      This routine checks orbitals for Malmqvist.
+C>         CISTEP MUST BE ALDET OR ORMAS.
+C>         NON-ZERO OFF-DIAGONAL BLOCKS IN ORBITAL TRANSFORMATION
+C>            FOR CASSCF, ACT-CORE AND ACT-VIRT BLOCKS NEED TO BE ZERO.
+C>            FOR ORMAS,  OFF-DIAGONAL NSPACE ELEMENTS NEED TO BE ZERO.
+C> 
+C> @param VTORB holds the orbital transformation.
+C> @param L1    is the length of the AO coefficients.
+C> @param NACT  is the number of MCSCF active orbitals.
+C> @param NCOR  is the number of MCSCF core orbitals.
+C> @param CISTEP is a double precision variable for kind of CI run.
+c> @param MASWRK indicates master process.
+      SUBROUTINE MALMQ_TCHK(VTORB,L1,NACT,NCOR,CISTEP,MASWRK)
+C-----------------------------------------------------------------------
+      IMPLICIT NONE
+C     VARS
+      LOGICAL MASWRK
+      INTEGER I,II,IERR,IERR1,J,JJ,L1,NACT,NCOR
+      DOUBLE PRECISION ::
+     *       TMP,TMP2
+C     NEW CODING STANDARDS VARS
+      INTEGER IAMA,IAMI,IBMA,IBMI,IDIMFCC,LBST,
+     *        IDAF,IODA,IP,IPK,IR,IS,IW,NAV,
+     *        MAXI,MINI,MNUM,MSTA,NSPACE,NREF0
+      LOGICAL FDIRCT,QCORR
+      DOUBLE PRECISION ::
+     *       TOL,ZERO,
+     *       ALDET,C0SQ,CISTEP,ORMAS
+C-----------------------------------------------------------------------
+      PARAMETER (TOL=1.0D-12, ZERO=0.0D+00)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /FCCWFN/ NSPACE,MSTA(51),MNUM(51),MINI(51),MAXI(51),
+     *                IAMI(51),IAMA(51),IBMI(51),IBMA(51),IDIMFCC(51),
+     *                LBST(51),NREF0,FDIRCT,QCORR,C0SQ
+      DOUBLE PRECISION ::
+     *       VTORB(L1,L1)
+C
+C     SET UP SOME DATA
+      DATA ALDET,ORMAS /8HALDET   ,8HORMAS   /
+C
+C     INITIALIZE IERR
+      IERR=0
+C
+C     CISTEP ERRORS
+      IF(CISTEP.NE.ALDET.AND.CISTEP.NE.ORMAS) THEN
+        IERR=IERR+1 
+        IF(MASWRK) WRITE(IW,9001)
+      ENDIF
+C
+C     EXAMINE TORB 'OFF-DIAGONAL' BLOCKS FOR NON-ZERO VALUES
+      IERR1=IERR
+      DO J=NCOR+1,NCOR+NACT
+        DO I=1,NCOR
+          TMP =ABS(VTORB(I,J))
+          TMP2=ABS(VTORB(J,I))
+          IF(TMP.GT.TOL.OR.TMP2.GT.TOL) IERR=IERR+1
+          VTORB(I,J)=ZERO
+          VTORB(J,I)=ZERO
+        ENDDO
+        DO I=NCOR+NACT+1,L1
+          TMP =ABS(VTORB(I,J))
+          TMP2=ABS(VTORB(J,I))
+          IF(TMP.GT.TOL.OR.TMP2.GT.TOL) IERR=IERR+1
+          VTORB(I,J)=ZERO
+          VTORB(J,I)=ZERO
+        ENDDO
+      ENDDO
+      IF(CISTEP.EQ.ORMAS.AND.NSPACE.GT.1) THEN
+        DO II=1,NSPACE-1
+          DO JJ=II+1,NSPACE
+            DO I=MSTA(II),MSTA(II+1)-1
+              DO J=MSTA(JJ),MSTA(JJ+1)-1
+                TMP =ABS(VTORB(I,J))
+                TMP2=ABS(VTORB(J,I))
+                IF(TMP.GT.TOL.OR.TMP2.GT.TOL) IERR=IERR+1
+                VTORB(I,J)=ZERO
+                VTORB(J,I)=ZERO
+              ENDDO
+            ENDDO
+          ENDDO
+        ENDDO
+      ENDIF
+      IF(IERR.GT.IERR1.AND.MASWRK) WRITE(IW,9002)
+C
+C     PERFORM THE ABORT
+      IF(IERR.GT.0) THEN
+        IF(MASWRK) WRITE(IW,9003)
+        CALL FLSHBF(IW)
+        CALL ABRT
+        STOP
+      ENDIF
+C
+      RETURN
+ 9001 FORMAT(1X,'THIS CISTEP IS NOT AVAIABLE FOR CI TRANSFORM.')
+ 9002 FORMAT(1X,'PROBLEM OCCURS FOR ORBITAL TRANSFORM BLOCKS.')
+ 9003 FORMAT(1X,'*** ERROR IN MALMQ_TCHK ROUTINE.')
+      END
+C*MODULE ALDECI  *DECK MALMQ_TFACT
+C> @brief      This routine factorizes the orbital transform. 
+C> 
+C> @author     Aaron West and Klaus Ruedenberg
+C>             -November 09, 2012
+C> 
+C> @details    This routine actually forms the factorized
+C>             orbital transformation matrix for Malmqvist's
+C>             CI transformation.
+C>             (SEE ATCHITY, RUEDENBERG, J. CHEM. PHYS.,
+C>              VOL 111, PG. 2910, 1999.)
+C> 
+C> @param VTORB  holds the orbital transformation.
+C> @param VTP    will hold the factorized orbital transformation.
+C>               It stores the factors column-wise.
+C> @param QMAT1  is the pth recursion matrix
+C> @param QMAT2  is the (p+1)th recursion matrix.
+C> @param L1     is the length of the AO coefficients.
+C> @param L3     is the square of L1.
+C> @param NCORSV is the number of MCSCF core orbitals.
+C> @param NACT   is the number of MCSCF active orbitals.
+c> @param MASWRK indicates master process.
+      SUBROUTINE MALMQ_TFACT(VTORB,VTP,QMAT1,QMAT2,L1,L3,
+     *                       NCORSV,NACT,MASWRK)
+C-----------------------------------------------------------------------
+      IMPLICIT NONE
+C     VARS
+      LOGICAL MASWRK
+      INTEGER I,IEND,IERR,ILTH,ISTART,J,L1,L3,NACT,NCORSV
+      DOUBLE PRECISION ::
+     *       QMATP
+C     NEW CODING STANDARDS VARS
+      INTEGER IDAF,IODA,IP,IPK,IPP,IR,IS,IW,NAV
+      DOUBLE PRECISION ::
+     *       ZERO,ONE,TOL
+
+C-----------------------------------------------------------------------
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00, TOL=1.0D-07)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      DOUBLE PRECISION ::
+     *       VTORB(L1,L1),VTP(L1,L1),QMAT1(L1,L1),QMAT2(L1,L1)
+C
+C     CLEAR OUT SOME ITEMS JUST FOR NICE PRINTING.
+      CALL VCLR(VTP,1,L3)
+      CALL VCLR(QMAT1,1,L3)
+      CALL VCLR(QMAT2,1,L3)
+C
+C     FOR NOW, KEEP GENERAL DIM.
+C     E.G, ISTART=1,IEND=L0,ILTH=L1
+      ISTART = NCORSV+1
+      IEND = NCORSV+NACT
+      ILTH = NACT
+C
+C     SET QMAT1 = VTORB
+      CALL DCOPY(L3,VTORB,1,QMAT1,1)
+C
+C     PERFORM RECURRSION USING QMAT1 = VTP * QMAT2
+      IERR=0
+      DO IPP = ISTART,IEND
+C       SET IPPTH COLUMN OF VTP
+        CALL DCOPY(ILTH,QMAT1(ISTART,IPP),1,VTP(ISTART,IPP),1)
+C       GENERATE NEXT QMAT2 MATRIX
+C       NOTE:  THE (P+1)TH MATRIX --> 0 OR 1 UNTIL IPPTH INDEX
+        DO I=ISTART,IEND
+          DO J=ISTART,IPP
+            QMAT2(I,J)=ZERO
+            IF(I.EQ.J) QMAT2(I,J)=ONE
+          ENDDO
+        ENDDO
+        QMATP = QMAT1(IPP,IPP)
+        IF(ABS(QMATP).LT.TOL) IERR=IERR+1
+        DO I=ISTART,IEND
+          DO 100 J=IPP+1,IEND
+            IF(I.EQ.IPP) QMAT2(I,J)=QMAT1(I,J)/QMATP
+            IF(I.EQ.IPP) GO TO 100
+            QMAT2(I,J)=QMAT1(I,J)-QMAT1(I,IPP)*QMAT1(IPP,J)/QMATP
+  100     CONTINUE
+        ENDDO
+C       GENERATE NEW QMAT1 MATRIX
+        DO I=ISTART,IEND
+          CALL DCOPY(ILTH,QMAT2(ISTART,I),1,QMAT1(ISTART,I),1)
+        ENDDO
+      ENDDO
+C
+C     IF THE ORBITAL ORDERING BETWEEN ORIENTED AND OTHER ORBITALS
+C     IS DIFFERENT SUCH THAT THE BLOCK DIAGONAL FORM IS OFF,
+C     THEN THE MALQVIST DECOMPOSITION PROBABLY REQUIRES
+C     A PIVOTING ADDITION.
+C     THIS ITEM COULD BE THE CASE WITH POOR ORBITAL OVERLAPS ALSO.
+C     (E.G. SEE LU FAILURE AND LU PRODUCT)
+      IF (IERR.NE.0) THEN
+        IF(MASWRK) WRITE(IW,9000)
+        CALL FLSHBF(IW)
+        CALL ABRT
+        STOP
+      ENDIF
+C
+      RETURN
+ 9000 FORMAT(1X,'*** ERROR.  Q-MATRIX ELEMENTS USED FOR DIVISION'/
+     *       1X,'HAVE BECOME CLOSE TO ZERO.'/
+     *       1X,'SEE NOTES IN MALMQ_TFACT FOR FURTHER INFORMATION.')
+      END
+C*MODULE ALDECI  *DECK MALMQ_RINAB
+C> @brief      This routine does Malmqvist CI part for full CI.
+C> 
+C> @author     Aaron West and Klaus Ruedenberg
+C>             -November 09, 2012
+C> 
+C> @details    This routine does the Malmqvist CI part of the
+C>             Malmqvist transformation.  It transforms the CI vector
+C>             given the old and new orbital sets through singles
+C>             excitations only.  However, it requires all excitations
+C>             out of the IPTH orbital be performed for all strings 
+C>             of the same spin together.  Otherwise, the entire length
+C>             of the CI vector might be re-generated and requires that
+C>             much more storage.
+C>             This routine could be abandoned and MALMQ_FCHCX1S
+C>             could be used once symmetry is debugged there.
+C>             Please see MALMQ_FCHCX1S for any updates to that point.
+C>             In addition, ncor was never more than 0 for debugging.
+C>             AW will do the two items below.
+C> 
+C> @todo       Work symmetry into routine or abandon routine.
+C>             Make parallel.
+C>
+C> @param VTORB  will contain the factorized orbital transformation.
+C> @param L1     is the length of the AO coefficients.
+C> @param NCORSV is the number of core orbitals.
+C> @param ITMPCI denotes the CI root number to be transformed.
+C> @param NV     denotes total number of CI states for run.
+C> @param AB     denotes temporary storage with length of CI vector.
+C> @param CI     denotes the CI vectors.
+C> @param NORB   is the number of total occupied (active if ncor is 0)
+C>               orbitals in the CI.
+C> @param NCOR   is (if any) the number of chemical core orbitals.
+C> @param NCI    denotes the length of the CI coefficient vector.
+C> @param NA     is the number of active alpha electrons.
+C> @param NB     is the number of active beta electrons.
+C> @param IACON1 contains the occupied orbital indices
+C>               for a given starting alpha string.
+C> @param IACON2 contains the occupied orbital indices
+C>               for an Malmqvist excitation-generated alpha string.
+C> @param IBCON1 contains the occupied orbital indices
+C>               for a given starting beta string.
+C> @param IBCON2 contains the occupied orbital indices
+C>               for an Malmqvist excitation-generated beta string.
+C> @param IFA    contains binomial coefficients.
+C> @param ISPA   holds the determinant start position
+C>               for each alpha string.
+C> @param ISPB   holds the determinant start position
+C>               for each beta string.
+C> @param NALP   denotes the total number of alpha strings.
+C> @param NBLP   denotes the total number of beta strings.
+      SUBROUTINE MALMQ_RINAB(
+     *           VTORB,L1,NCORSV,ITMPCI,NV,
+     *           AB,CI,NORB,NCOR,NCI,NA,NB,
+     *           IACON1,IACON2,IBCON1,IBCON2,IFA,
+     *           ISPA,ISPB,NALP,NBLP)
+C-----------------------------------------------------------------------
+      IMPLICIT NONE
+C     VARS
+      INTEGER NCI,IBAT,IBAT2,ICAT,ICAT2,ICI1,ICI2,IIDET,IPER1,IPET,IJK,
+     *        KJI,NA,NB,NALP,NBLP,NAT,NBT,NORB,NCOR,NCORSV,NV,
+     *        IHOLD,NACT,IPTH,JTH,ITMPCI,L1,L3,I
+      DOUBLE PRECISION ::
+     *       TCI2,TMP
+C     NEW CODING STANDARDS VARS
+      INTEGER IDAF,IODA,IP,IPK,IR,IS,IW,NAV
+C-----------------------------------------------------------------------
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      INTEGER POSDET,IFA(0:NORB-NCOR,0:NORB-NCOR),
+     *        IACON1(NA+NCOR),IBCON1(NA+NCOR),
+     *        IACON2(NA+NCOR),IBCON2(NB+NCOR),
+     *        ISPA(NALP),ISPB(NBLP)
+      DOUBLE PRECISION ::
+     *       VTORB(L1,L1),AB(NCI,NV),CI(NCI,NV)
+C
+      NACT = NORB - NCOR
+      NAT = NA + NCOR
+      NBT = NB + NCOR
+C
+C     DEFINE L3 AS USUAL
+      L3=L1*L1
+C
+C     READ IN THE FACTORIZED ORBITAL TRANSFORMATION.
+      CALL DAREAD(IDAF,IODA,VTORB,L3,520,0)
+C
+C     INITIALIZE CORRECT ARRAY WITH CI COEFF
+      DO I=1,NCI
+        AB(I,1)=CI(I,ITMPCI)
+      ENDDO
+C
+C     LOOP OVER THE IPTH PRODUCT FOUND IN CONFIG. TRANSFORM. 
+      DO 100 IPTH=NORB,NCOR+1,-1
+C
+C       RESET CI VECTORS FOR (I + F) TRANSFORM.
+        DO I=1,NCI
+          CI(I,1)=AB(I,1)
+        ENDDO
+C
+C       --------------------------------------------------
+C       RESET ALPHA ORBITAL INDICES
+        DO I=1,NAT
+          IACON1(I) = I
+        ENDDO
+C       LOOP OVER ALL ALPHA DETERMINANTS
+        DO 9000 IJK = 1,NALP
+C
+C         CHECK IF IPTH ORBITAL EXISTS IN THIS ALPHA DETERMINANT
+C         IF NOT, SKIP LOOP OVER J
+          IHOLD=0
+          DO I=1,NAT
+            IF(IACON1(I).EQ.IPTH) IHOLD=1
+          ENDDO
+          IF(IHOLD.EQ.0) GO TO 201
+C
+C         ALPHA DET POSITION
+          ICAT = ISPA(IJK)
+C
+C         RESET BETA ORBITAL INDICES
+          DO I=1,NBT
+            IBCON1(I) = I
+          ENDDO
+C         LOOP OVER ALL BETA DETERMINANTS
+          DO 8000 KJI = 1,NBLP
+C       --------------------------------------------------
+C
+C           GET BETA DET POSITION
+            IBAT=ISPB(KJI)
+C
+C           LOOP OVER THE J SUM FOUND IN CONFIG. TRANSFORM.
+            DO 110 JTH=NCOR+1,NORB
+C
+C             GET ITEMS FOR THE INITIAL DET
+C             OUTPUTS EXPLAINED BELOW.
+              CALL MALMQ_FINDET(IACON1,IACON2,NA,IPTH,JTH,
+     *                          NCOR,IPER1,IIDET,IW)
+C
+C             IF NO DETERMINANT, SKIP THIS TERM IN THE SUM OVER J
+C             OUTPUT IIDET = 0 --> DET EXISTS
+C                          = 1 --> DET GOES TO ZERO 
+              IF(IIDET.NE.0) GO TO 110
+C
+C             FINISH PERMUTATION
+C             OUTPUT IPER1  = POWER OF PERMUTATION FACTOR
+              IPER1 = ((-1)**IPER1)
+C
+C             GET NEW ALPHA DET POSITION
+C             OUTPUT IACON2 = NEW ORBITAL SET
+              IPET = POSDET(NACT,NA,IACON2,IFA)
+C             ICAT2 = (IPET-1)*NBLP
+              ICAT2 = ISPA(IPET)
+C
+C             GET DET POSITIONS
+C             1)  GET INITIAL DET POSITION
+              ICI1=ICAT+IBAT
+C             2)  GET NEW DET POSITION
+              ICI2=ICAT2+IBAT
+C
+C             GET THE ORBITAL FACTORS
+C             AND
+C             MULTIPLY IN PERMUTATION
+              TCI2=VTORB(NCORSV+JTH,NCORSV+IPTH)
+              IF(IPTH.EQ.JTH) TCI2=TCI2-1.0D+00
+              TCI2=TCI2*IPER1
+C
+C             MANIPULATE CI COEFF
+              AB(ICI2,1)=AB(ICI2,1)+TCI2*CI(ICI1,1)
+C
+C           END LOOP OVER ACTIVE ORBITALS (THE SUM OVER J)
+  110       CONTINUE
+C
+C       --------------------------------------------------
+C           ADVANCE THE BETA ORBITAL INDICES
+            CALL ADVANC(IBCON1,NBT,NORB)
+ 8000     CONTINUE
+C
+C       NEXT PIECES ARE ESSENTIALLY ATTACHED TO THE 9000 LOOP.
+C       GET NEW ORBITALS FOR NEXT ALPHA STRING.
+  201   CONTINUE
+        CALL ADVANC(IACON1,NAT,NORB)
+ 9000   CONTINUE
+C       --------------------------------------------------
+C
+C     END LOOP OVER THE IPTH PRODUCT FOUND IN CONFIG. TRANSFORM.
+  100 CONTINUE
+C
+C
+C
+C
+C
+C     LOOP OVER THE IPTH PRODUCT FOUND IN CONFIG. TRANSFORM.
+      DO 200 IPTH=NORB,NCOR+1,-1
+C
+C       RESET CI VECTORS FOR (I + F) TRANSFORM.
+        DO I=1,NCI
+          CI(I,1)=AB(I,1)
+        ENDDO
+C
+C       --------------------------------------------------
+C       RESET BETA ORBITAL INDICES
+        DO I=1,NBT
+          IBCON1(I) = I
+        ENDDO
+C       LOOP OVER ALL BETA DETERMINANTS
+        DO 9999 IJK = 1,NBLP
+C
+C         CHECK IF IPTH ORBITAL EXISTS IN THIS ALPHA DETERMINANT
+C         IF NOT, SKIP LOOP OVER J
+          IHOLD=0
+          DO I=1,NBT
+            IF(IBCON1(I).EQ.IPTH) IHOLD=1
+          ENDDO
+          IF(IHOLD.EQ.0) GO TO 301
+C
+C         BETA DET POSITION
+          IBAT = ISPB(IJK)
+C
+C         RESET ALPHA ORBITAL INDICES
+          DO I=1,NAT
+            IACON1(I) = I
+          ENDDO
+C         LOOP OVER ALL ALPHA DETERMINANTS
+          DO 8001 KJI = 1,NALP
+C       --------------------------------------------------
+C
+C           GET ALPHA DET POSITION
+            ICAT=ISPA(KJI)
+C
+C           LOOP OVER THE J SUM FOUND IN CONFIG. TRANSFORM.
+            DO 210 JTH=NCOR+1,NORB
+C
+C             GET ITEMS FOR THE INITIAL DET
+C             OUTPUTS EXPLAINED BELOW.
+              CALL MALMQ_FINDET(IBCON1,IBCON2,NB,IPTH,JTH,
+     *                          NCOR,IPER1,IIDET,IW)
+C
+C             IF NO DETERMINANT, SKIP THIS TERM IN THE SUM OVER J
+C             OUTPUT IIDET = 0 --> DET EXISTS
+              IF(IIDET.NE.0) GO TO 210
+C
+C             FINISH PERMUTATION
+C             OUTPUT IPER1  = POWER OF PERMUTATION FACTOR
+              IPER1 = ((-1)**IPER1)
+C
+C             GET NEW BETA DET POSITION
+C             OUTPUT IBCON2 = NEW ORBITAL SET
+              IPET = POSDET(NACT,NB,IBCON2,IFA)
+C             IBAT2 = (IPET-1)*NALP
+              IBAT2 = ISPB(IPET)
+C
+C             GET DET POSITIONS
+C             1)  GET INTIAL DET POSITION
+              ICI1=IBAT+ICAT
+C             2)  GET NEW DET POSITION
+              ICI2=IBAT2+ICAT
+C
+C             GET THE ORBITAL FACTORS
+C             AND
+C             MULTIPLY IN PERMUTATION
+              TCI2=VTORB(NCORSV+JTH,NCORSV+IPTH)
+              IF(IPTH.EQ.JTH) TCI2=TCI2-1.0D+00
+              TCI2=TCI2*IPER1
+C
+C             MANIPULATE CI COEFF
+              AB(ICI2,1)=AB(ICI2,1)+TCI2*CI(ICI1,1)
+C
+C           END LOOP OVER ACTIVE ORBITALS (THE SUM OVER J)
+  210       CONTINUE
+C
+C       --------------------------------------------------
+C           ADVANCE THE ALPHA ORBITAL INDICES
+            CALL ADVANC(IACON1,NAT,NORB)
+ 8001     CONTINUE
+C
+C       NEXT PIECES ARE ESSENTIALLY ATTACHED TO THE 9999 LOOP.
+C       GET NEW ORBITALS FOR NEXT BETA STRING.
+  301   CONTINUE
+        CALL ADVANC(IBCON1,NBT,NORB)
+ 9999   CONTINUE
+C       --------------------------------------------------
+C
+C     END LOOP OVER THE IPTH PRODUCT FOUND IN CONFIG. TRANSFORM.
+  200 CONTINUE
+C
+C
+C
+C     COPY OVER CI COEFF BACK TO ORIGINAL POSITION 
+      DO I=1,NCI
+        CI(I,ITMPCI)=AB(I,1)
+      ENDDO
+C
+C     RE-NORMALIZE CO COEFF
+      TMP=0.0D+00
+      DO I=1,NCI
+        TMP = TMP+CI(I,ITMPCI)*CI(I,ITMPCI)
+      ENDDO
+      TMP=1.0D+00/SQRT(TMP)
+      CALL DSCAL(NCI,TMP,CI(1,ITMPCI),1)
+C
+      RETURN
+      END
+C
+C*MODULE ALDECI  *DECK MALMQ_FINDET
+C> @brief      This routine generates orbital indices for strings.
+C> 
+C> @author     Aaron West and Klaus Ruedenberg
+C>             -November 09, 2012
+C> 
+C> @details    This routine generates orbital indices for strings
+C>             regardless of excitation direction and regardless
+C>             of linear dependence in the determinant.
+C>             Numerous error outs are made in order to verify
+C>             the routine.
+C>             While somewhat inefficient, the routine allows for
+C>             both upwards and downwards excitations, which are
+C>             needed for the Malmqvist CI transformation.
+C>             Most routines related to the sigma vector generation
+C>             are designed for one-way excitation.
+C>             We might eventually replace this routine with a 
+C>             more efficient one, but it still useful for 
+C>             verifying working code.
+C> 
+C> @param IBCON1 is an integer array that contains the occupied 
+C>               orbital indices of a given input spin string. 
+C> @param IBCON2 contains the resultant occupied orbital indices of 
+C>               output sping string with exit from the routine.
+C> @param NB     is the total number of electrons of some spin.
+C> @param IPTH   denotes the orbital to possibly loose an electron.
+C> @param JJ     denotes the orbital to possibly gain an electron.
+C> @param NCOR   denotes either the number of MCSCF core orbitals or 0.
+C> @param IPER   denotes the determinant permutation into standard order.
+C> @param IIDET  indicates whether or not determinant exists.
+C>               A 0 indicates determinant does exist.
+C>               A 1 indicates determinant does not exist.
+C> @param IW     is the integer variable for printing to log files.
+      SUBROUTINE MALMQ_FINDET(IBCON1,IBCON2,NB,IPTH,JJ,
+     *                        NCOR,IPER,IIDET,IW)
+C-----------------------------------------------------------------------
+      IMPLICIT NONE
+C     VARS
+      INTEGER I,IB,IERR,IIDET,IPER,IPTH,ITMP,JJ,NB,NCOR
+      INTEGER IW
+C-----------------------------------------------------------------------
+      INTEGER IBCON1(NB),IBCON2(NB)
+C
+C     ERROR OUT IF INITIAL DET IS NOT IN STANDARD ORDER.
+C     ERROR OUT IF INITIAL DET IS ACTUALLY ZERO.
+      IERR=0
+      DO I=1,NB-1
+        IF(IBCON1(I+1).LE.IBCON1(I)) IERR=IERR+1
+      ENDDO
+C
+C     INITIALIZE PERMUTATION VAR
+C     INTIATLIZE DET EXIST. VAR
+      IPER=0
+      IIDET=0
+C
+C     COPY IN OLD ORBITAL SET
+      CALL ICOPY(NB,IBCON1,1,IBCON2,1)
+C
+C     AT THIS POINT, THE IPTH ORBITAL EXISTS IN THE STRING.
+C     NOW, LOCATE THE ELECTRON POSITION AT WHICH IT EXISTS.
+C     I.E. DEFINE IB
+      IB=0
+      DO I=1,NB
+        IF(IBCON1(I).EQ.IPTH) IB=I
+      ENDDO
+      IF(IB.EQ.0) IERR=IERR+1
+      IF(IB.EQ.0) GO TO 300
+C     SET NEW ELEMENT.
+      IBCON2(IB)=JJ-NCOR
+C
+C     IF JJ ALREADY EXISTED IN THAT POSITION IN INITIAL DET,
+C     KEEP IDDET=0 AND RETURN
+      IF(JJ-NCOR.EQ.IBCON1(IB)) GO TO 300
+C
+C     CHECK THAT JJ DOES NOT ALREADY EXIST IN IBCON2
+C     IF SO, SET IIDET=1 AND RETURN
+      DO I=1,NB
+        IF(I.NE.IB.AND.IBCON2(I).EQ.JJ-NCOR) IIDET=1
+        IF(I.NE.IB.AND.IBCON2(I).EQ.JJ-NCOR) GO TO 300
+      ENDDO
+C
+C     REARRANGE NEW DET ORBITALS INTO STANDARD ORDER
+C     TRACK THE PERMUTATION AS WELL.
+C     ENSURE THAT THE DET EXISTS WITH IIDET
+C     NOTE:  SINCE WE ALWAYS START OFF IN STANDARD ORDER, THAT HELPS.
+      IF(JJ-NCOR.GT.IBCON1(IB)) THEN
+        DO 100 I=IB,NB-1
+          IF(IBCON2(I+1).GT.IBCON2(I)) GO TO 100
+          IPER=IPER+1
+          ITMP=IBCON2(I+1)
+          IBCON2(I+1)=IBCON2(I)
+          IBCON2(I)=ITMP
+  100   CONTINUE
+      ELSE
+        DO 101 I=IB,2,-1
+          IF(IBCON2(I-1).LT.IBCON2(I)) GO TO 101
+          IPER=IPER+1
+          ITMP=IBCON2(I-1)
+          IBCON2(I-1)=IBCON2(I)
+          IBCON2(I)=ITMP
+  101   CONTINUE
+      ENDIF
+C
+C     BELOW, MAKE LAST CHECKS.
+  300 CONTINUE
+C
+C     ERROR OUT IF FINAL DET IS NOT IN STANDARD ORDER.
+C     ERROR OUT IF FINAL DET IS ACTUALLY ZERO.
+      DO I=1,NB-1
+        IF(IBCON2(I+1).LE.IBCON2(I)) IERR=IERR+1
+      ENDDO
+C
+C     PERFORM ANY ERROR OUTS.
+      IF(IERR.GT.0.AND.IIDET.EQ.0) THEN
+C       DID NOT BOTHER TO PUT MASWRK HERE.
+C       WE SHOULD NOT SEE THIS ERROR FOR WORKING CODE ANYWAYS.
+        WRITE(IW,9000)
+        CALL FLSHBF(IW)
+        CALL ABRT
+        STOP
+      ENDIF
+C
+ 9000 FORMAT(/1X,'ERROR IN MALMQ_FINDET.'/
+     *        1X,'SOME DETERMINANT IS NOT IN STANDARD ORDER.')
+      RETURN
+      END
+C*MODULE ALDECI  *DECK MALMQ_CIGRB
+C> @brief      This routine returns CI root for Malmqvist. 
+C> 
+C> @author     Aaron West
+C>             -November 09, 2012
+C> 
+C> @details    This routine returns the state for CI transformation.
+C>             This routine is for the Malmqvist transformation.
+C> 
+C> @param ITMP is the value of the CI root to undergo transformation.
+C> @param IW   is the integer variable for printing to log files.
+C> @param MASWRK indicates master process.
+      SUBROUTINE MALMQ_CIGRB(ITMP,IW,MASWRK)
+C-----------------------------------------------------------------------
+      IMPLICIT NONE
+C     VARS
+      LOGICAL MASWRK
+      INTEGER I,ITMP,NXRT,NXRT2
+C     NEW CODING STANDARDS VARS
+      INTEGER IDWEIGH,IGPDET,IPURES,IROOT,IW,IWTS,K,KST,KSTSYM,
+     *        MAXP,MAXW1,MXRT,NA,NB,NACT,NCI,NCOR,NCORSV,NFLGDM,
+     *        NFTGCI,NITER,NORB
+      DOUBLE PRECISION ::
+     *       CRIT,DWPARM,GLIST,GRPDET,PRTTOL,S,SPINS,STSYM,SZ,WSTATE
+C-----------------------------------------------------------------------
+      PARAMETER (MXRT=100)
+      COMMON /DETWFN/ WSTATE(MXRT),SPINS(MXRT),CRIT,PRTTOL,S,SZ,
+     *                GRPDET,STSYM,GLIST,DWPARM,
+     *                NFLGDM(MXRT),IWTS(MXRT),NCORSV,NCOR,NACT,NORB,
+     *                NA,NB,K,KST,IROOT,IPURES,MAXW1,NITER,MAXP,NCI,
+     *                IGPDET,KSTSYM,NFTGCI,IDWEIGH
+C
+C     INTIALIZE ITMP
+      ITMP=0
+C
+C     THIS NEXT PIECE SEEMS RIGHT.
+C     HOWEVER... 
+C     IF SZ DOES NOT EQUAL S IN A REGULAR CI, IT SEEMS
+C     POSSIBLE SOME KIND OF BUG WITH CI COEFF.
+C     SINCE THIS METHOD IS BEING DEVELOPED, WE TAKE NO PRISONERS.
+C     SO, ERROR OUT FOR NOW.
+      NXRT=0
+      NXRT2=0
+      DO 10 I=1,K
+         IF (SZ.NE.S) NXRT=NXRT+1
+         IF (IPURES.EQ.1.AND.ABS(SPINS(I)-S).GT.0.03D+00) GOTO 10
+         IF(SZ.EQ.S) NXRT=NXRT+1
+         NXRT2=NXRT2+1
+         IF(WSTATE(NXRT2).NE.0.0D+00) GOTO 20 
+   10 CONTINUE
+C
+   20 CONTINUE
+C
+C     WRITE OUT ROOT FOR CI TRANSFORMATION.
+      ITMP=NXRT
+      IF(MASWRK) WRITE(IW,9001) ITMP
+C
+C     IF ITMP=0, ERROR OUT.
+C     IF S DOES NOT EQUAL SZ, ERROR OUT SINCE IT LOOKS TO MANGLE COEFF.
+      IF(ITMP.EQ.0.OR.
+     *   IPURES.NE.1
+     *   .OR.WSTATE(NXRT2).EQ.0
+     *   .OR.S.NE.SZ
+     *  ) THEN
+        IF(MASWRK) WRITE(IW,9002)
+        CALL FLSHBF(IW)
+        CALL ABRT
+        STOP
+      ENDIF
+
+      RETURN
+ 9001 FORMAT(/1X,'**** ---MALMQ_CIGRB--- *****,'/
+     *        1X,'THIS RUN WILL NOW FORM NEW CI COEFFICIENTS'/
+     *        1X,'VIA CONFIGURATIONAL TRANSFORMATION ON ROOT=',I4)
+ 9002 FORMAT(/1X,'**** ERROR IN ---MALMQ_CIGRB--- *****,'/
+     *        1X,'CANNOT ASSIGN ROOT FOR CONFIGURATIONAL TRANSFORM.')
       END
