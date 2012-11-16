@@ -1344,6 +1344,9 @@ c> @date November 4, 2012-Aaron West
 c> -Added SVD-localized orbitals option (part 1 of 3).
 c> @date November 6, 2012-Aaron West
 c> -Added malmq_cidriv call for future use (parts 2 and 3).
+c> @date November 16, 2012-Aaron West
+c> -Added another malmq_cidriv call for charge transfer.
+c>
       SUBROUTINE LMOX
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
@@ -1417,9 +1420,29 @@ C
       IF(ILOCAL.EQ.2.OR.ILOCAL.EQ.4) COMBO=.TRUE.
       IF (ORIENT.AND.COMBO) CALL DIRLMO
 C
-C     NEXT TWO LINES ARE FOR FUTURE DEVELOPMENT.  PLEASE LEAVE IT.
-C      ICIMALMQ=2
-C      CALL MALMQ_CIDRIV(325,71,ICIMALMQ)
+C     ----- PERFORM ATOMS-IN-MOLECULES BONDING ANALYSIS -----
+C
+      IF(ILOCAL.EQ.4) THEN
+C       FIRST CONVERT CI COEFFICIENT FROM NSPACE>1 TO NSPACE=1 
+cdevlop--        for now, we restrict the above to option 4.
+cdevlop--        also need to write lines to switch from defcci to detfci call
+cdevlop--        with malmq_cidriv below.
+cdevlop--        only in specific cases will the run retain its nspace value.
+cdevlop--        IF(NSPACE.GT.1) THEN
+cdevlop--          ICIMALMQ=2
+cdevlop--          CALL MALMQ_CIDRIV(325,71,ICIMALMQ)
+cdevlop--        ENDIF
+C       ORIENTED OR NOT ORIENTED SELECTION
+        IORBF2=71
+        IF(ORIENT) IORBF2=286
+C       OBTAIN CI COEFFICIENTS FOR LOCALIZED ORBITALS OF CHOICE.
+        ICIMALMQ=1
+        CALL MALMQ_CIDRIV(325,IORBF2,ICIMALMQ)
+C       OBTAIN CI COEFFICIENTS FOR CHARGE-TRANSFER-LESS WAVEFUNCTION.
+        ICIMALMQ=3
+        IGARB=IORBF2
+        CALL MALMQ_CIDRIV(IGARB,IGARB,ICIMALMQ)
+      ENDIF
 C
       RETURN
       END
@@ -4936,7 +4959,7 @@ C     58     93 = NUM IN INFOA BLOCK
 C
 C     MAKE THE CALLS FOR SVD-BASED ORBITALS.
       NCORTOT=0
-      CALL LOCAL_PPABASIS(ZAN,IAN,NAT,MASWRK,IW)
+      CALL LOCAL_PPABASIS(ZAN,IAN,NAT,NACT,MASWRK,IW)
       CALL LOCAL_PPASVDCORE(
      *     NCORTOT,IORBF1,X(LS2),
      *     X(LS),X(LUVEC),X(LEIG1),X(LVTVEC),
@@ -4976,13 +4999,13 @@ c> @author     Aaron West and Klaus Ruedenberg
 c>             -November 4, 2012
 c> @details    Routine checks basis set for SVD-localization.
 c>
-c> @param ZAN is from INFOA common.
-c> @param IAN is from INFOA common.
-c> @param NAT is the number of atoms.
+c> @param ZAN    is from INFOA common.
+c> @param IAN    is from INFOA common.
+c> @param NAT    is the number of atoms.
+c> @param NACT   is the number of active orbitals.
 c> @param MASWRK indicates the master process.
-c> @param IW indicates write out to the log file.
-c> @todo  Try to reduce memory usage a bit.
-      SUBROUTINE LOCAL_PPABASIS(ZAN,IAN,NAT,MASWRK,IW)
+c> @param IW     indicates write out to the log file.
+      SUBROUTINE LOCAL_PPABASIS(ZAN,IAN,NAT,NACT,MASWRK,IW)
 C-----------------------------------------------------------------------
       IMPLICIT NONE
 C     VARS
@@ -4991,20 +5014,36 @@ C     VARS
       PARAMETER (MXATM=2000)
       DOUBLE PRECISION :: ZAN(MXATM)
       INTEGER IAN(MXATM)
-      INTEGER NAT,IW,I,IERR,ILAST,NUCZ 
+      INTEGER NAT,IW,I,IERR1,IERR2,ILAST,NUCZ,ITMP,NACT 
+      INTEGER NUMVAL1,LOCAL_NUMVAL
 C-----------------------------------------------------------------------
 C
 C     MAKE SOME MAIN ERROR OUTS FIRST.
 C     --FOR NOW, ABORT IF BASIS IS NOT ALL ELECTRON BASIS.
-      IERR=0
+      IERR1=0
       ILAST=55
       DO I=1,NAT
         NUCZ = INT(ZAN(I) + 1.0D-03)
-        IF(NUCZ.NE.IAN(I).OR.IAN(I).GE.ILAST) IERR=IERR+1
+        IF(NUCZ.NE.IAN(I).OR.IAN(I).GE.ILAST) IERR1=IERR1+1
       ENDDO
+      IF(MASWRK.AND.IERR1.GT.0) WRITE(IW,9001)
 C
-      IF(IERR.GT.0) THEN
-        IF(MASWRK) WRITE(IW,9001)
+C     ERROR OUT IF ACTIVE ORBITALS ARE NOT THE LENGTH
+C     OF THE FULL-VALENCE ORBITALS.
+C     THIS ITEM IS ACTUALLY NEEDED FOR THIS METHOD.
+      ITMP=0
+      DO I=1,NAT
+        NUMVAL1=LOCAL_NUMVAL(I)
+        ITMP=ITMP+NUMVAL1
+      ENDDO
+      IERR2=0
+      IF(ITMP.NE.NACT) IERR2=1
+      IF(MASWRK.AND.IERR2.GT.0) WRITE(IW,9002)
+C
+C     ACTUALLY ERROR OUT.
+      IF(IERR1.GT.0
+     *   .OR.IERR2.GT.0
+     *  ) THEN
         CALL FLSHBF(IW)
         CALL ABRT
         STOP
@@ -5013,6 +5052,8 @@ C
       RETURN
  9001 FORMAT(1X,'*** ERROR IN LOCAL_PPABASIS ROUTINE.'/
      *       1X,'ERROR OCCURS FOR USING BASIS SET.')
+ 9002 FORMAT(1X,'*** ERROR IN LOCAL_PPABASIS ROUTINE.'/
+     *       1X,'NACT MUST EQUAL NUMBER OF MBS VALENCE ORBITALS.')
       END
 C*MODULE LOCAL    *DECK LOCAL_NUMVAL 
 c> @brief      Routine returns number of valences orbitals.
@@ -5059,6 +5100,34 @@ C
 C
       RETURN
       END
+C*MODULE LOCAL   *DECK LOCAL_ATM_CH
+C> @brief      This routine return integer value of nuclear charge.
+C> 
+C> @author     Aaron West
+C>             -November 15, 2012
+C> 
+C> @details    This routine return integer value of nuclear charge.
+C>             Using function avoids any conflict of variables very
+C>             easily.  e.g. in Davidson routines for Malmqvist items
+C> 
+C> @param IAT is the atom number.
+      INTEGER FUNCTION LOCAL_ATM_CH(IAT)
+C-----------------------------------------------------------------------
+      IMPLICIT NONE
+C     VARS
+      INTEGER IAT
+C     NEW CODING STANDARDS VARS
+      DOUBLE PRECISION :: ZAN,C
+      INTEGER MXATM,NAT,ICH,MUL,NUM,NQMT,NEX,NA,NB,IAN
+      PARAMETER (MXATM=2000)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NEX,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+C-----------------------------------------------------------------------
+C
+      LOCAL_ATM_CH=INT(ZAN(IAT)) 
+C
+      RETURN
+      END
 C*MODULE LOCAL   *DECK LOCAL_PPASVDCORE
 c> @brief      Routine makes SVD-localized core orbitals.
 c>
@@ -5068,6 +5137,11 @@ c>
 c> @details    Routine makes SVD-localized core orbitals.
 c>             LOCAL_PPASVD contains equivalent and 
 c>             better comments in the routine itself.
+c>
+c> @date November 16, 2012-Aaron West
+c> -Removed some error outs for vtvec.  Symmetric molecules
+c>  can have zeros here even in C1 point group.
+c>  This error out was mainly for debugging bad code.
 c>
 c> @param NCORTOT is total number of MCSCF core orbitals. 
 c> @param IORBF1 is the dat dict file for initial orbitals.
@@ -5113,11 +5187,11 @@ C     VARS
       LOGICAL MASWRK
       INTEGER MXATM
       PARAMETER (MXATM=2000)
-      DOUBLE PRECISION :: ONE,TOL,TMP
+      DOUBLE PRECISION :: ONE,TOL
       INTEGER NAT,LIMLOW(MXATM),LIMSUP(MXATM),
      *        NVVOS_NUMCOR
       PARAMETER (ONE=1.0D+00, TOL=1.0D-06)
-      INTEGER I,IATM1,IBAS1,IBAS2,IERR2,IERR3,IERR4,IHACT,
+      INTEGER I,IATM1,IBAS1,IBAS2,IERR2,IERR3,IHACT,
      *        ILTH,IMO,IORBF1,ISIZSVD,J,JHACT,L0,L1,L2,L3,NCORSV,
      *        NCORTOT,NUMCOR1,IJ,IJ2
 C     NEW CODING STANDARDS VARS
@@ -5219,17 +5293,6 @@ C       PERFORM SVD FOR IATM1
      *              ILTH,NCORTOT,SAOMO,L1,EIG,
      *              UVEC,L1,VTVEC,L0,
      *              WRKSVD,ISIZSVD,INFO)
-C
-C       WE KEEP ABOVE VCLRS FOR NOW AND ERROR OUT FOR
-C       INAPPROPRIATE ZERO ENTRIES.
-        IERR4=0
-        DO I=1,NCORTOT
-          DO J=1,NCORTOT
-            TMP=ABS(VTVEC(I,J))
-            IF(TMP.LT.TOL) IERR4=IERR4+1
-          ENDDO
-        ENDDO
-        IF(IERR4.GT.0) GO TO 8999
 C
 C       FORM TRANSFORMATION MATRIX VTVEC-TRANS FOR THE NEWLY PROJECTED MOS.
         CALL TRPOSQ(VTVEC,L0)
@@ -5343,13 +5406,10 @@ C     PERFORM FINAL ERROR OUTS.
           WRITE(IW,9003)
         ELSEIF(IERR3.GT.0) THEN
           WRITE(IW,9004) IERR3
-        ELSEIF(IERR4.GT.0) THEN
-          WRITE(IW,9005)
         ENDIF
       ENDIF
       IF(IERR2.GT.0
      *  .OR.IERR3.GT.0
-     *  .OR.IERR4.GT.0
      *  ) THEN
         CALL FLSHBF(IW)
         CALL ABRT
@@ -5362,8 +5422,6 @@ C
  9004 FORMAT(1X,'*** ERROR IN LOCAL_PPASVDCORE ROUTINE.'/
      *       1X,'IN SYMMETRIC ORTHOG.,'/
      *       1X,I4,' EIGENVALUES ARE BELOW TOL.')
- 9005 FORMAT(1X,'*** ERROR IN LOCAL_PPASVDCORE ROUTINE.'/
-     *       1X,'ERROR OCCURS FOR DGESVD OUTPUT VTVEC.')
       END
 C*MODULE LOCAL   *DECK LOCAL_PPASVD
 c> @brief      Routine makes SVD-localized valence orbitals.
@@ -5372,6 +5430,11 @@ c> @author     Aaron West and Klaus Ruedenberg
 c>             -November 4, 2012
 c>
 c> @details    Routine makes SVD-localized core orbitals.
+c>
+c> @date November 16, 2012-Aaron West
+c> -Removed some error outs for vtvec.  Symmetric molecules
+c>  can have zeros here even in C1 point group.
+c>  This error out was mainly for debugging bad code.
 c>
 c> @param NCORTOT is total number of MCSCF core orbitals.
 c> @param IORBF1 is the dat dict file for initial orbitals.
@@ -5416,10 +5479,10 @@ C     VARS
       LOGICAL MASWRK
       INTEGER MXATM
       PARAMETER (MXATM=2000)
-      DOUBLE PRECISION :: ONE,TOL,TMP
+      DOUBLE PRECISION :: ONE,TOL
       PARAMETER (ONE=1.0D+00, TOL=1.0D-06)
       INTEGER NAT,LIMLOW(MXATM),LIMSUP(MXATM)
-      INTEGER I,IATM1,IBAS1,IBAS2,IERR1,IERR2,IERR3,IERR4,IHACT,
+      INTEGER I,IATM1,IBAS1,IBAS2,IERR1,IERR2,IERR3,IHACT,
      *        ILTH,IMO,IORBF1,ISIZSVD,J,JHACT,L0,L1,L2,L3,
      *        ITMP,JHACT2,JMO,NACT,NCORTOT,NUMVAL1,IJ,IJ2,
      *        LOCAL_NUMVAL
@@ -5537,17 +5600,6 @@ C       PERFORM SVD FOR IATM1
      *              ILTH,NACT,SAOMO,L1,EIG,
      *              UVEC,L1,VTVEC,L0,
      *              WRKSVD,ISIZSVD,INFO)
-C
-C       WE KEEP ABOVE VCLRS FOR NOW AND ERROR OUT FOR
-C       INAPPROPRIATE ZERO ENTRIES.
-        IERR4=0
-        DO I=1,NACT
-          DO J=1,NACT
-            TMP=ABS(VTVEC(I,J))
-            IF(TMP.LT.TOL) IERR4=IERR4+1
-          ENDDO
-        ENDDO
-        IF(IERR4.GT.0) GO TO 8999
 C
 C       FORM TRANSFORMATION MATRIX VTVEC-TRANS FOR THE NEWLY PROJECTED MOS.
 C       (NACT,NACT) MATRIX SEEMS TO TURN UP IN VTVEC 
@@ -5697,9 +5749,10 @@ ckeep---      Remove the below line and print out nonorthogonal orbitals.
 ckeep---      CALL DAREAD(IDAF,IODA,VTMP,L3,522,0)
       IF(MASWRK) THEN
         WRITE(IW,9070)
-ckeep---        Uncomment the print statement below.
+ckeep---        Uncomment the write statement.
 ckeep---        Check that orient=.f. in the input.
-ckeep---        Now, one can view the SVD orbitals for any checks. 
+ckeep---        Now, one can view the SVD orbitals for any checks
+ckeep---        to what gets put into daf file 71. 
 ckeep---        Uncomment the next line.
 ckeep---        WRITE(IW,9071)
         CALL PRSQL(VTMP,NCORTOT+NACT,L1,L1)
@@ -5736,14 +5789,11 @@ C     PERFORM FINAL ERROR OUTS.
           WRITE(IW,9003)
         ELSEIF(IERR3.GT.0) THEN
           WRITE(IW,9004) IERR3
-        ELSEIF(IERR4.GT.0) THEN
-          WRITE(IW,9005)
         ENDIF
       ENDIF
       IF(IERR1.GT.0
      *  .OR.IERR2.GT.0
      *  .OR.IERR3.GT.0
-     *  .OR.IERR4.GT.0
      *  ) THEN
         CALL FLSHBF(IW)
         CALL ABRT
@@ -5758,8 +5808,6 @@ C
  9004 FORMAT(1X,'*** ERROR IN LOCAL_PPASVD ROUTINE.'/
      *       1X,'IN SYMMETRIC ORTHOG., '
      *       1X,I4,' EIGENVALUES ARE BELOW TOL.')
- 9005 FORMAT(1X,'*** ERROR IN LOCAL_PPASVD ROUTINE.'/
-     *       1X,'ERROR OCCURS FOR DGESVD OUTPUT VTVEC.')
  9070 FORMAT(/1X,'PPASVD LOCALIZED ORBITALS')
 ckeep--- 9071 FORMAT(//10X,'ORIENTED LOCALIZED ORBITALS')
  9080 FORMAT('PPASVD LOCALIZED ORBITALS'/' $VEC')
