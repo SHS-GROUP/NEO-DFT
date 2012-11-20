@@ -991,7 +991,7 @@ C
       LDMAT    = LVTORB + L1*L1
       LFRHS    = LDMAT + NATOMS*NATOMS
       LNATM    = LFRHS + NATOMS
-      LIPVTATM = LNATM + NATOMS+1
+      LIPVTATM = LNATM + L1
       LAST     = LIPVTATM + NATOMS
       NEED2  = LAST - LOADFM - 1
       NEEDCI = NEED1 + NEED2
@@ -2422,10 +2422,11 @@ C> @param DMAT     is a NATOMS-by-NATOMS matrix
 C>                 for charge transfer run.
 C> @param FRHS     is a vector with NATOMS length
 C>                 for charge transfer run.
-C> @param NATM     is a vector with NATOMS+1 length
-C>                 that holds the starting molecular
-C>                 orbital for each atom.  For quasi-atomic orbitals,
+C> @param NATM     is a vector with L1 length
+C>                 that defines atoms for each orbital number.
+C>                 For quasi-atomic orbitals,
 C>                 these orbital limits assign each orbital to a single atom.
+C>                 At this point, NATM actually contains active orbital labels.
 C> @param IPVTATM  is storage for pivot vectors for small linear equations.
       SUBROUTINE DAVCI(IW,SOME,ECONST,SI1,SI2,NORB,NCOR,NCI,NA,NB,
      *    CI,SPIN,EL,K,KST,MAXP,MAXW1,NITER,CRIT,
@@ -2467,7 +2468,7 @@ C
       DIMENSION IOB(NORB-NCOR)
       DIMENSION ISTRB((NBLP*(NB*(NORB-NCOR-NB)))/2)
       DIMENSION ISTRP((NBLP*(NB*(NORB-NCOR-NB)))/2),ISTAR(NBLP)
-      DIMENSION DMAT(NATOMS,NATOMS),FRHS(NATOMS),NATM(NATOMS+1)
+      DIMENSION DMAT(NATOMS,NATOMS),FRHS(NATOMS),NATM(L1)
       DIMENSION IPVTATM(NATOMS)
 C
 C   Code to do a full CI almost completely directly.  Written by
@@ -2734,7 +2735,7 @@ C
 C       FIND WAVEFUNCTION WITH NO CHARGE TRANSFER.
         IF(ICIMALMQ.EQ.3) THEN
           CALL MALMQ_CHARGE_TRANSFER1(
-     *         NATOMS,ITMPCI,NV,
+     *         NATOMS,ITMPCI,NV,L1,
      *         AB,CI,NORB,NCOR,NCI,NA,NB,
      *         IACON1,IBCON1,
      *         ISPA,ISPB,NALP,NBLP,
@@ -2742,7 +2743,7 @@ C       FIND WAVEFUNCTION WITH NO CHARGE TRANSFER.
      *         MASWRK,IW,SOME)
         ENDIF
 C
-C       NOW, GET OUR BEFORE WE MUCK UP THE NEW CI COEFFS.
+C       NOW, GET OUT BEFORE WE MUCK UP THE NEW CI COEFFS.
         RETURN
       ENDIF
 C
@@ -7464,10 +7465,11 @@ C> @param DMAT     is a NATOMS-by-NATOMS matrix
 C>                 for charge transfer run.
 C> @param FRHS     is a vector with NATOMS length
 C>                 for charge transfer run.
-C> @param NATM     is a vector with NATOMS+1 length
-C>                 that holds the starting molecular
-C>                 orbital for each atom.  For quasi-atomic orbitals,
+C> @param NATM     is a vector with L1 length
+C>                 that defines atoms for each orbital number.
+C>                 For quasi-atomic orbitals,
 C>                 these orbital limits assign each orbital to a single atom.
+C>                 At this point, NATM actually contains active orbital labels.
 C> @param IPVTATM  is storage for pivot vectors for small linear equations.
       SUBROUTINE DETCI(IW,SOME,ECONST,SI1,SI2,ISI1,ISI2,
      *         NORB,NCOR,NCI,NA,NB,K,KST,MAXP,MAXW1,NITER,CRIT,
@@ -7487,7 +7489,7 @@ C
       DIMENSION IFA(0:NORB-NCOR,0:NORB-NCOR)
       DIMENSION CI(IDS),IWRK(IIS)
       DIMENSION IOB(NORB-NCOR)
-      DIMENSION DMAT(NATOMS,NATOMS),FRHS(NATOMS),NATM(NATOMS+1)
+      DIMENSION DMAT(NATOMS,NATOMS),FRHS(NATOMS),NATM(L1)
       DIMENSION IPVTATM(NATOMS)
 C
 C   Code to do determinantal CI, here we partition the memory up
@@ -10539,7 +10541,7 @@ C-----------------------------------------------------------------------
 C     VARS
       LOGICAL MASWRK
       INTEGER I,ICHK,IDUM,IEND,IEND2,IORBF1,IORBF2,IST,IST2,
-     *        ITMP,JTMP,J,JJ,L0,L1,L2,L3,NCORSV,NACT,NVIRT
+     *        ITMP,JTMP,J,JJ,L0,L1,L2,L3,NCORSV,NACT,NVIRT,JSAV
 C     NEW CODING STANDARDS VARS
       LOGICAL FDIRCT,QCORR
       INTEGER NSPACE,MSTA,MNUM,MINI,MAXI,IAMI,IAMA,IBMI,IBMA,
@@ -10566,6 +10568,10 @@ C
 C     READ FINAL MOS
       CALL DAREAD(IDAF,IODA,VOR,L3,IORBF2,0)
 C
+C     CLEAR OUT THE IWRK ARRAYS TO CHECK WHAT IS GOING ON LATER.
+      CALL VICLR(IWRK,1,L1)
+      CALL VICLR(IWRK2,1,L1*8)
+C
 C     OBTAIN MAXIMUM OVERLAP FOR GIVEN ORBITAL SETS
       CALL DAREAD(IDAF,IODA,S,L2,12,0)
       CALL DCOPY(L3,VOPT,1,UVEC,1)
@@ -10591,10 +10597,17 @@ C     JUST IN CASE.
           ITMP=IWRK2(I)
           JTMP=0
           DO J=1,NVIRT-1
-            IF(IWRK2(J).GE.NVIRT) JTMP=IWRK2(J)
+            IF(IWRK2(J).GE.NVIRT) THEN
+              JTMP=IWRK2(J)
+              JSAV=J
+            ENDIF
           ENDDO
           IF(JTMP.NE.0) THEN
+C           INTERCHANGE ORBITALS
             CALL DSWAP(L1,VOR(1,JTMP),1,VOR(1,ITMP),1)
+C           INTERCHANGE LABELS
+            IWRK2(I)   =JTMP
+            IWRK2(JSAV)=ITMP
             IF(MASWRK) WRITE(IW,9001) JTMP,ITMP
           ENDIF
         ENDIF
@@ -10602,7 +10615,10 @@ C     JUST IN CASE.
 
 C
 C     APPLY ANY ORMAS RESTRICTIONS TO THE ORBITAL REORDERINGS
-      IF(CISTEP.NE.ORMAS) RETURN
+C     NOTES:
+C     --EVEN THOUGH JUST L0 IN LENGTH, WE WRITE OUT L1 SINCE
+C       THAT VARIABLE IS ALREADY CONVENIENT IN LATER ROUTINES.
+      IF(CISTEP.NE.ORMAS) GO TO 100
       CALL VICLR(IWRK,1,L1)
       IF(MASWRK) WRITE(IW,9003)
       IST=MSTA(1)
@@ -10647,10 +10663,45 @@ C                 SWAP MOS
 C
 C       WRITE OUT NEW ORDERINGS
         DO I=IST,IEND
-          IF(MASWRK) WRITE(IW,9004) I,IWRK2(I),IWRK(I) 
+          IF(MASWRK) WRITE(IW,9004) I,IWRK2(I),IWRK(I)
         ENDDO
       ENDIF
 C
+  100 CONTINUE
+C
+C     SHIFT ORBITAL LABELS SO THAT THE FIRST ACTIVE ORBITAL
+C     HAS A LABEL OF 1.
+      DO I=1,L1
+C       GET TOTAL CORE NUMBER
+        ITMP=NCORSV
+C       CONVERT IWRK2 INDICES TO HAVE ACTIVE ORBITALS START AT 1.
+        IWRK2(I)=IWRK2(I)-ITMP
+C       SHIFT IWRK2 INDICES TO PROPER LOCATIONS.
+        ICHK=I-ITMP
+        IF(I.GT.ITMP.AND.I.LE.L1
+     *     .AND.
+     *     ICHK.GE.1.AND.ICHK.LE.L1) IWRK2(I-ITMP)=IWRK2(I)
+        IF(I.GT.L0) IWRK2(I)=0
+      ENDDO
+C     RE-CHECK 
+      DO I=1,L0-NCORSV
+        IF(IWRK2(I).LE.0) THEN
+          IF(MASWRK) WRITE(IW,9005)
+          CALL FLSHBF(IW)
+          CALL ABRT
+          STOP
+        ENDIF
+      ENDDO
+C     KILL OFF THE VIRTUALS SINCE WE CHECKED EVERYTHING ALREADY.
+      DO I=NCORSV+NACT+1,L1
+        IWRK2(I)=0
+      ENDDO
+C
+C     SAVE NEW ORBITAL ORDERINGS FOR CHARGE TRANSFER RUNS.
+C     NOTE:  THE LAST ELEMENTS SHOULD BE NEGATIVE NUMS ANDcOR 0s.
+C            WE DON'T USE THEM ANYWAYS.
+      CALL DAWRIT(IDAF,IODA,IWRK2,L1,527,1)
+
       CALL FLSHBF(IW)
 C
 C     RE-READ INITIAL MOS
@@ -10665,6 +10716,7 @@ C     RE-READ INITIAL MOS
  9002 FORMAT(1X,'3. NOW APPLYING ANY VIRTUAL VS OCCUPIED RESTRICTIONS.')
  9003 FORMAT(1X,'4.NOW APPLYING ANY ORMAS SUBSPACE RESTRICTIONS.')
  9004 FORMAT(1X,'MO SWITCHES COUNT-POSITION-GROUP',I4,I4,I4)
+ 9005 FORMAT(1X,'THESE ELEMENTS MUST BE GREATER THAN 0.')
       END
 C*MODULE ALDECI  *DECK MALMQ_TORB
 C> @brief      This routine gets orbital transformation for Malmqvist.
@@ -10702,7 +10754,7 @@ C-----------------------------------------------------------------------
 C     VARS
       LOGICAL MASWRK
       INTEGER I,L0,L1,L2,L3,NACT,NCORSV
-      DOUBLE PRECISION RCOND
+      DOUBLE PRECISION RCOND1,RCOND2
 C     NEW CODING STANDARDS VARS
       INTEGER IDAF,IODA,IP,IPK,IR,IS,IW,NAV
 C-----------------------------------------------------------------------
@@ -10750,7 +10802,7 @@ C     FORM SHAT
       CALL MRTRBR(VOPT,L1,L1,L0,VTORB,L1,L0,SHAT,L1)
 C
 C     FORM SBAR-INV
-      CALL DGECO(SBAR,L1,L0,IPVT,RCOND,WRKINV)
+      CALL DGECO(SBAR,L1,L0,IPVT,RCOND1,WRKINV)
       CALL DGEDI(SBAR,L1,L0,IPVT,DET,WRKINV,01)
 C
 C     FORM VTORB
@@ -10759,21 +10811,21 @@ C     FORM VTORB
 cdsav--
 cdsav--C
 cdsav--C     FORM VTORB-INV
-cdsav--      CALL DGECO(VTORB,L1,L0,IPVT,RCOND,WRKINV)
+cdsav--      CALL DGECO(VTORB,L1,L0,IPVT,RCOND2,WRKINV)
 cdsav--      CALL DGEDI(VTORB,L1,L0,IPVT,DET,WRKINV,01)
 C
 C     IN ACT-ACT BLOCK, FORM VTORB-INV
       DO I=1,NACT
         CALL DCOPY(NACT,VTORB(NCORSV+1,NCORSV+I),1,VMAT(1,I),1)
       ENDDO
-      CALL DGECO(VMAT,NACT,NACT,IPVT,RCOND,WRKINV)
+      CALL DGECO(VMAT,NACT,NACT,IPVT,RCOND2,WRKINV)
       CALL DGEDI(VMAT,NACT,NACT,IPVT,DET,WRKINV,01)
       DO I=1,NACT
         CALL DCOPY(NACT,VMAT(1,I),1,VTORB(NCORSV+1,NCORSV+I),1)
       ENDDO
 C
 C     ERROR OUT IF RCOND TOO SMALL.
-      IF(RCOND.LT.1.0D-10) THEN
+      IF(RCOND1.LT.1.0D-10.OR.RCOND2.LT.1.0D-10) THEN
         IF(MASWRK) WRITE(IW,9000)
         CALL FLSHBF(IW)
         CALL ABRT
@@ -10822,7 +10874,7 @@ C     NEW CODING STANDARDS VARS
      *       TOL,ZERO,
      *       ALDET,C0SQ,CISTEP,ORMAS
 C-----------------------------------------------------------------------
-      PARAMETER (TOL=1.0D-11, ZERO=0.0D+00)
+      PARAMETER (TOL=1.0D-08, ZERO=0.0D+00)
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
       COMMON /FCCWFN/ NSPACE,MSTA(51),MNUM(51),MINI(51),MAXI(51),
      *                IAMI(51),IAMA(51),IBMI(51),IBMA(51),IDIMFCC(51),
@@ -11507,6 +11559,7 @@ C>
 C> @param NATOMS   denotes the number of atoms.
 C> @param ITMPCI   denotes the CI root of interest.
 C> @param NV       denotes total number of CI states for run.
+C> @param L1       denotes the length of the AO coefficients.
 C> @param AB       will temporarily hold the new CI coefficients.
 C> @param CI       denotes the CI vector.
 C> @param NORB     is the number of total occupied (active if ncor is 0)
@@ -11536,16 +11589,16 @@ C>                 In essense, this matrix is the matrix-form of the
 C>                 next variable.
 C> @param FRHS     is a vector that will hold the charge transfer
 C>                 population for each atom.
-C> @param NATM     is a vector with NATOMS+1 length
-C>                 that holds the starting molecular
-C>                 orbital for each atom.  For quasi-atomic orbitals,
+C> @param NATM     is a vector with L1 length
+C>                 that defines atoms for each orbital number.
+C>                 For quasi-atomic orbitals,
 C>                 these orbital limits assign each orbital to a single atom.
 C> @param IPVTATM  is storage for pivot vectors for small linear equations.
 C> @param MASWRK   denotes the master process.
 C> @param IW       is the integer variable for printing to log files.
 C> @param SOME     is true for master process with nprint not equal -5.
       SUBROUTINE MALMQ_CHARGE_TRANSFER1(
-     *           NATOMS,ITMPCI,NV,
+     *           NATOMS,ITMPCI,NV,L1,
      *           AB,CI,NORB,NCOR,NCI,NA,NB,
      *           IACON1,IBCON1,
      *           ISPA,ISPB,NALP,NBLP,
@@ -11555,12 +11608,11 @@ C-----------------------------------------------------------------------
       IMPLICIT NONE
 C     VARS
       LOGICAL MASWRK,SOME
-      INTEGER I,IERR,ILOOP,ITER,ITMP,ITMPCI,NA,NB,NALP,NBLP,
-     *        NV,NCI,NORB,NCOR,NATOMS
+      INTEGER L1,I,IERR,ILOOP,ITER,ITMPCI,NA,NB,NALP,NBLP,
+     *        NV,NCI,NORB,NCOR,NATOMS,IATHLD,IKIND
       DOUBLE PRECISION ::
      *       RESID,TMP,TMPOVR
 C     NEW CODING STANDARDS VARS
-      INTEGER LOCAL_NUMVAL
       INTEGER MAXIT,IW
       DOUBLE PRECISION ::
      *       TOL,ZERO
@@ -11568,7 +11620,7 @@ C-----------------------------------------------------------------------
       PARAMETER (MAXIT=600, TOL=1.0D-14, ZERO=0.0D+00)
       INTEGER IACON1(NA+NCOR),IBCON1(NA+NCOR),
      *        ISPA(NALP),ISPB(NBLP),
-     *        NATM(NATOMS+1),IPVTATM(NATOMS)
+     *        NATM(L1),IPVTATM(NATOMS)
       DOUBLE PRECISION ::
      *       AB(NCI,NV),CI(NCI,NV),
      *       DMAT(NATOMS,NATOMS),FRHS(NATOMS)
@@ -11578,16 +11630,27 @@ C     INITIATLIZE FIRST AB VECTOR TO CI COEFFICIENT OF INTEREST.
         AB(I,1)=CI(I,ITMPCI)
       ENDDO
 C
-C     INITIALIZE NATM ORBITAL RANGES.
-C     NOTE:  THESE NUMBERS ARE ACTIVE ORBITAL NUMBERS
-C            THAT START AT 1.
-      CALL VICLR(NATM,1,NATOMS)
-      ITMP=1
+C     CONVERT NATM ORBITAL RANGES INTO ATOM INDICES.
+C     NOTE:  NATM ARRAY CONTAINS ORBITAL NUMBERS FOR 1->L0.
+C            IT STARTS WITH ACTIVE ORBITALS AT INDEX 1.
+      CALL MALMQ_MK_NATM(NATM,L1,NATOMS,NORB,SOME)
+C
+C     DETERMINE ATOM WITH LEAST CHARGE TRANSFER NOW.
+      ILOOP=1
+      CALL MALMQ_CHARGE_TRANSFER2(
+     *     NATOMS,NV,L1,
+     *     AB,NORB,NCOR,NCI,NA,NB,
+     *     IACON1,IBCON1,
+     *     ISPA,ISPB,NALP,NBLP,
+     *     DMAT,FRHS,NATM,ILOOP,IATHLD,
+     *     MASWRK,IW)
+      IATHLD=1
+      TMP=ABS(FRHS(1))
       DO I=1,NATOMS
-        NATM(I)=ITMP
-        ITMP=ITMP+LOCAL_NUMVAL(I)
+        IF(ABS(FRHS(I)).LT.TMP) IATHLD=I
+        IF(ABS(FRHS(I)).LT.TMP) TMP=ABS(FRHS(I))
       ENDDO
-      NATM(NATOMS+1)=ITMP
+      IF(SOME) WRITE(IW,9000) IATHLD
 C
 C     LOOP OVER ITERATES UNTIL NONLINEAR EQUATION CONVERGES.
       IF(SOME) WRITE(IW,9001)
@@ -11596,12 +11659,17 @@ C
 C       FORM DMAT AND FRHS.
         ILOOP=0
         CALL MALMQ_CHARGE_TRANSFER2(
-     *       NATOMS,NV,
+     *       NATOMS,NV,L1,
      *       AB,NORB,NCOR,NCI,NA,NB,
      *       IACON1,IBCON1,
      *       ISPA,ISPB,NALP,NBLP,
-     *       DMAT,FRHS,NATM,ILOOP,
+     *       DMAT,FRHS,NATM,ILOOP,IATHLD,
      *       MASWRK,IW)
+C
+C       SHIFT DMAT AND FRHS ELEMENTS BECAUSE OF IATHLD.
+        IKIND=0
+        CALL MALMQ_CHARGE_SHIFT(
+     *       IKIND,IATHLD,FRHS,DMAT,NATOMS,MASWRK,IW)
 C
 C       GRAB MAX RESIDUAL AND CHECK CONVERGENCE.
         RESID=ABS(FRHS(1))
@@ -11622,16 +11690,21 @@ C       SOLVE DMAT * X = FRHS LINEAR EQUATION.
           STOP
         ENDIF
 C
+C       UNSHIFT DMAT AND FRHS ELEMENTS BECAUSE OF IATHLD.
+        IKIND=1
+        CALL MALMQ_CHARGE_SHIFT(
+     *       IKIND,IATHLD,FRHS,DMAT,NATOMS,MASWRK,IW)
+C
 C       PREP FOR NEXT ROUND
 C       ---FORM NEW CI COEFF FROM NONLINEAR FORMULA
 C       ------B_K= SUM OVER K[  C_K/(1+SUM OVER ATOMS-1[ETC] ]
 C       ---NORMALIZE THESE CI COEFF
         CALL MALMQ_CHARGE_TRANSFER3(
-     *       NATOMS,NV,
+     *       NATOMS,NV,L1,
      *       AB,NORB,NCOR,NCI,NA,NB,
      *       IACON1,IBCON1,
      *       ISPA,ISPB,NALP,NBLP,
-     *       FRHS,NATM)
+     *       FRHS,NATM,IATHLD)
 C
 C     END LOOP OVER ITERATES UNTIL NONLINEAR EQUATION CONVERGES.
       ENDDO
@@ -11640,11 +11713,11 @@ C     CHECK THE SOLUTION OVER ALL NATOMS RATHER THAN NATOMS-1
   200 CONTINUE
       ILOOP=1
       CALL MALMQ_CHARGE_TRANSFER2(
-     *     NATOMS,NV,
+     *     NATOMS,NV,L1,
      *     AB,NORB,NCOR,NCI,NA,NB,
      *     IACON1,IBCON1,
      *     ISPA,ISPB,NALP,NBLP,
-     *     DMAT,FRHS,NATM,ILOOP,
+     *     DMAT,FRHS,NATM,ILOOP,IATHLD,
      *     MASWRK,IW)
       RESID=ABS(FRHS(1))
       DO I=1,NATOMS
@@ -11676,6 +11749,7 @@ C     WRITE OUT RESULTS.
       IF(SOME) WRITE(IW,9007) TMPOVR
 C
       RETURN
+ 9000 FORMAT(/1X'OMITTING ATOM',1X,I4,'.')
  9001 FORMAT(/'ITERATION',6X,'CURRENT MAXIMUM RESIDUAL')
  9002 FORMAT(I5,10X,1P,E8.2)
  9003 FORMAT(/1X,'ERROR IN SMALL LINEAR EQUATION',
@@ -11701,6 +11775,7 @@ C> @todo       Make parallel if even needed.
 C>
 C> @param NATOMS   denotes the number of atoms.
 C> @param NV       denotes total number of CI states for run.
+C> @param L1       denotes the length of the AO coefficients.
 C> @param AB       will temporarily hold the new CI coefficients.
 C> @param NORB     is the number of total occupied (active if ncor is 0)
 C>                 orbitals in the CI.
@@ -11722,29 +11797,30 @@ C> @param DMAT     is a charge-transfer-less matrix.
 C>                 Please see MALMQ_CHARGE_TRANSFER1.
 C> @param FRHS     is a vector that will hold the charge transfer
 C>                 population for each atom.
-C> @param NATM     is a vector with NATOMS+1 length
-C>                 that holds the starting molecular
-C>                 orbital for each atom.  For quasi-atomic orbitals,
+C> @param NATM     is a vector with L1 length
+C>                 that defines atoms for each orbital number.
+C>                 For quasi-atomic orbitals,
 C>                 these orbital limits assign each orbital to a single atom.
 C> @param ILOOP    toggles between summing over NATOMS-1 or NATOMS.
 C>                 ILOOP=0 yields both DMAT and FRHS over NATOMS-1.
 C>                 ILOOP=1 yields only FRHS over NATOMS.
+C> @param IATHLD   is the index of the atom which is omitted.
 C> @param MASWRK   denotes the master process.
 C> @param IW       is the integer variable for printing to log files.
       SUBROUTINE MALMQ_CHARGE_TRANSFER2(
-     *           NATOMS,NV,
+     *           NATOMS,NV,L1,
      *           AB,NORB,NCOR,NCI,NA,NB,
      *           IACON1,IBCON1,
      *           ISPA,ISPB,NALP,NBLP,
-     *           DMAT,FRHS,NATM,ILOOP,
+     *           DMAT,FRHS,NATM,ILOOP,IATHLD,
      *           MASWRK,IW)
 C-----------------------------------------------------------------------
       IMPLICIT NONE
 C     VARS
       LOGICAL MASWRK
-      INTEGER I,IBAT,ICAT,ICHARG,ICHARGB,ICI1,IFRHS,IFRHSB,IIAA,IIBB,
-     *        IIEND,IIST,IJK,KJI,ILOOP,ILOOP2,ITMP,NA,NB,NALP,NBLP,
-     *        NAT,NBT,NCI,NCOR,NNELC,NORB,NV,NATOMS
+      INTEGER L1,I,IBAT,ICAT,ICHARG,ICHARGB,ICI1,IFRHS,IFRHSB,IIAA,IIBB,
+     *        IATOM,IJK,KJI,ILOOP,ITMP,NA,NB,NALP,NBLP,
+     *        NAT,NBT,NCI,NCOR,NNELC,NORB,NV,NATOMS,IATHLD
       DOUBLE PRECISION ::
      *       TMPCI
 C     NEW CODING STANDARDS VARS
@@ -11753,7 +11829,7 @@ C     NEW CODING STANDARDS VARS
 C-----------------------------------------------------------------------
       INTEGER IACON1(NA+NCOR),IBCON1(NA+NCOR),
      *        ISPA(NALP),ISPB(NBLP),
-     *        NATM(NATOMS+1)
+     *        NATM(L1)
       DOUBLE PRECISION ::
      *       AB(NCI,NV),DMAT(NATOMS,NATOMS),FRHS(NATOMS)
 C
@@ -11768,10 +11844,7 @@ C
 C     ILOOP CONTROLS WHETHER:
 C     --1. SOLVING FOR LAGRANGE MULTIPLIERS
 C     --2. CHECKING THE SOLUTION
-      ILOOP2=0
-      IF(ILOOP.EQ.0) ILOOP2=NATOMS-1
-      IF(ILOOP.EQ.1) ILOOP2=NATOMS
-      IF(ILOOP2.EQ.0) THEN
+      IF(ILOOP.NE.0.AND.ILOOP.NE.1) THEN
         IF(MASWRK) WRITE(IW,9002)
         CALL FLSHBF(IW)
         CALL ABRT
@@ -11811,23 +11884,23 @@ C         DEFINE THE CI COEFFICIENT ONCE.
           TMPCI=AB(ICI1,1)
 C
 C         LOOP OVER ATOMS
-          DO 100 IIAA=1,ILOOP2
+          DO 100 IIAA=1,NATOMS
+            IF(IIAA.EQ.IATHLD.AND.ILOOP.NE.1) GO TO 100
 C           RE-INITIALIZE IFRHS
             IFRHS=0
 C           FIRST INCLUDE CORE ELECTRONS INTO IFRHS
             NNELC=NVVOS_NUMCOR(IIAA,1)
             IFRHS=IFRHS+2*NNELC
-C           GRAB ATOMIC ORBITAL RANGES FOR ATOM IIAA
-            IIST=NATM(IIAA)
-            IIEND=NATM(IIAA+1)-1
 C           LOOP OVER IACON1,IBCON1 FOR OCCUPIED ORBITALS
             DO I=1,NAT
               ITMP=IACON1(I)
-              IF(ITMP.GE.IIST.AND.ITMP.LE.IIEND) IFRHS=IFRHS+1
+              IATOM=NATM(ITMP)
+              IF(IATOM.EQ.IIAA) IFRHS=IFRHS+1
             ENDDO
             DO I=1,NBT
               ITMP=IBCON1(I)
-              IF(ITMP.GE.IIST.AND.ITMP.LE.IIEND) IFRHS=IFRHS+1
+              IATOM=NATM(ITMP)
+              IF(IATOM.EQ.IIAA) IFRHS=IFRHS+1
             ENDDO
 C           FORM RHS CONTRIBUTION
             ICHARG=LOCAL_ATM_CH(IIAA)
@@ -11836,23 +11909,23 @@ C           FORM RHS CONTRIBUTION
 C
 C           SYMMETRIC LOOP OVER ATOMS
             IF(ILOOP.EQ.1) GO TO 100
-            DO IIBB=IIAA,NATOMS-1
+            DO 101 IIBB=IIAA,NATOMS
+              IF(IIBB.EQ.IATHLD.AND.ILOOP.NE.1) GO TO 101
 C             RE-INITIALIZE IFRHSB
               IFRHSB=0
 C             FIRST INCLUDE CORE ELECTRONS INTO IFRHS
               NNELC=NVVOS_NUMCOR(IIBB,1)
               IFRHSB=IFRHSB+2*NNELC
-C             GRAB ATOMIC ORBITAL RANGES FOR ATOM IIBB
-              IIST=NATM(IIBB)
-              IIEND=NATM(IIBB+1)-1
 C             LOOP OVER IACON1,IBCON1 FOR OCCUPIED ORBITALS
               DO I=1,NAT
                 ITMP=IACON1(I)
-                IF(ITMP.GE.IIST.AND.ITMP.LE.IIEND) IFRHSB=IFRHSB+1
+                IATOM=NATM(ITMP)
+                IF(IATOM.EQ.IIBB) IFRHSB=IFRHSB+1
               ENDDO
               DO I=1,NBT
                 ITMP=IBCON1(I)
-                IF(ITMP.GE.IIST.AND.ITMP.LE.IIEND) IFRHSB=IFRHSB+1
+                IATOM=NATM(ITMP)
+                IF(IATOM.EQ.IIBB) IFRHSB=IFRHSB+1
               ENDDO
 C             FORM MATRIX CONTRIBUTION
               ICHARGB=LOCAL_ATM_CH(IIBB)
@@ -11860,7 +11933,7 @@ C             FORM MATRIX CONTRIBUTION
               DMAT(IIAA,IIBB)=DMAT(IIAA,IIBB)+IFRHS*IFRHSB*TMPCI*TMPCI
 C
 C             END SYMMETRIC LOOP OVER ATOMS
-              ENDDO
+  101       CONTINUE
 C
 C         END LOOP OVER ATOMS
   100     CONTINUE
@@ -11881,8 +11954,8 @@ C     AND
 C     FILL IN THE REST OF THE SYMMETRIC MATRIX DMAT.
       IF(ILOOP.EQ.1) RETURN
       CALL DSCAL(NATOMS*NATOMS,2.0D+00,DMAT,1)
-      DO IIAA=1,NATOMS-1
-        DO IIBB=IIAA+1,NATOMS-1
+      DO IIAA=1,NATOMS
+        DO IIBB=IIAA+1,NATOMS
           DMAT(IIBB,IIAA)=DMAT(IIAA,IIBB)
         ENDDO
       ENDDO
@@ -11892,7 +11965,6 @@ C
      *        1X,'NATOMS CANNOT BE LESS THAN 2.')
  9002 FORMAT(/1X,'ERROR IN MALMQ_CHARGE_TRANSFER2.'/
      *        1X,'ILOOP MUST EQUAL 0 OR 1.')
-
       END
 C*MODULE ALDECI  *DECK MALMQ_CHARGE_TRANSFER3
 C> @brief      This routine updates charge-transfer-less CI.
@@ -11907,6 +11979,7 @@ C> @todo       Make parallel if even needed.
 C>
 C> @param NATOMS   denotes the number of atoms.
 C> @param NV       denotes total number of CI states for run.
+C> @param L1       denotes the length of the AO coefficients.
 C> @param AB       will temporarily hold the new CI coefficients.
 C> @param NORB     is the number of total occupied (active if ncor is 0)
 C>                 orbitals in the CI.
@@ -11926,20 +11999,21 @@ C> @param NALP     denotes the total number of alpha strings.
 C> @param NBLP     denotes the total number of beta strings.
 C> @param FRHS     is a vector that will hold the charge transfer
 C>                 population for each atom.
-C> @param NATM     is a vector with NATOMS+1 length
-C>                 that holds the starting molecular
-C>                 orbital for each atom.  For quasi-atomic orbitals,
+C> @param NATM     is a vector with L1 length
+C>                 that defines atoms for each orbital number.
+C>                 For quasi-atomic orbitals,
 C>                 these orbital limits assign each orbital to a single atom.
       SUBROUTINE MALMQ_CHARGE_TRANSFER3(
-     *           NATOMS,NV,
+     *           NATOMS,NV,L1,
      *           AB,NORB,NCOR,NCI,NA,NB,
      *           IACON1,IBCON1,
      *           ISPA,ISPB,NALP,NBLP,
-     *           FRHS,NATM)
+     *           FRHS,NATM,IATHLD)
 C-----------------------------------------------------------------------
       IMPLICIT NONE
 C     VARS
-      INTEGER I,ITMP,IBAT,ICAT,ICHARG,ICI1,IFRHS,IIAA,IIST,IIEND,
+      INTEGER IATHLD
+      INTEGER L1,I,ITMP,IBAT,ICAT,ICHARG,ICI1,IFRHS,IIAA,IATOM,
      *        IJK,KJI,NA,NB,NALP,NBLP,NAT,NBT,NCI,NV,NORB,NNELC,
      *        NATOMS,NCOR
       DOUBLE PRECISION ::
@@ -11952,7 +12026,7 @@ C-----------------------------------------------------------------------
       PARAMETER (ZERO=0.0D+00, ONE=1.0D+00)
       INTEGER IACON1(NA+NCOR),IBCON1(NA+NCOR),
      *        ISPA(NALP),ISPB(NBLP),
-     *        NATM(NATOMS+1)
+     *        NATM(L1)
       DOUBLE PRECISION ::
      *       AB(NCI,NV),FRHS(NATOMS)
 C
@@ -11983,23 +12057,23 @@ C     --------------------------------------------------
 C     --------------------------------------------------
 C         LOOP OVER ATOMS
           TMPRHS=ZERO
-          DO IIAA=1,NATOMS-1
+          DO 100 IIAA=1,NATOMS
+            IF(IIAA.EQ.IATHLD) GO TO 100
 C           RE-INITIALIZE IFRHS
             IFRHS=0
 C           FIRST INCLUDE CORE ELECTRONS INTO IFRHS
             NNELC=NVVOS_NUMCOR(IIAA,1)
             IFRHS=IFRHS+2*NNELC
-C           GRAB ATOMIC ORBITAL RANGES FOR ATOM IIAA
-            IIST=NATM(IIAA)
-            IIEND=NATM(IIAA+1)-1
 C           LOOP OVER IACON1,IBCON1 FOR OCCUPIED ORBITALS
             DO I=1,NAT
               ITMP=IACON1(I)
-              IF(ITMP.GE.IIST.AND.ITMP.LE.IIEND) IFRHS=IFRHS+1
+              IATOM=NATM(ITMP)
+              IF(IATOM.EQ.IIAA) IFRHS=IFRHS+1
             ENDDO
             DO I=1,NBT
               ITMP=IBCON1(I)
-              IF(ITMP.GE.IIST.AND.ITMP.LE.IIEND) IFRHS=IFRHS+1
+              IATOM=NATM(ITMP)
+              IF(IATOM.EQ.IIAA) IFRHS=IFRHS+1
             ENDDO
 C           FORM RHS CONTRIBUTION
             ICHARG=LOCAL_ATM_CH(IIAA)
@@ -12007,7 +12081,7 @@ C           FORM RHS CONTRIBUTION
             TMPRHS=TMPRHS + IFRHS*FRHS(IIAA)
 C
 C         END LOOP OVER ATOMS
-          ENDDO
+  100     CONTINUE
 C-------------------------------------
 C         FORM NEW CI COEFFICIENT
           TMPRHS=ONE+TMPRHS
@@ -12034,4 +12108,131 @@ C     NORMALIZE NEW CI COEFF
       CALL DSCAL(NCI,TMP,AB(1,1),1)
 C
       RETURN
+      END
+C*MODULE ALDECI  *DECK MALMQ_CHARGE_SHIFT
+C> @brief      This routine shifts dmat and frhs elements.
+C> 
+C> @author     Aaron West and Klaus Ruedenberg
+C>             -November 19, 2012
+C> 
+C> @details    This routine shifts around dmat and frhs
+C>             elements.  It allows for choosing the atom
+C>             with the least amount of charge transfer
+C>             and then shifts around the elements before
+C>             and after solving the small linear equation.
+C> 
+C> @param IKIND indicates to shift before or after solving
+C>              the linear equation.
+C>              A 0 is for before.
+C>              A 1 is for after.
+C> @param IATHLD is the number of the atom to be omitted.
+C>               It is automatically determined earlier on.
+C> @param FRHS     is a vector that will hold the charge transfer
+C>                 population for each atom.
+C> @param DMAT     is a charge-transfer-less matrix.
+C>                 Please see MALMQ_CHARGE_TRANSFER1.
+C> @param NATOMS   denotes the number of atoms.
+C> @param MASWRK   denotes the master process.
+C> @param IW       is the integer variable for printing to log files.
+      SUBROUTINE MALMQ_CHARGE_SHIFT(
+     *           IKIND,IATHLD,FRHS,DMAT,NATOMS,MASWRK,IW)
+C-----------------------------------------------------------------------
+      IMPLICIT NONE
+C     VARS
+      LOGICAL MASWRK
+      INTEGER IKIND,IW,NATOMS,IATHLD,I
+C-----------------------------------------------------------------------
+      DOUBLE PRECISION ::
+     *       DMAT(NATOMS,NATOMS),FRHS(NATOMS)
+C
+C
+        IF(IATHLD.NE.NATOMS) THEN
+        IF(IKIND.EQ.0) THEN
+C         SHIFT FRHS ELEMENTS AND DMAT COLS 
+          DO I=IATHLD,NATOMS-1
+            FRHS(I)=FRHS(I+1)
+            CALL DCOPY(NATOMS,DMAT(1,I+1),1,DMAT(1,I),1)
+          ENDDO
+C         SHIFT ROWS OF DMAT
+          DO I=IATHLD,NATOMS-1
+            CALL DCOPY(NATOMS-1,DMAT(I+1,1),NATOMS,
+     *                          DMAT(I,1),NATOMS)
+          ENDDO
+        ELSEIF(IKIND.EQ.1) THEN
+C         UNSHIFT FRHS ELEMENTS AND DMAT COLS
+          DO I=NATOMS-1,IATHLD,-1
+            FRHS(I+1)=FRHS(I)
+            CALL DCOPY(NATOMS,DMAT(1,I),1,DMAT(1,I+1),1)
+          ENDDO
+C         UNSHIFT ROWS OF DMAT
+          DO I=NATOMS-1,IATHLD,-1
+            CALL DCOPY(NATOMS-1,DMAT(I,1),NATOMS,
+     *                          DMAT(I+1,1),NATOMS)
+          ENDDO
+        ELSE
+          IF(MASWRK) WRITE(IW,9000)
+          CALL FLSHBF(IW)
+          CALL ABRT
+          STOP
+        ENDIF
+        ENDIF
+C
+      RETURN
+ 9000 FORMAT(/1X,'ERROR IN MALMQ_CHARGE_SHIFT.'/
+     *        1X,'IKIND MUST BE 0 OR 1.')
+      END
+
+C*MODULE ALDECI  *DECK MALMQ_MK_NATM
+C> @brief      This routine gets atom numbers for orbitals.
+C> 
+C> @author     Aaron West and Klaus Ruedenberg
+C>             -November 19, 2012
+C> 
+C> @details    This routine finds and stores atom numbers for
+C>             each active orbital.  The MALMQ_GETORB routine
+C>             must be called beforehand to fill a DAF file.
+C> 
+C> @param NATM     is a vector with L1 length
+C>                 that defines atoms for each orbital number.
+C>                 For quasi-atomic orbitals,
+C>                 these orbital limits assign each orbital to a single atom.
+C>                 At this point, NATM actually contains active orbital labels.
+C> @param L1       denotes the length of the AO coefficients.
+C> @param NATOMS   denotes the number of atoms.
+C> @param NORB     is the number of total occupied (active if ncor is 0)
+C>                 orbitals in the CI.
+C> @param SOME   is true for master process with nprint not equal -5.
+      SUBROUTINE MALMQ_MK_NATM(NATM,L1,NATOMS,NORB,SOME)
+C-----------------------------------------------------------------------
+      IMPLICIT NONE
+C     VARS
+      LOGICAL SOME
+      INTEGER NORB,NATOMS,L1,IORB,IDUM,I,ITMP,ITMP2
+C     NEW CODING STANDARDS VARS
+      INTEGER LOCAL_NUMVAL
+      INTEGER IDAF,IODA,IP,IPK,IR,IS,IW,NAV
+C-----------------------------------------------------------------------
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      INTEGER NATM(L1)
+C
+      IF(SOME) WRITE(IW,9040)
+      CALL FLSHBF(IW)
+      CALL DAREAD(IDAF,IODA,NATM,L1,527,1)
+C
+      DO IORB=1,NORB
+C       INITIALIZE LOWER ORBITAL LIMIT ON ATOM I.
+        ITMP=1
+        DO I=1,NATOMS
+C         GET UPPER ORBITAL LIMIT ON ATOM I.
+          ITMP2=ITMP+LOCAL_NUMVAL(I)-1
+C         DO THE WORK.
+          IDUM=NATM(IORB)
+          IF(IDUM.GE.ITMP.AND.IDUM.LE.ITMP2) NATM(IORB)=I
+C         GET LOWER ORBITAL LIMIT ON ATOM I FOR NEXT ROUND.
+          ITMP=ITMP2+1
+        ENDDO
+      ENDDO
+C
+      RETURN
+ 9040 FORMAT(/1X,'PICKING UP ORBITAL INDICES FOR ICIMALMQ=3 RUN.')
       END
