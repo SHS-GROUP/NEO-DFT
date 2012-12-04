@@ -65,10 +65,10 @@ namespace cchem {
 	}
 	/** free device memory */
 	void free() {
-	    foreach (void* ptr, device_) {
+	    foreach (void *ptr, this->device_) {
 		cuda::free(ptr);
-		device_.erase(ptr);
 	    }
+	    device_.clear();
 	}
 	double* malloc(size_t size) {
 	    double *ptr = cuda::malloc<double>(size);
