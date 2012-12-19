@@ -1125,6 +1125,9 @@ C> @date November 08, 2012-Aaron West
 C> -Added icimalmq variable for Malmqvist CI transformation option.
 C>  Also added arguments into dafcci for this item as well.
 C>
+C> @date December 17, 2012-Aaron West
+C> -Add in memory allocation for charge transfer stuff for ORMAS.
+C>
 C> @param NPRINT results in extra print offs when nprint does not
 C>               equal negative 5.
 C> @param CLABEL governs whether transformed integrals
@@ -1141,7 +1144,7 @@ C>               nprint is NOT equal to 5 (since SOME must also be true).
 C> @param NPRI6  results in print off of 2-particle density matrix
 C>               when npri6 is greater than zero.
 C> @param ICIMALMQ results in the different CI transformations
-C>                 when icimalmq equals 1,2,3.
+C>                 when icimalmq equals 1,3.
       SUBROUTINE DEFCCI(NPRINT,CLABEL,DDITRF,NDM1,NDM2,NPRI5,NPRI6,
      *                  ICIMALMQ)
 C
@@ -1385,6 +1388,9 @@ C
       L2 = (L1*L1+L1)/2
       L3 = L1*L1
 C
+C     Define simple items for Malmqvist work.
+      NATOMS=NAT
+C
 C   INTEGRAL STORAGE REQUIREMENTS FIRST.
 C
       CALL VALFM(LOADFM)
@@ -1447,14 +1453,16 @@ C
 C
 C
 C   MALMQVIST CI TRANSFORMATION STUFF.
-C   NOTE:  WE PUT THIS DEAD LAST SINCE IT IS NEW,
-C          AND I'VE NOTICED THAT ORMAS HAS USED
-C          LENGTHS OF THE MEMORY TOTAL MEMORY 
-C          TO A VALFM CALL FOR DIMENSIONING ITEMS.
+C   NOTE:  WE PUT THIS DEAD LAST SINCE IT IS NEW.
+C          ORMAS CHOPS UP A LOT OF MEMORY INTO PIECES.
 C          SO, THIS PLACEMENT SEEMS LIKE THE SAFE MOVE...FOR NOW.
 C
-      LVTORB = LAST
-      LAST = LVTORB + L1*L1
+      LVTORB   = LAST
+      LDMAT    = LVTORB + L1*L1
+      LFRHS    = LDMAT + NATOMS*NATOMS
+      LNATM    = LFRHS + NATOMS
+      LIPVTATM = LNATM + L1
+      LAST     = LIPVTATM + NATOMS
 C
       NEED4  = LAST - LOADFM - 1
       NEEDCI = NEED1 + NEED2 + NEED3 + NEED4
@@ -1521,7 +1529,8 @@ C
      *           NB1EX,IBST2,
      *           X(JB1GR),X(JB1PE),X(JB1IN),X(JB1PO),X(JB1ST),
      *           X(JB1SY),
-     *           X(LVTORB),L1,NCORSV,ICIMALMQ)
+     *           X(LVTORB),L1,NCORSV,ICIMALMQ,
+     *           NATOMS,X(LDMAT),X(LFRHS),X(LNATM),X(LIPVTATM))
 C
       DO I=1,MIN(K,MXRT)
          ESTATE(I) = X(KEL-1+I)+ECONST
@@ -4881,11 +4890,28 @@ C>
 C> @date November 08, 2012-Aaron West
 C> -Added vtorb,L1,ncorsv, and icimalmq arguments for Malmqvist.
 C>
+C> @date December 13, 2012-Aaron West
+C> -Fix singlet enumeration for Malmqvist runs.
+C>  No runs done, so no harm done.
+C>
+C> @date December 17, 2012-Aaron West
+C> -Add in charge transfer stuff for ORMAS.
+C>
 C> @param VTORB contains Malmqvist' factorized orbital transformation.
 C> @param L1 denotes the length of the AO coefficients.
 C> @param NCORSV denotes the number of MCSCF core orbitals.
 C> @param ICIMALMQ results in the different CI transformations
-C>                 when icimalmq equals 1,2,3.
+C>                 when icimalmq equals 1,3.
+C> @param NATOMS   is the number of atoms.
+C> @param DMAT     is a NATOMS-by-NATOMS matrix
+C>                 for charge transfer run.
+C> @param FRHS     is a vector with NATOMS length
+C>                 for charge transfer run.
+C> @param NATM     is a vector with L1 length
+C>                 that defines atoms for each orbital number.
+C>                 For quasi-atomic orbitals,
+C>                 these orbital limits assign each orbital to a single atom.
+C> @param IPVTATM  is storage for pivot vectors for small linear equations.
       SUBROUTINE DAFCCI(IW,SOME,ECONST,ISTAT,
      *           SI1,SI2,M2,M4,NACT,NCI,NA,NB,K,KST,MAXP,MAXW1,
      *           NITER,CRIT,
@@ -4901,7 +4927,8 @@ C>                 when icimalmq equals 1,2,3.
      *           ITGA,ITGB,IAST,IBST,
      *           NB1EX,IBST2,
      *           JB1GR,JB1PE,JB1IN,JB1PO,JB1ST,JB1SY,
-     *           VTORB,L1,NCORSV,ICIMALMQ)
+     *           VTORB,L1,NCORSV,ICIMALMQ,
+     *           NATOMS,DMAT,FRHS,NATM,IPVTATM)
 C     ------------------------------------------------------------------
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
 C
@@ -4938,6 +4965,11 @@ C
       DIMENSION LSAC(IAST),LSBC(IBST)
       DIMENSION JB1GR(NB1EX),JB1PE(NB1EX),JB1IN(NB1EX),JB1ST(IBST2)
       DIMENSION JB1PO(NB1EX),JB1SY(NB*(NACT-NB))
+C
+C     ATOMIC-LIKE VARS HERE
+      DIMENSION VTORB(L1,L1),DMAT(NATOMS,NATOMS),FRHS(NATOMS)
+      DIMENSION NATM(L1),IPVTATM(NATOMS)
+C
 C
       IF (.NOT.FDIRCT) THEN
          IDIM1 = NSYM+1
@@ -5110,7 +5142,7 @@ C
          ENDIF
       ENDIF
 C
-      IF (NA.EQ.NB) THEN
+      IF (NA.EQ.NB.and.icimalmq.eq.0) THEN
          CALL  FCCSPIN(NA,NB,IACON1,IACON2,IBCON1,IBCON2,
      *      ISD,IDO,CI,AB,KST,NCI,SPIN,IWRK1,IWRK2,MAXW1,
      *           LGCOM,NAST,NBST,LSYMA,LSYMB,
@@ -5134,7 +5166,7 @@ C
 C
 C  IF MS=0, IMPOSE RESTRICTION ON THE INITIAL CI COEFFICIENTS.
 C
-      IF (NA.EQ.NB) THEN
+      IF (NA.EQ.NB.and.icimalmq.eq.0) THEN
       DO 5511 IGA=1,ITGA
          DO 5522 KKA=NAST(IGA)+1,NAST(IGA+1)
             JPZA1 = LSPA(KKA)
@@ -5169,7 +5201,7 @@ C
       END IF
 C
 C     PERFORM MALMQVIST CI TRANSFORMATION IF REQUESTED.
-      IF(ICIMALMQ.EQ.1) THEN
+      IF(ICIMALMQ.NE.0) THEN
 C
 C       OBTAIN CORRECT ROOT TO ACCESS FOR NEXT ROUTINE.
         CALL MALMQ_CIGRB(ITMPCI,IW,MASWRK,SOME)
@@ -5181,15 +5213,33 @@ C       OBTAIN CORRECT ROOT TO ACCESS FOR NEXT ROUTINE.
         ENDIF
 C
 C       CONFIGURATIONAL TRANSFORMATION WITHOUT DOING CI.
-        CALL MALMQ_FCHCX1S(
-     *       VTORB,L1,NCORSV,ITMPCI,
-     *       NACT,NA,NB,CI,AB,KST,NCI,X,NX,
-     *       IACON1,IACON2,IBCON1,IBCON2,
-     *       LBOX1,LBOX2,LBOX3,LBOX5,
-     *       NSYM,KTAB,
-     *       LANDET,LBNDET,NAST,NBST,LSYMA,LSYMB,LGCOM,
-     *       LSPA,LSPB,LDISB,LSAS,LSBS,LSAC,LSBC,
-     *       ITGA,ITGB,IAST,IBST)
+        IF(ICIMALMQ.EQ.1) THEN
+          CALL MALMQ_FCHCX1S(
+     *         VTORB,L1,NCORSV,ITMPCI,
+     *         NACT,NA,NB,CI,AB,KST,NCI,X,NX,
+     *         IACON1,IACON2,IBCON1,IBCON2,
+     *         LBOX1,LBOX2,LBOX3,LBOX5,
+     *         NSYM,KTAB,
+     *         LANDET,LBNDET,NAST,NBST,LSYMA,LSYMB,LGCOM,
+     *         LSPA,LSPB,LDISB,LSAS,LSBS,LSAC,LSBC,
+     *         ITGA,ITGB,IAST,IBST)
+        ENDIF
+C
+C       FIND WAVEFUNCTION WITH NO CHARGE TRANSFER.
+        IF(ICIMALMQ.EQ.3) THEN
+          CALL MALMQ_CHARGE_TRANSFER_ORMAS1(
+     *         L1,NATOMS,DMAT,FRHS,NATM,IPVTATM,
+     *         ITMPCI,CI,NACT,
+     *         MASWRK,SOME,
+     *         NA,NB,AB,NV,NCI,X,NX,
+     *         IACON1,IACON2,IBCON1,IBCON2,
+     *         LBOX1,LBOX2,LBOX3,LBOX5,
+     *         NSYM,KTAB,
+     *         LANDET,LBNDET,NAST,NBST,LSYMA,LSYMB,LGCOM,
+     *         LSPA,LSPB,LDISB,LSBS,LSBC,
+     *         ITGA,ITGB,IAST,IBST,
+     *         NSPACE)
+        ENDIF
 C
 C       TAKE CARE OF SPIN
         CALL FCCSPIN(NA,NB,IACON1,IACON2,IBCON1,IBCON2,
@@ -5200,8 +5250,8 @@ C       TAKE CARE OF SPIN
      *       X,NX,LANDET,LBNDET,
      *       ITGA,ITGB,IAST,IBST,KTAB,NSYM)
 C
-C       NOW, GET OUT BEFORE WE MUCK UP THE NEW CI COEFFS.
-        RETURN
+C       GET THE EL ENERGY BEFORE EXITING.
+C       SO THE RETURN IS BELOW AFTER ONE SIGMA VECTOR.
       ENDIF
 C
 C  THE ROUTINE NAMES HAVE MEANING.  FCHC IS COMMON TO ALL OF THEM.
@@ -5212,7 +5262,7 @@ C  THE 7TH AND FINAL CHARACTER CAN BE A D OR S.  D MEANS FULLY DIRECT
 C  AND S MEANS SEMI-DIRECT.  D IS YET TO BE IMPLEMENTED, I WILL
 C  SEE IF THERE IS A NEED FOR IT FIRST.
 C
-      IF (NA.EQ.NB) THEN
+      IF (NA.EQ.NB.and.icimalmq.eq.0) THEN
       IF (KST.GT.1) THEN
       CALL FCHC0YS(SI1,SI2,INDEX,NACT,NA,NB,CI,AB,KST,Q,NCI,X,NX,
      *           IACON1,IACON2,IBCON1,IBCON2,
@@ -5274,9 +5324,8 @@ C
    15    CONTINUE
    13 CONTINUE
 C
-C     IF WE WANT TO CHECK SOME ENERGIES FOR MALMQ_CIDRIV,
-C     WE UNCOMMENT THE NEXT LINE AND REMOVE THE RETURN ABOVE.
-C      IF(ICIMALMQ.EQ.1) RETURN
+C     NEXT LINE EXITS BEFORE MUCKING UP CI COEFFS FOR MALMQ_CIDRIV.
+      IF(ICIMALMQ.NE.0) RETURN
 C
       DO 555 II=1,MAXP
          DO 677 JJ=1,II-1
@@ -12954,11 +13003,8 @@ C>             of the same spin together.  Otherwise, the entire length
 C>             of the CI vector might be re-generated and requires that
 C>             much more storage.
 C>
-C> @todo       Finish debugging symmetry.  The symmetry is probably close
-C>             to working since it follows the routine in maktabs in a 
-C>             very close fashion.  However, it definitely needs the
-C>             debugging.
-C>             Parallelize.  AW will do these soon...
+C> @todo       Debugging symmetry.
+C>             Make parallel.
 C>
 C> @param VTORB   will contain the factorized orbital transformation.
 C> @param L1      is the length of the AO coefficients.
@@ -13026,7 +13072,6 @@ C> @param IBST    denotes the total number of beta strings.
      *           LANDET,LBNDET,NAST,NBST,LSYMA,LSYMB,LGCOM,
      *           LSPA,LSPB,LDISB,LSAS,LSBS,LSAC,LSBC,
      *           ITGA,ITGB,IAST,IBST)
-cawlocal         added new line at the top of sub.
 C-----------------------------------------------------------------------
       IMPLICIT NONE
       LOGICAL GOPARR,DSKWRK,MASWRK
@@ -13101,7 +13146,7 @@ C     LOOP OVER THE IPTH PRODUCT
 C
 C       RESET CI VECTORS
         DO I=1,NCI
-          CI(I,1)=AB(I,1)
+          CI(I,ITMPCI)=AB(I,1)
         ENDDO
 C
 C       LOOP OVER ALL ALPHA GROUPS
@@ -13194,7 +13239,7 @@ C                 OBTAIN TRANSFORM FACTOR
                   IF(IPTH.EQ.JTH) TCI2=TCI2-1.0D+00
                   TCI2=TCI2*IPER1
 C                 MANIPULATE CI COEFF
-                  AB(ICI2,1)=AB(ICI2,1)+TCI2*CI(ICI1,1)
+                  AB(ICI2,1)=AB(ICI2,1)+TCI2*CI(ICI1,ITMPCI)
   110           CONTINUE
 C-----------------------------------------------------------------------
 C               END OF LOOP OVER ALL BETA STRINGS IN GIVEN BETA GROUP
@@ -13219,7 +13264,7 @@ C     LOOP OVER THE IPTH PRODUCT
 C
 C       RESET CI VECTORS
         DO I=1,NCI
-          CI(I,1)=AB(I,1)
+          CI(I,ITMPCI)=AB(I,1)
         ENDDO
 C
 C       LOOP OVER ALL BETA GROUPS
@@ -13311,7 +13356,7 @@ C                 OBTAIN TRANSFORM FACTOR
                   IF(IPTH.EQ.JTH) TCI2=TCI2-1.0D+00
                   TCI2=TCI2*IPER1
 C                 MANIPULATE CI COEFF
-                  AB(ICI2,1)=AB(ICI2,1)+TCI2*CI(ICI1,1)
+                  AB(ICI2,1)=AB(ICI2,1)+TCI2*CI(ICI1,ITMPCI)
   210           CONTINUE
 C-----------------------------------------------------------------------
 C               END OF LOOP OVER ALL ALPHA STRINGS IN GIVEN ALPHA GROUP
@@ -13344,4 +13389,907 @@ C     RE-NORMALIZE CI COEFF
 C
       RETURN
  9000 FORMAT(/1X,'FDIRCT IS NOT POSSIBLE FOR MALMQ_FCHCX1S ROUTINE.')
+      END
+C*MODULE ORMAS1  *DECK MALMQ_CHARGE_TRANSFER_ORMAS1
+C> @brief      This routine obtains charge-transfer-less CI.
+C>
+C> @author     Aaron West and Klaus Ruedenberg
+C>             -December 17, 2012
+C>
+C> @details    This routine obtains charge-transfer-less CI.
+C>             Similar routines exist in ALDECI and ORMAS.
+C>             These routines must remain similar.
+C>
+C> @param L1 denotes the length of the AO coefficients.
+C> @param NATOMS   is the number of atoms.
+C> @param DMAT     is a charge-transfer-less matrix.
+C>                 Please see MALMQ_CHARGE_TRANSFER1.
+C> @param FRHS     is a vector that will hold the charge transfer
+C>                 population for each atom.
+C> @param NATM     is a vector with L1 length
+C>                 that defines atoms for each orbital number.
+C>                 For quasi-atomic orbitals,
+C>                 these orbital limits assign each orbital to a single atom.
+C> @param IPVTATM  is storage for pivot vectors for small linear equations.
+C> @param ITMPCI  denotes the CI root number to be transformed.
+C> @param CI
+C> @param NV      denotes total number of CI states for run.
+C> @param NACT    denotes the number of active orbitals.
+C> @param MASWRK
+C> @param SOME
+C> @param NA      is the number of active alpha electrons.
+C> @param NB      is the number of active beta electrons.
+C> @param AB      denotes temporary storage already available in CI run.
+C> @param NV      denotes total number of CI states for run.
+C> @param NCI     is the length of the CI vector.
+C> @param X       contains binomial coefficients sorted for ORMAS spaces.
+C> @param NX      is the dimension of X based off a total memory
+C>                segment.  Thus, ORMAS additions could be tricky.
+C> @param IACON1  contains the occupied orbital indices
+C>                for a given starting alpha string.
+C> @param IACON2  contains the occupied orbital indices
+C>                for an Malmqvist excitation-generated alpha string.
+C> @param IBCON1  contains the occupied orbital indices
+C>                for a given starting beta string.
+C> @param IBCON2  contains the occupied orbital indices
+C>                for an Malmqvist excitation-generated beta string.
+C> @param LBOX1   contains the number of electrons of some spin
+C>                while cycling over the corresponding spin strings.
+C> @param LBOX2   contains the number of electrons of the other spin
+C>                while cycling over the corresponding spin strings.
+C> @param LBOX3   is a scratch array.
+C> @param LBOX5   is another scratch array.
+C> @param NSYM    equals 2**IGPDET.
+C> @param KTAB    is related to alpha and beta string symmetry.
+C> @param LANDET  contains the number of alpha strings
+C>                for each alpha group and ormas space.
+C> @param LBNDET  contains the number of beta strings
+C>                for each beta group and ormas space.
+C> @param NAST    returns starting alpha string in given alpha group.
+C> @param NBST    returns starting beta string in given beta group.
+C> @param LSYMA   returns symmetry for given alpha string.
+C> @param LSYMB   returns symmetry for given beta string.
+C> @param LGCOM   defines which alpha and beta groups are
+C>                incompatible to form the reduced CI length.
+C> @param LSPA    returns starting determinant position
+C>                given alpha string number.
+C> @param LSPB    returns starting determinant position
+C>                given beta string number.
+C> @param LDISB   increments more of the determinant position
+C>                based on beta and alpha groups coupled by symmetry.
+C> @param LSAS    returns the input going into LSAC array
+C>                for alpha groups of a given symmetry.
+C> @param LSBS    is analogue of lsas for beta groups.
+C> @param LSAC    increments more of the determinant position
+C>                based on alpha group symmetry.
+C> @param LSBC    is the analogue of LSAC for beta groups.
+C> @param ITGA    denotes the total number of alpha groups.
+C> @param ITGB    denotes the total number of beta groups.
+C> @param IAST    denotes the total number of alpha strings.
+C> @param IBST    denotes the total number of beta strings.
+C> @param NSPACE  is the number of ORMAS groups, or subspaces.
+      SUBROUTINE MALMQ_CHARGE_TRANSFER_ORMAS1(
+     *           L1,NATOMS,DMAT,FRHS,NATM,IPVTATM,
+     *           ITMPCI,CI,NACT,
+     *           MASWRK,SOME,
+     *           NA,NB,AB,NV,NCI,X,NX,
+     *           IACON1,IACON2,IBCON1,IBCON2,
+     *           LBOX1,LBOX2,LBOX3,LBOX5,
+     *           NSYM,KTAB,
+     *           LANDET,LBNDET,NAST,NBST,LSYMA,LSYMB,LGCOM,
+     *           LSPA,LSPB,LDISB,LSBS,LSBC,
+     *           ITGA,ITGB,IAST,IBST,
+     *           NSPACE)
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+C     THIS BLOCK HAS MOST VARIABLES FOR
+C     MALMQ_CHARGE_TRANSFER_ORMAS2 AND 3.
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+      IMPLICIT NONE
+      LOGICAL MASWRK
+C     VARS
+      INTEGER NCI,NV,
+     *        NA,NB,IAST,IBST,ITGA,ITGB,
+     *        NSYM,NX,
+     *        NSPACE
+C     NEW CODING STANDARDS VARS
+C-----------------------------------------------------------------------
+      INTEGER IR,IW,IP,IS,IJKT,IDAF,NAV,IODA
+      COMMON /IOFILE/ IR,IW,IP,IS,IJKT,IDAF,NAV,IODA(950)
+C
+      INTEGER IACON1(NA),IACON2(NA),IBCON1(NA),IBCON2(NA),
+     *        LBOX1(NSPACE),LBOX2(NSPACE),LBOX3(NSPACE),
+     *        LBOX5(NSPACE),
+     *        KTAB(NSYM),
+     *        LANDET(NSPACE,ITGA),LBNDET(NSPACE,ITGB),
+     *        NAST(ITGA+1),NBST(ITGB+1),
+     *        LSYMA(IAST),LSYMB(IBST),
+     *        LGCOM(ITGB,ITGA),
+     *        LSPA(IAST),LSPB(IBST),
+     *        LDISB(NSYM,ITGB,ITGA),
+     *        LSBS(NSYM+1,ITGB),
+     *        LSBC(IBST)
+      DOUBLE PRECISION ::
+     *       AB(NCI,NV),X(NX)
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+C     END OF THIS BLOCK HAS MOST VARIABLES FOR
+C     MALMQ_CHARGE_TRANSFER_ORMAS2 AND 3.
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+C
+C
+C-----------------------------------------------------------------------
+C     VARS
+      LOGICAL SOME
+      INTEGER L1,I,IERR,ILOOP,ITER,ITMPCI,
+     *        NATOMS,IATHLD,IKIND,
+     *        NACT
+      DOUBLE PRECISION ::
+     *       RESID,TMP,TMPOVR
+C     NEW CODING STANDARDS VARS
+      INTEGER MAXIT
+      DOUBLE PRECISION ::
+     *       TOL,ZERO
+      PARAMETER (MAXIT=600, TOL=1.0D-14, ZERO=0.0D+00)
+      INTEGER NATM(L1),IPVTATM(NATOMS)
+      DOUBLE PRECISION ::
+     *       DMAT(NATOMS,NATOMS),FRHS(NATOMS),CI(NCI,NV)
+C-----------------------------------------------------------------------
+C
+C
+C
+C
+C
+C     INITIATLIZE FIRST AB VECTOR TO CI COEFFICIENT OF INTEREST.
+      DO I=1,NCI
+        AB(I,1)=CI(I,ITMPCI)
+      ENDDO
+C
+C     GRAB ATOM-ORBITAL CORRESPONDENCE.
+      IF(SOME) WRITE(IW,9040)
+      CALL FLSHBF(IW)
+      CALL DAREAD(IDAF,IODA,NATM,NACT,531,1)
+C
+C     DETERMINE ATOM WITH LEAST CHARGE TRANSFER NOW.
+C     NOTE:  SET IATHLD TO SOMETHING RIGHT NOW JUST TO SATISFY INITIALIZATION.
+      ILOOP=1
+      IATHLD=1
+      CALL MALMQ_CHARGE_TRANSFER_ORMAS2(
+     *     NA,NB,AB,NV,NCI,X,NX,
+     *     IACON1,IACON2,IBCON1,IBCON2,
+     *     LBOX1,LBOX2,LBOX3,LBOX5,
+     *     NSYM,KTAB,
+     *     LANDET,LBNDET,NAST,NBST,LSYMA,LSYMB,LGCOM,
+     *     LSPA,LSPB,LDISB,LSBS,LSBC,
+     *     ITGA,ITGB,IAST,IBST,
+     *     L1,NATOMS,DMAT,FRHS,NATM,ILOOP,IATHLD)
+      IATHLD=1
+      TMP=ABS(FRHS(1))
+      DO I=1,NATOMS
+        IF(SOME) WRITE(IW,9000) I,FRHS(I)
+        IF(ABS(FRHS(I)).LT.TMP) IATHLD=I
+        IF(ABS(FRHS(I)).LT.TMP) TMP=ABS(FRHS(I))
+      ENDDO
+      IF(SOME) WRITE(IW,9001) IATHLD
+C
+C     LOOP OVER ITERATES UNTIL NONLINEAR EQUATION CONVERGES.
+      IF(SOME) WRITE(IW,9002)
+      DO ITER=1,MAXIT
+C
+C       FORM DMAT AND FRHS.
+        ILOOP=0
+        CALL MALMQ_CHARGE_TRANSFER_ORMAS2(
+     *       NA,NB,AB,NV,NCI,X,NX,
+     *       IACON1,IACON2,IBCON1,IBCON2,
+     *       LBOX1,LBOX2,LBOX3,LBOX5,
+     *       NSYM,KTAB,
+     *       LANDET,LBNDET,NAST,NBST,LSYMA,LSYMB,LGCOM,
+     *       LSPA,LSPB,LDISB,LSBS,LSBC,
+     *       ITGA,ITGB,IAST,IBST,
+     *       L1,NATOMS,DMAT,FRHS,NATM,ILOOP,IATHLD)
+C
+C       SHIFT DMAT AND FRHS ELEMENTS BECAUSE OF IATHLD.
+        IKIND=0
+        CALL MALMQ_CHARGE_SHIFT(
+     *       IKIND,IATHLD,FRHS,DMAT,NATOMS,MASWRK,IW)
+C
+C       GRAB MAX RESIDUAL AND CHECK CONVERGENCE.
+        RESID=ABS(FRHS(1))
+        DO I=1,NATOMS-1
+          TMP=ABS(FRHS(I))
+          RESID=MAX(RESID,TMP)
+        ENDDO
+        IF(RESID.LT.TOL) GO TO 200
+        IF(SOME) WRITE(IW,9003) ITER,RESID
+C
+C       SOLVE DMAT * X = FRHS LINEAR EQUATION.
+        IERR=0
+        CALL SLVLEQ(DMAT,FRHS,IPVTATM,NATOMS-1,NATOMS,0,IERR)
+        IF(IERR.NE.0) THEN
+          IF(MASWRK) WRITE(IW,9004)
+          CALL FLSHBF(IW)
+          CALL ABRT
+          STOP
+        ENDIF
+C
+C       UNSHIFT DMAT AND FRHS ELEMENTS BECAUSE OF IATHLD.
+        IKIND=1
+        CALL MALMQ_CHARGE_SHIFT(
+     *       IKIND,IATHLD,FRHS,DMAT,NATOMS,MASWRK,IW)
+C
+C       PREP FOR NEXT ROUND
+C       ---FORM NEW CI COEFF FROM NONLINEAR FORMULA
+C       ------B_K= SUM OVER K[  C_K/(1+SUM OVER ATOMS-1[ETC] ]
+C       ---NORMALIZE THESE CI COEFF
+        CALL MALMQ_CHARGE_TRANSFER_ORMAS3(
+     *       NA,NB,AB,NV,NCI,X,NX,
+     *       IACON1,IACON2,IBCON1,IBCON2,
+     *       LBOX1,LBOX2,LBOX3,LBOX5,
+     *       NSYM,KTAB,
+     *       LANDET,LBNDET,NAST,NBST,LSYMA,LSYMB,LGCOM,
+     *       LSPA,LSPB,LDISB,LSBS,LSBC,
+     *       ITGA,ITGB,IAST,IBST,
+     *       L1,NATOMS,FRHS,NATM,IATHLD)
+C
+C     END LOOP OVER ITERATES UNTIL NONLINEAR EQUATION CONVERGES.
+      ENDDO
+C
+C     CHECK THE SOLUTION OVER ALL NATOMS RATHER THAN NATOMS-1
+  200 CONTINUE
+      ILOOP=1
+      CALL MALMQ_CHARGE_TRANSFER_ORMAS2(
+     *     NA,NB,AB,NV,NCI,X,NX,
+     *     IACON1,IACON2,IBCON1,IBCON2,
+     *     LBOX1,LBOX2,LBOX3,LBOX5,
+     *     NSYM,KTAB,
+     *     LANDET,LBNDET,NAST,NBST,LSYMA,LSYMB,LGCOM,
+     *     LSPA,LSPB,LDISB,LSBS,LSBC,
+     *     ITGA,ITGB,IAST,IBST,
+     *     L1,NATOMS,DMAT,FRHS,NATM,ILOOP,IATHLD)
+      RESID=ABS(FRHS(1))
+      DO I=1,NATOMS
+        TMP=ABS(FRHS(I))
+        RESID=MAX(RESID,TMP)
+      ENDDO
+      IF(RESID.LT.TOL) GO TO 201
+C
+C     ERROR OUT FOR NO CONVERGENCE.
+      IF(MASWRK) WRITE(IW,9006) RESID
+      CALL FLSHBF(IW)
+      CALL ABRT
+      STOP
+C
+C     NONLINEAR EQUATION IS CONVERGED.
+  201 CONTINUE
+C
+C     CALCULATE CHARGE-TRANSFER-LESS AND QUASI-ATOMIC
+C               CI COEFFICIENT OVERLAP.
+       TMPOVR=ZERO
+       DO I=1,NCI
+         TMP=AB(I,1)*CI(I,ITMPCI)
+         TMP=ABS(TMP)
+         TMPOVR=TMPOVR+TMP
+       ENDDO
+C
+C     WRITE OUT RESULTS.
+      IF(SOME) WRITE(IW,9007) RESID,TOL
+      IF(SOME) WRITE(IW,9008) TMPOVR
+C
+C     NEED TO COMPUTE DENSITY OF NEW WAVEFUNCTION.
+C     SO, TRANSFER OVER CI COEFFICIENTS.
+      DO I=1,NCI
+        CI(I,ITMPCI)=AB(I,1)
+      ENDDO
+C
+      RETURN
+ 9000 FORMAT(/1X,'ATOM',1X,I4,1X,'CHARGE TRANSFER =',1X,F15.8)
+ 9001 FORMAT(/1X,'OMITTING ATOM',1X,I4,'.')
+ 9002 FORMAT(/'ITERATION',6X,'CURRENT MAXIMUM RESIDUAL')
+ 9003 FORMAT(I5,10X,1P,E8.2)
+ 9004 FORMAT(/1X,'ERROR IN SMALL LINEAR EQUATION',
+     *        1X,'IN MALMQ_CHARGE_TRANSFER.')
+ 9006 FORMAT(/1X,'NO CONVERGENCE IN MALMQ_CHARGE_TRANSFER',
+     *       /1X,'RESIDUAL =',1P,E8.2)
+ 9007 FORMAT(/1X,'CONVERGENCE OBTAIN IN MALMQ_CHARGE_TRANSFER.',
+     *       /1X,'RESIDUAL =',1P,E8.2,
+     *       /1X,'TOLERANCE=',1P,E8.2)
+ 9008 FORMAT(/1X,'ORTHOGONAL QUASI-ATOMIC AND CHARGE-TRANSFER-LESS',
+     *       /1X,'WAVEFUNCTION OVERLAP=',F15.8)
+ 9040 FORMAT(/1X,'PICKING UP ATOM INDICES FOR ICIMALMQ=3 RUN.')
+      END
+C*MODULE ORMAS1  *DECK MALMQ_CHARGE_TRANSFER_ORMAS2
+C> @brief      This routine makes charge-transfer-less CI arrays.
+C>
+C> @author     Aaron West and Klaus Ruedenberg
+C>             -December 17, 2012
+C>
+C> @details    This routine makes charge-transfer-less CI arrays
+C>             i.e. it makes dmat and frhs.
+C>             Similar routines exist in ALDECI and ORMAS.
+C>             These routines must remain similar.
+C>
+C> @todo       Make parallel if even needed.
+C>             Debug symmetry.
+C>
+C> @param NA      is the number of active alpha electrons.
+C> @param NB      is the number of active beta electrons.
+C> @param AB      denotes temporary storage already available in CI run.
+C> @param NV      denotes total number of CI states for run.
+C> @param NCI     is the length of the CI vector.
+C> @param X       contains binomial coefficients sorted for ORMAS spaces.
+C> @param NX      is the dimension of X based off a total memory
+C>                segment.  Thus, ORMAS additions could be tricky.
+C> @param IACON1  contains the occupied orbital indices
+C>                for a given starting alpha string.
+C> @param IACON2  contains the occupied orbital indices
+C>                for an Malmqvist excitation-generated alpha string.
+C> @param IBCON1  contains the occupied orbital indices
+C>                for a given starting beta string.
+C> @param IBCON2  contains the occupied orbital indices
+C> @param LBOX1   contains the number of electrons of some spin
+C>                while cycling over the corresponding spin strings.
+C> @param LBOX2   contains the number of electrons of the other spin
+C>                while cycling over the corresponding spin strings.
+C> @param LBOX3   is a scratch array.
+C> @param LBOX5   is another scratch array.
+C> @param NSYM    equals 2**IGPDET.
+C> @param KTAB    is related to alpha and beta string symmetry.
+C> @param LANDET  contains the number of alpha strings
+C>                for each alpha group and ormas space.
+C> @param LBNDET  contains the number of beta strings
+C>                for each beta group and ormas space.
+C> @param NAST    returns starting alpha string in given alpha group.
+C> @param NBST    returns starting beta string in given beta group.
+C> @param LSYMA   returns symmetry for given alpha string.
+C> @param LSYMB   returns symmetry for given beta string.
+C> @param LGCOM   defines which alpha and beta groups are
+C>                incompatible to form the reduced CI length.
+C> @param LSPA    returns starting determinant position
+C>                given alpha string number.
+C> @param LSPB    returns starting determinant position
+C>                given beta string number.
+C> @param LDISB   increments more of the determinant position
+C>                based on beta and alpha groups coupled by symmetry.
+C> @param LSAS    returns the input going into LSAC array
+C>                for alpha groups of a given symmetry.
+C> @param LSBS    is analogue of lsas for beta groups.
+C> @param LSAC    increments more of the determinant position
+C>                based on alpha group symmetry.
+C> @param LSBC    is the analogue of LSAC for beta groups.
+C> @param ITGA    denotes the total number of alpha groups.
+C> @param ITGB    denotes the total number of beta groups.
+C> @param IAST    denotes the total number of alpha strings.
+C> @param IBST    denotes the total number of beta strings.
+C> @param L1 denotes the length of the AO coefficients.
+C> @param NATOMS   is the number of atoms.
+C> @param DMAT     is a charge-transfer-less matrix.
+C>                 Please see MALMQ_CHARGE_TRANSFER1.
+C> @param FRHS     is a vector that will hold the charge transfer
+C>                 population for each atom.
+C> @param NATM     is a vector with L1 length
+C>                 that defines atoms for each orbital number.
+C>                 For quasi-atomic orbitals,
+C>                 these orbital limits assign each orbital to a single atom.
+C> @param ILOOP    toggles between summing over NATOMS-1 or NATOMS.
+C>                 ILOOP=0 yields both DMAT and FRHS over NATOMS-1.
+C>                 ILOOP=1 yields only FRHS over NATOMS.
+C> @param IATHLD   is the index of the atom which is omitted.
+      SUBROUTINE MALMQ_CHARGE_TRANSFER_ORMAS2(
+     *           NA,NB,AB,NV,NCI,X,NX,
+     *           IACON1,IACON2,IBCON1,IBCON2,
+     *           LBOX1,LBOX2,LBOX3,LBOX5,
+     *           NSYM,KTAB,
+     *           LANDET,LBNDET,NAST,NBST,LSYMA,LSYMB,LGCOM,
+     *           LSPA,LSPB,LDISB,LSBS,LSBC,
+     *           ITGA,ITGB,IAST,IBST,
+     *           L1,NATOMS,DMAT,FRHS,NATM,ILOOP,IATHLD)
+
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+      IMPLICIT NONE
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      LOGICAL FDIRCT,QCORR
+C--------------------------------------------------------
+C     ATOMIC-LIKE VARS
+      INTEGER L1,I,IATHLD,IATOM,ICHARG,ICHARGB,IFRHS,IFRHSB,
+     *        IIAA,IIBB,ILOOP,ITMP,NAT,NBT,NATOMS,NNELC
+      INTEGER LOCAL_ATM_CH,NVVOS_NUMCOR
+      INTEGER NATM(L1)
+      DOUBLE PRECISION ::
+     *       DMAT(NATOMS,NATOMS),FRHS(NATOMS)
+C--------------------------------------------------------
+C     VARS
+      INTEGER NCI,NV,NA,NB,
+     *        IAST,IBST,IBSYM,
+     *        ICI1,IEND,IGA,IGB,
+     *        II,IIB,IIZ,IST2,ISTA,
+     *        ITGA,ITGB,
+     *        JASYM,JPZA1,JPZB1,
+     *        KK,KKB,KSYM,NSYM,NX
+      DOUBLE PRECISION ::
+     *       TMPCI
+C     NEW CODING STANDARDS VARS
+      INTEGER IAMA,IAMI,IBMA,IBMI,
+     *        IDAF,IDIM,IJKT,IODA,IP,IR,IS,IW,NAV,
+     *        IPTIM,IBTYP,
+     *        MAXI,MINI,MNUM,MSTA,LBST,NSPACE,
+     *        MASTER,ME,NREF0,NPROC
+      DOUBLE PRECISION ::
+     *       C0SQ
+C-----------------------------------------------------------------------
+      COMMON /FCCWFN/ NSPACE,MSTA(51),MNUM(51),MINI(51),MAXI(51),
+     *                IAMI(51),IAMA(51),IBMI(51),IBMA(51),IDIM(51),
+     *                LBST(51),NREF0,FDIRCT,QCORR,C0SQ
+      COMMON /IOFILE/ IR,IW,IP,IS,IJKT,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+      INTEGER IACON1(NA),IACON2(NA),IBCON1(NA),IBCON2(NA),
+     *        LBOX1(NSPACE),LBOX2(NSPACE),LBOX3(NSPACE),
+     *        LBOX5(NSPACE),
+     *        KTAB(NSYM),
+     *        LANDET(NSPACE,ITGA),LBNDET(NSPACE,ITGB),
+     *        NAST(ITGA+1),NBST(ITGB+1),
+     *        LSYMA(IAST),LSYMB(IBST),
+     *        LGCOM(ITGB,ITGA),
+     *        LSPA(IAST),LSPB(IBST),
+     *        LDISB(NSYM,ITGB,ITGA),
+     *        LSBS(NSYM+1,ITGB),
+     *        LSBC(IBST)
+      DOUBLE PRECISION ::
+     *       AB(NCI,NV),X(NX)
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+C
+C     ERROR OUT IF NATOMS IS LESS THAN 2.
+      IF(NATOMS.LT.2) THEN
+        IF(MASWRK) WRITE(IW,9001)
+        CALL FLSHBF(IW)
+        CALL ABRT
+        STOP
+      ENDIF
+C
+C     ILOOP CONTROLS WHETHER:
+C     --1. SOLVING FOR LAGRANGE MULTIPLIERS
+C     --2. CHECKING THE SOLUTION
+      IF(ILOOP.NE.0.AND.ILOOP.NE.1) THEN
+        IF(MASWRK) WRITE(IW,9002)
+        CALL FLSHBF(IW)
+        CALL ABRT
+        STOP
+      ENDIF
+C
+C     RESET DMAT AND FRHS
+      CALL VCLR(DMAT,1,NATOMS*NATOMS)
+      CALL VCLR(FRHS,1,NATOMS)
+C--------------------------------------------------------------------------
+C--------------------------------------------------------------------------
+C--------------------------------------------------------------------------
+C--------------------------------------------------------------------------
+C     ROUTINE NOT EQUIPPED FOR FDIRCT, WHICH IS NOT ESSENTIAL TO MALMQVIST-TYPE RUNS.
+      IF(FDIRCT) THEN
+        IF(MASWRK) WRITE(IW,9000)
+        CALL FLSHBF(IW)
+        CALL ABRT
+        STOP
+      ENDIF
+C
+C     LOOP OVER ALL ALPHA GROUPS
+      CALL RESETCO(LBOX1,NSPACE,NA,IAMA,IAMI,LBOX3)
+      DO II=1,ITGA
+        CALL RESETDE(LBOX1,NSPACE,NA,MSTA,IACON1)
+
+C       LOOP OVER ALL ALPHA STRINGS IN GIVEN ALPHA GROUP
+        DO KK=NAST(II)+1,NAST(II+1)
+C
+          JASYM = LSYMA(KK)
+          KSYM = KTAB(JASYM)
+C
+C         LOOP OVER ALL APPLICABLE BETA GROUPS
+          CALL RESETCO(LBOX2,NSPACE,NB,IBMA,IBMI,LBOX3)
+          DO IIB = 1,ITGB
+C           BEFORE ORBITAL ARRAY RESET, SKIP ANY INCOMPATIBLE ALPHA AND BETA GROUPS.
+            IF (LGCOM(IIB,II).EQ.0) GO TO 600
+            CALL RESETDE(LBOX2,NSPACE,NB,MSTA,IBCON1)
+
+C           LOOP OVER ALL BETA STRINGS IN GIVEN BETA GROUP
+            ISTA = 1
+            DO KKB=LSBS(KSYM,IIB),LSBS(KSYM+1,IIB)-1
+              IST2 = LSBC(KKB)
+              DO IIZ=ISTA,IST2-1
+                CALL MOVEUP2(LBOX2,NSPACE,NB,MSTA,IBCON1)
+              ENDDO
+              ISTA = IST2
+C
+C-------------CALLS FOR INITIAL DET POSITIONS------------------------------
+              CALL POSITCO(LBOX5,NSPACE,NA,IAMA,IAMI,LBOX3,LBOX1,IGA)
+              CALL IDPOST(IACON1,NA,LBOX1,NSPACE,MSTA,IDIM,X,NX,
+     *                    LBST,LANDET(1,IGA),IBCON2,JPZA1)
+C
+              CALL POSITCO(LBOX5,NSPACE,NB,IBMA,IBMI,LBOX3,LBOX2,IGB)
+              CALL IDPOST(IBCON1,NB,LBOX2,NSPACE,MSTA,IDIM,X,NX,
+     *                    LBST,LBNDET(1,IGB),IACON2,JPZB1)
+C
+              JPZA1 = JPZA1 + NAST(IGA)
+              JPZB1 = JPZB1 + NBST(IGB)
+              IBSYM = LSYMB(JPZB1)
+              ICI1 = LSPA(JPZA1)+LDISB(IBSYM,IGB,IGA)+LSPB(JPZB1)
+C--------------------------------------------------------------------------
+C--------------------------------------------------------------------------
+C--------------------------------------------------------------------------
+C--------------------------------------------------------------------------
+C         NOTE:  THIS SECTION MUST MATCH BETWEEN ALDECI AND ORMAS
+C                TRANSFER '2' ROUTINES.
+C         DEFINE THE CI COEFFICIENT ONCE.
+          TMPCI=AB(ICI1,1)
+C         ALDECI USES NAT,NBT RATHER THAN NA,NB.
+          NAT=NA
+          NBT=NB
+C
+C
+C         LOOP OVER ATOMS
+          DO 100 IIAA=1,NATOMS
+            IF(IIAA.EQ.IATHLD.AND.ILOOP.NE.1) GO TO 100
+C           RE-INITIALIZE IFRHS
+            IFRHS=0
+C           FIRST INCLUDE CORE ELECTRONS INTO IFRHS
+            NNELC=NVVOS_NUMCOR(IIAA,1)
+            IFRHS=IFRHS+2*NNELC
+C           LOOP OVER IACON1,IBCON1 FOR OCCUPIED ORBITALS
+            DO I=1,NAT
+              ITMP=IACON1(I)
+              IATOM=NATM(ITMP)
+              IF(IATOM.EQ.IIAA) IFRHS=IFRHS+1
+            ENDDO
+            DO I=1,NBT
+              ITMP=IBCON1(I)
+              IATOM=NATM(ITMP)
+              IF(IATOM.EQ.IIAA) IFRHS=IFRHS+1
+            ENDDO
+C           FORM RHS CONTRIBUTION
+            ICHARG=LOCAL_ATM_CH(IIAA)
+            IFRHS=IFRHS-ICHARG
+            FRHS(IIAA)=FRHS(IIAA)+IFRHS*TMPCI*TMPCI
+C
+C           SYMMETRIC LOOP OVER ATOMS
+            IF(ILOOP.EQ.1) GO TO 100
+            DO 101 IIBB=IIAA,NATOMS
+              IF(IIBB.EQ.IATHLD.AND.ILOOP.NE.1) GO TO 101
+C             RE-INITIALIZE IFRHSB
+              IFRHSB=0
+C             FIRST INCLUDE CORE ELECTRONS INTO IFRHS
+              NNELC=NVVOS_NUMCOR(IIBB,1)
+              IFRHSB=IFRHSB+2*NNELC
+C             LOOP OVER IACON1,IBCON1 FOR OCCUPIED ORBITALS
+              DO I=1,NAT
+                ITMP=IACON1(I)
+                IATOM=NATM(ITMP)
+                IF(IATOM.EQ.IIBB) IFRHSB=IFRHSB+1
+              ENDDO
+              DO I=1,NBT
+                ITMP=IBCON1(I)
+                IATOM=NATM(ITMP)
+                IF(IATOM.EQ.IIBB) IFRHSB=IFRHSB+1
+              ENDDO
+C             FORM MATRIX CONTRIBUTION
+              ICHARGB=LOCAL_ATM_CH(IIBB)
+              IFRHSB=IFRHSB-ICHARGB
+              DMAT(IIAA,IIBB)=DMAT(IIAA,IIBB)+IFRHS*IFRHSB*TMPCI*TMPCI
+C
+C             END SYMMETRIC LOOP OVER ATOMS
+  101       CONTINUE
+C
+C         END LOOP OVER ATOMS
+  100     CONTINUE
+C--------------------------------------------------------------------------
+C--------------------------------------------------------------------------
+C--------------------------------------------------------------------------
+C--------------------------------------------------------------------------
+C             END OF LOOP OVER ALL BETA STRINGS IN GIVEN BETA GROUP
+            ENDDO
+C           END OF LOOP OVER ALL APPLICABLE BETA GROUPS
+  600       CALL PUSHCO(LBOX2,NSPACE,NB,IBMA,IBMI,LBOX3,IEND)
+          ENDDO
+C         END OF LOOP OVER ALL ALPHA STRINGS IN GIVEN ALPHA GROUP
+          CALL MOVEUP2(LBOX1,NSPACE,NA,MSTA,IACON1)
+        ENDDO
+C       END OF LOOP OVER ALL ALPHA GROUPS
+        CALL PUSHCO(LBOX1,NSPACE,NA,IAMA,IAMI,LBOX3,IEND)
+      ENDDO
+C--------------------------------------------------------------------------
+C--------------------------------------------------------------------------
+C--------------------------------------------------------------------------
+C--------------------------------------------------------------------------
+C
+C
+C     SCALE DMAT BY 2.0D+00
+C     AND
+C     FILL IN THE REST OF THE SYMMETRIC MATRIX DMAT.
+      IF(ILOOP.EQ.1) RETURN
+      CALL DSCAL(NATOMS*NATOMS,2.0D+00,DMAT,1)
+      DO IIAA=1,NATOMS
+        DO IIBB=IIAA+1,NATOMS
+          DMAT(IIBB,IIAA)=DMAT(IIAA,IIBB)
+        ENDDO
+      ENDDO
+C
+C
+      RETURN
+ 9000 FORMAT(/1X,'FDIRCT IS NOT POSSIBLE FOR',
+     *        1X,' MALMQ_CHARGE_TRANSFER_ORMAS ROUTINES.')
+ 9001 FORMAT(/1X,'ERROR IN MALMQ_CHARGE_TRANSFER_ORMAS2.'/
+     *        1X,'NATOMS CANNOT BE LESS THAN 2.')
+ 9002 FORMAT(/1X,'ERROR IN MALMQ_CHARGE_TRANSFER_ORMAS2.'/
+     *        1X,'ILOOP MUST EQUAL 0 OR 1.')
+      END
+C*MODULE ORMAS1  *DECK MALMQ_CHARGE_TRANSFER_ORMAS3
+C> @brief      This routine updates charge-transfer-less CI.
+C>
+C> @author     Aaron West and Klaus Ruedenberg
+C>             -December 17, 2012
+C>
+C> @details    This routine updates charge-transfer-less CI
+C>             i.e. it actually updates the CI coefficients.
+C>             Similar routines exist in ALDECI and ORMAS.
+C>             These routines must remain similar.
+C>
+C> @todo       Make parallel if even needed.
+C>             Debug symmetry.
+C>
+C> @param NA      is the number of active alpha electrons.
+C> @param NB      is the number of active beta electrons.
+C> @param AB      denotes temporary storage already available in CI run.
+C> @param NV      denotes total number of CI states for run.
+C> @param NCI     is the length of the CI vector.
+C> @param X       contains binomial coefficients sorted for ORMAS spaces.
+C> @param NX      is the dimension of X based off a total memory
+C>                segment.  Thus, ORMAS additions could be tricky.
+C> @param IACON1  contains the occupied orbital indices
+C>                for a given starting alpha string.
+C> @param IACON2  contains the occupied orbital indices
+C>                for an Malmqvist excitation-generated alpha string.
+C> @param IBCON1  contains the occupied orbital indices
+C>                for a given starting beta string.
+C> @param IBCON2  contains the occupied orbital indices
+C> @param LBOX1   contains the number of electrons of some spin
+C>                while cycling over the corresponding spin strings.
+C> @param LBOX2   contains the number of electrons of the other spin
+C>                while cycling over the corresponding spin strings.
+C> @param LBOX3   is a scratch array.
+C> @param LBOX5   is another scratch array.
+C> @param NSYM    equals 2**IGPDET.
+C> @param KTAB    is related to alpha and beta string symmetry.
+C> @param LANDET  contains the number of alpha strings
+C>                for each alpha group and ormas space.
+C> @param LBNDET  contains the number of beta strings
+C>                for each beta group and ormas space.
+C> @param NAST    returns starting alpha string in given alpha group.
+C> @param NBST    returns starting beta string in given beta group.
+C> @param LSYMA   returns symmetry for given alpha string.
+C> @param LSYMB   returns symmetry for given beta string.
+C> @param LGCOM   defines which alpha and beta groups are
+C>                incompatible to form the reduced CI length.
+C> @param LSPA    returns starting determinant position
+C>                given alpha string number.
+C> @param LSPB    returns starting determinant position
+C>                given beta string number.
+C> @param LDISB   increments more of the determinant position
+C>                based on beta and alpha groups coupled by symmetry.
+C> @param LSAS    returns the input going into LSAC array
+C>                for alpha groups of a given symmetry.
+C> @param LSBS    is analogue of lsas for beta groups.
+C> @param LSAC    increments more of the determinant position
+C>                based on alpha group symmetry.
+C> @param LSBC    is the analogue of LSAC for beta groups.
+C> @param ITGA    denotes the total number of alpha groups.
+C> @param ITGB    denotes the total number of beta groups.
+C> @param IAST    denotes the total number of alpha strings.
+C> @param IBST    denotes the total number of beta strings.
+C> @param L1      denotes the length of the AO coefficients.
+C> @param NATOMS  is the number of atoms.
+C> @param DMAT    is a charge-transfer-less matrix.
+C>                Please see MALMQ_CHARGE_TRANSFER1.
+C> @param FRHS    is a vector that will hold the charge transfer
+C>                population for each atom.
+C> @param NATM    is a vector with L1 length
+C>                that defines atoms for each orbital number.
+C>                For quasi-atomic orbitals,
+C>                these orbital limits assign each orbital to a single atom.
+C> @param IATHLD  is the index of the atom which is omitted.
+      SUBROUTINE MALMQ_CHARGE_TRANSFER_ORMAS3(
+     *           NA,NB,AB,NV,NCI,X,NX,
+     *           IACON1,IACON2,IBCON1,IBCON2,
+     *           LBOX1,LBOX2,LBOX3,LBOX5,
+     *           NSYM,KTAB,
+     *           LANDET,LBNDET,NAST,NBST,LSYMA,LSYMB,LGCOM,
+     *           LSPA,LSPB,LDISB,LSBS,LSBC,
+     *           ITGA,ITGB,IAST,IBST,
+     *           L1,NATOMS,FRHS,NATM,IATHLD)
+
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+      IMPLICIT NONE
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      LOGICAL FDIRCT,QCORR
+C--------------------------------------------------------
+C     ATOMIC-LIKE VARS
+      INTEGER L1,I,IATHLD,IATOM,ICHARG,IFRHS,
+     *        IIAA,ITMP,NAT,NBT,NATOMS,NNELC
+      INTEGER LOCAL_ATM_CH,NVVOS_NUMCOR
+      INTEGER NATM(L1)
+      DOUBLE PRECISION ::
+     *       TMP,TMPRHS,ZERO,ONE,
+     *       FRHS(NATOMS)
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00)
+C--------------------------------------------------------
+C     VARS
+      INTEGER NCI,NV,NA,NB,
+     *        IAST,IBST,IBSYM,
+     *        ICI1,IEND,IGA,IGB,
+     *        II,IIB,IIZ,IST2,ISTA,
+     *        ITGA,ITGB,
+     *        JASYM,JPZA1,JPZB1,
+     *        KK,KKB,KSYM,NSYM,NX
+C     NEW CODING STANDARDS VARS
+      INTEGER IAMA,IAMI,IBMA,IBMI,
+     *        IDAF,IDIM,IJKT,IODA,IP,IR,IS,IW,NAV,
+     *        IPTIM,IBTYP,
+     *        MAXI,MINI,MNUM,MSTA,LBST,NSPACE,
+     *        MASTER,ME,NREF0,NPROC
+      DOUBLE PRECISION ::
+     *       C0SQ
+C-----------------------------------------------------------------------
+      COMMON /FCCWFN/ NSPACE,MSTA(51),MNUM(51),MINI(51),MAXI(51),
+     *                IAMI(51),IAMA(51),IBMI(51),IBMA(51),IDIM(51),
+     *                LBST(51),NREF0,FDIRCT,QCORR,C0SQ
+      COMMON /IOFILE/ IR,IW,IP,IS,IJKT,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+      INTEGER IACON1(NA),IACON2(NA),IBCON1(NA),IBCON2(NA),
+     *        LBOX1(NSPACE),LBOX2(NSPACE),LBOX3(NSPACE),
+     *        LBOX5(NSPACE),
+     *        KTAB(NSYM),
+     *        LANDET(NSPACE,ITGA),LBNDET(NSPACE,ITGB),
+     *        NAST(ITGA+1),NBST(ITGB+1),
+     *        LSYMA(IAST),LSYMB(IBST),
+     *        LGCOM(ITGB,ITGA),
+     *        LSPA(IAST),LSPB(IBST),
+     *        LDISB(NSYM,ITGB,ITGA),
+     *        LSBS(NSYM+1,ITGB),
+     *        LSBC(IBST)
+      DOUBLE PRECISION ::
+     *       AB(NCI,NV),X(NX)
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+
+
+
+C--------------------------------------------------------------------------
+C--------------------------------------------------------------------------
+C--------------------------------------------------------------------------
+C--------------------------------------------------------------------------
+C     ROUTINE NOT EQUIPPED FOR FDIRCT, WHICH IS NOT ESSENTIAL TO MALMQVIST-TYPE RUNS.
+      IF(FDIRCT) THEN
+        IF(MASWRK) WRITE(IW,9000)
+        CALL FLSHBF(IW)
+        CALL ABRT
+        STOP
+      ENDIF
+C
+C     LOOP OVER ALL ALPHA GROUPS
+      CALL RESETCO(LBOX1,NSPACE,NA,IAMA,IAMI,LBOX3)
+      DO II=1,ITGA
+        CALL RESETDE(LBOX1,NSPACE,NA,MSTA,IACON1)
+
+C       LOOP OVER ALL ALPHA STRINGS IN GIVEN ALPHA GROUP
+        DO KK=NAST(II)+1,NAST(II+1)
+C
+          JASYM = LSYMA(KK)
+          KSYM = KTAB(JASYM)
+C
+C         LOOP OVER ALL APPLICABLE BETA GROUPS
+          CALL RESETCO(LBOX2,NSPACE,NB,IBMA,IBMI,LBOX3)
+          DO IIB = 1,ITGB
+C           BEFORE ORBITAL ARRAY RESET, SKIP ANY INCOMPATIBLE ALPHA AND BETA GROUPS.
+            IF (LGCOM(IIB,II).EQ.0) GO TO 600
+            CALL RESETDE(LBOX2,NSPACE,NB,MSTA,IBCON1)
+
+C           LOOP OVER ALL BETA STRINGS IN GIVEN BETA GROUP
+            ISTA = 1
+            DO KKB=LSBS(KSYM,IIB),LSBS(KSYM+1,IIB)-1
+              IST2 = LSBC(KKB)
+              DO IIZ=ISTA,IST2-1
+                CALL MOVEUP2(LBOX2,NSPACE,NB,MSTA,IBCON1)
+              ENDDO
+              ISTA = IST2
+C
+C-------------CALLS FOR INITIAL DET POSITIONS------------------------------
+              CALL POSITCO(LBOX5,NSPACE,NA,IAMA,IAMI,LBOX3,LBOX1,IGA)
+              CALL IDPOST(IACON1,NA,LBOX1,NSPACE,MSTA,IDIM,X,NX,
+     *                    LBST,LANDET(1,IGA),IBCON2,JPZA1)
+C
+              CALL POSITCO(LBOX5,NSPACE,NB,IBMA,IBMI,LBOX3,LBOX2,IGB)
+              CALL IDPOST(IBCON1,NB,LBOX2,NSPACE,MSTA,IDIM,X,NX,
+     *                    LBST,LBNDET(1,IGB),IACON2,JPZB1)
+C
+              JPZA1 = JPZA1 + NAST(IGA)
+              JPZB1 = JPZB1 + NBST(IGB)
+              IBSYM = LSYMB(JPZB1)
+              ICI1 = LSPA(JPZA1)+LDISB(IBSYM,IGB,IGA)+LSPB(JPZB1)
+C--------------------------------------------------------------------------
+C--------------------------------------------------------------------------
+C--------------------------------------------------------------------------
+C--------------------------------------------------------------------------
+C         NOTE:  THIS SECTION MUST MATCH BETWEEN ALDECI AND ORMAS
+C                TRANSFER '3' ROUTINES.
+C         ALDECI USES NAT,NBT RATHER THAN NA,NB.
+          NAT=NA
+          NBT=NB
+C         LOOP OVER ATOMS
+          TMPRHS=ZERO
+          DO 100 IIAA=1,NATOMS
+            IF(IIAA.EQ.IATHLD) GO TO 100
+C           RE-INITIALIZE IFRHS
+            IFRHS=0
+C           FIRST INCLUDE CORE ELECTRONS INTO IFRHS
+            NNELC=NVVOS_NUMCOR(IIAA,1)
+            IFRHS=IFRHS+2*NNELC
+C           LOOP OVER IACON1,IBCON1 FOR OCCUPIED ORBITALS
+            DO I=1,NAT
+              ITMP=IACON1(I)
+              IATOM=NATM(ITMP)
+              IF(IATOM.EQ.IIAA) IFRHS=IFRHS+1
+            ENDDO
+            DO I=1,NBT
+              ITMP=IBCON1(I)
+              IATOM=NATM(ITMP)
+              IF(IATOM.EQ.IIAA) IFRHS=IFRHS+1
+            ENDDO
+C           FORM RHS CONTRIBUTION
+            ICHARG=LOCAL_ATM_CH(IIAA)
+            IFRHS=IFRHS-ICHARG
+            TMPRHS=TMPRHS + IFRHS*FRHS(IIAA)
+C
+C         END LOOP OVER ATOMS
+  100     CONTINUE
+C-------------------------------------
+C         FORM NEW CI COEFFICIENT
+          TMPRHS=ONE+TMPRHS
+          TMPRHS=ABS(TMPRHS)
+          AB(ICI1,1)=AB(ICI1,1)/TMPRHS
+C-------------------------------------
+C--------------------------------------------------------------------------
+C--------------------------------------------------------------------------
+C--------------------------------------------------------------------------
+C--------------------------------------------------------------------------
+C             END OF LOOP OVER ALL BETA STRINGS IN GIVEN BETA GROUP
+            ENDDO
+C           END OF LOOP OVER ALL APPLICABLE BETA GROUPS
+  600       CALL PUSHCO(LBOX2,NSPACE,NB,IBMA,IBMI,LBOX3,IEND)
+          ENDDO
+C         END OF LOOP OVER ALL ALPHA STRINGS IN GIVEN ALPHA GROUP
+          CALL MOVEUP2(LBOX1,NSPACE,NA,MSTA,IACON1)
+        ENDDO
+C       END OF LOOP OVER ALL ALPHA GROUPS
+        CALL PUSHCO(LBOX1,NSPACE,NA,IAMA,IAMI,LBOX3,IEND)
+      ENDDO
+C--------------------------------------------------------------------------
+C--------------------------------------------------------------------------
+C--------------------------------------------------------------------------
+C--------------------------------------------------------------------------
+C
+C
+C     NORMALIZE NEW CI COEFF
+      TMP=ZERO
+      DO I=1,NCI
+        TMP = TMP+AB(I,1)*AB(I,1)
+      ENDDO
+      TMP=ONE/SQRT(TMP)
+      CALL DSCAL(NCI,TMP,AB(1,1),1)
+C
+C
+      RETURN
+ 9000 FORMAT(/1X,'FDIRCT IS NOT POSSIBLE FOR',
+     *        1X,' MALMQ_CHARGE_TRANSFER_ORMAS ROUTINES.')
       END
