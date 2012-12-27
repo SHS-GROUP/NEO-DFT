@@ -1,3 +1,4 @@
+C 19 DEC 12 - JI,GDF - Add h/i functionality. Whole module extensively modifed
 C 11 AUG 10 - DGF - FMO SALC CALL
 C 10 MAY 10 - RMO - SPHBCK: PARALLELIZATION
 C 19 SEP 05 - MWS - ADD TRUE NUCLEAR CHARGE ARRAY TO INFOA COMMON
@@ -24,12 +25,41 @@ C  5 NOV 92 - MWS - CHANGE TO 16 BIT PACKING FOR SALC INDICES
 C  3 NOV 92 - MWS - CIPA: INCLUDE MICHEL'S COMPLEX GROUP FIX
 C 20 MAR 92 - MWS - NEW CODE FROM MICHEL
 C
+c> @file  Some explanations of dimensions are relevant here.
+c>
+c>   The 108 that occurs below in P,PR,PI,PNORM,CA,MXSALC is a result of:
+c>       108 = 3 (triply degenerate irreps) x 36 (No. of Cartesians for K,L=7).
+c>   The 108 used to be 45 = 3 x 15 (No. of Cartesians for G,L=4).
+c>   I have purposely used K,L=7 because 84 = 3 x 28 (No. of Carts for I,L=6) 
+c>   where 84 is by pure chance another magic number. Best to avoid confusion.
+c>
+c>                                        S P D  F  G  H  I
+c>   The 84 that occurs below is for 84 = 1+3+6+10+15+21+28, i.e., the sum of  
+c>   number of Cartesians up to I,L=6. This used to be 35 (G,L=4).
+c>
+c>   7 (and 8) occurs frequently, this is for loops/storage up to I,L=6. 
+C>   7 used to be 5 for loops/storage up to G,L=4.
+c>
+c>   Other DATA arrays and dimensions can be inferred from numbers shown above.
+
+C
 C*MODULE SYMSLC  *DECK CIPA
+C
+C> @brief : Routine and module to compute SALC coefficients. This essentially 
+C>          transforms the AO basis so that it corresponds to the point 
+C>          group/symmetry, i.e., makes symmetrical combinations of the AO 
+C>          basis functions.
+C>
+C> @date  : December 21, 2012 - Joe Ivanic, Graham Fletcher
+C>          Major upgrade to include for h,i functions in basis
+C>          All routines in this module have been significantly modified
+C
       SUBROUTINE CIPA(P,PR,PI,PNORM,ISGRP,CA,SAO,TWRK,UWRK,ISB,IPB,
      *                CCHAR,CC,LAB,SHELL,LOC1,LOC2,IWRK1,IWRK2,KLASS,
      *                IRPBAS,IDLAB,DIJPQ,LDIJPQ,GAM,CHARR,
-     *                TRACEP,TRACED,TRACEF,TRACEG,DD,SS,VV,TT,PP,ROT,
-     *                BUFF,PSPH,DSPH,FSPH,GSPH,
+     *                TRACEP,TRACED,TRACEF,TRACEG,traceh,tracei,
+     *                DD,SS,VV,TT,PP,ROT,
+     *                BUFF,PSPH,DSPH,FSPH,GSPH, hsph,aisph,
      *                NATM,L1,L3,NSH,MXCIPA,DBG,SOME)
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
@@ -38,17 +68,19 @@ C
 C
       PARAMETER (MXATM=2000, MXSH=5000, MXGTOT=20000)
 C
-      DIMENSION P(45,45),PR(45,45),PI(45,45),PNORM(45),
-     *          ISGRP(NATM,6),CA(NATM,45),SAO(L3),TWRK(L3),UWRK(L1),
-     *          ISB(NSH,14),IPB(NSH,14),CCHAR(5,48),CC(MXCIPA),
-     *          LAB(MXCIPA,4),SHELL(NATM,6),LOC1(NAT,5),LOC2(NAT,5),
+      DIMENSION P(108,108),PR(108,108),PI(108,108),PNORM(108),
+     *          isgrp(natm,8),ca(natm,108),sao(l3),twrk(l3),uwrk(l1),
+     *          isb(nsh,14),ipb(nsh,14),cchar(7,48),cc(mxcipa),
+     *          lab(mxcipa,4),shell(natm,8),loc1(nat,7),loc2(nat,7),
      *          IWRK1(NATM),IWRK2(NATM),KLASS(NATM),IRPBAS(*),
      *          DIJPQ(1000),LDIJPQ(1000),GAM(48,48),CHARR(48,14),
      *          TRACEP(48),TRACED(48),TRACEF(48),TRACEG(48),
-     *          DD(35),ROT(15,15),BUFF(15,15),IDLAB(*),
-     *          SS(35,35),VV(35,35),TT(35,35),PP(35,35),
-     *          PSPH(3,3),DSPH(6,6),FSPH(10,10),GSPH(15,15)
-      DIMENSION ISG(6),KBB(5),KCC(5),SKIP(5),MP(5),MF(5),MIRP(5,14)
+     *          traceh(48),tracei(48),
+     *          DD(84),ROT(28,28),BUFF(28,28),IDLAB(*),
+     *          ss(84,84),vv(84,84),tt(84,84),pp(84,84),
+     *          PSPH(3,3),DSPH(6,6),FSPH(10,10),GSPH(15,15),
+     *          hsph(21,21),aisph(28,28)
+      dimension isg(8),kbb(7),kcc(7),skip(7),mp(7),mf(7),mirp(7,14)
 C
       COMMON /BASSPH/ QMTTOL,ISPHER
       COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
@@ -64,13 +96,14 @@ C
       COMMON /SYMREP/ IRPNAM(14),IPA(14),LAMBDA(14),LAMBD0(14),
      *                IADDR1(14),IADDR2(14),IADDR3(14)
       COMMON /SYMSPD/ PTR(3,144),DTR(6,288),FTR(10,480),GTR(15,720)
+      common /symhi / htr(21,1008),aitr(28,1344)
       COMMON /SYMTRY/ MAPSHL(MXSH,48),MAPCTR(MXATM,48),
      *                T(432),INVT(48),NT
 C
       DATA CMPLX    /8HCOMPLEX /
-      DATA MXSALC   /45/
-      DATA MF       /0,1,4,10,20/
-      DATA MP       /1,3,6,10,15/
+      DATA MXSALC   /108/
+      data mf       /0,1,4,10,20,35,56/
+      data mp       /1,3,6,10,15,21,28/
       DATA TOL      /1.0D-10/
       DATA ZERO,HALF,ONE /0.0D+00,0.5D+00,1.0D+00/
       DATA BLOCKI   /8HBLOCKI  /, BLANK/8HBLANK   /
@@ -88,7 +121,7 @@ C
       DO 5 ISH=1,NSHELL
       ISB(ISH,IRP)=0
     5 IPB(ISH,IRP)=0
-      DO 10 I=1,5
+      do 10 i=1,7
       DO 10 IAT=1,NAT
       LOC1(IAT,I)=-1
    10 LOC2(IAT,I)=-1
@@ -100,12 +133,15 @@ C
       CALL DAREAD(IDAF,IODA,FTR, 4800, 9,0)
       CALL DAREAD(IDAF,IODA,GTR,10800,10,0)
 C
+      call daread(idaf,ioda, htr,21168,911,0) 
+      call daread(idaf,ioda,aitr,37632,912,0) 
+C
       IF(ISPHER.GE.0) THEN
 C
 C     -----  TRANSFORM TO SPHERICAL HARMONICS BASIS.    -----
 C
          CALL SPHSET(DBG,DD,SS,VV,TT,PP,ROT,BUFF,
-     *               PSPH,DSPH,FSPH,GSPH)
+     *               psph,dsph,fsph,gsph,hsph,aisph)
          CALL SPHTRF(DBG)
          IF(DBG) CALL SPHPRT
 C
@@ -136,6 +172,28 @@ C
      1           GTR(7,N+7)+GTR(8,N+8)+GTR(9,N+9)+
      1           GTR(10,N+10)+GTR(11,N+11)+GTR(12,N+12)+
      1           GTR(13,N+13)+GTR(14,N+14)+GTR(15,N+15)
+c h
+      n=21*(it-1)
+      traceh(it)=htr( 1,n+ 1)+htr( 2,n+ 2)+htr( 3,n+ 3)+
+     1           htr( 4,n+ 4)+htr( 5,n+ 5)+htr( 6,n+ 6)+
+     1           htr( 7,n+ 7)+htr( 8,n+ 8)+htr( 9,n+ 9)+
+     1           htr(10,n+10)+htr(11,n+11)+htr(12,n+12)+
+     1           htr(13,n+13)+htr(14,n+14)+htr(15,n+15)+
+     1           htr(16,n+16)+htr(17,n+17)+htr(18,n+18)+
+     1           htr(19,n+19)+htr(20,n+20)+htr(21,n+21)
+c i
+      n=28*(it-1)
+      tracei(it)=aitr( 1,n+ 1)+aitr( 2,n+ 2)+aitr( 3,n+ 3)+
+     1           aitr( 4,n+ 4)+aitr( 5,n+ 5)+aitr( 6,n+ 6)+
+     1           aitr( 7,n+ 7)+aitr( 8,n+ 8)+aitr( 9,n+ 9)+
+     1           aitr(10,n+10)+aitr(11,n+11)+aitr(12,n+12)+
+     1           aitr(13,n+13)+aitr(14,n+14)+aitr(15,n+15)+
+     1           aitr(16,n+16)+aitr(17,n+17)+aitr(18,n+18)+
+     1           aitr(19,n+19)+aitr(20,n+20)+aitr(21,n+21)+
+     1           aitr(22,n+22)+aitr(23,n+23)+aitr(24,n+24)+
+     1           aitr(25,n+25)+aitr(26,n+26)+aitr(27,n+27)+
+     1           aitr(28,n+28)
+C
    15 CONTINUE
       IF(DBG) THEN
          WRITE(IW,9019) (TRACEP(IT),IT=1,NT)
@@ -259,7 +317,7 @@ C
 C
 C     ----- CHECK WHICH ANGULAR MOMENTA ARE PRESENT ON THAT CENTER -----
 C
-      DO 250 KT=1,5
+      do 250 kt=1,7
   250 SKIP(KT)=.TRUE.
       DO 260 ISH=1,NSHELL
       JAT=KATOM(ISH)
@@ -274,7 +332,7 @@ C     ----- EQUIVALENT CENTER IATOM WILL CONTRIBUTE ONLY TO  -----
 C           CHARACTER OF OPERATIONS WHICH MAP IT INTO ITSELF.
 C
       DO 310 IT=1,NT
-      DO 310 KT=1,5
+      do 310 kt=1,7
   310 CCHAR(KT,IT)=ZERO
 C
       DO 350 JAT=1,NAT
@@ -290,12 +348,14 @@ C
       CCHAR(3,IT)=CCHAR(3,IT)+TRACED(IT)
       CCHAR(4,IT)=CCHAR(4,IT)+TRACEF(IT)
       CCHAR(5,IT)=CCHAR(5,IT)+TRACEG(IT)
+      CCHAR(6,IT)=CCHAR(6,IT)+TRACEh(IT)
+      CCHAR(7,IT)=CCHAR(7,IT)+TRACEi(IT)
   340 CONTINUE
   350 CONTINUE
 C
       IF(DBG) THEN
          DO 360 IT=1,NT
-            WRITE(IW,9997) IT,(CCHAR(KT,IT),KT=1,5)
+            write(iw,9997) it,(cchar(kt,it),kt=1,7)
   360    CONTINUE
       END IF
 C
@@ -309,7 +369,8 @@ C                            -ICLASS- AND -S,P,D,F,G- FUNCTIONS .
 C
 C     ----- LOOP OVER ANGULAR MOMENTA -----
 C
-      DO 800 KT=1,5
+      do 800 kt=1,7
+C
       IF(SKIP(KT)) GO TO 800
       NF=MF(KT)
       NP=MP(KT)
@@ -326,6 +387,7 @@ C
       DO 570 IT=1,NT
   570 DUM=DUM+CCHAR(KT,IT)*CHARR(IT,IRP)
       DUM=DUM/NT
+
       IF(DUM.LT.TOL) GO TO 750
       NIRP=NINT(DUM)
       IF(COMPLX.EQ.CMPLX.AND.LL.EQ.2) NIRP=NIRP/2
@@ -351,6 +413,8 @@ C
       IF(KT.EQ.3) DUM=GM*DTR(I,J+NP*(IT-1))
       IF(KT.EQ.4) DUM=GM*FTR(I,J+NP*(IT-1))
       IF(KT.EQ.5) DUM=GM*GTR(I,J+NP*(IT-1))
+      if(kt.eq.6) dum=gm*htr(i,j+np*(it-1))
+      if(kt.eq.7) dum=gm*aitr(i,j+np*(it-1))
   590 P(I+NP*(LL1-1),J+NP*(LL2-1))=P(I+NP*(LL1-1),J+NP*(LL2-1))+DUM
   600 CONTINUE
   610 CONTINUE
@@ -466,7 +530,7 @@ C     ----- END OF LOOP OVER ANGULAR MOMENTUM TYPES -----
 C
   800 CONTINUE
 C
-      DO 810 KT=1,5
+      do 810 kt=1,7
       KBB(KT)=LOC1(ICLASS,KT)
   810 KCC(KT)=LOC2(ICLASS,KT)
       JCLASS=ICLASS
@@ -491,7 +555,7 @@ C
       KLASS(J)=ICLASS
   820 CONTINUE
 C
-      DO 900 KT=1,5
+      do 900 kt=1,7
       IF(SKIP(KT)) GO TO 900
       NP=MP(KT)
       LOC1(ICLASS,KT)=IC
@@ -525,6 +589,8 @@ C
       IF(KT.EQ.3) D=DTR(I,K+NP*(IT-1))
       IF(KT.EQ.4) D=FTR(I,K+NP*(IT-1))
       IF(KT.EQ.5) D=GTR(I,K+NP*(IT-1))
+      if(kt.eq.6) d=htr(i,k+np*(it-1))
+      if(kt.eq.7) d=aitr(i,k+np*(it-1))
       DUM=DUM+D*CC(K+NP*(M-1)+KB)*GAM(IT,M+LL*(L-1)+IRP0)
   850 CONTINUE
       IF( ABS(DUM).LT.TOL) DUM=ZERO
@@ -576,8 +642,8 @@ C
 C
       IF(DBG) THEN
          WRITE(IW,9983) (KLASS(IAT),
-     1                  (LOC1(KLASS(IAT),KT),KT=1,5),
-     2                  (LOC2(KLASS(IAT),KT),KT=1,5),IAT=1,NAT)
+     1                  (loc1(klass(iat),kt),kt=1,7),
+     2                  (loc2(klass(iat),kt),kt=1,7),iat=1,nat)
       END IF
 C
 C     ----- GENERATE INITIAL ADDRESS OF SYMMETRY BLOCKS -----
@@ -633,6 +699,9 @@ C
          CALL DAREAD(IDAF,IODA,DTR, 1728, 8,0)
          CALL DAREAD(IDAF,IODA,FTR, 4800, 9,0)
          CALL DAREAD(IDAF,IODA,GTR,10800,10,0)
+C
+         call daread(idaf,ioda, htr,21168,911,0)
+         call daread(idaf,ioda,aitr,37632,912,0)
       END IF
 C
       RETURN
@@ -640,8 +709,8 @@ C
  9018 FORMAT(/,16H TRACE OF -DTR- ,/,(12F10.5))
  9017 FORMAT(/,16H TRACE OF -FTR- ,/,(12F10.5))
  9016 FORMAT(/,16H TRACE OF -GTR- ,/,(12F10.5))
- 9997 FORMAT(' CHAR. OF REDUCIBLE REP. FOR -IT- AND -S,P,D,F,G- = ',
-     1 I5,5F10.5)
+ 9997 FORMAT(' CHAR. OF REDUCIBLE REP. FOR -IT- AND -S,P,D,F,G,H,I- = ',
+     1 I5,7F10.5)
  9995 FORMAT(21H EQUIVALENT CENTER = ,I5)
  9994 FORMAT(18H KT,KB,KC,IC,NP = ,5I5)
  9993 FORMAT(/,24H LABELS AND COEFFICIENTS,/,
@@ -656,13 +725,20 @@ C
  9985 FORMAT(//,14H ----- ATOM = ,I2)
  9983 FORMAT(35H KLASS(IAT) LOC1(KLASS(IAT),KT) AND,
      1                  20H LOC2(KLASS(IAT),KT),
-     2  I7,5X,5I5,10X,5I5)
+     2  I7,5X,7I5,10X,7I5)
  9982 FORMAT(21H     IADDR3(IRREP) = ,/,(14I5))
  9981 FORMAT(' .... ANG.MOM., IRREP., DEG., NIRP = ',4I5,I5,F10.5)
  9980 FORMAT(/1X,'-- VARIATIONAL SPACE WILL BE RESTRICTED TO PURE',
      *           ' SPHERICAL HARMONICS ONLY --')
       END
 C*MODULE SYMSLC  *DECK DIJGEN
+C
+C> @brief : Routine is for symmetry integral blocking
+C>          However, this is a defunct option in GAMESS
+C>
+C> @date  : December 21, 2012 - Joe Ivanic, Graham Fletcher
+C>          Upgrade to include for h,i functions in basis
+C
       SUBROUTINE DIJGEN(KLASS,IDLAB,CC,LAB,SHELL,
      *                  LOC1,LOC2,ISG,JSG,DIJPQ,LDIJPQ,
      *                  NCC,MXCIPA,NAT,SOME)
@@ -674,8 +750,8 @@ C
       PARAMETER (MXATM=2000, MXSH=5000, MXGTOT=20000)
 C
       DIMENSION KLASS(NAT),IDLAB(*),
-     *          CC(NCC),LAB(MXCIPA,4),SHELL(NAT,6),
-     *          LOC1(NAT,5),LOC2(NAT,5),ISG(NAT),JSG(NAT),
+     *          cc(ncc),lab(mxcipa,4),shell(nat,8),
+     *          loc1(nat,7),loc2(nat,7),isg(nat),jsg(nat),
      *          DIJPQ(1000),LDIJPQ(1000)
 C
       COMMON /IOFILE/ IR,IW,IP,IJK,IPK,IDAF,NAV,IODA(950)
@@ -695,13 +771,16 @@ C
          STOP
       END IF
 C
-      DO 5 J=1,6
+      do 5 j=1,7
+c
       DO 5 I=1,NAT
     5 SHELL(I,J)=.TRUE.
       DO 6 II=1,NSHELL
       LIT=KTYPE(II)
       ICEN=KATOM(II)
-      IF(LIT.EQ.2.AND.KMIN(II).EQ.1) LIT=6
+c
+      if(lit.eq.2.and.kmin(ii).eq.1) lit=8
+c
       SHELL(KLASS(ICEN),LIT)=.FALSE.
     6 CONTINUE
 C
@@ -731,12 +810,16 @@ C
 C
 C     ----- LOOP OVER TYPES OF SHELLS ON -IATOM- -----
 C
-      DO 180 KT1=1,6
+c
+      do 180 kt1=1,8
+c
       IF(SHELL(IATOM,KT1)) GO TO 180
 C
 C     ----- LOOP OVER TYPES OF SHELLS ON -JATOM- -----
 C
-      DO 170 KT2=1,6
+c
+      do 170 kt2=1,8
+c
       IF(SHELL(JATOM,KT2)) GO TO 170
       NUMPQA=0
 C
@@ -766,6 +849,13 @@ C
      1       ' COMPLEX REPRESENTATIONS. STOP               ')
       END
 C*MODULE SYMSLC  *DECK DIJPQA
+C
+C> @brief : Routine is used as part of symmetry integral blocking
+C>          However, this is a defunct option in GAMESS
+C>
+C> @date  : December 21, 2012 - Joe Ivanic, Graham Fletcher
+C>          Upgrade to include for h,i functions in basis
+C
       SUBROUTINE DIJPQA(CC,LAB,LOC1,LOC2,DIJPQ,LDIJPQ,IDLAB,
      *                  NCC,MXCIPA,NAT,ISG,LIT1,JSG,LJT1,
      *                  NUMPQA,SOME)
@@ -774,19 +864,19 @@ C
 C
       LOGICAL SPI,SPJ,SOME
 C
-      DIMENSION CC(NCC),LAB(MXCIPA,4), IDLAB(4,225,2),
-     *          LOC1(NAT,5),LOC2(NAT,5),DIJPQ(1000),LDIJPQ(1000)
-      DIMENSION KMIN(6),KMAX(6),NF(6),LOCD(225),LOCMIN(225),LOCMAX(225)
+      dimension cc(ncc),lab(mxcipa,4), idlab(4,784,2),
+     *          loc1(nat,7),loc2(nat,7),dijpq(1000),ldijpq(1000)
+      dimension kmin(8),kmax(8),nf(8),locd(784),locmin(784),locmax(784)
 C
       COMMON /IOFILE/ IR,IW,IP,IJK,IPK,IDAF,NAV,IODA(950)
       COMMON /SYMREP/ IRPNAM(14),IPA(14),LAMBDA(14),LAMBD0(14),
      *                IADDR1(14),IADDR2(14),IADDR3(14)
 C
-      DATA KMIN /1,2, 5,11,21,1/
-      DATA KMAX /1,4,10,20,35,4/
-      DATA NF   /1,3, 6,10,15,4/
+      data kmin /1,2, 5,11,21,36,57,1/
+      data kmax /1,4,10,20,35,56,84,4/
+      data nf   /1,3, 6,10,15,21,28,4/
       DATA TOL  /1.0D-10/
-      DATA MAXPQA,NDMAX /225,1000/
+      data maxpqa,ndmax /784,1000/
 C
 C           IDLAB IS USED BEFORE IT IS INITIALIZED
 C           HONDO-8 HAS IDLAB IN STATIC COMMON /IJPQA/,
@@ -797,8 +887,10 @@ C
 C
       LIT=LIT1
       LJT=LJT1
-      I1S=6*(ISG-1)+LIT
-      I2S=6*(JSG-1)+LJT
+c
+      i1s=8*(isg-1)+lit
+      i2s=8*(jsg-1)+ljt
+c
       IF(I1S.GE.I2S) GO TO 20
       I3=I1S
       I1S=I2S
@@ -810,8 +902,10 @@ C
       MAXJ=KMAX(LJT)
       MINPI=MINI
       MINPJ=MINJ
-      IF(LIT.EQ.6) LIT=2
-      IF(LJT.EQ.6) LJT=2
+c
+      if(lit.eq.8) lit=2
+      if(ljt.eq.8) ljt=2
+c
       NF1=NF(LIT)
       NF2=NF(LJT)
 C
@@ -966,6 +1060,12 @@ C
  9006 FORMAT(' -NUMPQA- IS TOO LARGE. STOP')
       END
 C*MODULE SYMSLC  *DECK SALCAO
+C
+C> @brief : Routine sets up matrix of SALC orbitals
+C>
+C> @date  : December 21, 2012 - Joe Ivanic, Graham Fletcher
+C>          Upgrade to include for h,i functions in basis
+C
       SUBROUTINE SALCAO(CA,SAO,TWRK,UWRK,ISB,IPB,CC,LAB,LOC1,LOC2,
      *                  MAPC,MAPS,KLASS,IRPBAS,NATM,L1,L3,NSH,NCC,
      *                  MXCIPA,DBG)
@@ -976,11 +1076,11 @@ C
 C
       PARAMETER (MXATM=2000, MXSH=5000, MXGTOT=20000)
 C
-      DIMENSION CA(NATM,45),SAO(L3),TWRK(L3),UWRK(L1),
+      DIMENSION CA(NATM,108),SAO(L3),TWRK(L3),UWRK(L1),
      *          ISB(NSH,14),IPB(NSH,14),
-     *          CC(MXCIPA),LAB(MXCIPA,4),LOC1(NATM,5),LOC2(NATM,5),
+     *          cc(mxcipa),lab(mxcipa,4),loc1(natm,7),loc2(natm,7),
      *          MAPC(NATM),MAPS(NATM),KLASS(NATM),IRPBAS(L1,3)
-      DIMENSION MP(5)
+      dimension mp(7)
 C
       COMMON /BASSPH/ QMTTOL,ISPHER
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
@@ -999,7 +1099,7 @@ C
 C
       DATA CMPLX /8HCOMPLEX /
       DATA ZERO  /0.0D+00/
-      DATA MP    /1,3,6,10,15/
+      data mp    /1,3,6,10,15,21,28/
 C
 C     ----- ROUTINE SETS UP MATRIX OF -SALC- ORBITALS -----
 C
@@ -1024,7 +1124,7 @@ C
 C
 C     ----- LOOP OVER SHELL TYPES ON -P1- CENTER -----
 C
-      DO 200 KT=1,5
+      do 200 kt=1,7
       NP=MP(KT)
 C
       ISH=0
@@ -1248,6 +1348,12 @@ C
  9986 FORMAT(21H     IADDR3(IRREP) = ,/,(14I5))
       END
 C*MODULE SYMSLC  *DECK SALCPR
+C
+C> @brief : Routine prints symmetry adapted linear combinations
+C>
+C> @date  : December 21, 2012 - Joe Ivanic, Graham Fletcher
+C>          Upgrade to include for h,i functions in basis
+C
       SUBROUTINE SALCPR(CA,ISB,IPB,CC,LAB,LOC1,LOC2,MAPC,KLASS,
      *                  NATM,NSH,NCC,MXCIPA,DBG,SOME)
 C
@@ -1257,10 +1363,10 @@ C
 C
       PARAMETER (MXATM=2000, MXSH=5000, MXGTOT=20000)
 C
-      DIMENSION CA(NATM,45),ISB(NSH,14),IPB(NSH,14),CC(NCC),
-     *          LAB(MXCIPA,4),LOC1(NATM,5),LOC2(NATM,5),MAPC(NATM),
+      DIMENSION CA(NATM,108),ISB(NSH,14),IPB(NSH,14),CC(NCC),
+     *          lab(mxcipa,4),loc1(natm,7),loc2(natm,7),mapc(natm),
      *          KLASS(NATM)
-      DIMENSION MP(5)
+      dimension mp(7)
 C
       COMMON /BASSPH/ QMTTOL,ISPHER
       COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
@@ -1277,7 +1383,7 @@ C
       COMMON /SYMTRY/ MAPSHL(MXSH,48),MAPCTR(MXATM,48),
      *                T(432),INVT(48),NT
 C
-      DATA MP  /1,3,6,10,15/
+      data mp  /1,3,6,10,15,21,28/
 C
 C     ----- ROUTINE PRINTS SYMMETRY ADAPTED LINEAR COMBINATIONS -----
 C
@@ -1300,7 +1406,7 @@ C
 C
 C     ----- LOOP OVER SHELL TYPES ON -P1- CENTER -----
 C
-      DO 200 KT=1,5
+      do 200 kt=1,7
       NP=MP(KT)
 C
       ISH=0
@@ -1368,6 +1474,7 @@ C
 C     ----- END LOOP OVER -P1- CENTERS -----
 C
   210 CONTINUE
+C
       IF(SOME) THEN
          IF(ISPHER.EQ.1   .AND.  NFG.EQ.0) WRITE(IW,9998) NSALC
          WRITE(IW,9997)
@@ -1383,7 +1490,15 @@ C
  9997 FORMAT(/5X,'DIMENSIONS OF THE SYMMETRY SUBSPACES ARE')
  9996 FORMAT(5(1X,A4,'=',I5,4X))
       END
+C
 C*MODULE SYMSLC  *DECK SPHBCK
+C
+C> @brief : Routine transforms SALC coefficients expressed in spherical
+C>          harmonics space back into cartesian space.
+C>
+C> @date  : December 21, 2012 - Joe Ivanic, Graham Fletcher
+C>          Significant upgrade to include for h,i functions in basis
+C
       SUBROUTINE SPHBCK(V,T,U,NBF,DBG)
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
@@ -1405,6 +1520,8 @@ C
      *                FSHELL(10,10),GSHELL(15,15),
      *                PIHELL(3,3),DIHELL(6,6),
      *                FIHELL(10,10),GIHELL(15,15)
+      common /sphehi/ hshell(21,21),aishell(28,28),
+     *                hihell(21,21),aiihell(28,28)
 C
       PARAMETER (ZERO=0.0D+00, ONE=1.0D+00)
 C
@@ -1423,7 +1540,8 @@ C
       MIN=KMIN(ISH)
       MAX=KMAX(ISH)
       LOC=KLOC(ISH)-MIN
-      GO TO (100,200,300,400,500),IT
+      go to (100,200,300,400,500,600,700),it
+C
   100 CONTINUE
       GO TO 1000
   200 IF(MIN.EQ.1) THEN
@@ -1457,12 +1575,27 @@ C
       LOCI=LOC+I
       LOCJ=LOC+J
   510 T(LOCJ,LOCI)=GSHELL(I-MIN+1,J-MIN+1)
+c
+      go to 1000
+  600 do 610 i=min,max
+      do 610 j=min,max
+      loci=loc+i
+      locj=loc+j
+  610 t(locj,loci)=hshell(i-min+1,j-min+1)
+      go to 1000
+  700 do 710 i=min,max
+      do 710 j=min,max
+      loci=loc+i
+      locj=loc+j
+  710 t(locj,loci)=aishell(i-min+1,j-min+1)
+c
  1000 CONTINUE
 C
       IF(DBG) CALL SYMPRP(T,NUM,NUM,NUM)
       IF(DBG) CALL SYMPRP(V,NUM,NUM,NUM)
 C
 C     ----- BACK-TRANSFORM -----
+C
 C             V <-- T*V
 C
       PARALL3 = GOPARR  .AND.  NUM.GT.MXSQN3()
@@ -1493,7 +1626,16 @@ C
 C
       RETURN
       END
+C
 C*MODULE SYMSLC  *DECK SPHBCKU
+C
+C> @brief : Routine transforms SALC coefficients expressed in cartesian 
+C>          space into spherical harmonic space. This is a clone
+C>          of SPHBCK
+C>
+C> @date  : December 21, 2012 - Joe Ivanic, Graham Fletcher
+C>          Significant upgrade to include for h,i functions in basis
+C
       SUBROUTINE SPHBCKU(T,L1,NBF,NSPH)
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
@@ -1510,6 +1652,8 @@ C
      *                FSHELL(10,10),GSHELL(15,15),
      *                PIHELL(3,3),DIHELL(6,6),
      *                FIHELL(10,10),GIHELL(15,15)
+      common /sphehi/ hshell(21,21),aishell(28,28),
+     *                hihell(21,21),aiihell(28,28)
 C
 C     ----- CREATE TRANSFORMATION MATRIX CARTESIAN->SPHERICAL
 C           A CLONE OF SPHBCK.
@@ -1532,7 +1676,7 @@ C
 C                                     L-SHELLS
          IF(IT.EQ.2.AND.MIN.EQ.1) NSPH=NSPH+1
 C
-         GO TO (100,200,300,400,500),IT
+         go to (100,200,300,400,500,600,700),it
 C
   100    CONTINUE
          LOCI=LOC+1
@@ -1594,18 +1738,47 @@ C
             ENDDO
          ENDDO
          NEL=NEL+6
+C
+         go to 1000
+  600    continue
+         do i=min,max
+            do j=min,min+10
+               loci=loc+i
+               locj=loc+j-nel
+               t(loci,locj)=hshell(i-min+1,j-min+1)
+            enddo
+         enddo
+         nel=nel+10
+         go to 1000
+  700    continue
+         do i=min,max
+            do j=min,min+12
+               loci=loc+i
+               locj=loc+j-nel
+               t(loci,locj)=aishell(i-min+1,j-min+1)
+            enddo
+         enddo
+         nel=nel+15
+C
  1000 CONTINUE
 C
       RETURN
       END
 C*MODULE SYMSLC  *DECK SPHCUT
+C
+C> @brief : Routine eliminates unwanted (contaminant) functions from 
+C>          spherical harmonic space. 
+C>
+C> @date  : December 21, 2012 - Joe Ivanic, Graham Fletcher
+C>          Significant upgrade to include for h,i functions in basis
+C
       SUBROUTINE SPHCUT(DBG)
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
 C
       LOGICAL DBG
 C
-      DIMENSION MF(5),NAM(35),INDSR(10)
+      dimension mf(7),nam(84),indsr(35)
 C
       PARAMETER (MXSH=5000, MXATM=2000)
 C
@@ -1614,20 +1787,38 @@ C
      *                FSHELL(10,10),GSHELL(15,15),
      *                PIHELL(3,3),DIHELL(6,6),
      *                FIHELL(10,10),GIHELL(15,15)
+      common /sphehi/ hshell(21,21),aishell(28,28),
+     *                hihell(21,21),aiihell(28,28)
       COMMON /SYMSPD/ PTR(3,144),DTR(6,288),FTR(10,480),GTR(15,720)
+      common /symhi / htr(21,1008),aitr(28,1344)
       COMMON /SYMTRY/ MAPSHL(MXSH,48),MAPCTR(MXATM,48),
      *                T(432),INVT(48),NT
 C
       PARAMETER (ZERO=0.0D+00)
 C
-      DATA MF  /0,1,4,10,20/
-      DATA NAM /4H  S ,4H  X ,4H  Y ,4H  Z ,4H  XX,4H  YY,4H  ZZ,
-     1          4H  XY,4H  XZ,4H  YZ,4H XXX,4H YYY,4H ZZZ,4H XXY,
-     2          4H XXZ,4H YYX,4H YYZ,4H ZZX,4H ZZY,4H XYZ,4HXXXX,
-     3          4HYYYY,4HZZZZ,4HXXXY,4HXXXZ,4HYYYX,4HYYYZ,4HZZZX,
-     4          4HZZZY,4HXXYY,4HXXZZ,4HYYZZ,4HXXYZ,4HYYXZ,4HZZXY/
+      data mf  /0,1,4,10,20,35,56/
+      data nam /6h    s ,6h    x ,6h    y ,6h    z ,6h    xx,6h    yy,
+     1          6h    zz,6h    xy,6h    xz,6h    yz,6h   xxx,6h   yyy,
+     2          6h   zzz,6h   xxy,6h   xxz,6h   yyx,6h   yyz,6h   zzx,
+     3          6h   zzy,6h   xyz,6h  xxxx,6h  yyyy,6h  zzzz,6h  xxxy,
+     4          6h  xxxz,6h  yyyx,6h  yyyz,6h  zzzx,6h  zzzy,6h  xxyy,
+     5          6h  xxzz,6h  yyzz,6h  xxyz,6h  yyxz,6h  zzxy,6h xxxxx,
+     6          6h yyyyy,6h zzzzz,6h xxxxy,6h xxxxz,6h yyyyx,6h yyyyz,
+     7          6h zzzzx,6h zzzzy,6h xxxyy,6h xxxzz,6h yyyxx,6h yyyzz,
+     8          6h zzzxx,6h zzzyy,6h xxxyz,6h yyyxz,6h zzzxy,6h xxyyz,
+     9          6h xxzzy,6h yyzzx,6h    x6,6h    y6,6h    z6,6h   x5y,
+     1          6h   x5z,6h   y5x,6h   y5z,6h   z5x,6h   z5y,6h  x4y2,
+     2          6h  x4z2,6h  y4x2,6h  y4z2,6h  z4x2,6h  z4y2,6h  x4yz,
+     3          6h  y4xz,6h  z4xy,6h  x3y3,6h  x3z3,6h  y3z3,6h x3y2z,
+     4          6h x3z2y,6h y3x2z,6h y3z2x,6h z3x2y,6h z3y2x,6hx2y2z2/
+c
       DATA INDSR /4HD S ,4HF P1,4HF P2,4HF P3,4HG S ,
-     1            4HG D1,4HG D2,4HG D3,4HG D4,4HG D5/
+     1            4hg d1,4hg d2,4hg d3,4hg d4,4hg d5,
+     1            4hh p1,4hh p2,4hh p3,4hh f1,4hh f2,
+     1            4hh f3,4hh f4,4hh f5,4hh f6,4hh f7,
+     1            4hi  s,4hi d1,4hi d2,4hi d3,4hi d4,
+     1            4hi d5,4hi g1,4hi g2,4hi g3,4hi g4,
+     1            4hi g5,4hi g6,4hi g7,4hi g8,4hi g9/
 C
 C     ----- SET UNDESIRED BLOCKS IN THE ROTATION MATRIX TO ZERO -----
 C
@@ -1637,16 +1828,20 @@ C
       ND= 6*(IT-1)
       NF=10*(IT-1)
       NG=15*(IT-1)
+      nh=21*(it-1)
+      ni=28*(it-1)
 C
-C     ----- LOOP OVER S,P,D,F,G CLASSES -----
+C     ----- LOOP OVER S,P,D,F,G,H,I CLASSES -----
 C
-      DO 20 IPER=1,3
+      do 20 iper=1,5
 C
       N=6
       IF(IPER.EQ.2) N=10
       IF(IPER.EQ.3) N=15
+      if(iper.eq.4) n=21
+      if(iper.eq.5) n=28
 C
-      GO TO (21,22,23),IPER
+      go to (21,22,23,24,25),iper
 C
  21   DO 31 I=1,N
       DTR(I,ND+6)=ZERO
@@ -1666,6 +1861,21 @@ C
       GTR(I,NG+J)=ZERO
       GTR(J,NG+I)=ZERO
  33   CONTINUE
+      go to 20
+c
+ 24   do 34 i=12,21
+      do 34 j=1,n
+      htr(i,nh+j)=zero
+      htr(j,nh+i)=zero
+ 34   continue
+      go to 20
+c
+ 25   do 35 i=14,28
+      do 35 j=1,n
+      aitr(i,ni+j)=zero
+      aitr(j,ni+i)=zero
+ 35   continue
+C
  20   CONTINUE
  60   CONTINUE
 C
@@ -1677,13 +1887,15 @@ C     ----  PRINTING  ----
 C
       WRITE(IW,9996)
 C
-      DO 120 IPER=1,3
+      do 120 iper=1,5
 C
       N=6
       IF(IPER.EQ.2) N=10
       IF(IPER.EQ.3) N=15
+      if(iper.eq.4) n=21
+      if(iper.eq.5) n=28
       ID=MF(IPER+2)
-      GO TO (121,122,123),IPER
+      go to (121,122,123,124,125),iper
 C
 C     ---- D S ----
 C
@@ -1722,6 +1934,33 @@ C
       WRITE(IW,9997) (GSHELL(I,J),NAM(ID+I),I=MINNP,MAXNP)
       IF(MAXNP.LT.N) GO TO 143
  133  CONTINUE
+      go to 120
+c
+c     ---- h p and h f ----
+c
+ 124  do 134 j=12,21
+      write(iw,9998) j,indsr(j-12+11)
+      maxnp=0
+ 144  minnp=maxnp+1
+      maxnp=maxnp+6
+      if(maxnp.gt.n) maxnp=n
+      write(iw,9997) (hshell(i,j),nam(id+i),i=minnp,maxnp)
+      if(maxnp.lt.n) go to 144
+ 134  continue
+      go to 120
+c
+c     ---- i s, i d and i g ----
+c
+ 125  do 135 j=14,28
+      write(iw,9998) j,indsr(j-14+21)
+      maxnp=0
+ 145  minnp=maxnp+1
+      maxnp=maxnp+6
+      if(maxnp.gt.n) maxnp=n
+      write(iw,9997) (aishell(i,j),nam(id+i),i=minnp,maxnp)
+      if(maxnp.lt.n) go to 145
+ 135  continue
+C
  120  CONTINUE
 C
       END IF
@@ -1732,18 +1971,27 @@ C
  9996 FORMAT(/,10X,30(1H-),/,10X,'ELIMINATED VECTORS IN -SPHCUT-',/,
      1         10X,30(1H-))
       END
+C
 C*MODULE SYMSLC  *DECK SPHMAK
-      SUBROUTINE SPHMAK(DBG,DD,SS,VV,TT,PP,SSPH,PSPH,DSPH,FSPH,GSPH)
+C
+C> @brief : Routine makes spherical harmonic functions
+C>
+C> @date  : December 21, 2012 - Joe Ivanic, Graham Fletcher
+C>          Significant upgrade to include for h,i functions in basis
+C
+      subroutine sphmak(dbg,dd,ss,vv,tt,pp,ssph,psph,dsph,fsph,gsph,
+     *                  hsph,aisph)
 C
       IMPLICIT   DOUBLE PRECISION (A-H,O-Z)
 C
       LOGICAL    NORM,DBG
 C
-      DIMENSION DD(35),SS(35,35),VV(35,35),TT(35,35),PP(35,35),
+      DIMENSION DD(84),SS(84,84),VV(84,84),TT(84,84),PP(84,84),
      *          SSPH(1,1),PSPH(3,3),DSPH(6,6),FSPH(10,10),GSPH(15,15)
-      DIMENSION BC(5),NX(35),NY(35),NZ(35),
+     *,         hsph(21,21),aisph(28,28)
+      dimension bc(7),nx(84),ny(84),nz(84),
      *          ISSPH(1,1),IPSPH(3,3),IDSPH(6,6),IFSPH(10,10),
-     *          IGSPH(15,15)
+     *          igsph(15,15),ihsph(21,21),iisph(28,28)
 C
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
       COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
@@ -1793,20 +2041,176 @@ C
      5  0,  0,  0,  0,  1,  0,  0,  1,  0,  0,  0,  0,  0,  1,  0,
      6  0,  0,  0,  0,  0,  0,  1,  0,  1,  0,  0,  0,  1,  0,  0/
 C
+      data ihsph/
+     1  1,  0,  0,  0,  0,  5,  0,  0,  0,-10,  0,  0,  0,  0,  0,    !  +5
+     1  0,  0,  0,  0,  0,  0,
+     2  0,  0,  0,  0,  1,  0,  1,  0,  0,  0,  0,  0,  0,  0,  0,    !  +4
+     2  0,  0,  0, -6,  0,  0,
+     3 -1,  0,  0,  0,  0,  3,  0,  0,  0,  2,  8,  0,  0,  0,  0,    !  +3
+     3  0,  0,  0,  0,  0,-24,
+     4  0,  0,  0,  0, -1,  0,  1,  0,  0,  0,  0,  0,  0,  2, -2,    !  +2
+     4  0,  0,  0,  0,  0,  0,
+     5  1,  0,  0,  0,  0,  1,  0,  8,  0,  2,-12,  0,  0,  0,  0,    !  +1
+     5  0,  0,  0,  0,  0,-12,
+     6  0,  0,  8,  0, 15,  0, 15,  0,  0,  0,  0,  0,  0,-40,-40,    !   0
+     6  0,  0,  0, 30,  0,  0,
+     7  0,  1,  0,  1,  0,  0,  0,  0,  8,  0,  0,  2,-12,  0,  0,    !  -1
+     7  0,  0,  0,  0,-12,  0,
+     8  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,    !  -2
+     8 -1, -1,  2,  0,  0,  0,
+     9  0,  1,  0, -3,  0,  0,  0,  0,  0,  0,  0, -2, -8,  0,  0,    !  -3
+     9  0,  0,  0,  0, 24,  0,
+     *  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,    !  -4
+     *  1, -1,  0,  0,  0,  0,
+     1  0,  1,  0,  5,  0,  0,  0,  0,  0,  0,  0,-10,  0,  0,  0,    !  -5
+     1  0,  0,  0,  0,  0,  0,
+c
+     2  1,  0,  0,  0,  0,  1,  0,  1,  0,  2,  2,  0,  0,  0,  0,    !   1
+     2  0,  0,  0,  0,  0,  2,
+     3  0,  1,  0,  1,  0,  0,  0,  0,  1,  0,  0,  2,  2,  0,  0,    !   1
+     3  0,  0,  0,  0,  2,  0,
+     4  0,  0,  1,  0,  1,  0,  1,  0,  0,  0,  0,  0,  0,  2,  2,    !   0
+     4  0,  0,  0,  2,  0,  0, 
+c
+     5  1,  0,  0,  0,  0, -3,  0,  0,  0, -2,  1,  0,  0,  0,  0,    !   3
+     5  0,  0,  0,  0,  0, -3,
+     6  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,    !   2
+     6  1,  1,  1,  0,  0,  0,
+     7 -1,  0,  0,  0,  0, -1,  0,  4,  0, -2,  3,  0,  0,  0,  0,    !   1
+     7  0,  0,  0,  0,  0,  3,
+     8  0,  0,  2,  0, -3,  0, -3,  0,  0,  0,  0,  0,  0, -1, -1,    !   0
+     8  0,  0,  0, -6,  0,  0,
+     9  0, -1,  0, -1,  0,  0,  0,  0,  4,  0,  0, -2,  3,  0,  0,    !   1
+     9  0,  0,  0,  0,  3,  0,
+     *  0,  0,  0,  0,  1,  0, -1,  0,  0,  0,  0,  0,  0,  1, -1,    !   2
+     *  0,  0,  0,  0,  0,  0,
+     1  0, -1,  0,  3,  0,  0,  0,  0,  0,  0,  0,  2, -1,  0,  0,    !   3
+     1  0,  0,  0,  0,  3,  0/
+C
+      data iisph/
+     1   1,  -1,   0,   0,   0,   0,   0,   0,   0, -15,    !  +6
+     1   0,  15,   0,   0,   0,   0,   0,   0,   0,   0,
+     1   0,   0,   0,   0,   0,   0,   0,   0,
+     2   0,   0,   0,   0,   1,   0,   0,   0,   0,   0,    !  +5
+     2   0,   0,   0,   0,   0,   0,   5,   0,   0,   0,
+     2   0, -10,   0,   0,   0,   0,   0,   0,
+     3  -1,  -1,   0,   0,   0,   0,   0,   0,   0,   5,    !  +4
+     3  10,   5,  10,   0,   0,   0,   0,   0,   0,   0,
+     3   0,   0,   0,   0,   0,   0,   0, -60,
+     4   0,   0,   0,   0,  -3,   0,   0,   0,   0,   0,    !  +3
+     4   0,   0,   0,   0,   0,   0,   9,   0,   0,   8,
+     4   0,   6,   0,   0,   0,   0, -24,   0,
+     5   1,  -1,   0,   0,   0,   0,   0,   0,   0,   1,    !  +2
+     5 -16,  -1,  16,  16, -16,   0,   0,   0,   0,   0,
+     5   0,   0,   0,   0,   0,   0,   0,   0,
+     6   0,   0,   0,   0,  10,   0,   0,  16,   0,   0,    !  +1
+     6   0,   0,   0,   0,   0,   0,  10,   0,   0, -40,
+     6   0,  20,   0,   0,   0,   0, -40,   0,
+     7  -5,  -5,  16,   0,   0,   0,   0,   0,   0, -15,    !   0
+     7  90, -15,  90,-120,-120,   0,   0,   0,   0,   0,
+     7   0,   0,   0,   0,   0,   0,   0, 180,
+     8   0,   0,   0,   0,   0,   0,  10,   0,  16,   0,    !  -1
+     8   0,   0,   0,   0,   0,  10,   0,   0,   0,   0,
+     8 -40,   0,   0,  20,   0, -40,   0,   0,
+     9   0,   0,   0,   1,   0,   1,   0,   0,   0,   0,    !  -2
+     9   0,   0,   0,   0,   0,   0,   0,  16,   2,   0,
+     9   0,   0, -16,   0, -16,   0,   0,   0,
+     *   0,   0,   0,   0,   0,   0,   3,   0,   0,   0,    !  -3
+     *   0,   0,   0,   0,   0,  -9,   0,   0,   0,   0,
+     *  -8,   0,   0,  -6,   0,  24,   0,   0,
+     1   0,   0,   0,  -4,   0,   4,   0,   0,   0,   0,    !  -4
+     1   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+     1   0,   0,  40,   0, -40,   0,   0,   0,
+     2   0,   0,   0,   0,   0,   0,   1,   0,   0,   0,    !  -5
+     2   0,   0,   0,   0,   0,   5,   0,   0,   0,   0,
+     2   0,   0,   0, -10,   0,   0,   0,   0,
+     3   0,   0,   0,   6,   0,   6,   0,   0,   0,   0,    !  -6
+     3   0,   0,   0,   0,   0,   0,   0,   0, -20,   0,
+     3   0,   0,   0,   0,   0,   0,   0,   0,
+c
+     4   1,   1,   1,   0,   0,   0,   0,   0,   0,   3,    !   0
+     4   3,   3,   3,   3,   3,   0,   0,   0,   0,   0,
+     4   0,   0,   0,   0,   0,   0,   0,   6,
+c
+     5  -1,  -1,   2,   0,   0,   0,   0,   0,   0,  -3,    !   0
+     5   0,  -3,   0,   3,   3,   0,   0,   0,   0,   0,
+     5   0,   0,   0,   0,   0,   0,   0,   0,
+     6   0,   0,   0,   1,   0,   1,   0,   0,   0,   0,    !   2
+     6   0,   0,   0,   0,   0,   0,   0,   1,   2,   0,
+     6   0,   0,   2,   0,   2,   0,   0,   0,
+     7   1,  -1,   0,   0,   0,   0,   0,   0,   0,   1,    !   2
+     7   2,  -1,  -2,   1,  -1,   0,   0,   0,   0,   0,
+     7   0,   0,   0,   0,   0,   0,   0,   0,
+     8   0,   0,   0,   0,   1,   0,   0,   1,   0,   0,    !   1
+     8   0,   0,   0,   0,   0,   0,   1,   0,   0,   2,
+     8   0,   2,   0,   0,   0,   0,   2,   0,
+     9   0,   0,   0,   0,   0,   0,   1,   0,   1,   0,    !   1
+     9   0,   0,   0,   0,   0,   1,   0,   0,   0,   0,
+     9   2,   0,   0,   2,   0,   2,   0,   0,
+c
+     *   1,   1,   0,   0,   0,   0,   0,   0,   0,  -5,    !   4
+     *   1,  -5,   1,   0,   0,   0,   0,   0,   0,   0,
+     *   0,   0,   0,   0,   0,   0,   0,  -6,
+     1   0,   0,   0,   0,   1,   0,   0,   0,   0,   0,    !   3
+     1   0,   0,   0,   0,   0,   0,  -3,   0,   0,   1,
+     1   0,  -2,   0,   0,   0,   0,  -3,   0,
+     2  -1,   1,   0,   0,   0,   0,   0,   0,   0,  -1,    !   2
+     2   5,   1,  -5,   6,  -6,   0,   0,   0,   0,   0,
+     2   0,   0,   0,   0,   0,   0,   0,   0,
+     3   0,   0,   0,   0,  -3,   0,   0,   4,   0,   0,    !   1
+     3   0,   0,   0,   0,   0,   0,  -3,   0,   0,   1,
+     3   0,  -6,   0,   0,   0,   0,   1,   0,
+     4   3,   3,   8,   0,   0,   0,   0,   0,   0,   9,    !   0
+     4 -21,   9, -21, -16, -16,   0,   0,   0,   0,   0,
+     4   0,   0,   0,   0,   0,   0,   0, -42,
+     5   0,   0,   0,   0,   0,   0,  -3,   0,   4,   0,    !   1
+     5   0,   0,   0,   0,   0,  -3,   0,   0,   0,   0,
+     5   1,   0,   0,  -6,   0,   1,   0,   0,
+     6   0,   0,   0,  -1,   0,  -1,   0,   0,   0,   0,    !   2
+     6   0,   0,   0,   0,   0,   0,   0,   6,  -2,   0,
+     6   0,   0,   5,   0,   5,   0,   0,   0,
+     7   0,   0,   0,   0,   0,   0,  -1,   0,   0,   0,    !   3
+     7   0,   0,   0,   0,   0,   3,   0,   0,   0,   0,
+     7  -1,   0,   0,   2,   0,   3,   0,   0,
+     8   0,   0,   0,   1,   0,  -1,   0,   0,   0,   0,    !   4
+     8   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+     8   0,   0,   1,   0,  -1,   0,   0,   0/
+C
       DATA  NX    / 1, 2, 1, 1, 3, 1, 1, 2, 2, 1,
      1              4, 1, 1, 3, 3, 2, 1, 2, 1, 2,
      2              5, 1, 1, 4, 4, 2, 1, 2, 1, 3,
-     3              3, 1, 3, 2, 2/
+     3              3, 1, 3, 2, 2,
+     4              6, 1, 1, 5, 5, 2, 1, 2, 1, 4,
+     5              4, 3, 1, 3, 1, 4, 2, 2, 3, 3,
+     6              2,
+     7              7, 1, 1, 6, 6, 2, 1, 2, 1, 5,
+     8              5, 3, 1, 3, 1, 5, 2, 2, 4, 4,
+     9              1, 4, 4, 3, 2, 3, 2, 3/
+C
       DATA  NY    / 1, 1, 2, 1, 1, 3, 1, 2, 1, 2,
      1              1, 4, 1, 2, 1, 3, 3, 1, 2, 2,
      2              1, 5, 1, 2, 1, 4, 4, 1, 2, 3,
-     3              1, 3, 2, 3, 2/
+     3              1, 3, 2, 3, 2,
+     4              1, 6, 1, 2, 1, 5, 5, 1, 2, 3,
+     5              1, 4, 4, 1, 3, 2, 4, 2, 3, 2,
+     6              3, 
+     7              1, 7, 1, 2, 1, 6, 6, 1, 2, 3,
+     8              1, 5, 5, 1, 3, 2, 5, 2, 4, 1,
+     9              4, 3, 2, 4, 4, 2, 3, 3/
+C
       DATA  NZ    / 1, 1, 1, 2, 1, 1, 3, 1, 2, 2,
      1              1, 1, 4, 1, 2, 1, 2, 3, 3, 2,
      2              1, 1, 5, 1, 2, 1, 2, 4, 4, 1,
-     3              3, 3, 2, 2, 3/
+     3              3, 3, 2, 2, 3,
+     4              1, 1, 6, 1, 2, 1, 2, 5, 5, 1,
+     5              3, 1, 3, 4, 4, 2, 2, 4, 2, 3,
+     6              3,
+     7              1, 1, 7, 1, 2, 1, 2, 6, 6, 1,
+     8              3, 1, 3, 5, 5, 2, 2, 5, 1, 4,
+     9              4, 2, 3, 2, 3, 4, 4, 3/
+C
       DATA ZERO   /  0.0D+00/
-      DATA BC     /5*0.0D+00/
+      data bc     /7*0.0D+00/
 C
       DBG=.FALSE.
 C
@@ -1815,10 +2219,12 @@ C
       BC(3)=1*3
       BC(4)=1*3*5
       BC(5)=1*3*5*7
+      bc(6)=1*3*5*7*9
+      bc(7)=1*3*5*7*9*11
 C
       NORM =NORMF.EQ.0.OR.NORMP.EQ.0
 C
-      NBF = 35
+      nbf = 84
       DO J=1,NBF
          DO I=1,NBF
             IJX=NX(I)+NX(J)-2
@@ -1887,8 +2293,8 @@ C
 C
 C     ----- BUILD SPHERICAL HARMONICS -----
 C
-      DO J=1,35
-         DO I=1,35
+      do j=1,84
+         do i=1,84
             VV(I,J)=ZERO
          ENDDO
       ENDDO
@@ -1918,6 +2324,17 @@ C
             VV(I+20,J+20)=IGSPH(I,J)
          ENDDO
       ENDDO
+C
+      do j=1,21
+         do i=1,21
+            vv(i+35,j+35)=ihsph(i,j)
+         enddo
+      enddo
+      do j=1,28
+         do i=1,28
+            vv(i+56,j+56)=iisph(i,j)
+         enddo
+      enddo
 C
 C     ----- DEAL WITH NORMALIZATION OF -AO- BASIS -----
 C
@@ -2044,7 +2461,7 @@ C
          WRITE(IW,9999)
       END IF
 C
-C     ----- BUILD -SSPH- -PSPH- -DSPH- -FSPH- -GSPH- -----
+C     ----- BUILD -SSPH- -PSPH- -DSPH- -FSPH- -GSPH- -HSPH- -ISPH- -----
 C
       DO J=1,1
          DO I=1,1
@@ -2071,6 +2488,18 @@ C
             GSPH(I,J)=VV(I+20,J+20)
          ENDDO
       ENDDO
+C
+      do j=1,21
+         do i=1,21
+            hsph(i,j)=vv(i+35,j+35)
+         enddo
+      enddo
+      do j=1,28
+         do i=1,28
+            aisph(i,j)=vv(i+56,j+56)
+         enddo
+      enddo
+C
       RETURN
 C
  9999 FORMAT(/)
@@ -2078,6 +2507,12 @@ C
  9997 FORMAT(5I3,3X,3I5)
       END
 C*MODULE SYMSLC  *DECK SPHMAT
+C
+C> @brief : Make spherical harmonics transformation matrix
+C>
+C> @date  : December 21, 2012 - Joe Ivanic, Graham Fletcher
+C>          Significant upgrade to include for h,i functions in basis
+C
       SUBROUTINE SPHMAT(SP,NDIM,IFINV,IFTSP)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
@@ -2095,6 +2530,8 @@ C
      *                FSHELL(10,10),GSHELL(15,15),
      *                PIHELL(3,3),DIHELL(6,6),
      *                FIHELL(10,10),GIHELL(15,15)
+      common /sphehi/ hshell(21,21),aishell(28,28),
+     *                hihell(21,21),aiihell(28,28)
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
 C
       DIMENSION SP(NDIM,NDIM)
@@ -2150,6 +2587,20 @@ C
                      SP(I+LOC-1,J+LOC-1)=GIHELL(I,J)
                   ENDDO
                ENDDO
+C
+            else if(lit.eq.6) then
+               do j=1,21
+                  do i=1,21
+                     sp(i+loc-1,j+loc-1)=hihell(i,j)
+                  enddo
+               enddo
+            else if(lit.eq.7) then
+               do j=1,28
+                  do i=1,28
+                     sp(i+loc-1,j+loc-1)=aiihell(i,j)
+                  enddo
+               enddo
+C
             ELSE
                WRITE(IW,9999)
                CALL ABRT
@@ -2197,6 +2648,20 @@ C
                      SP(J+LOC-1,I+LOC-1)=GIHELL(I,J)
                   ENDDO
                ENDDO
+C
+            else if(lit.eq.6) then
+               do j=1,21
+                  do i=1,21
+                     sp(j+loc-1,i+loc-1)=hihell(i,j)
+                  enddo
+               enddo
+            else if(lit.eq.7) then
+               do j=1,28
+                  do i=1,28
+                     sp(j+loc-1,i+loc-1)=aiihell(i,j)
+                  enddo
+               enddo
+C
             ELSE
                WRITE(IW,9999)
                CALL ABRT
@@ -2244,6 +2709,20 @@ C
                      SP(I+LOC-1,J+LOC-1)=GSHELL(I,J)
                   ENDDO
                ENDDO
+C
+            else if(lit.eq.6) then
+               do j=1,21
+                  do i=1,21
+                     sp(i+loc-1,j+loc-1)=hshell(i,j)
+                  enddo
+               enddo
+            else if(lit.eq.7) then
+               do j=1,28
+                  do i=1,28
+                     sp(i+loc-1,j+loc-1)=aishell(i,j)
+                  enddo
+               enddo
+C
             ELSE
                WRITE(IW,9999)
                CALL ABRT
@@ -2291,6 +2770,20 @@ C
                      SP(J+LOC-1,I+LOC-1)=GSHELL(I,J)
                   ENDDO
                ENDDO
+C
+            else if(lit.eq.6) then
+               do j=1,21
+                  do i=1,21
+                     sp(j+loc-1,i+loc-1)=hshell(i,j)
+                  enddo
+               enddo
+            else if(lit.eq.7) then
+               do j=1,28
+                  do i=1,28
+                     sp(j+loc-1,i+loc-1)=aishell(i,j)
+                  enddo
+               enddo
+C
             ELSE
                WRITE(IW,9999)
                CALL ABRT
@@ -2300,21 +2793,28 @@ C
       END IF
 C
       RETURN
- 9999 FORMAT(' -SPHMAT- LIMITED TO -G- SHELLS . STOP .')
+ 9999 FORMAT(' -SPHMAT- LIMITED TO -I- SHELLS . STOP .')
 C 9998 FORMAT(/,1X,'SPHERICAL HARMONICS TRANSFORMATION MATRIX',
 C     1            ' -IFINV- = ',I5,' -IFTSP- = ',I5,
 C     2       /,1X,41(1H-))
       END
 C*MODULE SYMSLC  *DECK SPHSET
+C
+C> @brief : Routine defines spherical harmonics and inverse transformations
+C>
+C> @date  : December 21, 2012 - Joe Ivanic, Graham Fletcher
+C>          Significant upgrade to include for h,i functions in basis
+C
       SUBROUTINE SPHSET(DBG,DD,SS,VV,TT,PP,ROT,BUFF,
-     *                  PSPH,DSPH,FSPH,GSPH)
+     *                  psph,dsph,fsph,gsph,hsph,aisph)
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
 C
-      DOUBLE PRECISION DD(35),ROT(15,15),BUFF(15,15),
-     *          SS(35,35),VV(35,35),TT(35,35),PP(35,35),
-     *          PSPH(3,3),DSPH(6,6),FSPH(10,10),GSPH(15,15)
-      DOUBLE PRECISION INDX(15),VWRK(15)
+      double precision dd(84),rot(28,28),buff(28,28),
+     *          ss(84,84),vv(84,84),tt(84,84),pp(84,84),
+     *          psph(3,3),dsph(6,6),fsph(10,10),gsph(15,15)
+     *,         hsph(21,21),aisph(28,28)
+      double precision indx(28),vwrk(28)
 C
       LOGICAL DBG
 C
@@ -2324,6 +2824,8 @@ C
      *                FSHELL(10,10),GSHELL(15,15),
      *                PIHELL(3,3),DIHELL(6,6),
      *                FIHELL(10,10),GIHELL(15,15)
+      common /sphehi/ hshell(21,21),aishell(28,28),
+     *                hihell(21,21),aiihell(28,28)
 C
       PARAMETER (ZERO=0.0D+00, ONE=1.0D+00)
 C
@@ -2337,9 +2839,10 @@ C
 C
 C     ----- INITIALIZATIONS -----
 C
-      DO 1 I=1,15
+      DO 1 I=1,28
        INDX(I)=0
  1    CONTINUE
+C
       DO 10 I=1,3
       DO  5 J=1,3
         PSPH(I,J)=ZERO
@@ -2365,9 +2868,33 @@ C
  35   GIHELL(I,J)=ZERO
  40   GIHELL(I,I)=ONE
 C
+      do 50 i=1,21
+      do 45 j=1,21
+        hsph(i,j)=zero
+      hshell(i,j)=zero
+ 45   hihell(i,j)=zero
+ 50   hihell(i,i)=one
+      do 60 i=1,28
+      do 55 j=1,28
+       aisph(i,j)=zero
+      aishell(i,j)=zero
+ 55   aiihell(i,j)=zero
+ 60   aiihell(i,i)=one
+C
 C     ----- GET SPHERICAL HARMONICS DEFINITIONS -----
 C
-      CALL SPHMAK(DBG,DD,SS,VV,TT,PP,SSPH,PSPH,DSPH,FSPH,GSPH)
+      call sphmak(dbg,dd,ss,vv,tt,pp,ssph,psph,dsph,fsph,gsph,
+     *            hsph,aisph)
+C
+CJI --------------------------------------------------------------------------
+C   The complex formulas that appear below for rot for p,d,f,g are explained
+C   using a specific example for a g element at the top of symhi.src.
+C   The formulas for h,i are so complex that a PERL script was written to 
+C   derive them and these are obtained via calls to gethrot,getirot that exist
+C   in symhi.src. Note that there are 20,412 terms in rot(i)! If we want to
+C   have k,L=7 or higher work in GAMESS we are going to have to figure out 
+C   some sort of recursive derivation, but we leave this for another day.
+CJI --------------------------------------------------------------------------
 C
 C     ----- P SPHERICAL HARMONICS -----
 C
@@ -2401,9 +2928,9 @@ C
 C
 C     ----- DEFINE INVERSE TRANSFORMATION -----
 C
-      CALL LUDCMP(BUFF,15, 3,INDX,VWRK,D,IERR)
+      CALL LUDCMP(BUFF,28, 3,INDX,VWRK,D,IERR)
       DO I=1,3
-         CALL LUBKSB(BUFF,15, 3,INDX,PIHELL(1,I))
+         CALL LUBKSB(BUFF,28, 3,INDX,PIHELL(1,I))
       ENDDO
 C
 C     PRINT
@@ -2473,9 +3000,9 @@ C
 C
 C     ----- DEFINE INVERSE TRANSFORMATION -----
 C
-      CALL LUDCMP(BUFF,15, 6,INDX,VWRK,D,IERR)
+      CALL LUDCMP(BUFF,28, 6,INDX,VWRK,D,IERR)
       DO 180 I=1,6
-      CALL LUBKSB(BUFF,15, 6,INDX,DIHELL(1,I))
+      CALL LUBKSB(BUFF,28, 6,INDX,DIHELL(1,I))
  180  CONTINUE
 C
 C     PRINT
@@ -2623,9 +3150,9 @@ C
 C
 C     ----- DEFINE INVERSE TRANSFORMATION -----
 C
-      CALL LUDCMP(BUFF,15,10,INDX,VWRK,D,IERR)
+      CALL LUDCMP(BUFF,28,10,INDX,VWRK,D,IERR)
       DO 280 I=1,10
-      CALL LUBKSB(BUFF,15,10,INDX,FIHELL(1,I))
+      CALL LUBKSB(BUFF,28,10,INDX,FIHELL(1,I))
  280  CONTINUE
 C
 C     PRINT
@@ -3028,20 +3555,97 @@ C
 C
 C     ----- DEFINE INVERSE TRANSFORMATION -----
 C
-      CALL LUDCMP(BUFF,15,15,INDX,VWRK,D,IERR)
+      CALL LUDCMP(BUFF,28,15,INDX,VWRK,D,IERR)
       DO 380 I=1,15
-      CALL LUBKSB(BUFF,15,15,INDX,GIHELL(1,I))
+      CALL LUBKSB(BUFF,28,15,INDX,GIHELL(1,I))
   380 CONTINUE
 C
 C     PRINT
 C
       IF(DBG) CALL SYMPRP(GSHELL,15,15,15)
       IF(DBG) CALL SYMPRP(GIHELL,15,15,15)
+c
+CJI Insert h and i formulas
+c
+c      As Graham said, the transformation for h/i can be done using an auto procedure. 
+c      I have used a PERL script to generate the formulas and this is available.
+c      The two relevant subroutines gethrot and getirot are in symhi.src
+c
+c     ----- h spherical harmonics -----
+c
+      if(dbg) call symprp(hsph,21,21,21)
+c
+c     ----- load h transformation of frames in -rot- -----
+c
+      call gethrot(rot,28)
+c
+c     ----- express spherical harmonics in absolute frame -----
+c
+      do 460 i=1,21
+      do 460 j=1,21
+      a=zero
+      do 450 k=1,21
+      a=a+rot(i,k)*hsph(k,j)
+ 450  continue
+        buff(i,j)=a
+ 460  hshell(i,j)=a
+c
+c     ----- define inverse transformation -----
+c
+      call ludcmp(buff,28,21,indx,vwrk,d,ierr)
+      do 480 i=1,21
+      call lubksb(buff,28,21,indx,hihell(1,i))
+  480 continue
+c
+c      print
+c
+      if(dbg) call symprp(hshell,21,21,21)
+      if(dbg) call symprp(hihell,21,21,21)
+c
+c     ----- i spherical harmonics -----
+c
+      if(dbg) call symprp(aisph,28,28,28)
+c
+c     ----- load transformation of frames in -rot- -----
+c
+       call getirot(rot,28)
+c
+c     ----- express spherical harmonics in absolute frame -----
+c
+      do 560 i=1,28
+      do 560 j=1,28
+      a=zero
+      do 550 k=1,28
+      a=a+rot(i,k)*aisph(k,j)
+ 550  continue
+        buff(i,j)=a
+ 560  aishell(i,j)=a
+c
+c     ----- define inverse transformation -----
+c
+      call ludcmp(buff,28,28,indx,vwrk,d,ierr)
+      do 580 i=1,28
+      call lubksb(buff,28,28,indx,aiihell(1,i))
+  580 continue
+c
+c     print
+c
+      if(dbg) call symprp(aishell,28,28,28)
+      if(dbg) call symprp(aiihell,28,28,28)
+C
       RETURN
  9999 FORMAT(/,' DEFINITION OF SPHERICAL HARMONICS',/,
      1         ' ---------------------------------')
       END
+C
 C*MODULE SYMSLC  *DECK SPHTRF
+C
+C> @brief : Routine calculates the symmetry transformation matrices
+C>          in the basis of spherical harmonics
+C>
+C> @date  : December 21, 2012 - Joe Ivanic, Graham Fletcher
+C>          Significant upgrade to include for h,i functions in basis
+C
       SUBROUTINE SPHTRF(DBG)
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
@@ -3050,15 +3654,19 @@ C
 C
       PARAMETER (MXSH=5000, MXATM=2000)
 C
-      DIMENSION V(15,15),T(15,15),TI(15,15),BUFF(15,15),
-     *          PNAME(3),DNAME(6),FNAME(10),GNAME(15)
+      dimension v(28,28),t(28,28),ti(28,28),buff(28,28),
+     *          pname(3),dname(6),fname(10),gname(15),
+     *          hname(21),ainame(28)
 C
       COMMON /IOFILE/ IR,IW,IP,IJK,IPK,IDAF,NAV,IODA(950)
       COMMON /SPHERI/ PSHELL(3,3),DSHELL(6,6),
      *                FSHELL(10,10),GSHELL(15,15),
      *                PIHELL(3,3),DIHELL(6,6),
      *                FIHELL(10,10),GIHELL(15,15)
+      common /sphehi/ hshell(21,21),aishell(28,28),
+     *                hihell(21,21),aiihell(28,28)
       COMMON /SYMSPD/ PTR(3,144),DTR(6,288),FTR(10,480),GTR(15,720)
+      common /symhi / htr(21,1008),aitr(28,1344)
       COMMON /SYMTRY/ MAPSHL(MXSH,48),MAPCTR(MXATM,48),
      *                TSYM(432),INVT(48),NT
 C
@@ -3071,6 +3679,13 @@ C
       DATA GNAME /4HG1  ,4HG2  ,4HG3  ,4HG4  ,4HG5  ,4HG6  ,4HG7  ,
      1            4HG8  ,4HG9  ,4HG10 ,4HG11 ,4HG12 ,4HG13 ,4HG14 ,
      2            4HG15 /
+      data hname /4hh1  ,4hh2  ,4hh3  ,4hh4  ,4hh5  ,4hh6  ,4hh7  ,
+     1            4hh8  ,4hh9  ,4hh10 ,4hh11 ,4hh12 ,4hh13 ,4hh14 ,
+     2            4hh15 ,4hh16 ,4hh17 ,4hh18 ,4hh19 ,4hh20 ,4hh21 /
+      data ainame /4hi1  ,4hi2  ,4hi3  ,4hi4  ,4hi5  ,4hi6  ,4hi7  ,
+     1             4hi8  ,4hi9  ,4hi10 ,4hi11 ,4hi12 ,4hi13 ,4hi14 ,
+     2             4hi15 ,4hi16 ,4hi17 ,4hi18 ,4hi19 ,4hi20 ,4hi21 ,
+     3             4hi22 ,4hi23 ,4hi24 ,4hi25 ,4hi26 ,4hi27 ,4hi28 /
 C
 C     ---- THIS ROUTINE CALCULATES THE SYMMETRY TRANSFORMATION -----
 C          MATRICES IN THE BASIS OF SPHERICAL HARMONICS.
@@ -3084,15 +3699,19 @@ C
       ND= 6*(IT-1)
       NF=10*(IT-1)
       NG=15*(IT-1)
+      nh=21*(it-1)
+      ni=28*(it-1)
 C
-      DO 20 IPER=1,4
+      do 20 iper=1,6
 C
       N=3
       IF(IPER.EQ.2) N=6
       IF(IPER.EQ.3) N=10
       IF(IPER.EQ.4) N=15
+      if(iper.eq.5) n=21
+      if(iper.eq.6) n=28
 C
-      GO TO (21,22,23,24),IPER
+      go to (21,22,23,24,26,27),iper
 C
  21   DO 31 I=1,N
       DO 31 J=1,N
@@ -3126,6 +3745,21 @@ C
  34   CONTINUE
       GO TO 25
 C
+ 26   do 36 i=1,n
+      do 36 j=1,n
+      v(i,j)=htr(i,nh+j)
+      t(i,j)=hshell(i,j)
+      ti(i,j)=hihell(i,j)
+ 36   continue
+      go to 25
+c
+ 27   do 37 i=1,n
+      do 37 j=1,n
+      v(i,j)=aitr(i,ni+j)
+      t(i,j)=aishell(i,j)
+      ti(i,j)=aiihell(i,j)
+ 37   continue
+C
 C     ---- RIGHT-TRANSFORMATION ----
 C
  25   DO 100 I=1,N
@@ -3148,7 +3782,7 @@ C
 C
 C     ---- COPY BACK -----
 C
-      GO TO (41,42,43,44),IPER
+      go to (41,42,43,44,45,46),iper
 C
  41   DO 51 I=1,N
       DO 51 J=1,N
@@ -3173,6 +3807,17 @@ C
       GTR(I,NG+J)=V(I,J)
  54   CONTINUE
       GO TO 20
+C
+ 45   do 55 i=1,n
+      do 55 j=1,n
+      htr(i,nh+j)=v(i,j)
+ 55   continue
+      go to 20
+c
+ 46   do 56 i=1,n
+      do 56 j=1,n
+      aitr(i,ni+j)=v(i,j)
+ 56   continue
 C
 C     DONE
 C
@@ -3218,6 +3863,31 @@ C
   254 WRITE(IW,8861) GNAME(I),(GTR(I,NG+J),J=JMIN,JMAX)
       WRITE(IW,8863)
       IF(JMAX.LT.15) GO TO 253
+C
+      nh=21*(it-1)
+      jmax=0
+  256 jmin=jmax+1
+      jmax=jmax+10
+      if(jmax.gt.21) jmax=21
+      write(iw,8862) (hname(j),j=jmin,jmax)
+      write(iw,8863)
+      do 257 i=1,21
+  257 write(iw,8861) hname(i),(htr(i,nh+j),j=jmin,jmax)
+      write(iw,8863)
+      if(jmax.lt.21) go to 256
+c
+      ni=28*(it-1)
+      jmax=0
+  258 jmin=jmax+1
+      jmax=jmax+10
+      if(jmax.gt.28) jmax=28
+      write(iw,8862) (ainame(j),j=jmin,jmax)
+      write(iw,8863)
+      do 259 i=1,28
+  259 write(iw,8861) ainame(i),(aitr(i,ni+j),j=jmin,jmax)
+      write(iw,8863)
+      if(jmax.lt.28) go to 258
+C
   255 CONTINUE
 C
   300 CONTINUE
@@ -3230,12 +3900,20 @@ C
  8861 FORMAT(2X,A4,2X,10F10.6)
  8860 FORMAT(/,21X,'TRANSFORMATION NUMBER',I4,/)
       END
+c
 C*MODULE SYMSLC  *DECK SPHPRT
+C
+C> @brief : Routine prints definitions of the spherical harmonics
+C>
+C> @date  : December 21, 2012 - Joe Ivanic, Graham Fletcher
+C>          Significant upgrade to include for h,i functions in basis
+C
       SUBROUTINE SPHPRT
       IMPLICIT REAL*8 (A-H,O-Z)
       PARAMETER (MXGTOT=20000)
       PARAMETER (MXSH=5000)
-      CHARACTER*4 NAMXYZ
+c
+      character*6 namxyz
       CHARACTER*4 NAMSPH
       CHARACTER*4 NAMLAB
       COMMON /IOFILE/ IR,IW,IP,IJK,IPK,IDAF,NAV,IODA(950)
@@ -3247,23 +3925,50 @@ C*MODULE SYMSLC  *DECK SPHPRT
      *                FSHELL(10,10),GSHELL(15,15),
      *                PIHELL(3,3),DIHELL(6,6),
      *                FIHELL(10,10),GIHELL(15,15)
-      DIMENSION NF(5),NAMXYZ(35),NAMSPH(35),NAMLAB(35)
-      DATA NF     /1,3,6,10,15/
-      DATA NAMXYZ /'   S','   X','   Y','   Z','  XX','  YY','  ZZ',
-     1             '  XY','  XZ','  YZ',' XXX',' YYY',' ZZZ',' XXY',
-     2             ' XXZ',' YYX',' YYZ',' ZZX',' ZZY',' XYZ','XXXX',
-     3             'YYYY','ZZZZ','XXXY','XXXZ','YYYX','YYYZ','ZZZX',
-     4             'ZZZY','XXYY','XXZZ','YYZZ','XXYZ','YYXZ','ZZXY'/
-      DATA NAMSPH /'  S ','P X ','P Y ','P Z ','D Z2','D X2','D XY',
-     1             'D XZ','D YZ','D S ','  F1','  F2','  F3','  F4',
-     2             '  F5','  F6','  F7','F P1','F P2','F P3','  G1',
-     3             '  G2','  G3','  G4','  G5','  G6','  G7','  G8',
-     4             '  G9','G S ','G D1','G D2','G D3','G D4','G D5'/
-      DATA NAMLAB /'  S ','  P1','  P2','  P3','  D1','  D2','  D3',
-     1             '  D4','  D5','  DS','  F1','  F2','  F3','  F4',
-     2             '  F5','  F6','  F7','F P1','F P2','F P3','  G1',
-     3             '  G2','  G3','  G4','  G5','  G6','  G7','  G8',
-     4             '  G9','G S ','G D1','G D2','G D3','G D4','G D5'/
+      common /sphehi/ hshell(21,21),aishell(28,28),
+     *                hihell(21,21),aiihell(28,28)
+C
+      dimension nf(7),namxyz(84),namsph(84),namlab(84)
+      data nf     /1,3,6,10,15,21,28/
+      data namxyz 
+     *         /'    s ','    x ','    y ','    z ','    xx','    yy',
+     1          '    zz','    xy','    xz','    yz','   xxx','   yyy',
+     2          '   zzz','   xxy','   xxz','   yyx','   yyz','   zzx',
+     3          '   zzy','   xyz','  xxxx','  yyyy','  zzzz','  xxxy',
+     4          '  xxxz','  yyyx','  yyyz','  zzzx','  zzzy','  xxyy',
+     5          '  xxzz','  yyzz','  xxyz','  yyxz','  zzxy',' xxxxx',
+     6          ' yyyyy',' zzzzz',' xxxxy',' xxxxz',' yyyyx',' yyyyz',
+     7          ' zzzzx',' zzzzy',' xxxyy',' xxxzz',' yyyxx',' yyyzz',
+     8          ' zzzxx',' zzzyy',' xxxyz',' yyyxz',' zzzxy',' xxyyz',
+     9          ' xxzzy',' yyzzx','    x6','    y6','    z6','   x5y',
+     1          '   x5z','   y5x','   y5z','   z5x','   z5y','  x4y2',
+     2          '  x4z2','  y4x2','  y4z2','  z4x2','  z4y2','  x4yz',
+     3          '  y4xz','  z4xy','  x3y3','  x3z3','  y3z3',' x3y2z',
+     4          ' x3z2y',' y3x2z',' y3z2x',' z3x2y',' z3y2x','x2y2z2'/
+      data namsph /'  s ','p x ','p y ','p z ','d z2','d x2','d xy',
+     1             'd xz','d yz','d s ','  f1','  f2','  f3','  f4',
+     2             '  f5','  f6','  f7','f p1','f p2','f p3','  g1',
+     3             '  g2','  g3','  g4','  g5','  g6','  g7','  g8',
+     4             '  g9','g s ','g d1','g d2','g d3','g d4','g d5',
+     5             '  h1','  h2','  h3','  h4','  h5','  h6','  h7',
+     6             '  h8','  h9',' h10',' h11','h p1','h p2','h p3',
+     7             'h f1','h f2','h f3','h f4','h f5','h f6','h f7',
+     8             '  i1','  i2','  i3','  i4','  i5','  i6','  i7',
+     9             '  i8','  i9',' i10',' i11',' i12',' i13',' i s',
+     *             'i d1','i d2','i d3','i d4','i d5','i g1','i g2',
+     1             'i g3','i g4','i g5','i g6','i g7','i g8','i g9'/
+      data namlab /'  s ','  p1','  p2','  p3','  d1','  d2','  d3',
+     1             '  d4','  d5',' d s','  f1','  f2','  f3','  f4',
+     2             '  f5','  f6','  f7','f p1','f p2','f p3','  g1',
+     3             '  g2','  g3','  g4','  g5','  g6','  g7','  g8',
+     4             '  g9',' g s','g d1','g d2','g d3','g d4','g d5',
+     5             '  h1','  h2','  h3','  h4','  h5','  h6','  h7',
+     6             '  h8','  h9',' h10',' h11','h p1','h p2','h p3',
+     7             'h f1','h f2','h f3','h f4','h f5','h f6','h f7',
+     8             '  i1','  i2','  i3','  i4','  i5','  i6','  i7',
+     9             '  i8','  i9',' i10',' i11',' i12',' i13',' i s',
+     *             'i d1','i d2','i d3','i d4','i d5','i g1','i g2',
+     1             'i g3','i g4','i g5','i g6','i g7','i g8','i g9'/
       DATA ONE    /1.0D+00/
 C
 C     ----  PRINT SPHERICAL HARMONICS DEFINITION -----
@@ -3277,7 +3982,7 @@ C
 C
       DO 100 ISPH=1,MAXTYP
          N=NF(ISPH)
-         GO TO (10,20,30,40,50),ISPH
+         go to (10,20,30,40,50,60,70),isph
 C
 C     ---- S ----
 C
@@ -3353,6 +4058,39 @@ C
             IF(MAX.LT.N) GO TO 51
          ENDDO
          GO TO 100
+c
+c     ---- h ----
+c
+  60     do j=1,n
+            max=0
+  61        min=max+1
+            max=max+6
+            if(max.gt.n) max=n
+            if(min.lt.6) then
+               write(iw,9998) j,namsph(j+35),j,namlab(j+35),
+     1                        (hshell(i,j),namxyz(i+35),i=min,max)
+            else
+               write(iw,9997) (hshell(i,j),namxyz(i+35),i=min,max)
+            end if
+            if(max.lt.n) go to 61
+         enddo
+         go to 100
+c
+c     ---- i ----
+c
+  70     do j=1,n
+            max=0
+  71        min=max+1
+            max=max+6
+            if(max.gt.n) max=n
+            if(min.lt.6) then
+               write(iw,9998) j,namsph(j+56),j,namlab(j+56),
+     1                        (aishell(i,j),namxyz(i+56),i=min,max)
+            else
+               write(iw,9997) (aishell(i,j),namxyz(i+56),i=min,max)
+            end if
+            if(max.lt.n) go to 71
+         enddo
 C
   100 CONTINUE
 C
