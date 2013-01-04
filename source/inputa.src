@@ -1,3 +1,5 @@
+C 19 DEC 12 - JI  - Add more stringent checks for angular momentum limits
+C                   Add h/i data for calls to PCNBAS,CCNBAS
 C 18 Oct 12 - MWS - save pristine input nuclear charges, allow DFT CP
 C  2 Sep 12 - NM  - allow SF-TDDFT with EFP1 and/or C-PCM gradients
 C  2 Sep 12 - MWS - synchronize MCINP
@@ -1591,7 +1593,8 @@ C
       IF(BASIS.EQ.BAAPC2) NPOL = 12
       IF(BASIS.EQ.BAAPC3) NPOL = 13
       IF(BASIS.EQ.BAAPC4) NPOL = 14
-      CALL PCNBAS(NUCZ,CSINP,CPINP,CDINP,CFINP,CGINP,IERR1,IERR2,
+      CALL PCNBAS(NUCZ,CSINP,CPINP,CDINP,CFINP,CGINP,CHINP,CIINP,
+     *            IERR1,IERR2,
      *            INTYP,NANGM,NBFS,MINF,MAXF,LOC,NGAUSS,NS,NPOL)
       IF(IERR1.NE.0) GO TO 1560
       IF(IERR2.NE.0) GO TO 1600
@@ -1661,7 +1664,8 @@ C           1ST ROW TM DOESN'T OFFER THE -DZ- TYPES:
       IF(BASIS.EQ.BASNCQ) NPOL = 23
       IF(BASIS.EQ.BASNC5) NPOL = 24
       IF(BASIS.EQ.BASNC6) NPOL = 25
-      CALL CCNBAS(NUCZ,CSINP,CPINP,CDINP,CFINP,CGINP,IERR1,IERR2,
+      CALL CCNBAS(NUCZ,CSINP,CPINP,CDINP,CFINP,CGINP,CHINP,CIINP,
+     *            IERR1,IERR2,
      *            INTYP,NANGM,NBFS,MINF,MAXF,LOC,NGAUSS,NS,NPOL)
       IF(IERR1.NE.0) GO TO 1560
       IF(IERR2.NE.0) GO TO 1600
@@ -3057,6 +3061,11 @@ C>
 C> @details    Routine reads in basis set, generates initial MOs,
 C>             performs checks on input groups, does error outs,
 C>             and prints this info to log file.
+C>
+C> @date : December 21, 2012 - Joe Ivanic
+C>         Add more stringent checks for angular momentum limits
+C>         depending on type of run. 
+C>         Add capability for energies using h,i(L=5,6) functions
 C>
 C> @date November 4, 2012-Aaron West
 C> -Added SVD-localized orbitals option.
@@ -4597,27 +4606,6 @@ C
          END IF
       END IF
 C
-C     NOW, CRASH AND BURN ANY -H- OR -I- BASIS FUNCTION RUN!
-C     WHILE THE CARTESIAN GAUSSIAN INTEGRALS ARE OK, THERE ARE
-C     NO PROGRAMS FOR HANDLING THEIR SYMMETRY PROPERTIES YET.
-C     SEE THE DETAILED NOTE JUST BELOW...
-C
-      CALL BASCHK(LMAX)
-      IF(LMAX.GE.5) THEN
-         IF(MASWRK) WRITE(IW,*) 'NO H OR I FUNCTIONS ALLOWED'
-         CALL ABRT
-      END IF
-C
-C     ONCE SPDFGHI CODING IN ENERGY AND PROPERTIES IS DONE,
-C     WE WILL STILL NEED TO KILL ANY OF THE FOLLOWING:
-C        ANYTHING DOING 1ST OR 2ND DERIVATIVES ANALYTICALLY
-C        NMR - RELIES ON ITS OWN DERIVATIVE INTEGRALS
-C        SOLVENT MODELS - EVERY LAST ONE
-C        MCP OR ECP PSEUDOPOTENTIALS
-C        RELATIVITY - BOTH SPIN-ORBIT AND SCALAR EFFECTS
-C        DFT?    FMO?   ANYTHING ELSE?
-C     N.B. VECTOR.SRC WILL NEED FIXING, TOO
-C
 C     ----- Z MATRIX INPUT -----
 C
       NVAR = 0
@@ -4661,6 +4649,46 @@ C
       NACCT =0
       NPRTGO=1
       IDPUNC=0
+C
+C         ----- Check basis set angular momentum -----
+C     Additional tests should still be kept near the implementation,
+C     just in case.
+C     It is good to pre-screen here, early in the run, as best we can.
+C     Should probably consider harder about RUNTYP=TDHF, VSCF, FFIELD,
+C     and COSMO solvation.
+C
+C     LMAX is what we actually use in this run,
+C     MAXL is the program limitation.
+C
+      CALL BASCHK(LMAX)
+      LMAX = LMAX + 1
+      MAXL = LMAX
+C         energy, analytic gradient, analytic hessian
+C         are programmed for spdfghi, spdfg, and spd.
+C         But can't check hessian, as $HESS is read much later on,
+C         setting NHLEVL.  We do trap for spd in analytic 2nd der ints!
+      CALL DERCHK(MAXDER)
+      IF(MAXDER.EQ.1) MAXDER=MAXDER-NGLEVL
+C-----IF(MAXDER.EQ.2) MAXDER=MAXDER-NHLEVL
+      IF(MAXDER.EQ.0)      MAXL=7
+      IF(MAXDER.EQ.1)      MAXL=5
+C-----IF(MAXDER.EQ.2)      MAXL=3
+C         energy runs involving spin-orbit or transition moments,
+C         scalar relativity, NMR, MCP or ECP, SVP solvent,
+C         and Fragment MO theory are spdfg.
+      IF(RUNTYP.EQ.TRAN)   MAXL=5   ! also gets spin-orbit
+      IF(RMETHOD.NE.RNONE) MAXL=5
+      IF(RUNTYP.EQ.NMR)    MAXL=5
+      IF(IECP.NE.0)        MAXL=5   ! gets MCP as well as ECP
+      IF(ISVP.EQ.1)        MAXL=5
+      IF(NFG.GT.1)         MAXL=5
+C         PCM and EFP solvation are spdf only.
+      IF(IPCM.EQ.1)        MAXL=4
+      IF(NFRG.GT.0)        MAXL=4
+      IF(LMAX.GT.MAXL) THEN
+         IF(MASWRK) WRITE(IW,9340) LMAX-1
+         CALL ABRT
+      END IF
 C
 C     ----- PREPARE FOR ORBITAL SYMMETRY ASSIGNMENTS -----
 C     AND RESTORE /SYMSPD/ CARTESIAN SPACE TRANSFORMATIONS, IF NEEDED.
@@ -4815,6 +4843,23 @@ C    *           ' SS-CASSCF WAVEFUNCTIONS.')
      *           ' OR MPLEVL...),'/
      *        1X,'   AND FOR GAS PHASE SIMULATIONS ONLY.'/)
 C
+ 9340 FORMAT(//1X,'*** MAXIMUM ANGULAR MOMENTUM EXCEEDED ***'//
+     *        1X,'THIS RUN''S BASIS SET HAS MAXIMUM ANGULAR',
+     *           ' MOMENTUM=',I2/
+     *        1x,'WHERE 0=S, 1=P, 2=D, 3=F, 4=G, 5=H, 6=I'//
+     *        1X,'GAS PHASE ENERGY RUNS ARE LIMITED TO SPDFGHI.'/
+     *        1X,'ANALYTIC GRADIENT RUNS ARE LIMITED TO SPDFG,',
+     *           ' BUT SEE NUMGRD IN $CONTRL.'/
+     *        1X,'ANALYTIC HESSIAN RUNS ARE LIMITED TO SPD,',
+     *           ' BUT SEE METHOD IN $HESS.'/
+     *        1X,'THE SOLVENT MODELS EFP AND PCM ARE LIMITED TO SPDF,'/
+     *        1X,'AND SOLVENT MODEL SVP IS LIMITED TO SPDFG.'/
+     *        1X,'RUNTYP=NMR IS LIMITED TO SPDFG.'/
+     *        1X,'FRAGMENT MOLECULAR ORBITAL THEORY',
+     *           ' IS LIMITED TO SPDFG.'/
+     *        1X,'RELWFN''s SCALAR RELATIVITY IS LIMITED TO SPDFG.'/
+     *        1X,'RUNTYP=TRANSITN (SPIN-ORBIT OR RAD.TRANS.) IS',
+     *           ' LIMITED TO SPDFG.'//)
  9410 FORMAT(1X,'AT MOST, ONLY ONE ENERGY DECOMPOSITION ANALYSIS',
      *          ' CAN BE SELECTED:')
  9420 FORMAT(1X,'YOU MUST SELECT AT LEAST ONE ENERGY DECOMPOSITION',
