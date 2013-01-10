@@ -1958,3 +1958,453 @@ C    THERE IS AN UNFORTUNATE COMMON BLOCK DIMENSION USED HERE.
       END IF
       RETURN
       END
+C
+      MODULE EFAIDIS
+!> @brief This module contains global variables necessary for 
+!>         computing the EFP-ab initio dispersion energy 
+!>
+!> @author Tony Smith
+!> - Jan 10, 2013
+!> @details
+!>    SABEFPAI : THREE-DIMENSIONAL ARRAY OF DOUBLE PRECISION VALUES,
+!>              allocated in SUBROUTINE EFPAIE in source file EFPAUL,
+!>              deallocated in SUBROUTINE EFAIDISP in this module.
+!>              Stores values of EFP-AI overlap integrals. Dimensions
+!>              are (NFRG,NA-MMCORE,MMXMO), where NFRG = number of EFPs,
+!>              NA-MMCORE = number of AI valence orbitals, MMXMO =
+!>              number of dispersion points (centroids) per EFP
+!>    IQMDISP : flag to turn on EFP-AI dispersion calculation
+!>              POSSIBLE VALUES: 0 = off, non-zero = on.
+!>              Set in SUBROUTINE EFINP in source file EFINP.
+!>    IDISDMP : flag to specify type of damping function
+!>              POSSIBLE VALUES: -1 = no damping, 1 = overlap-based,
+!>                    all other values (usually 0) = Tang-Toennies
+!>              Set in SUBROUTINE EFINP in source file EFINP.
+!>    IDSGRD  : flag to skip the dispersion gradient calculation
+!>              POSSIBLE VALUES: 0 = gradient off, non-zero = on.
+!>              Set in SUBROUTINE EFINP in source file EFINP.
+!>    MMCORE : number of core orbitals. Set in RHFCL in source
+!>             file RHFUHF.
+!>    DISPENRG : value of the EFP-AI dispersion energy
+!>    MMXMO  :  number of dispersion points (centroids) per EFP
+!>    MMXBF  :  number of basis functions
+! 
+      DOUBLE PRECISION, ALLOCATABLE, SAVE :: SABEFPAI(:,:,:)
+      INTEGER, SAVE :: IQMDISP,IDISDMP,IDSGRD,MMCORE
+      DOUBLE PRECISION, SAVE :: DISPENRG,MMXMO,MMXBF
+      END MODULE EFAIDIS
+C
+C *MODULE EFDRVR  *DECK EFAIDISP
+!> @brief   Calculates EFP-ab initio (EFP-AI/EFP-QM) dispersion energy
+!>          and gradients
+!>
+!> @author  Tony Smith
+!> - Jan 10, 2013
+!> @param   EORBS: Array of orbital energies
+!> @details see Q. Smith et al, J. Chem. Phys. 136, 244107 (2012); 
+!>          http://dx.doi.org/10.1063/1.4729535 
+!> @note    Gradient code for overlap-based damping (IDISDMP=1) is
+!>          incomplete!
+!> @todo    Get derivatives of overlap integrals between EFP and AI
+!>          orbitals to complete the overlap-based damping gradients
+      SUBROUTINE EFAIDISP(EORBS)
+      USE EFAIDIS
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      CHARACTER*8 POLNAM,DPOLNAM
+      PARAMETER (MXSH=5000, MXGTOT=20000, MXATM=2000,
+     *           MXFRG=1050, MXFGPT=12000, MXIFRQ=12,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12,
+     *           MXGEFP=4000, MXSHEF=1000)
+      PARAMETER (NMO=500, MXAO=8192)
+      COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
+     *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
+     *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
+     *                POLNAM(MXFGPT),DPOLNAM(MXIFRQ,MXFGPT),
+     *                POLSCR(MXFGPT),IPLSCR,INDSCR
+      COMMON /EFPSCR/ POLAB(MXFRG),B,SCROFF,IELECS,IDISPS,NEW_POL
+      COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
+     *                NPPTS(MXFRG),NPTTPT,IEFP,
+     *                NRPTS(MXFRG),NRTTPT,IREP,ICHGP,NFRG,
+     *                NDPPTS(MXDPPT),NDPTTPT,IEFDP,LSTMPTS(MXFRG)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /EFPGES/ DESFRG(6,MXFRG)
+      COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
+     *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
+     *                ATORQ(3,MXFRG)
+      COMMON /GRAD  / DE(3,MXATM)
+      COMMON /MASSES/ ZMASS(MXATM)
+      COMMON /FRGTYP/ NDFRG,ISET(MXFRG),NAMIDX(MXDFG)
+      COMMON /PAULMO/ CENTNM(MXFGPT),CENTCD(3,MXFGPT),NORBFP(MXFRG),
+     *                NPBF(MXFRG),NTMO
+      COMMON /EFPBAS/ EXEF(MXGEFP,MXDFG),CSEF(MXGEFP,MXDFG),
+     *                CPEF(MXGEFP,MXDFG),CDEF(MXGEFP,MXDFG),
+     *                CFEF(MXGEFP,MXDFG),CGEF(MXGEFP,MXDFG),
+     *                PRNAME(MXFGPT),PRCORD(3,MXFGPT),EFZNUC(MXFGPT),
+     *                KSTREF(MXSHEF,MXDFG),KATMEF(MXSHEF,MXDFG),
+     *                KTYPEF(MXSHEF,MXDFG),KNGEF(MXSHEF,MXDFG),
+     *                KLOCEF(MXSHEF,MXDFG),KMINEF(MXSHEF,MXDFG),
+     *                KMAXEF(MXSHEF,MXDFG),NSHLEF(MXDFG),NGSSEF(MXDFG),
+     *                NATEF(MXDFG),NUMEF(MXDFG),NTPATM
+C
+      DIMENSION EORBS(NUM)
+      DIMENSION WRKTR(12)
+      DIMENSION DYNTR(MXDPPT,NFRG)
+      DIMENSION FUM1(NA-MMCORE,NQMT-NA),FUM2(NA-MMCORE,NQMT-NA),
+     *			FUM3(NA-MMCORE,NQMT-NA)
+      DIMENSION SQ1(NA-MMCORE,NA-MMCORE),
+     *          SQ2(NA-MMCORE,NA-MMCORE),
+     *			SQ3(NA-MMCORE,NA-MMCORE),
+     *          AVG(NA-MMCORE,NA-MMCORE),WORK(NA),
+     *          H(NA-MMCORE,NA-MMCORE),H1(NA-MMCORE)
+      DIMENSION UM1(NQMT-NA,NA-MMCORE),UM2(NQMT-NA,NA-MMCORE),
+     *          UM3(NQMT-NA,NA-MMCORE)
+      DIMENSION UM(NA-MMCORE,NQMT-NA,3),
+     *          HF((NUM*NUM+NUM)/2),
+     * 			TRAN(NA-MMCORE,NA-MMCORE),
+     *          E(NUM),HFP(NUM,NUM),CXM(NUM,NUM),TM(NUM),
+     *          D((NUM*NUM+NUM)/2)
+      DIMENSION VEC(NUM,NA),XYZP(3),CCHG(3,NA-MMCORE),DIST(3)
+      DIMENSION CEE(NAT,3),CEF(NFRG,3),ZNU(NAT),ZEF(MXATM)
+      DIMENSION DEE(3),DEETORQ(6),AROT(3,NAT),
+     *          ATRAN(3),ATOTAL(3,NAT),FTOTAL(3,NAT)
+C
+      DATA ZERO,ONE,TWO,THREE /0.0D+00,1.0D+00,2.0D+00,3.0D+00/
+      DATA FOUR,SIX           /4.0D+00,6.0D+00/
+C
+      THIRD=ONE/THREE
+      FOURTHIRD=FOUR*THIRD
+      MAXDER = 0
+      CALL DERCHK(MAXDER)
+      IF (MAXDER.NE.1) IDSGRD = 0
+      NXYZ = 3
+      NORB = NQMT
+      NOCC = NA
+      NLOC = NA - MMCORE
+      NVIR = NORB - NA
+      NUM2 =(NUM*NUM+NUM)/2
+      NUM3 = NUM*NUM
+      DO I=1,3
+         DEE(I)=ZERO
+         DEETORQ(I)=ZERO
+         DEETORQ(I+3)=ZERO
+      ENDDO
+      CALL DAREAD(IDAF,IODA,VEC,NUM*NA,71,0)
+      IF(NVIR .EQ. 0) RETURN
+      CALL DAREAD(IDAF,IODA,TRAN,NLOC*NLOC,73,0)
+      ID = 0
+      DO I=1,NFRG
+        DO J=1,NDPPTS(I)
+           ID=ID+1
+           DYNTR(J,I) = THIRD*(EFDPOL(1,ID) + EFDPOL(2,ID) +
+     *                   EFDPOL(3,ID))
+        ENDDO
+      ENDDO
+C
+C  TRANSFORM DIPOLE INTEGRALS TO MO BASIS
+C
+      CALL DAREAD(IDAF,IODA,CXM,NUM3,15,0)
+      IF (MMCORE.GT.0) THEN
+         DO I = 1,NLOC
+            CALL DCOPY(NUM,VEC(1,MMCORE+I),1,VEC(1,I),1)
+         END DO
+      END IF
+      CALL CALCOM(XCOM,YCOM,ZCOM)
+      XYZP(1) = XCOM
+      XYZP(2) = YCOM
+      XYZP(3) = ZCOM
+      CALL DIPINT(XCOM,YCOM,ZCOM,.FALSE.)
+      DO 300 IXYZ=1,3
+         CALL DAREAD(IDAF,IODA,D,NUM2,94+IXYZ,0)
+         CALL TFTRI(HF,D,CXM,TM,NORB,NUM,NUM)
+C GET (OCC-CORE) x VIR BLOCK
+         CALL CPYTSQ(HF,HFP,NUM,1)
+         IL=0
+         DO 320 IVIR=1,NVIR
+            IM=0
+            DO 340 IOCC=MMCORE+1,NA
+               IM=IM+1
+               UM(IM,IVIR,IXYZ)=HFP(IOCC,NA+IVIR)
+  340       CONTINUE
+  320    CONTINUE
+C GET LMO CENTROIDS
+         DO 360 J=1,NLOC
+            CALL TFTRI(CCHG(IXYZ,J),D,VEC(1,J),TM,1,NUM,NUM)
+            CCHG(IXYZ,J) = CCHG(IXYZ,J) + XYZP(IXYZ)
+  360    CONTINUE
+  300 CONTINUE
+      IE=0
+      SUM=0.0D+00
+      DISP=0.0D+00
+      JAY=0
+C BEGIN LOOP OVER EFP POINTS
+      DO 801 IEFP=1,NFRG
+      INPPTS=NPPTS(IEFP)
+      DO 800 JEFP=1,INPPTS
+      IE=IE+1
+      DO IT=1,12
+C CONSTRUCT ALPHA TENSOR (DYNAMIC POLARIZABILITY VALUES FOR EFP)
+         WRKTR(IT)=DYNTR(JEFP+(IT-1)*INPPTS,IEFP)
+      ENDDO
+      DO 411 IOCC=1,NLOC
+         DO 421 IVIR=1,NVIR
+C ENERGY DIFF BETWEEN A VIRTUAL AND AN OCCUPIED AI ORBITAL
+            ENRGDF=EORBS(NA+IVIR)-EORBS(MMCORE+IOCC)
+C GET VALUE OF INTEGRAL OVER IMAG FREQ RANGE FOR THIS PAIR OF AI ORBITALS
+C AND SET OF ALPHA VALUES
+            CALL EFAIMF(FR,WRKTR,ENRGDF)
+C MULTIPLY IMAG FREQ INTEGRAL WITH CORRESPONDING DIPOLE INTEGRAL
+            FUM1(IOCC,IVIR)=UM(IOCC,IVIR,1)*FR
+            FUM2(IOCC,IVIR)=UM(IOCC,IVIR,2)*FR
+            FUM3(IOCC,IVIR)=UM(IOCC,IVIR,3)*FR
+C TRANSPOSE OF DIPOLE INTEGRAL MATRICES
+            UM1(IVIR,IOCC)=UM(IOCC,IVIR,1)
+            UM2(IVIR,IOCC)=UM(IOCC,IVIR,2)
+            UM3(IVIR,IOCC)=UM(IOCC,IVIR,3)
+  421    CONTINUE
+  411 CONTINUE
+C MULTIPLY (IMAG FREQ*DIPOLE) BY (TRANSPOSE OF DIPOLE), OBTAINING SQUARE
+C MATRICES INDEXED BY OCCUPIED (VALENCE) ORBITALS ONLY
+      CALL MRARBR(FUM1,NLOC,NLOC,NVIR,UM1,NVIR,NLOC,SQ1,NLOC)
+      CALL MRARBR(FUM2,NLOC,NLOC,NVIR,UM2,NVIR,NLOC,SQ2,NLOC)
+      CALL MRARBR(FUM3,NLOC,NLOC,NVIR,UM3,NVIR,NLOC,SQ3,NLOC)
+C  AVERAGE THE MATRICES OVER DIRECTIONAL COMPONENTS: (1/3)(Dx+Dy+Dz)
+C  (The FOUR is somehow part of the integration scheme; see SUROUTINE LAPOL 
+C  in source file LOCPOL, from which this subroutine was adapted.)
+      DO I=1,NLOC
+         DO J=1,NLOC
+            AVG(I,J)=SQ1(I,J)+SQ2(I,J)+SQ3(I,J)
+            AVG(I,J)=AVG(I,J)*FOUR*THIRD
+         ENDDO
+      ENDDO
+C TRANSFORM TO LOCALIZED MO BASIS
+      CALL TFSQU(H,AVG,TRAN,WORK,NLOC,NLOC)
+C DIAGONAL ELEMENTS OF H MATRIX NOW CORRESPOND TO C6 VALUES.
+C USE THEM WITH C6*F6/R6 FORMULA:
+      DO 790 I=1,NLOC
+         C6=H(I,I)
+         F6=ONE
+         DO IXYZ=1,3
+            DIST(IXYZ)=EFP(IXYZ,IE)-CCHG(IXYZ,I)
+         ENDDO
+         X = DIST(1)
+         Y = DIST(2)
+         Z = DIST(3)
+C         RR=DIST(1)*DIST(1)+DIST(2)*DIST(2)+DIST(3)*DIST(3)
+         R2 = X*X + Y*Y + Z*Z
+         R=SQRT(R2)
+         R6=R2*R2*R2
+         IF (IDISDMP.EQ.1) THEN
+C           OVERLAP-BASED DAMPING
+            SAB=SABEFPAI(IEFP,I,JEFP)
+            IF (ABS(SAB) .GT. 1.0D-05) THEN
+               RB = -2.0D+00*LOG(ABS(SAB))
+               RB2 = RB*RB
+               EX1 = SAB*SAB
+               F6 = ONE-(EX1*(ONE + RB + RB2/TWO ))             
+            ELSE
+               F6 = ONE
+               RB = ZERO
+               RB2 = ZERO
+               SAB = ZERO
+            END IF
+         ELSE IF (IDISDMP.EQ.-1) THEN
+C           NO DAMPING
+            F6=ONE
+            RB=ZERO
+            RB2 = ZERO
+            SAB=ZERO
+         ELSE
+C           TANG-TOENNIES DAMPING
+            RB =  B*R
+            EX1 = EXP(-RB)
+            RB2 = RB*RB
+            RB3 = RB*RB2
+            RB4 = RB2*RB2
+            RB5 = RB*RB4
+            RB6 = RB*RB5
+C
+            F6 = ONE-(EX1*(ONE + RB + RB2/TWO +
+     *               RB3/SIX + RB4/24.0D+00 +
+     *               RB5/120.0D+00 +RB6/720.0D+00))
+         END IF
+         SUM=SUM+C6*F6
+         DISP=DISP - C6*F6/R6
+C   GRADIENT
+C   DE/DR=FOUR/THREE*(-6*C6*F6/R**7 + DF6/DR * C6/R**6)
+         IF (IDSGRD.EQ.0) GOTO 790
+         IF (IDISDMP .EQ. 1) THEN
+C   NOTE: GRADIENT NOT FULLY IMPLEMENTED FOR OVERLAP-BASED
+C         DAMPING. NEED "DF6" TERMS, I.E. DSAB (DERIVATIVE
+C         OF OVERLAP INTEGRALS TAKEN BTWN EFP&QM ORBITALS)
+            CON1=-FOURTHIRD*(C6/R6)*(SIX*F6/R2)
+            CON2=-FOURTHIRD*(C6/R6)*(RB2*SAB)
+         ELSE
+            CON1=-FOURTHIRD*(C6/R6)*
+     *           ((SIX*F6/R2)-(B*RB6*EX1)/(R*720.0D+00))
+            CON2 = ZERO
+         END IF
+C
+         CONX=CON1*X
+         CONY=CON1*Y
+         CONZ=CON1*Z
+         DEE(1) = DEE(1) + CONX
+C     *            + CON2*DSAB(1)
+         DEE(2) = DEE(2) + CONY
+C     *            + CON2*DSAB(2)
+         DEE(3) = DEE(3) + CONZ
+C     *            + CON2*DSAB(3)
+         DEETORQ(1) = DEETORQ(1)+CONZ*(EFP(2,JEFP)-EFCENT(2,IEFP))
+     *                      -CONY*(EFP(3,JEFP)-EFCENT(3,IEFP))
+         DEETORQ(2) = DEETORQ(2)+CONX*(EFP(3,JEFP)-EFCENT(3,IEFP))
+     *                      -CONZ*(EFP(1,JEFP)-EFCENT(1,IEFP))
+         DEETORQ(3) = DEETORQ(3)+CONY*(EFP(1,JEFP)-EFCENT(1,IEFP))
+     *                      -CONX*(EFP(2,JEFP)-EFCENT(2,IEFP))
+         DEETORQ(4) = DEETORQ(4)+CONZ*(CCHG(2,I)-YCOM)
+     *                      -CONY*(CCHG(3,I)-ZCOM)
+         DEETORQ(5) = DEETORQ(5)+CONX*(CCHG(3,I)-ZCOM)
+     *                      -CONZ*(CCHG(1,I)-XCOM)
+         DEETORQ(6) = DEETORQ(6)+CONY*(CCHG(1,I)-XCOM)
+     *                      -CONX*(CCHG(2,I)-YCOM)
+C
+C END LOOP OVER VALENCE LMOs
+  790 CONTINUE
+C  END LOOP OVER EFP POINTS
+  800 CONTINUE
+      IF (IDSGRD.EQ.0) GOTO 801
+      DO J=1,3
+         DESFRG(J,IEFP) = DESFRG(J,IEFP) + DEE(J)
+         DESFRG(J+3,IEFP) = DESFRG(J+3,IEFP) + DEETORQ(J)
+      ENDDO
+C END LOOP OVER NUMBER OF FRAGMENTS
+  801 CONTINUE
+      IF (IDSGRD.EQ.0) GOTO 999
+C     GET MOMENTS OF INERTIA AND TOTAL MASS FOR AI
+      TMASS=ZERO
+      DO I=1,NAT
+         CEE(I,1)=C(1,I)
+         CEE(I,2)=C(2,I)
+         CEE(I,3)=C(3,I)
+         ZNU(I)=ZAN(I)
+         TMASS = TMASS + ZMASS(I)
+      ENDDO
+      CALL PRAXIS(CEE,ZNU,NAT,NAT,AIX,AIY,AIZ)
+C     CALCULATE ROTATIONAL ACCELERATION AT ATOMS
+      IF (NAT.EQ.1) THEN
+         AROT(1,1)=ZERO
+         AROT(2,1)=ZERO
+         AROT(3,1)=ZERO
+         GOTO 390
+      END IF
+      IF (AIX.GT.1.0D-05) THEN
+         ALX=DEETORQ(4)/AIX
+      ELSE
+         ALX=ZERO
+      END IF
+      IF (AIY.GT.1.0D-05) THEN
+         ALY=DEETORQ(5)/AIY
+      ELSE
+         ALY=ZERO
+      END IF
+      IF (AIZ.GT.1.0D-05) THEN
+         ALZ=DEETORQ(6)/AIZ
+      ELSE
+         ALZ=ZERO
+      END IF
+      DO I=1,NAT
+        AROT(1,I)=ALZ*(C(2,I)-YCOM)-ALY*(C(3,I)-ZCOM)
+        AROT(2,I)=ALX*(C(3,I)-ZCOM)-ALZ*(C(1,I)-XCOM)
+        AROT(3,I)=ALY*(C(1,I)-XCOM)-ALX*(C(2,I)-YCOM)
+      ENDDO
+C     CALCULATE TRANSLATIONAL ACCELERATION
+ 390  DO I=1,3
+         ATRAN(I)=DEE(I)/TMASS
+      ENDDO
+C     CALCULATE TOTAL ACCELERATION AND TOTAL FORCE,
+C     ADD TO GRADIENT "DE"
+      DO I=1,NAT
+         DO J=1,3
+            ATOTAL(J,I)=AROT(J,I)+ATRAN(J)
+            FTOTAL(J,I)=ATOTAL(J,I)*ZMASS(I)
+            DE(J,I) = DE(J,I) + FTOTAL(J,I)
+         ENDDO
+      ENDDO
+C
+C  APPROXIMATE THE HIGHER ORDER TERMS IN DISPERSION ENERGY 
+C  EXPANSION AS 1/3 OF THE C6 CONTRIBUTION
+  999 DISPENRG = DISP*FOURTHIRD
+C     WRITE(IW,1000) DISPENRG
+      IF (ALLOCATED(SABEFPAI)) DEALLOCATE(SABEFPAI)
+      RETURN
+C1000 FORMAT(1X,'EFP-AI DISPERSION ENERGY =',F20.10)
+      END SUBROUTINE EFAIDISP
+C
+C *MODULE EFDRVR  *DECK EFAIMF
+!> @brief Calculates imaginary frequency integral between
+!>        pairs of AI orbitals; for use with EFAIDISP code
+!>
+!> @author Tony Smith
+!> - Jan 10, 2013
+!> @param FR : the final calculated value of the integral
+!> @param ALP : alpha tensor; array of 12 values
+!> @param ENRGDF : energy difference between two AI orbitals
+      SUBROUTINE EFAIMF(FR,ALP,ENRGDF)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      PARAMETER (MXFRG=1050, MXIFRQ=12, MXFGPT=12000,
+     *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
+      PARAMETER (ZERO=0.0D+00,ONE=1.0D+00)
+C THE 12 GAUSS-LEGENDRE WEIGHTS
+      PARAMETER (FACT1= 0.72086099022968040154D-02)
+      PARAMETER (FACT2= 0.17697067815034886394D-01)
+      PARAMETER (FACT3= 0.30660908596251749739D-01)
+      PARAMETER (FACT4= 0.48381293256249884995D-01)
+      PARAMETER (FACT5= 0.74878830420650517080D-01)
+      PARAMETER (FACT6= 0.11806515901361630228D+00)
+      PARAMETER (FACT7= 0.19535413832209084204D+00)
+      PARAMETER (FACT8= 0.35055692324483221824D+00)
+      PARAMETER (FACT9= 0.71577113554429568336D+00)
+      PARAMETER (FACT10=1.81409759976323969729D+00)
+      PARAMETER (FACT11=6.97923445114870823247D+00)
+      PARAMETER (FACT12=83.2480938829658453917D+00)
+C THE 12 GAUSS-LEGENDRE ABSCISSAS A.K.A. IMAGINARY FREQ VALUES
+C (THE FOLLOWING ARE ACTUALLY THE FREQUENCIES *SQUARED*)
+      PARAMETER (FREQ1=0.779327022332536710825D-05)
+      PARAMETER (FREQ2=0.228210717737242978745D-03)
+      PARAMETER (FREQ3=0.152113192477780750688D-02)
+      PARAMETER (FREQ4=0.608339199058554610325D-02)
+      PARAMETER (FREQ5=0.192239670393041989464D-01)
+      PARAMETER (FREQ6=0.543928293635942075334D-01)
+      PARAMETER (FREQ7=0.148916688004125595980D+00)
+      PARAMETER (FREQ8=0.421349037034822917794D+00)
+      PARAMETER (FREQ9=1.331494010666300803437D+00)
+      PARAMETER (FREQ10=5.32498192172462030801D+00)
+      PARAMETER (FREQ11=3.54935126637048206534D+01)
+      PARAMETER (FREQ12=1.03935828835455831714D+03)
+C
+      CHARACTER*8 POLNAM,DPOLNAM
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      DIMENSION  ALP(12)
+C
+      ENRGSQ=ENRGDF*ENRGDF
+C
+      FR= ALP(1)*FACT1/(ENRGSQ+FREQ1)
+     *  + ALP(2)*FACT2/(ENRGSQ+FREQ2)
+     *  + ALP(3)*FACT3/(ENRGSQ+FREQ3)
+     *  + ALP(4)*FACT4/(ENRGSQ+FREQ4)
+     *  + ALP(5)*FACT5/(ENRGSQ+FREQ5)
+     *  + ALP(6)*FACT6/(ENRGSQ+FREQ6)
+     *  + ALP(7)*FACT7/(ENRGSQ+FREQ7)
+     *  + ALP(8)*FACT8/(ENRGSQ+FREQ8)
+     *  + ALP(9)*FACT9/(ENRGSQ+FREQ9)
+     *  + ALP(10)*FACT10/(ENRGSQ+FREQ10)
+     *  + ALP(11)*FACT11/(ENRGSQ+FREQ11)
+     *  + ALP(12)*FACT12/(ENRGSQ+FREQ12)
+      FR=FR*ENRGDF
+      RETURN
+      END SUBROUTINE EFAIMF
