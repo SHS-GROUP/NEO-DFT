@@ -71,13 +71,17 @@ AX_CUDA()
 AM_CPPFLAGS="$AM_CPPFLAGS $CUDA_CPPFLAGS"
 dnl echo "$AM_CPPFLAGS"
 
+#      in actuality, the compiler options which are actually used
+#      seem to come from the ~/libcchem/rys/configure.ac file
 AC_ARG_WITH(gpu,
-	AC_HELP_STRING([--with-gpu], [Select GPU: tesla or fermi]),
+	AC_HELP_STRING([--with-gpu], [Select GPU: tesla, fermi, or kepler]),
 	[with_gpu=$withval], [with_gpu="tesla"])
 if test "x$with_gpu" = "xtesla"; then
     CUDAFLAGS="-arch=sm_13 -Xptxas -dlcm=cg $CUDAFLAGS"
 elif test "x$with_gpu" = "xfermi"; then
-    CUDAFLAGS="-arch=sm_21 -Xptxas -dlcm=cg -maxrregcount=80 $CUDAFLAGS"
+    CUDAFLAGS="-arch=sm_20 -Xptxas -dlcm=cg -maxrregcount=80 $CUDAFLAGS"
+elif test "x$with_gpu" = "xkepler"; then
+    CUDAFLAGS="-arch=sm_35 -Xptxas -dlcm=cg -maxrregcount=80 $CUDAFLAGS"
 else
     echo "*** unknown GPU:" $with_gpu 
 fi

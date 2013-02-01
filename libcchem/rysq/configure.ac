@@ -64,14 +64,19 @@ sinclude(config/ax_cuda.m4)
 AX_CUDA_ROOT()
 AX_CUDA()
 
+#
+#        some compiler options affecting math results are
+#        -ftz=true -prec-div=false -prec-sqrt=false --fmad=false
+#
 AC_ARG_WITH(gpu,
-	AC_HELP_STRING([--with-gpu], [Select GPU: tesla or fermi]),
+	AC_HELP_STRING([--with-gpu], [Select GPU: tesla, fermi, or kepler]),
 	[with_gpu=$withval], [with_gpu="tesla"])
 if test "x$with_gpu" = "xtesla"; then
     CUDAFLAGS="-arch=sm_13  $CUDAFLAGS"
 elif test "x$with_gpu" = "xfermi"; then
-    #CUDAFLAGS="-arch=sm_20 -ftz=true -prec-div=false -prec-sqrt=false $CUDAFLAGS"
     CUDAFLAGS="-arch=sm_20 $CUDAFLAGS"
+elif test "x$with_gpu" = "xkepler"; then
+    CUDAFLAGS="-arch=sm_35 $CUDAFLAGS"
 else
     echo "*** unknown GPU:" $with_gpu 
 fi

@@ -1,6 +1,6 @@
 #!/bin/csh
 #
-#  last update = 26 October 2012
+#  last update = 1 February 2013
 #
 #  This is a C-shell script to execute GAMESS, by typing
 #       rungms JOB VERNO NCPUS >& JOB.log &
@@ -146,7 +146,7 @@ endif
 #    analysis program (http://www.chem.wisc.edu/~nbo6), you must
 #    specify the full path name to the NBO binary.
 #    This value is ignored if NBO has not been linked to GAMESS.
-#   
+#
 setenv NBOEXE /u1/mike/nbo6/bin/nbo6.i8.exe
 #
 #    If a $GDDI input group is present, the calculation will be using
@@ -516,35 +516,54 @@ if ($TARGET == mpi) then
    #      we'll pass in a "processers per node" value, that is,
    #      all nodes are presumed to have equal numbers of cores.
    #
-   #      When using on the Infiniband clusters at Iowa State,
-   #      just pick target=mpi, version no. of the iMPI, and kickoff style.
-   #
    set PPN=$4
    #
-   #  Allow for compute process and data servers (one pair per core)
-   #  note that NCPUS = #cores, and NPROCS = #MPI processes
+   #      Allow for compute process and data servers (one pair per core)
+   #      note that NCPUS = #cores, and NPROCS = #MPI processes
    #
    @ NPROCS = $NCPUS + $NCPUS
    #
+   #      User customization required here:
+   #         specify your MPI choice: impi/mvapich2
+   #         specify your MPI library's top level path right here,
+   #            this will have directories like include/lib/bin below it.
+   #
+   set DDI_MPI_CHOICE=impi
+   #
+   #        ISU's various clusters have various MPI versions installed!
+   #
+   if ($DDI_MPI_CHOICE == impi) then
+      #-- DDI_MPI_ROOT=/opt/intel/impi/3.2
+      #-- DDI_MPI_ROOT=/share/apps/intel/impi/4.0.1.007/intel64
+      set DDI_MPI_ROOT=/share/apps/intel/impi/4.0.2.003/intel64
+   endif
+   #
+   if ($DDI_MPI_CHOICE == mvapich2) then
+      #-- DDI_MPI_ROOT=/share/apps/mpi/mvapich2-1.9a2-generic
+      set DDI_MPI_ROOT=/share/apps/mpi/mvapich2-1.9a2-qlc
+   endif
+   #
+   #       you probably don't need to modify the kickoff style (see below).
+   #
+   if ($DDI_MPI_CHOICE == impi)     set MPI_KICKOFF_STYLE=hydra
+   if ($DDI_MPI_CHOICE == mvapich2) set MPI_KICKOFF_STYLE=hydra
+   #
    #  Argonne's MPICH2, offers two possible kick-off procedures,
    #  guided by two disk files (A and B).
+   #  Other MPI implementations are often derived from Argonne's,
+   #  so usually offer these two styles.
+   #  For example, iMPI and MVAPICH2 can choose either "3steps" or "hydra".
    #
    #  Kickoff procedure #1 uses mpd demons, which potentially collide
    #  if the same user runs multiple jobs that end up on the same nodes.
    #  This is called "3steps" here because three commands (mpdboot,
    #  mpiexec, mpdallexit) are needed to run.
-   #  Kickoff procedure #2 is said to be faster, and involves only
-   #  one command (mpiexec.hydra), so it is called "hydra" here.
    #
-   #  Note that "mpirun" is not shown, since it cannot understand
+   #  Kickoff procedure #2 is little faster, easier to use, and involves
+   #  only one command (mpiexec.hydra).  It is called "hydra" here.
+   #
+   #  Note that "mpirun" is not illustrated, since it cannot understand
    #  how to place a c.p. and a d.s. pair on a single core.
-   #
-   #  Other MPI implementations are often derived from Argonne's, so
-   #  often offer these two styles.
-   #  For example, iMPI and MVAPICH2 can choose "3steps",
-   #  while iMPI (as of version 4.0) can choose "hydra".
-   #
-   set MPI_KICKOFF_STYLE=hydra
    #
    #  A. build HOSTFILE,
    #     This is always used below during file cleaning, and while
@@ -572,7 +591,7 @@ if ($TARGET == mpi) then
          set NNODES=$NNODES[1]
       endif
    endif
-   #           uncomment these if you are still setting up...
+   #           uncomment next lines if you need to debug host configuration.
    #--echo '-----debug----'
    #--echo HOSTFILE $HOSTFILE contains
    #--cat $HOSTFILE
@@ -593,13 +612,13 @@ if ($TARGET == mpi) then
 
    #
    if ($NCPUS == 1) then
-      echo "-n $NPROCS -host `hostname` /home/mike/gamess/gamess.$VERNO.x" >> $PROCFILE
+      echo "-n $NPROCS -host `hostname` $GMSPATH/gamess.$VERNO.x" >> $PROCFILE
    else
       if ($NNODES == 1) then
              # when all processes are inside a single node, it is simple!
              # all MPI processes, whether compute processes or data servers,
              # are just in this node.   (note: NPROCS = 2*NCPUS!)
-         echo "-n $NPROCS -host `hostname` /home/mike/gamess/gamess.$VERNO.x" >> $PROCFILE
+         echo "-n $NPROCS -host `hostname` $GMSPATH/gamess.$VERNO.x" >> $PROCFILE
       else
              # For more than one node, we want PPN compute processes on
              # each node, and of course, PPN data servers on each.
@@ -612,7 +631,7 @@ if ($TARGET == mpi) then
          while ($n <= $NNODES)
             set host=`sed -n -e "$n p" $HOSTFILE`
             set host=$host[1]
-            echo "-n $PPN2 -host $host /home/mike/gamess/gamess.$VERNO.x" >> $PROCFILE
+            echo "-n $PPN2 -host $host $GMSPATH/gamess.$VERNO.x" >> $PROCFILE
             @ n++
          end
       endif
@@ -645,20 +664,57 @@ if ($TARGET == mpi) then
    endif
    breaksw
    endsw
-   #           uncomment these if you are still setting up...
+   #           uncomment next lines if you need to debug host configuration.
    #--echo '-----debug----'
    #--echo PROCFILE $PROCFILE contains
    #--cat $PROCFILE
    #--echo '--------------'
    #
    #     add Intel MPI to the library path and to the execution path.
-   #        version number might be 3.2.1, 4.0.1.007, 4.0.2.003, or ...
    #
-   setenv LD_LIBRARY_PATH /share/apps/intel/impi/4.0.2.003/lib64:$LD_LIBRARY_PATH
-   set path=(/share/apps/intel/impi/4.0.2.003/bin64 $path)
+   if ($DDI_MPI_CHOICE == impi) then
+      setenv LD_LIBRARY_PATH $DDI_MPI_ROOT/lib:$LD_LIBRARY_PATH
+      set path=($DDI_MPI_ROOT/bin $path)
+   endif
    #
-   #  add MVAPICH2 to the execution path
-   #--set path=(/usr/mpi/gcc/mvapich2-1.2p1/bin $path)
+   #     add MVAPICH2 to the execution path
+   if ($DDI_MPI_CHOICE == mvapich2) then
+      setenv LD_LIBRARY_PATH $DDI_MPI_ROOT/lib:$LD_LIBRARY_PATH
+      set path=($DDI_MPI_ROOT/bin $path)
+   endif
+   #
+   #         ... thus ends setting up the process initiation,
+   #             tunings, pathnames, library paths, for the MPI.
+   #
+   #    Compiler library setup (ifort)
+   #         ignore this, or comment out if you're using gfortran.
+   #----- LD_LIBRARY_PATH /opt/intel/fce/10.1.018/lib:$LD_LIBRARY_PATH
+   #----- LD_LIBRARY_PATH /share/apps/intel/composerxe-2011.1.107/compiler/lib/intel64:$LD_LIBRARY_PATH
+   setenv LD_LIBRARY_PATH /share/apps/intel/composerxe-2011.4.191/compiler/lib/intel64:$LD_LIBRARY_PATH
+   #
+   #    Math library setup:
+   #          set up Intel MKL (math kernel library).
+   #          GAMESS links MKL statically, for single threaded execution,
+   #          so, you probably don't need to sweat this...
+   #--setenv LD_LIBRARY_PATH /opt/intel/mkl/10.0.3.020/lib/em64t
+   #--setenv LD_LIBRARY_PATH /share/apps/intel/composerxe-2011.1.107/mkl/lib/intel64
+   #--setenv LD_LIBRARY_PATH /share/apps/intel/composerxe-2011.4.191/mkl/lib/intel64
+   #--setenv MKL_SERIAL YES
+   #--setenv MKL_NUM_THREADS 1
+   #          set up Atlas, if you use that.
+   #--setenv LD_LIBRARY_PATH /usr/lib64/atlas:$LD_LIBRARY_PATH
+   #
+   #      any issues with run-time libraries can be debugged just below
+   #--echo '-----debug----'
+   #--echo the execution path us
+   #--echo $path
+   #--echo the library path is
+   #--echo $LD_LIBRARY_PATH
+   #--echo The dynamically linked libraries for this binary are
+   #--ldd $GMSPATH/gamess.cchem.$VERNO.x
+   #--echo '--------------'
+   #
+   #     ==== values that influence the MPI operation ====
    #
    #     tunings below are specific to Intel MPI 3.2 and/or 4.0:
    #        a very important option avoids polling for incoming messages
@@ -670,35 +726,30 @@ if ($TARGET == mpi) then
    #        iMPI 3.2 allows specification of a DAPL 2.0 library,
    #        iMPI 4.0 defaults fabric to shm,dapl: forcing dapl only is faster.
    #
-   set echo
-   setenv I_MPI_WAIT_MODE enable
-   setenv I_MPI_PIN disable
-   setenv I_MPI_DEBUG 0
-   setenv I_MPI_STATS 0
-   setenv I_MPI_FABRICS dapl
-   setenv I_MPI_DAT_LIBRARY libdat2.so
-   #      in case someone wants to try the "tag matching interface",
-   #      an option which unfortunately ignores the WAIT_MODE in 4.0.2!
-   #--setenv I_MPI_FABRICS tmi
-   #--setenv I_MPI_TMI_LIBRARY libtmi.so
-   #--setenv I_MPI_TMI_PROVIDER psm
-   #--setenv TMI_CONFIG /share/apps/intel/impi/4.0.2.003/intel64/etc/tmi.conf
-   unset echo
+   if ($DDI_MPI_CHOICE == impi) then
+      set echo
+      setenv I_MPI_WAIT_MODE enable
+      setenv I_MPI_PIN disable
+      setenv I_MPI_DEBUG 0
+      setenv I_MPI_STATS 0
+      setenv I_MPI_FABRICS dapl
+      setenv I_MPI_DAT_LIBRARY libdat2.so
+      #      in case someone wants to try the "tag matching interface",
+      #      an option which unfortunately ignores the WAIT_MODE in 4.0.2!
+      #--setenv I_MPI_FABRICS tmi
+      #--setenv I_MPI_TMI_LIBRARY libtmi.so
+      #--setenv I_MPI_TMI_PROVIDER psm
+      #--setenv TMI_CONFIG $DDI_MPI_ROOT/etc/tmi.conf
+      unset echo
+   endif
    #
    #      similar tunings for MVAPICH2 are
-   #--setenv MV2_USE_BLOCKING 1
-   #--setenv MV2_ENABLE_AFFINITY 0
-   #
-   #         ... thus ends setting up the process initiation,
-   #             tunings, pathnames, library paths, for the MPI.
-   #
-   #  set up Intel MKL (math kernel library).  As of version 10, GAMESS
-   #  links MKL statically, and also for single threaded execution.
-   #  So, you probably don't need to sweat this...
-   #--setenv LD_LIBRARY_PATH /opt/intel/mkl/10.0.3.020/lib/em64t
-   #--setenv LD_LIBRARY_PATH /opt/intel/composerxe-2011.1.107/mkl/lib/intel64
-   #--setenv MKL_SERIAL YES
-   #--setenv MKL_NUM_THREADS 1
+   if ($DDI_MPI_CHOICE == mvapich2) then
+      set echo
+      setenv MV2_USE_BLOCKING 1
+      setenv MV2_ENABLE_AFFINITY 0
+      unset echo
+   endif
    #
    #     Set up Fragment MO runs (or the other runs exploiting subgroups).
    #     One way to be sure that the master node of each subgroup
@@ -725,7 +776,7 @@ if ($TARGET == mpi) then
    #  Now, at last, we can actually kick-off the MPI processes...
    #
    echo "MPI kickoff will run GAMESS on $NCPUS cores in $NNODES nodes."
-   echo "The binary to be executed is /home/mike/gamess/gamess.$VERNO.x"
+   echo "The binary to be executed is $GMSPATH/gamess.$VERNO.x"
    echo "MPI will run $NCPUS compute processes and $NCPUS data servers,"
    echo "    placing $PPN of each process type onto each node."
    echo "The scratch disk space on each node is $SCR, with free space"
@@ -753,15 +804,25 @@ if ($TARGET == mpi) then
       breaksw
    #
    case hydra:
+      if ($DDI_MPI_CHOICE == impi) then
+         set echo
+         setenv I_MPI_HYDRA_ENV all
+         setenv I_MPI_PERHOST $PPN2
+         unset echo
+      endif
+      if ($DDI_MPI_CHOICE == mvapich2) then
+         set echo
+         setenv HYDRA_ENV all
+         unset echo
+      endif
       set echo
-      setenv I_MPI_HYDRA_ENV all
-      setenv I_MPI_PERHOST $PPN2
       mpiexec.hydra -f $PROCFILE -n $NPROCS \
-            /home/mike/gamess/gamess.$VERNO.x < /dev/null
+            $GMSPATH/gamess.$VERNO.x < /dev/null
       unset echo
       breaksw
+   #
    case default:
-      echo No valid MPI startup procedure chosen.
+      echo No valid DDI/MPI startup procedure chosen.
       exit
    endsw
    #
@@ -771,24 +832,42 @@ if ($TARGET == mpi) then
 endif
 #      ------ end of the MPI execution section -------
 
-#
 if ($TARGET == ga) then
    #
-   #      Usage of LIBCCHEM requires running over GA instead of DDI,
-   #      with an MPI library underneath the GA.  We must start only
-   #      one process per assigned node, hence the hardwiring of 
-   #      processes per node to just 1.  In effect, the variable
-   #      NCPUS becomes a node count, not a core count.
+   #      This section is used if and only if you run GAMESS+LIBCCHEM,
+   #      over Global Arrays (GA) which is running over MPI.
    #
+   #      To save space, the more verbose notes in the MPI section are
+   #      not all here.  See the MPI section for extra comments.
+   #
+   #      LIBCCHEM wants only one process per assigned node, hence the
+   #      hardwiring of processes per node to just 1.  In effect, the input
+   #      value NCPUS, and thus NPROCS, are node counts, not core counts.
    #      Parallelization inside the nodes is handled by LIBCCHEM threads.
    #      The lack of data servers is due to GA as the message passing agent.
-   #      The use of sockets on the Infiniband is due to not knowing how
-   #      to fully utilize GA.   GA doesn't seem to work with Hydra.
    #
    set PPN=1
    @ NPROCS = $NCPUS
    #
-   #      ===== set up MPI control files to execute  1 process per node =====
+   #      User customization here!
+   #         select MPI from just two: impi,mvapich2
+   #         select MPI top level directory pathname.
+   #
+   set GA_MPI_CHOICE=impi
+   #
+   if ($GA_MPI_CHOICE == impi) then
+      set GA_MPI_ROOT=/share/apps/intel/impi/4.0.2.003/intel64
+   endif
+   if ($GA_MPI_CHOICE == mvapich2) then
+      set GA_MPI_ROOT=/share/apps/mpi/mvapich2-1.9a2-sock
+   endif
+   #
+   #      we were unable to run by iMPI/hydra, but the old 3steps=OK.
+   #      in contrast, MVAPICH2 ran well by hydra, but not by mpirun_rsh.
+   if ($GA_MPI_CHOICE == impi)     set MPI_KICKOFF_STYLE=3steps
+   if ($GA_MPI_CHOICE == mvapich2) set MPI_KICKOFF_STYLE=hydra
+   #
+   #   ===== set up MPI control files to execute 1 process per node =====
    #
    #  A. build HOSTFILE,
    #
@@ -813,7 +892,7 @@ if ($TARGET == ga) then
          set NNODES=$NNODES[1]
       endif
    endif
-   #           uncomment these if you are still setting up...
+   #           uncomment next lines if you need to debug host configuration.
    #--echo '-----debug----'
    #--echo HOSTFILE $HOSTFILE contains
    #--cat $HOSTFILE
@@ -824,7 +903,17 @@ if ($TARGET == ga) then
    setenv PROCFILE $SCR/$JOB.processes.mpd
    if (-e $PROCFILE) rm $PROCFILE
    touch $PROCFILE
-   #
+
+   switch ($MPI_KICKOFF_STYLE)
+
+   case mpirun_rsh:
+
+#           MVAPICH2 hasn't got the 3-step way, but has a similar 'mpirun_rsh'.
+#           PROCFILE can remain empty, since it isn't used for this case.
+      breaksw
+
+   case 3steps:
+
    if ($NCPUS == 1) then
       echo "-n $NPROCS -host `hostname` $GMSPATH/gamess.cchem.$VERNO.x" >> $PROCFILE
    else
@@ -843,18 +932,85 @@ if ($TARGET == ga) then
          end
       endif
    endif
-   #           uncomment these if you are still setting up...
+   breaksw
+
+   case hydra:
+
+   if ($NNODES == 1) then
+             # when all processes are inside a single node, it is simple!
+      echo "`hostname`:$PPN" > $PROCFILE
+   else
+      @ n=1
+      while ($n <= $NNODES)
+         set host=`sed -n -e "$n p" $HOSTFILE`
+         set host=$host[1]
+         echo "${host}:$PPN" >> $PROCFILE
+         @ n++
+      end
+   endif
+   breaksw
+
+   endsw
+   #
+   #           uncomment next lines if you need to debug host configuration.
    #--echo '-----debug----'
    #--echo PROCFILE $PROCFILE contains
    #--cat $PROCFILE
    #--echo '--------------'
    #
-   #     add Intel MPI to the execution path.
+   #     add the MPI to the execution path.
    #
-   set path=(/share/apps/intel/impi/4.0.2.003/intel64/bin $path)
+   if ($GA_MPI_CHOICE == impi)     set path=($GA_MPI_ROOT/bin $path)
+   if ($GA_MPI_CHOICE == mvapich2) set path=($GA_MPI_ROOT/bin $path)
    #
-   #     add MVAPICH2 to the execution path
-   #--set path=(/usr/mpi/gcc/mvapich2-1.2p1/bin $path)
+   #         ... thus ends setting up the process initiation files,
+   #             tunings, and pathnames for the MPI.
+   #
+   #        ===== locate any shared object libraries we need here =====
+   #       note we are adding onto any pre-existing system's library path,
+   #       placing our choices first means they are sure to be obeyed.
+   #
+   #  a) next line finds the CUDA runtime libraries
+   setenv LD_LIBRARY_PATH /share/apps/cuda4.1/lib64:$LD_LIBRARY_PATH
+   #
+   #  b) next finds the right MPI libraries
+   #
+   if ($GA_MPI_CHOICE == impi) then
+      setenv LD_LIBRARY_PATH $GA_MPI_ROOT/lib:$LD_LIBRARY_PATH
+   endif
+   if ($GA_MPI_CHOICE == mvapich2) then
+      setenv LD_LIBRARY_PATH $GA_MPI_ROOT/lib:$LD_LIBRARY_PATH
+   endif
+   #
+   #  c) next line finds ifort-related compiler libraries
+   #     ignore this, or comment out if you're using gfortran.
+   #----- LD_LIBRARY_PATH /opt/intel/fce/10.1.018/lib:$LD_LIBRARY_PATH
+   #----- LD_LIBRARY_PATH /share/apps/intel/composerxe-2011.1.107/compiler/lib/intel64:$LD_LIBRARY_PATH
+   setenv LD_LIBRARY_PATH /share/apps/intel/composerxe-2011.4.191/compiler/lib/intel64:$LD_LIBRARY_PATH
+   #
+   #  d) next line finds Intel MKL (math kernel library) libraries
+   #  While pure-GAMESS steps run, we want serial execution here, note that
+   #  at times LIBCCHEM manipulates some of its steps to use threaded MKL.
+   #  Atlas is an acceptable substitute for MKL, if you linked to Atlas.
+   #----- LD_LIBRARY_PATH /opt/intel/mkl/10.0.3.020/lib/em64t:$LD_LIBRARY_PATH
+   #----- LD_LIBRARY_PATH /share/apps/intel/composerxe-2011.1.107/mkl/lib/intel64:$LD_LIBRARY_PATH
+   setenv LD_LIBRARY_PATH /share/apps/intel/composerxe-2011.4.191/mkl/lib/intel64:$LD_LIBRARY_PATH
+   setenv MKL_SERIAL YES
+   setenv MKL_NUM_THREADS 1
+   #
+   #--setenv LD_LIBRARY_PATH /usr/lib64/atlas:$LD_LIBRARY_PATH
+   #
+   #      any issues with run-time libraries can be debugged just below
+   #--echo '-----debug----'
+   #--echo the execution path is
+   #--echo $path
+   #--echo the library path is
+   #--echo $LD_LIBRARY_PATH
+   #--echo The dynamically linked libraries for this binary are
+   #--ldd $GMSPATH/gamess.cchem.$VERNO.x
+   #--echo '--------------'
+   #
+   #     ==== values that influence the MPI operation ====
    #
    #     tunings below are specific to Intel MPI 3.2 and/or 4.0:
    #        a very important option avoids polling for incoming messages
@@ -866,75 +1022,50 @@ if ($TARGET == ga) then
    #        iMPI 3.2 allows specification of a DAPL 2.0 library,
    #        iMPI 4.0 defaults fabric to shm,dapl: forcing dapl only is faster.
    #
-   set echo
-   setenv I_MPI_WAIT_MODE enable
-   setenv I_MPI_PIN disable
-   setenv I_MPI_DEBUG 0
-   setenv I_MPI_STATS 0
-   #      force the Infiniband to run in IPoIB mode due to using GA.
-   setenv I_MPI_DEVICE sock
-   setenv I_MPI_NETMASK ib0
-   #      in case we ever figure out how to use GA with DAPL
-   #--setenv I_MPI_FABRICS dapl
-   #--setenv I_MPI_DAT_LIBRARY libdat2.so
-   #      in case someone wants to try the "tag matching interface",
-   #      an option which unfortunately ignores the WAIT_MODE in 4.0.2!
-   #--setenv I_MPI_FABRICS tmi
-   #--setenv I_MPI_TMI_LIBRARY libtmi.so
-   #--setenv I_MPI_TMI_PROVIDER psm
-   #--setenv TMI_CONFIG /share/apps/intel/impi/4.0.2.003/intel64/etc/tmi.conf
-   unset echo
+   if ($GA_MPI_CHOICE == impi) then
+      set echo
+      setenv I_MPI_WAIT_MODE enable
+      setenv I_MPI_PIN disable
+      setenv I_MPI_DEBUG 0
+      setenv I_MPI_STATS 0
+      #      force the Infiniband to run in IPoIB mode due to using GA.
+      setenv I_MPI_DEVICE sock
+      setenv I_MPI_NETMASK ib0
+      #      in case we ever figure out how to use GA with DAPL
+      #--setenv I_MPI_FABRICS dapl
+      #--setenv I_MPI_DAT_LIBRARY libdat2.so
+      #      in case someone wants to try the "tag matching interface",
+      #      an option which unfortunately ignores the WAIT_MODE in 4.0.2!
+      #--setenv I_MPI_FABRICS tmi
+      #--setenv I_MPI_TMI_LIBRARY libtmi.so
+      #--setenv I_MPI_TMI_PROVIDER psm
+      #--setenv TMI_CONFIG $GA_MPI_ROOT/etc/tmi.conf
+      unset echo
+   endif
    #
    #      similar tunings for MVAPICH2 are
-   #--setenv MV2_USE_BLOCKING 1
-   #--setenv MV2_ENABLE_AFFINITY 0
-   #
-   #         ... thus ends setting up the process initiation files,
-   #             tunings, and pathnames for the MPI.
-   #
-   #        ===== locate any shared object libraries we need here =====
-   #       note we are adding onto any pre-existing system's library path,
-   #       placing our choices first means they are sure to be obeyed.
-   #
-   #  a) next line finds Intel MPI libraries
-   #
-   setenv LD_LIBRARY_PATH /share/apps/intel/impi/4.0.2.003/intel64/lib:$LD_LIBRARY_PATH
-   #
-   #  b) next line finds ifort-related compiler libraries
-   setenv LD_LIBRARY_PATH /share/apps/intel/composerxe-2011.4.191/compiler/lib/intel64:$LD_LIBRARY_PATH
-   #
-   #  c) next line finds Intel MKL (math kernel library) libraries
-   #  While pure-GAMESS steps run, we want serial execution here, note that
-   #  at times LIBCCHEM manipulates some of its steps to use threaded MKL.
-   setenv LD_LIBRARY_PATH /share/apps/intel/composerxe-2011/mkl/lib/intel64:$LD_LIBRARY_PATH
-   #
-   setenv MKL_SERIAL YES
-   setenv MKL_NUM_THREADS 1
-   #
-   #  d) next line finds the CUDA runtime libraries
-   setenv LD_LIBRARY_PATH /share/apps/cuda4.1/lib64:$LD_LIBRARY_PATH
-   #
-   #      any issues with run-time libraries can be debugged just below
-   #----------debug----------
-   #---echo the library path is $LD_LIBRARY_PATH
-   #---echo The dynamic link libraries for this binary are
-   #---ldd $GMSPATH/gamess.cchem.$VERNO.x
-   #----------debug----------
+   if ($GA_MPI_CHOICE == mvapich2) then
+      set echo
+      setenv MV2_USE_BLOCKING 1
+      setenv MV2_USE_THREAD_WARNING 0
+      setenv MV2_ENABLE_AFFINITY 0
+      unset echo
+   endif
    #
    #          ===== Runtime control over LIBCCHEM =====
-   #      set GMS_CCHEM to 0 to disable calls into LIBCCHEM.
+   #      set GMS_CCHEM to 1 to enable calls to LIBCCHEM.
    #      set CCHEM to control use of GPUs, or memory used.
    #                for example, setenv CCHEM 'devices=;memory=100m'
    #                disables the usage of GPUs,
-   #                and limits memory/node to 100m (m,g work)
-   #      set OMP_NUM_THREADS to limit core usage to less than all cores.
-   #    
+   #                and limits memory/node to 100m (units m,g both OK)
+   #      set OMP_NUM_THREADS to limit core usage to fewer than all cores.
+   #
    setenv GMS_CCHEM '1'
    #
    #      Our 'gms' front end for PBS batch submission changes the value
    #      of NUMGPU to 2 or 4 depending on user's request, or else
    #      leaves NUMGPU at 0 if the user decides to ignore any GPUs.
-   #      
+   #
    #      Please set to your number of GPU's if you are not using
    #      the front end 'gms' to correctly change this value.
    #      The 0 otherwise leads to ignoring GPUs (OK if you have none).
@@ -943,10 +1074,8 @@ if ($TARGET == ga) then
    #      Our system is hex-core nodes, your memory setting might vary.
    @ NUMGPU=0
    if ($NUMGPU > 0) then
-      echo LIBCCHEM will run threads on $NUMGPU GPUs per node...
       setenv CCHEM 'memory=6g'
    else
-      echo LIBCCHEM is not using any GPUs...
       setenv CCHEM 'devices=;memory=6g'
    endif
    #
@@ -954,32 +1083,70 @@ if ($TARGET == ga) then
    #
    echo "MPI kickoff will start GAMESS on $NCPUS cores in $NNODES nodes."
    echo "LIBCCHEM will generate threads on all other cores in each node."
+   echo "LIBCCHEM will run threads on $NUMGPU GPUs per node."
    echo "LIBCCHEM's control setting for CCHEM is $CCHEM"
    echo "The binary to be executed is $GMSPATH/gamess.cchem.$VERNO.x"
    echo "The scratch disk space on each node is $SCR, with free space"
    df -k $SCR
-   #
    chdir $SCR
    #
-   #  a) bring up a 'ring' of MPI demons
-   #
-   set echo
-   mpdboot --rsh=ssh -n $NNODES -f $HOSTFILE
-   #
-   #  b) kick off the compute processes and the data servers
-   #
-   mpiexec -configfile $PROCFILE < /dev/null
-   #
-   #  c) shut down the 'ring' of MPI demons
-   #
-   mpdallexit
-   unset echo
+   switch ($MPI_KICKOFF_STYLE)
+     case 3steps:
+       #
+       #  a) bring up a 'ring' of MPI demons
+       #
+       set echo
+       mpdboot --rsh=ssh -n $NNODES -f $HOSTFILE
+       #
+       #  b) kick off the compute processes and the data servers
+       #
+       mpiexec -configfile $PROCFILE < /dev/null
+       #
+       #  c) shut down the 'ring' of MPI demons
+       #
+       mpdallexit
+       unset echo
+       breaksw
+
+#          never succeeded in getting next kickoff to actually work!
+     case mpirun_rsh:
+       set echo
+       mpirun_rsh -ssh -np $NNODES -hostfile $HOSTFILE \
+            $GMSPATH/gamess.cchem.$VERNO.x
+       unset echo
+       breaksw
+
+     case hydra:
+       if ($GA_MPI_CHOICE == impi) then
+         set echo
+         setenv I_MPI_HYDRA_ENV all
+         setenv I_MPI_PERHOST $PPN
+         unset echo
+       endif
+       if ($GA_MPI_CHOICE == mvapich2) then
+         set echo
+         setenv HYDRA_ENV all
+         setenv HYDRA_DEBUG 0
+         setenv HYDRA_IFACE ib0
+         unset echo
+       endif
+       set echo
+       mpiexec.hydra -f $PROCFILE -n $NPROCS \
+             $GMSPATH/gamess.cchem.$VERNO.x < /dev/null
+       unset echo
+       breaksw
+
+     case default:
+       echo No valid GA/MPI startup procedure chosen.
+       exit
+       breaksw
+   endsw
    #
    #    keep HOSTFILE, as it is passed to the file erasing step below
    rm -f $PROCFILE
    #
 endif
-#      ------ end of the MPI execution section -------
+#      ------ end of the GA execution section -------
 
 
 #     SGI Altix or ICE, using ProPack's mpt MPI library, and PBS batch queues

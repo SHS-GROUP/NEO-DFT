@@ -328,8 +328,8 @@ if ($pt2r12 > 0) then
 endif
 
 #    Next files are used only during CIM runs
-setenv CIMFILE $PWD/$JOB.cim
-setenv CIMDMN  $PWD/$JOB.dmn
+setenv CIMFILE $USERSCR/$JOB.cim
+setenv CIMDMN  $USERSCR/$JOB.dmn
 setenv CIMDCT  $SCR/$JOB.Fcdt
 setenv CIMAOI  $SCR/$JOB.Fcao
 setenv CIMMOI  $SCR/$JOB.Fcmo
