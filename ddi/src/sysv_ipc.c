@@ -5,7 +5,7 @@
  * Wrapper subroutines for System V IPC calls.
  *
  * Author: Ryan M. Olson
- * CVS $Id: sysv_ipc.c,v 1.1.1.1 2007/05/26 01:42:30 andrey Exp $
+ *  6 Feb 13 - Jason Rigby - retry if SEMOP fails due to interupt signal
 \* -------------------------------------------------------------------- */
  # include "ddi_base.h"
  # if defined USE_SYSV
@@ -152,12 +152,20 @@
    int Semop(int semid,struct sembuf *opers,size_t nops) {
       int ret;
 
+/*  
+    Note that it is apparently possible for a run to receive an
+    interupt signal in the middle of checking a semaphore.  This
+    will interupt prior to learning the state of the semaphore.
+    The "fix" is to just retry (recursive call) to learn what the
+    state of the semaphore really is.
+*/
       if((ret = semop(semid,opers,nops)) == -1) {
          fprintf(stdout,"%s: semop return an error performing %i operation(s) on semid %i.\n",DDI_Id(),(int) nops,semid);
          switch(errno) {
            case EFBIG:  fprintf(stdout," semop errno=EFBIG.\n"); break;
            case E2BIG:  fprintf(stdout," semop errno=E2BIG.\n"); break;
-           case EINTR:  fprintf(stdout," semop errno=EINTR.\n"); break;
+           case EINTR:  fprintf(stdout," semop errno=EINTR.\n");
+                        return Semop(semid,opers,nops);
            case EINVAL: fprintf(stdout," semop errno=EINVAL.\n"); break;
            case EACCES: fprintf(stdout," semop errno=EACCES.\n"); break;
            case EAGAIN: fprintf(stdout," semop errno=EAGAIN.\n"); break;

@@ -17,7 +17,6 @@
    
    Author: Ryan M. Olson
    Date: December 22, 2002
-   CVS $Id: ddi_fortran.h,v 1.2 2007/05/26 20:48:22 andrey Exp $
 \* ------------------------------------------------------------- */
  # include "f77_extern.h"
 
@@ -76,6 +75,7 @@
  #     define F77_ProcDLB_next            F77_Extern(DDI_PROCDLB_NEXT)
  #     define F77_ProcDLB_reset           F77_Extern(DDI_PROCDLB_RESET)
  #     define F77_ProcDLB_destroy         F77_Extern(DDI_PROCDLB_DESTROY)
+ #     define F77_Comm_destroy            F77_Extern(DDI_COMM_DESTROY) 
 /* DDI_ARR subroutines */
  #     define F77_ARR_zero                F77_Extern(DDI_ARR_ZERO)
  #     define F77_ARR_fill                F77_Extern(DDI_ARR_FILL)
@@ -163,6 +163,7 @@
  #     define F77_Get_comm                F77_Extern(ddi_get_comm)
  #     define F77_Put_comm                F77_Extern(ddi_put_comm)
  #     define F77_Acc_comm                F77_Extern(ddi_acc_comm)
+ #     define F77_Comm_destroy            F77_Extern(ddi_comm_destroy)
 /* DDI_ARR subroutines */
  #     define F77_ARR_zero                F77_Extern(ddi_arr_zero)
  #     define F77_ARR_fill                F77_Extern(ddi_arr_fill)

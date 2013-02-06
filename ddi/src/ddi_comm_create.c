@@ -1,3 +1,9 @@
+/*
+ * create communicators (i.e. subgroup computing)
+ * author Ryan Olsen, 2002.
+ *  6 Feb 13 - SRP - finish coding of communicator destruction
+ */
+
  # include "ddi_base.h"
 
    void Comm_divide(int ngroups, int comm_id, int *new_comm_id) {
@@ -130,7 +136,7 @@
       i = 0;
       if(np > 1) {
          do {
-	     
+
             if(ids[i] > cur_comm->np) {
                fprintf(stdout,"%s: Invalid id list in DDI_Comm_create.\n",DDI_Id());
                Fatal_error(911);
@@ -209,6 +215,14 @@
 		      DDI_Id(),new_comm->np,new_comm->nn,new_comm->np_local,
 		      new_comm->me,new_comm->my,new_comm->me_local));
       
+/*
+ *       fprintf(stdout,"Comm_create new_comm=%i\n",new_comm);
+ *       fprintf(stdout,"Comm_create new_comm->id=%i\n",new_comm->id);
+ *       fprintf(stdout,"Comm_create new_comm_id=%i\n",*new_comm_id);
+ *       fprintf(stdout,"Comm_create cur_comm->id=%i\n",cur_comm->id);
+ *       fprintf(stdout,"Comm_create comm_id=%i\n",comm_id);
+ */
+
     # if defined DDI_MPI
       new_comm->world_comm = cur_comm->world_comm;
       MPI_Comm_split(cur_comm->smp_comm,new_comm->global_pid[0],new_comm->me_local,&new_comm->smp_comm);
@@ -220,12 +234,12 @@
 
    }
 
-
    void DDI_Comm_destroy(int commid) {
       const DDI_Comm *comm = (const DDI_Comm *) Comm_find(commid);
 
       DDI_Comm *curr_comm = &gv(ddi_base_comm);
       DDI_Comm *prev_comm = NULL;
+
 /*
       DDI_Data *curr_data = &gv(ddi_base_data);
       DDI_Data *prev_data = NULL;
@@ -240,13 +254,13 @@
       while(curr_comm->next && curr_comm->id != commid) {
          prev_comm = curr_comm;
          curr_comm = (DDI_Comm *) curr_comm->next;
-      }
+	 }
 
       if(curr_comm->id != commid) {
          fprintf(stdout,"%s: Error in DDI_Comm_destroy - Comm not found.\n",DDI_Id());
          Fatal_error(911);
       }
-/*
+      /*
       while(curr_data->next && curr_data->id != curr_comm->data_id) {
          prev_data = curr_data;
          curr_data = (DDI_Data *) curr_data->next;
@@ -263,19 +277,31 @@
       if(curr_comm->me_local == 0) shmdt((void *) curr_data->sync_array);
       prev_data->next = curr_data->next;
       free(curr_data);
-*/
-  
+
+*/  
+
+   /* ----------------------------------------------------------------------- *\
+      SRP: Free old MPI communicators.
+   \* ----------------------------------------------------------------------- */
+
+    # if defined DDI_MPI
+         MPI_Comm_free(&curr_comm->node_comm);
+         MPI_Comm_free(&curr_comm->compute_comm);
+         MPI_Comm_free(&curr_comm->smp_comm);
+    # endif
+
    /* ----------------------------------------------------------------------- *\
       Delete item from DDI_Comm linked-list.
    \* ----------------------------------------------------------------------- */
-      free(curr_comm->smp_pid);
-      free(curr_comm->local_nid);
-      free(curr_comm->global_pid);
-      free(curr_comm->global_nid);
-      free(curr_comm->global_dsid);
-      free(curr_comm->node_master);
-      prev_comm->next = curr_comm->next;
-      free(curr_comm);
+
+       free(curr_comm->smp_pid);
+       free(curr_comm->local_nid);
+       free(curr_comm->global_pid);
+       free(curr_comm->global_nid);
+       free(curr_comm->global_dsid);
+       free(curr_comm->node_master);
+       prev_comm->next = curr_comm->next;
+       free(curr_comm); 
 
    }
 

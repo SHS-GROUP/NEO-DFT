@@ -195,6 +195,13 @@
       DDI_Destroy(ihandle);
    }
 
+/* ------------------------------- *\
+ FORTRAN Wrapper for DDI_Comm_destroy
+\* ------------------------------- */
+void F77_Comm_destroy(int_f77 *commid) {
+  int icommid = (int) *commid;
+  DDI_Comm_destroy(icommid);
+}                    
    
 /* ---------------------------- *\
    FORTRAN Wrapper for DDI_Zero

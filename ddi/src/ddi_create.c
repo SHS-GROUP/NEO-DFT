@@ -8,6 +8,7 @@
  * 10 Jun 09 - RMO - allow for one data server/node on Cray
  * 29 Mar 10 - SS  - add missing 3rd argument to ddi-send-request
  * 18 Aug 10 - MWS - use 64 bit integer for printing of DM total size
+ *  6 Feb 13 - MWS - trap for >2 Gword MEMDDI slice size
 \* -------------------------------------------------------------------- */
  # include "ddi_base.h"
 
@@ -75,6 +76,7 @@
       int i,np,me,nn,my;
       int inode;
       DDI_INT64 totwrds;
+      DDI_INT64 longrows,longcols,longslice,longnd,long2g;
     # ifndef USE_SYSV
       int remote_id;
     # endif
@@ -106,11 +108,55 @@
       
       if(me == 0) {
          if(gv(dda_output)) {
-            totwrds = idim*jdim;
-            fprintf(stdout," DDI: Creating Array [%i] - %ix%i=%i.\n",*handle,idim,jdim,totwrds);
+            longrows = idim;
+            longcols = jdim;
+            totwrds = longrows*longcols;
+            fprintf(stdout," DDI: Creating Array [%i] - %i x %i = %li words.\n",
+                                    *handle,idim,jdim,totwrds);
             fflush(stdout);
          }
       }
+
+   /*
+       Make sure each slice of the distributed array will be under 2 GWords.
+
+       Even on 64-bit hardware, most counting in this program is done
+       with 32-bit data types, meaning we can't count higher than 2**31-1.
+
+       If on 32-bit hardware, the 'long' data types here will be 32-bits,
+       and so we'll see crazy products, including less than zero.
+       In present form, nothing will be trapped here on a 32 bit machine!
+   */
+      longrows  = idim;
+      longcols  = jdim;
+      totwrds   = longrows*longcols;
+   /*     big memory pool over 2 Gwords is OK, but each slice    */
+   /*     (MEMDDI per data server) must be under 2 GWords.       */
+   /*     TCP/IP on one node has gv(nd)=-1 since no d.s. exists  */
+      longnd    = gv(nd);
+      if (longnd == -1) longnd=1;
+      longslice = totwrds/longnd;
+   /*  next is largest signed 32 bit integer, stored as 64 bit quantity  */
+      long2g   = 2147483643;
+      if (longslice > long2g)
+         {
+            fprintf(stdout,"\n");
+            fprintf(stdout," DDI: trouble creating distributed array!\n");
+            fprintf(stdout," Current number of data servers is %i\n",longnd);
+            fprintf(stdout," so each data server's slice of array");
+            fprintf(stdout," [%i] is %li words\n",*handle,longslice);
+            fprintf(stdout,"\n");
+            fprintf(stdout," Add more processors so required total array");
+            fprintf(stdout," size %li words\n",totwrds);
+            fprintf(stdout," divided by no. of processors (data servers)");
+            fprintf(stdout," is less than 2 Gwords= %li\n",long2g);
+            fprintf(stdout," For example, %li or more data servers...\n",
+                                1+totwrds/long2g);
+            fprintf(stdout,"\n");
+            fflush(stdout);
+            Fatal_error(911);
+         }
+
    /* ------------------------------------ *\
       Ensure 'jcols' is properly formatted
    \* ------------------------------------ */

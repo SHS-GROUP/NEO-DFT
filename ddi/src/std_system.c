@@ -4,6 +4,7 @@
    Author: Ryan M. Olson
    10 Jun 09 - RMO - add usleep routine
    13 May 10 - SS  - change memory allocation to work on Windows
+    6 Feb 13 - Nathaniel Swenson - print good 'chdir' error messages.
 \* ------------------------------------------------------ */
  # include "ddi_base.h"
 
@@ -53,13 +54,20 @@
    int Chdir(const char *path) {
       int ret;
       if((ret=chdir(path)) < 0) {
+         fflush(stdout);
+         fprintf(stdout,"Error changing to scratch directory '%s'.\n",path);
          switch(errno) {
-            case EFAULT:  fprintf(stdout,"Error: chdir(%s) failed (errno=EFAULT).\n",path); break;
-            case EACCES:  fprintf(stdout,"Error: chdir(%s) failed (errno=EACCES).\n",path); break;
-            case ENOTDIR:  fprintf(stdout,"Error: chdir(%s) failed (errno=ENOTDIR).\n",path); break;
-            case ENAMETOOLONG:  fprintf(stdout,"Error: chdir(%s) failed (errno=ENAMETOOLONG).\n",path); break;
-            default: fprintf(stdout,"Error: chdir(%s) failed (errno=unknown).\n",path); break;
+            case EFAULT:  fprintf(stdout,"errno=EFAULT.\n"); break;
+            case EACCES:  fprintf(stdout,"errno=EACCES.\n"); break;
+            case ENOTDIR: fprintf(stdout,"errno=ENOTDIR.\n"); break;
+            case ENAMETOOLONG: fprintf(stdout,"errno=ENAMETOOLONG.\n"); break;
+            default: fprintf(stdout,"errno=unknown.\n"); break;
          }
+         fprintf(stdout,"possible fixes include:\n");
+         fprintf(stdout,"a) directory named above must exist on all nodes.\n");
+         fprintf(stdout,"b) directory must be writeable.\n");
+         fprintf(stdout,"c) if using ddikick.x, specify -scr directory.\n");
+         fflush(stdout);
          Fatal_error(911);
       } 
       return ret;
