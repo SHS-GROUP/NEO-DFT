@@ -1,6 +1,6 @@
 #!/bin/csh
 #
-#  last update = 1 February 2013
+#  last update = 6 February 2013
 #
 #  This is a C-shell script to execute GAMESS, by typing
 #       rungms JOB VERNO NCPUS >& JOB.log &
@@ -1184,61 +1184,94 @@ if ($TARGET == altix) then
 endif
 
 
-#   CRAY-XTn (N=3,4,5) running GAMESS/DDI over MPI wants you to
+#   CRAY-XT (various models) running GAMESS/DDI over MPI wants you to
 #      a) set the path to point to the GAMESS executable
 #      b) set SMP_SIZE to the number of cores in each XT node
+#      c) read the notes below about SCR and USERSCR
 #
 #   This machine runs only one MPI process/core, with most of these
 #   able to be compute processes.  DDI_DS_PER_NODE lets you pick
 #   how many of processes are to function as data servers.
+#   So a node runs SMP_SIZE minus DDI_DE_PER_NODE compute processes.
 #
 #   The TPN variable below lets you use more memory, by wasting
 #   some of the processors, if that is needed to do your run.
-#   Not quite sure how 'aprun' picks this parameter up...
+#   The 4th run parameter has to be passed at time of job submission,
+#   if not, all cores are used.
 #
-#   This machine doesn't allow FORTRAN to access the file server
+#   This machine may not allow FORTRAN to access the file server
 #   directly.  As a work-around, input data like the error function
-#   table has to be copied to the working disk, and possible output
-#   files rescued from there after the run ends.
-#   Since the working disk is one massive file system seen by all
-#   nodes, GDDI is easy: all files read the very same INPUT file,
-#   so nothing very complicated need be done to set up GDDI runs.
+#   table can to be copied to the working disk SCR.  Any extra
+#   output files can be rescued from USERSCR after the run ends.
+#
+#   For speed reasons, you probably want to set SCR at the top of this
+#   file to /tmp, which is a RAM disk.  Not all data centers will let
+#   you do this, and it is acceptable to use the less eficient
+#   alternative of setting SCR to a /lustre subdirectory.
+#
+#   You should set USERSCR to your directory in /lustre, which is
+#   visible to all compute nodes, but not as fast as its /tmp.
+#   Supplemental output files (like .dat) are then not in a RAM
+#   disk which is wiped automatically at job end.
+#
+#   If you use subgroups, e.g. $GDDI input for FMO runs, you should
+#   modify the input copying near the top of this file to copy to
+#   USERSCR rather than SCR.  A file in /lustre is visible to all
+#   nodes!  You must also change gms-files.csh to define INPUT as
+#   being in USERSCR rather than SCR.
+#
+#   If your data center does not let you use -r1 below, to run on
+#   a jitter-free microkernel, just remove that flag from 'aprun'.
 #
 if ($TARGET == cray-xt) then
-       #   Jerry's XT
-   set GMSPATH=/u/home/boatzj/gamess
-   set SMP_SIZE=8  # number of cpus/cores per node (XT3 = dual CPU nodes)
-       #   Meng-Shiou's XT
-   #--set GMSPATH=/lustre/scratch/wums/QChem/gamess_Mar10_ORG/gamess
-   #--set SMP_SIZE=12  # number of cpus/cores per node (XT5 = hex CPU nodes)
+       #   path to binary, and number of cores per node.
+   set GMSPATH=/u/sciteam/spruitt/gamess
+   set SMP_SIZE=16
 
-   set TPN=$4      # number of processes per node (TPN=tasks/node)
+       # number of processes per node (TPN=tasks/node)
+   set TPN=$4
    if (null$TPN == null) set TPN=$SMP_SIZE
    if ($TPN > $SMP_SIZE) set TPN=$SMP_SIZE
 
    if (!(-e $SCR/$JOB)) mkdir $SCR/$JOB
-   cp    $ERICFMT $SCR/$JOB/ericfmt.dat
-   cp -r $MCPPATH $SCR/$JOB/
 
-   set echo
-   chdir $SCR/$JOB
+       # copy auxiliary data files to working disk, redefine their location.
+   cp    $ERICFMT $SCR/$JOB/ericfmt.dat
+   cp -r $MCPPATH $SCR/$JOB/MCP
    setenv ERICFMT $SCR/$JOB/ericfmt.dat
    setenv MCPPATH $SCR/$JOB/MCP
 
+       # execute, with a few run-time tunings set first.
+   set echo
    setenv DDI_DS_PER_NODE 1
+   setenv OMP_NUM_THREADS 1
 #---   setenv MPICH_UNEX_BUFFER_SIZE 90000000
    setenv MPICH_MAX_SHORT_MSG_SIZE 4000
-   aprun -n $NCPUS -N $TPN $GMSPATH/gamess.$VERNO.x $JOB
+   chdir $SCR/$JOB
+   aprun -r1 -n $NCPUS -N $TPN $GMSPATH/gamess.$VERNO.x $JOB
    unset echo
 
-   if (-e $SCR/scr/$JOB.efp)   cp $SCR/scr/$JOB.efp $USERSCR
-   if (-e $SCR/scr/$JOB.gamma) cp $SCR/scr/$JOB.gamma $USERSCR
-   if (-e $SCR/scr/$JOB.trj)   cp $SCR/scr/$JOB.trj $USERSCR
-   if (-e $SCR/scr/$JOB.rst)   cp $SCR/scr/$JOB.rst $USERSCR
-   if (-e $SCR/scr/$JOB.dat)   cp $SCR/scr/$JOB.dat $USERSCR
+#             Rescue the supplementary ASCII output files,
+#             from /lustre to one's permanent disk storage.
+#             This user is doing FMO trajectories, mainly,
+#             and ends up saving all those files...
+   set PERMSCR=/u/sciteam/spruitt/scr
+   if (-e $USERSCR/$JOB.efp)   cp $USERSCR/$JOB.efp   $PERMSCR
+   if (-e $USERSCR/$JOB.gamma) cp $USERSCR/$JOB.gamma $PERMSCR
+   if (-e $USERSCR/$JOB.trj)   cp $USERSCR/$JOB.trj   $PERMSCR
+   if (-e $USERSCR/$JOB.rst)   cp $USERSCR/$JOB.rst   $PERMSCR
+   if (-e $USERSCR/$JOB.dat)   cp $USERSCR/$JOB.dat   $PERMSCR
+                               cp $USERSCR/$JOB.trj.000* $PERMSCR
+   rm -f  $USERSCR/$JOB.*
+#              clean SCR, e.g. the RAM disk /tmp
+   rm -f  $SCR/$JOB/$JOB.F*
    rm -f  $SCR/$JOB/ericfmt.dat
    rm -rf $SCR/$JOB/MCP
    rmdir  $SCR/$JOB
+#             perhaps these next things are batch queue related files?
+#             this is dangerous if jobs are launched from home directory,
+#             as it will wipe out input and output!
+   #---rm -f  /u/sciteam/spruitt/$JOB.*
 endif
 
 

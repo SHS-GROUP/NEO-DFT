@@ -1,0 +1,781 @@
+#!/bin/csh
+#
+#   4 Feb 2013:    This front-end 'gms' script runs interactively,
+#   to send the back-end 'rungms' GAMESS job to a batch schedular,
+#   namely Sun Grid Engine (SGE) -or- Portable Batch System (PBS)
+#
+#   Three of our clusters use this 'gms' front-end:
+#        dynamo   = SGE, 8-core nodes, most with old Tesla GPUs
+#        chemphys = PBS, 6 core nodes, no GPUs
+#        exalted  = SGE, 6 core nodes, many Fermi GPUs, one Kepler GPU
+#   All of them use Infiniband.  That means that the 'rungms' back-end
+#   is either using execution target 'mpi' to run GAMESS, or execution
+#   target 'ga' to run GAMESS+LIBCCHEM on the GPUs.  The mpi/ga parts
+#   of 'rungms' contain SGE and PBS portions, to detect the nodes that
+#   are assigned to each particular job.
+#
+#   This 'gms' and the 'rungms' which it submits certainly can't be used
+#   elsewhere without customization, but if you know your own hardware
+#   and batch queue rules, you can certainly get this to work for you.
+#
+#
+#    ===== next section sets a few cluster-specific data
+#
+#    For the various Iowa State clusters, set the batch manager,
+#    and set the number of cores per node (PPN => Processors Per Node).
+#    We assume each cluster is uniform (e.g. cores, speed, RAM,...),
+#    except some of these clusters have GPUs present, non-uniformly.
+#
+switch (`hostname`)
+   case dynamo.iprt.iastate.edu:
+#                  necessary 'rungms' customizations for ISU:
+#           change both mpi/ga parts!!!
+#           change execution target to mpi
+#           change the ifort version number to 10.1.018
+#           change the MKL   version number to 10.0.3.020
+#           change the iMPI  version number to 3.2
+#           change execution to '3steps' since it is very old iMPI.
+#           about 2/3 of the nodes have a pair of old Tesla GPUs.
+      set SCHED=SGE
+      set CLUSTER=dynamo
+      set PPN_MAX=8
+      set NUMGPU=0
+      breaksw
+   case chemphys2011.fi.ameslab.gov:
+#                  necessary 'rungms' customizations for ISU:
+#           change the mpi part only!!!
+#           change the ifort version number to composerxe-2011.1.107
+#           change the MKL   version number to composerxe-2011.1.107
+#           change the iMPI  version number to 4.0.1.007
+#           there are no GPUs in this cluster.
+      set SCHED=PBS
+      set CLUSTER=chemphys
+      set PPN_MAX=6
+      set NUMGPU=0
+      breaksw
+   case exalted.iprt.iastate.edu:
+#                  necessary 'rungms' customizations for ISU:
+#           change both mpi/ga parts!!!
+#           change the ifort version number to composerxe-2011.4.191
+#           change the MKL   version number to composerxe-2011.4.191
+#           change the iMPI  version number to 4.0.2.003
+#           all nodes have at least a GPU pair, about 1/3 have four GPUs
+#           official policy is to require the use of the GPUs!
+      set SCHED=SGE
+      set CLUSTER=exalted
+      set PPN_MAX=6
+      set NUMGPU=2
+      breaksw
+   default:
+      echo "This cluster is unrecognized, please customize for your site."
+      exit 12
+      breaksw
+endsw
+#
+#   Let's make sure the user is set up for MPICH2-style MPI kickoff,
+#   this is for the '3 steps' style needed prior to Hydra's arrival.
+#
+if ($CLUSTER == dynamo) then
+   if (-e ~/.mpd.conf) then
+   else
+      echo "You need to create a MPI-related file: 'vi ~/.mpd.conf'"
+      echo "This file should contain exactly one line, such as"
+      echo "secretword=GiantsWin2010WorldSeries"
+      echo "      or"
+      echo "secretword=DodgersStink"
+      echo "Then make this private by 'chmod 600 ~/.mpd.conf'"
+      exit
+   endif
+endif
+#
+#    ===== next section parses arguments
+#
+#    anything not recognized is taken as the input file name.
+#
+while ($#argv > 0)
+   set val=$argv[1]
+   shift
+   switch ($val)
+#           extended help options:
+      case -help:
+        set JOB=morehelp
+        breaksw
+      case -cluster:
+        set JOB=cluster_config
+        breaksw
+#           job/queue resource options
+      case -l:
+        set LOGFILE=$argv[1]
+        shift
+        breaksw
+      case -p:
+        set NCPUS=$argv[1]
+        shift
+        breaksw
+      case -w:
+        set WALL=$argv[1]
+        shift
+        breaksw
+      case -hog:
+        set HOG=true
+        breaksw
+      case -ppn:
+        set PPN=$argv[1]
+        shift
+        breaksw
+      case -test:
+        set TESTJOB=true
+        switch ($CLUSTER)
+           case dynamo:
+              echo "Test job will run in the four node 'reserved' queue."
+              breaksw
+           case exalted:
+              echo "Test job will run in the two node 'dev' queue."
+              breaksw
+           default:
+              echo "Ignoring -test, there is no test queue on this cluster"
+              set TESTJOB=false
+              breaksw
+        endsw
+        breaksw
+#            a way to get at an 'exalted' node with one Kepler board.
+      case -kepler:
+        set KEPLER=true
+        set TESTJOB=true
+        set NUMGPU=1
+        echo "Test job will run in the one node 'experimental' queue."
+        breaksw
+#            in case the schedular lets us request nodes with GPUs...
+      case -gpu:
+        set NUMGPU=$argv[1]
+        shift
+        breaksw
+      case -ccmem:
+        set CCMEM=$argv[1]
+        shift
+        breaksw
+#            next two specify GAMESS binary's "version number" and pathname
+      case -v:
+        set VERNO=$argv[1]
+        shift
+        breaksw
+      case -exepath:
+        set XPATH=$argv[1]
+        shift
+        breaksw
+#             next four are special file saving/reuse options.
+      case -b:
+        set EXTBAS=$argv[1]
+        shift
+        breaksw
+      case -save30:
+        set SAVE30=true
+        breaksw
+      case -file37:
+        set FILE37=$argv[1]
+        set FILE12=$FILE37:r.civec
+        shift
+        set SAVE37=true
+        breaksw
+      case -file70:
+        set FILE70=$argv[1]
+        shift
+        set SAVE70=true
+        breaksw
+      default:
+        if ($?JOB == 1) then
+           echo You\'ve given too many input file names, $JOB and $val.
+           exit 4
+        else
+           set JOB=$val
+           if ($JOB =~ *.inp) set JOB=$JOB:r
+        endif
+        breaksw
+   endsw
+end
+#
+#     Global Arrays usage by GAMESS+LIBCCHEM requires running one MPI
+#     process per node: parallelism inside node is always by threads.
+if ($NUMGPU > 0) set PPN_MAX=1
+#
+if ($?JOB == 0)     set JOB=help
+if ($?VERNO == 0)   set VERNO=130
+if ($?LOGFILE == 0) set LOGFILE=default
+if ($?XPATH == 0)   set XPATH=none
+if ($?NCPUS == 0)   set NCPUS=0
+if ($?WALL == 0)    set WALL=default
+if ($?HOG == 0)     set HOG=false
+if ($?TESTJOB == 0) set TESTJOB=false
+if ($?KEPLER == 0)  set KEPLER=false
+if ($?NUMGPU == 0)  set NUMGPU=0
+if ($?CCMEM == 0)   set CCMEM=0
+if ($?PPN == 0)     set PPN=$PPN_MAX
+if ($?EXTBAS == 0)  set EXTBAS=/dev/null
+if ($?SAVE30 == 0)  set SAVE30=false
+if ($?SAVE37 == 0)  set SAVE37=false
+if ($?SAVE70 == 0)  set SAVE70=false
+#
+#    ===== next section provides some help screens, which exit.
+#
+if ($JOB == help) then
+   tput clear
+   echo "The syntax to execute GAMESS is"
+   echo "     gms [-l logfile] [-p CPUS] [-w dd:hh:mm:ss] jjj"
+   echo "where jjj is the name of your jjj.inp file, and"
+   echo "   -l        gives the log file name."
+   echo "   -p X      will run X compute processes.  If X exceeds the number"
+   echo "             of cores per node in this cluster ($PPN_MAX), then"
+   echo "             X will be rounded downward to a multiple of $PPN_MAX,"
+   echo "             or rounded to a multiple of Y, if -ppn is selected."
+   #### "   -hog      reserves one (1) entire node for this run, so you may"
+   #### "             choose -p from 1 to $PPN_MAX, but be assured that the"
+   #### "             entire memory of the node can be used by your run."
+   echo "   -ppn Y    run only Y compute processes in each node.  Of course,"
+   echo "             Y cannot exceed this cluster's core/node count, $PPN_MAX."
+   echo "   -w        wall clock time, as dd:hh:mm:ss (default=12:00:00=12 hrs)"
+   echo " "
+   echo "Other options, including GPU flags, can be displayed by 'gms -help'."
+   echo "This cluster's hardware can be displayed by 'gms -cluster'."
+
+   if($CLUSTER == exalted) then
+   echo " "
+   echo "EXALTED runs only a GAMESS+LIBCCHEM binary: it is a GPU cluster."
+   echo "The -p argument is actually a NODE count, not a CPU count."
+   echo "The -ppn argument is hardwired to 1 in all jobs (always -hog)."
+   echo "MPI/GA execution will use all cores in the 'X' nodes assigned by -p,"
+   echo "as well as using all GPUs."
+   echo "Only SCF, MP2, and CCSD(T) single point energies can be run."
+   endif
+   exit
+endif
+#
+#     provide general data, and then perhaps cluster-specific info.
+if ($JOB == morehelp) then
+   tput clear
+   echo "Other 'gms' options, which are seldom given, are"
+   echo "   -v to choose a version number   default=$VERNO"
+   echo "   -exepath /full/path/name        location of GAMESS binary"
+   echo "   -b /full/name/of/yourbasisdata  user's external basis set file."
+   echo "   -save30                         save/reuse file DAFL30."
+   echo "   -file37 /full/name/of/file.gci  save/reuse file GCILIST/CIVECTR."
+   echo "   -file70 /full/name/of/file.cc   save/reuse file CCREST/AMPROCC."
+   echo " "
+ switch ($CLUSTER)
+ case dynamo:
+   echo "   -gpu n   requests nodes with GPUs be allocated,"
+   echo "            at most, 2 Tesla T10 GPUs can be requested."
+   echo "            Only 26 of the 34 production nodes have GPUs installed."
+   echo "            The default is n=0, to run the non-GPU linked binary."
+   echo "   -ccmem M core's memory limit (default M=8g). Include m/g units!"
+   echo "   -test    executes in a 4-node 'reserved' programming queue."
+   echo " "
+   echo "      NOTE: the standard -p flag counts in units of nodes,"
+   echo "            not cores, if the job is running on GPUs."
+   breaksw
+ case exalted:
+   echo "   -gpu n   requests nodes with n=2 or n=4 GPUs be allocated,"
+   echo "            the GPUs are Fermi C2070s, 5.25 GBytes ECC memory each."
+   echo "            Only 8 of 25 nodes have 4 GPUs, the rest have 2 GPUs,"
+   echo "            so it is easier to schedule 2 GPUs."
+   echo "            The default is n=2, and there is no non-GPU binary."
+   echo "   -ccmem M core's memory limit (default M=6g). Include m/g units!"
+   echo "   -test    executes in a 2-node 'dev'          programming queue."
+   echo "   -kepler  executes in a 1-node 'experimental' programming queue,"
+   echo "            which contains a single Kepler GPU."
+   echo " "
+   echo "      NOTE: the standard -p flag counts in units of nodes,"
+   echo "            not cores, if the job is running on GPUs."
+   breaksw
+ case chemphys:
+   breaksw
+ endsw
+ echo "Basic flags can be displayed by typing just 'gms'."
+ echo "This cluster's hardware can be displayed by 'gms -cluster'."
+ exit
+endif
+#
+if ($JOB == cluster_config) then
+ tput clear
+ switch ($CLUSTER)
+ case dynamo:
+   echo "The head node of this cluster is named dynamo.iprt.iastate.edu,"
+   echo "     and is a Dell PE-2950 node, with two 2.5 GHz quad core E5420."
+   echo "     Its permanent file storage is called /home/$USER"
+   echo " "
+   echo "The 35 compute nodes in this cluster are named"
+   echo "     compute-0-0, compute-0-1, ..., compute-0-34."
+   echo "Every compute node is the same,"
+   echo "     Dell R5400n blade, two quad-core 3.0 GHz E5450 chips, 16 GB RAM,"
+   echo "     and 1300 GBytes of /scratch disk (on 7200 RPM SATA disks)."
+   echo "except that some have a pair of Tesla GPUs and some do not."
+   echo " "
+   echo "The GPUs are thirteen Nvidia S1070 blades, containing 4 T10 GPUs,"
+   echo "each individual GPU has 4 GBs of memory.  One S1070 is cabled to"
+   echo "two Dell nodes, thus each GPU node has 1 pair of T10 GPUs."
+   echo " "
+   echo "Therefore this cluster contains 8*35 = 280 cores, but 4 nodes,"
+   echo "each of which owns a GPU pair, are reserved for programming tests:"
+   echo "        compute-0-0, -0-1, -0-2, and -0-3"
+   echo "The 31 remaining production nodes (compute-0-4 to -0-34) thus are"
+   echo "divided into 22 nodes with GPU pairs, and 9 nodes that lack them."
+   echo " "
+   echo "The network in this cluster is an Mellanox Infiniband, 4X DDR quality,"
+   echo "offering 16 Gbit/sec unidirectional bandwidth.  Of course, there"
+   echo "is also a gigabit ethernet for ordinary system management."
+   echo " "
+   echo "This cluster is based on Rocks/Linux, with the SGE batch schedular,"
+   echo "and all the usual software: gfortran/ifort, MKL, various MPIs..."
+   breaksw
+ case exalted:
+   echo "The head node of this cluster is named exalted.iprt.iastate.edu,"
+   echo "     Atipa Technologies node, with 2.67 GHz hex core X5650 (Gulftown)."
+   echo "     Its permanent file storage is called /home/$USER"
+   echo " "
+   echo "The 25 compute nodes in this cluster are named"
+   echo "     compute-0-0, compute-0-1, ..., compute-0-24."
+   echo "Every compute node is the same,"
+   echo "     one hex core 2.67 GHz X5650, 24 GB RAM (4 GB/core), and"
+   echo "     1800 GBytes of /scratch disk (on striped 3 Gbps SAS disks)."
+   echo "except 8 nodes have 4 GPUs, while the other 17 nodes have 2 GPUs."
+   echo " "
+   echo "The GPUs are Nvidia Fermi C2070 type,"
+   echo "each GPU has 5.25 GByte ECC-enabled memory."
+   echo " "
+   echo "The network in this cluster is an Qlogic Infiniband, 4X QDR quality,"
+   echo "offering 32 Gbit/sec unidirectional bandwidth.  Of course, there"
+   echo "is also a gigabit ethernet for ordinary system management."
+   echo " "
+   echo "This cluster is based on Rocks/Linux, with the SGE batch schedular,"
+   echo "and all the usual software: gfortran/ifort, MKL, various MPIs..."
+   breaksw
+#
+#           the gordon nodes are compute-0-x, x=0 to 10 (11 total)
+#           the  evans nodes are compute-1-x, x=0 to  4
+#           Only the former are described below,
+#           and the QSUB command enforces use of their PBS queue.
+ case chemphys:
+   echo "The head node of this cluster is named chemphys2011.fi.ameslab.gov,"
+   echo "     and is a Silicon Mechanics R308 node, with"
+   echo "     one Intel 2.66 GHz hex-core X5650 chip."
+   echo "     It's permanent file storage is called /home/$USER"
+   echo " "
+   echo "The 11 available Silicon Mechanics R4410 compute nodes are named"
+   echo "     compute-0-0, compute-0-1, ..., compute-0-10."
+   echo "Every compute node is the same,"
+   echo "     one Intel 2.93 GHz hex-core X5670 chip,"
+   echo "     24 GBytes RAM (4 GB/core),"
+   echo "     900 GBytes of /scratch disk (two striped 3 Gbps SATA disks),"
+   echo "     connected by 4X QDR Infiniband (32 Gbps bandwidth)."
+   echo " "
+   echo "The network in this cluster is an Mellanox Infiniband, 4X QDR quality,"
+   echo "offering 32 Gbit/sec unidirectional bandwidth.  Of course, there"
+   echo "is also a gigabit ethernet for ordinary system management."
+   echo " "
+   echo "This cluster is based on Rocks/Linux, with the PBS batch schedular,"
+   echo "and all the usual software: gfortran/ifort, MKL, various MPIs..."
+   echo " "
+   breaksw
+ endsw
+ exit
+endif
+#
+#    ===== next section tests existence of various files
+#
+if (-d ~/scr) then
+else
+   echo An empty ~/scr directory is being created for you...
+   mkdir ~/scr
+   sleep 1
+endif
+#
+#    we should make sure the input exists, and that we don't
+#    destroy any files from previous runs that might be useful.
+#
+set nerr=0
+#
+if ((-e $JOB.inp) || (-e tests/$JOB.inp) || (-e tests/standard/$JOB.inp)) then
+else
+   echo I could not find $JOB.inp in your current directory.
+   @ nerr++
+endif
+#
+if (-e ~/scr/$JOB.dat) then
+   echo You presently have a PUNCH file named ~/scr/$JOB.dat,
+   echo save this data, or delete it, before submitting this job.
+   @ nerr++
+endif
+#
+if (-e ~/scr/$JOB.trj) then
+   echo You presently have a TRAJECT file named ~/scr/$JOB.trj,
+   echo save this data, or delete it, before submitting this job.
+   @ nerr++
+endif
+#
+if (-e ~/scr/$JOB.rst) then
+   echo You presently have a RESTART file named ~/scr/$JOB.rst,
+   echo save this data, or delete it, before submitting this job.
+   @ nerr++
+endif
+#
+if (-e ~/scr/$JOB.efp) then
+   echo You presently have a MAKEFP file named ~/scr/$JOB.efp,
+   echo save this data, or delete it, before submitting this job.
+   @ nerr++
+endif
+#
+if ($nerr > 0) then
+   echo bombing out...
+   exit 4
+endif
+#
+#    ===== next section selects schedular and cluster independent options
+#
+#  we must have a name for the output from the run:
+#
+if ($LOGFILE == default) then
+   set LOGFILE=$JOB.log
+   echo -n "output file name? [$LOGFILE] "
+   set ans=$<
+   if (null$ans != null) set LOGFILE=$ans
+endif
+#
+#  SGE appends to the end of existing log file, instead of overwrite, so
+#      we'd prefer to delete the old log file, as that's very confusing.
+#  PBS might as well also ask if it is OK to overwrite, just to be safe.
+#
+if (-e $LOGFILE) then
+   echo -n "$LOGFILE already exists.  OK to delete the old one? [y] "
+   set ans=$<
+   if (null$ans == null) set ans=y
+   if ($ans == y) then
+      rm $LOGFILE
+   else
+      echo "Exiting, so you can think about your old log file's value."
+      exit
+   endif
+endif
+#
+#  we must know how many cores (NCPUS) to run on:
+#
+if ($NCPUS == 0) then
+   set NCPUS=$PPN_MAX
+   echo -n "number of cores to use ? [$NCPUS] "
+   set ans=$<
+   if (null$ans != null) set NCPUS=$ans
+endif
+#
+if ($PPN > $PPN_MAX) then
+   echo "This cluster has $PPN_MAX core nodes, so -ppn cannot request more"
+   echo "than $PPN_MAX processors per node."
+   exit
+endif
+#
+#        'hog' is a non-functional concept below, we are no longer
+#        trying to share nodes for multiple serial jobs,
+#        as it just fragments the cluster.
+if ($NCPUS < $PPN) then
+   set NNODES=1
+   #--set WHOLENODE=false
+   #--if ($HOG == true) set WHOLENODE=true
+   set WHOLENODE=true
+else
+#     jobs running more than one node come here, to ensure the
+#     the core count is rounded down to multiple of PPN.
+#        gms -p 50 -ppn 6   will produce NCPUS=48, NNODES=8, PPN=6
+   @ xx = $NCPUS / $PPN
+   @ yy = $PPN * $xx
+   set NCPUS=$yy
+   set NNODES=$xx
+   set WHOLENODE=true
+endif
+unset xx
+unset yy
+#
+#
+#  we must know the wall clock time limit:
+#      PBS will take the days:hours:minutes:seconds just as it comes.
+#      SGE will require this to be converted into seconds.
+#
+if ($WALL == default) then
+   set WALL=12:00:00
+   echo -n "Requested wall clock time (days:hours:minutes:seconds)? [$WALL] "
+   set ans=$<
+   if (null$ans != null) set WALL=$ans
+endif
+#
+if ($SCHED == SGE) then
+ set time=(`echo $WALL | cut --delimiter=: --output-delimiter=' ' --fields 1-`)
+ set ntime=$#time
+ switch ($ntime)
+  case 4:
+    @ seconds = 86400 * $time[1] + 3600 * $time[2] + 60 * $time[3] + $time[4]
+    breaksw
+  case 3:
+    @ seconds =                    3600 * $time[1] + 60 * $time[2] + $time[3]
+    breaksw
+  case 2:
+    @ seconds =                                      60 * $time[1] + $time[2]
+    breaksw
+  case 1:
+    @ seconds =                                                      $time[1]
+    breaksw
+  default
+    echo Something is wrong with this time specifier: $WALL
+    echo Please enter only colon separated wall clock times,
+    echo any of    ss  or  mm:ss  or  hh:mm:ss  or  dd:hh:mm:ss is OK.
+    exit
+ endsw
+endif
+#
+#    ===== next section selects schedular and cluster dependent options
+#
+set SGE_RESOURCES=""
+set PBS_RESOURCES=""
+#
+#   at least at our site, the PBS :ppn option ensures whole nodes.
+if ($SCHED == PBS) then
+   if ($WHOLENODE == true) set PBS_RESOURCES=":ppn=$PPN"
+endif
+#
+#   at least at our site, SGE is set to reserve entire nodes, in part
+#   this requires passing a node count to the -pe prolog/epilog scripts.
+#
+if ($SCHED == SGE) then
+   set WHOLENODE=true
+   if ($TESTJOB == false) then
+#
+#          at ISU, the 'exclusive' queue is for production runs.
+#          As the name suggests, this queue allocates entire nodes to
+#          a batch job, so all cores/GPUs/RAM/disk belong to this job.
+      set SGE_RESOURCES="$SGE_RESOURCES -l exclusive -q exclusive.q"
+   else
+#
+#          at ISU, reserved, dev, or experimental resource allocates nodes
+#          from batch queues by those specific names.  These are queues at
+#          our specific site which are dedicated to runs which may explore
+#          new GPUs, experimental software, or just new GAMESS code.
+      if ($CLUSTER == dynamo) then
+         set SGE_RESOURCES="$SGE_RESOURCES -l reserved"
+      endif
+      if ($CLUSTER == exalted) then
+         if ($KEPLER == false) then
+            set SGE_RESOURCES="$SGE_RESOURCES -q dev"
+         else
+            set SGE_RESOURCES="$SGE_RESOURCES -q experimental"
+         endif
+      endif
+   endif
+   if ($NCPUS < $PPN) set PPN=$NCPUS
+   set SGE_RESOURCES="$SGE_RESOURCES -l h_rt=$seconds"
+endif
+#
+#  A cluster with 8-core nodes and very slow disks should
+#  try to encourage the use of AO integral direct options.
+#
+if ($CLUSTER == dynamo) then
+                   set ndir = `grep -i "dirscf=.true." $JOB.inp | wc -l`
+   if ($ndir == 0) set ndir = `grep -i "dirscf=.t."    $JOB.inp | wc -l`
+   if ($ndir == 0) set ndir = `grep -i "dirtrf=.true." $JOB.inp | wc -l`
+   if ($ndir == 0) set ndir = `grep -i "dirtrf=.t."    $JOB.inp | wc -l`
+   if ($ndir == 0) then
+      echo "   Your job does not contain a DIRSCF or DIRTRF keyword."
+      echo "   The dynamo cluster is based on SATA quality disks, which"
+      echo "   are shared by eight (8) cores.  You probably will get"
+      echo "   better wall clock times if you go AO integral direct."
+   endif
+#       likewise, the run shouldn't be excessively long.
+   if ($seconds > 604800) then
+     echo Please request no more than 7 wall clock days.
+     exit
+   endif
+endif
+#
+#    Some clusters may have graphical processing units on some nodes.
+#    ISU's  dynamo cluster has some nodes with 0, and some with 2 GPUs,
+#                  most runs are non-GPU using mpi target,
+#                  but GAMESS+LIBCCHEM can be used if user's wish.
+#    ISU's exalted cluster has some nodes with 2, and some with 4 GPUs,
+#                  and it is policy that GPUs are -always- to be used.
+#    the GPU-possessing nodes are set up as a consumable resource in SGE.
+#    we keep GAMESS linked to two binaries:
+#         gamess.$VERNO.x or if LIBCHEM added, as gamess.cchem.$VERNO.x
+#
+switch ($CLUSTER)
+   case chemphys2011:
+      if ($NUMGPU > 0) then
+         echo Ignoring GPU request, this cluster has no GPUs.
+         set NUMGPU=0
+      endif
+      breaksw
+   case dynamo:
+      if ($NUMGPU > 2) set NUMGPU=2
+      set SGE_RESOURCES="$SGE_RESOURCES -l gpu=$NUMGPU"
+      if ($CCMEM == 0) set CCMEM=8g
+      breaksw
+   case exalted:
+#         This dedicated GPU cluster always hardwires non-zero GPU request!
+#            A backdoor exists, just in case we want to test a pure GAMESS
+#            binary, by entering a negative number for the GPU count.
+#         Schedular needs to be told 2 or 4 as the GPU count, since
+#         our SGE is configured to have those two resource catagories.
+#         Thus a request for 2 GPUs might end up on a node with 4,
+#         but a request for 4 should end up only on those with 4.
+      if ($NUMGPU >= 0) then
+         if ($NUMGPU > 4)  set NUMGPU=4
+         if ($NUMGPU >= 1) set GPURESOURCE=2
+         if ($NUMGPU >= 3) set GPURESOURCE=4
+         set SGE_RESOURCES="$SGE_RESOURCES -l gpu=$GPURESOURCE"
+      endif
+      breaksw
+endsw
+#
+#    ===== next section prepares the job script
+#
+cp /home/mike/gamess/rungms ~/scr/$JOB.script
+#
+#    special option to execute test version, rather than production code
+#
+if ($XPATH != none) then
+   sed -e \\+/home/mike/gamess+s++$XPATH+ \
+      ~/scr/$JOB.script > ~/scr/$JOB.mung
+   mv ~/scr/$JOB.mung ~/scr/$JOB.script
+endif
+#
+#    special option to hack in the desired GPU count,
+#    and force execution by the Global Array section of 'rungms'.
+#
+if ($NUMGPU > 0) then
+   sed -e /NUMGPU=0/s//NUMGPU=$NUMGPU/ \
+       -e /TARGET=mpi/s//TARGET=ga/ \
+      ~/scr/$JOB.script > ~/scr/$JOB.mung
+   mv ~/scr/$JOB.mung ~/scr/$JOB.script
+endif
+#
+#    special option to hack in the desired node memory for LIBCCHEM,
+#    this option is irrelevant to a normal GAMESS binary.
+#
+if ($CCMEM != 0) then
+   sed -e /memory=6g/s//memory=$CCMEM/ \
+      ~/scr/$JOB.script > ~/scr/$JOB.mung
+   mv ~/scr/$JOB.mung ~/scr/$JOB.script
+endif
+#
+#    special option to read user-specified external basis set library
+#
+if ($EXTBAS != /dev/null) then
+   if (-e $EXTBAS) then
+      sed -e \\+EXTBAS\ /dev/null+s++EXTBAS\ $EXTBAS+ \
+         ~/scr/$JOB.script > ~/scr/$JOB.mung
+      mv ~/scr/$JOB.mung ~/scr/$JOB.script
+   else
+      echo Your external basis set file $EXTBAS does not exist.
+      echo Please provide the correct fully qualified path name to this file.
+      exit 8
+   endif
+endif
+#
+#    special option to save/reuse DAFL30 for spin-orbit coupling runs
+#
+if ($SAVE30 == true) then
+   sed -e /JOB.F30/s//JOB.dafl30/ \
+      ~/scr/$JOB.script > ~/scr/$JOB.mung
+   mv ~/scr/$JOB.mung ~/scr/$JOB.script
+endif
+#
+#    special option to save/reuse GCILIST for general CI calculations
+#    we can't test its existence as this might be the run that creates it.
+#
+if ($SAVE37 == true) then
+   sed -e \\+\$SCR/\$JOB.F12+s++$FILE12+ \
+       -e \\+\$SCR/\$JOB.F37+s++$FILE37+ \
+      ~/scr/$JOB.script > ~/scr/$JOB.mung
+   mv ~/scr/$JOB.mung ~/scr/$JOB.script
+endif
+#
+#    special option to save/reuse CCREST or AMPROCC, for CC restarts
+#    we can't test its existence as this might be the run that creates it.
+#
+if ($SAVE70 == true) then
+   sed -e \\+\$SCR/\$JOB.F70+s++$FILE70+ \
+      ~/scr/$JOB.script > ~/scr/$JOB.mung
+   mv ~/scr/$JOB.mung ~/scr/$JOB.script
+endif
+#
+#    ===== last section actually submits the run
+#
+echo Submitting GAMESS job $JOB.inp using $NCPUS cores...
+#
+#    ensure we have a job name that does not begin with a number,
+#    and does not exceed 15 bytes.
+#
+set FIRST=`echo $JOB | cut -b 1-1`
+set FIRST=`echo $FIRST | tr '0-9' '[Q*]'`
+set JOBNAME=$FIRST`echo $JOB | cut -b 2-15`
+#
+#    SGE job submission:
+#    A 'parallel environment' named 'ddi' was set up on ISU's cluster,
+#    this SGE prolog file creates the SGE directory $TMPDIR on every node,
+#    and this epilog script erases $TMPDIR, to be sure the scratch disk is
+#    always cleaned up, and to remove dead semaphores.
+#
+#    SGE command 'qconf -sp ddi' shows the details of this environment,
+#    including pathnames to prolog/epilog scripts.  Also, 'qconf -spl'.
+#    Other useful SGE commands: 'qconf -sc' shows config for resources.
+#    The site http://gridengine.sunsource.net has links to 'nroff man
+#    pages' online, via the "docs" option.
+#
+#    Mirabile dictu!  SGE allows you to pass args to a job script by
+#    just placing them behind the script name.  In all my living days,
+#    I've never seen a batch program that permitted this.  Glory be!
+#
+if ($SCHED == SGE) then
+   set echo
+   qsub -cwd -o $LOGFILE -j yes -pe ddi $NNODES -N $JOBNAME $SGE_RESOURCES \
+              ~/scr/$JOB.script $JOB $VERNO $NCPUS $PPN
+   unset echo
+   sleep 2
+   rm ~/scr/$JOB.script
+endif
+#
+#   PBS job submission:
+#   -o     names the log file (see discussion)
+#   -j oe  joins standard error with standard output
+#   -m n   means no mail about the job
+#   -r n   means not-rerunable
+#   -N     names the job (must begin with letter and not excede 15 bytes)
+#   -l     limits resources for the job (obviously site dependent)
+#   -q     specifies the particular queue (obviously site dependent)
+#   PBS does not offer an easy way to pass arguments, so sed-hack 'em in.
+#   PBS has trouble showing output in real time.  Although the -o flag does
+#       let you assign the log file, it doesn't appear until the run ends.
+#         The usual arrow redirection of a script's output does work!
+#       So, embed the script we really want to run inside a silly 3-liner,
+#       whose output file is not much more than the job number assigned,
+#       and which can therefore be consigned by -o to the bit bucket.
+#       The 3-liner is saved somewhere inside PBS, and so can be removed,
+#       but the real script has to remain for the duration of the run.
+#
+if ($SCHED == PBS) then
+   sed -e /JOB=\$1/s//JOB=$JOB/        \
+       -e /VERNO=\$2/s//VERNO=$VERNO/  \
+       -e /NCPUS=\$3/s//NCPUS=$NCPUS/  \
+       -e /PPN=\$4/s//PPN=$PPN/        \
+           ~/scr/$JOB.script > ~/scr/$JOB.mung
+   mv ~/scr/$JOB.mung ~/scr/$JOB.script
+   chmod 755 ~/scr/$JOB.script
+   #
+   echo "#\!/bin/csh"                               > ~/scr/$JOB.pbsjob
+   echo "/home/$USER/scr/$JOB.script >& $LOGFILE"  >> ~/scr/$JOB.pbsjob
+   echo "rm -f /home/$USER/scr/$JOB.script"        >> ~/scr/$JOB.pbsjob
+   #
+   set echo
+   qsub -o /dev/null -j oe -m n -r n -N $JOBNAME -d `pwd` \
+        -l nodes=$NNODES"$PBS_RESOURCES",walltime=$WALL \
+        -q gordon ~/scr/$JOB.pbsjob
+   unset echo
+   echo Please do not erase ~/scr/$JOB.script until after the PBS job ends.
+   sleep 2
+   rm ~/scr/$JOB.pbsjob
+endif
+#
+exit

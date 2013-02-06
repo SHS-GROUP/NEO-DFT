@@ -1,6 +1,6 @@
 #!/bin/csh
 #
-#   4 May 12 - script to "link-edit" a GAMESS executable
+#  1 Feb 2013 - script to "link-edit" a GAMESS executable
 #
 #  Invoke this job by 'lked EXE VERNO >& lked.log &'
 #    EXE is normally 'gamess',
@@ -64,12 +64,23 @@ set XMVB=false
 #
 set NEO=false
 #
-#   4. optional Nvidia/CUDA code, for closed shell SCF Fock construction
+#   4. optional C++ code, running on CPUs, and possibly Nvidia/CUDA GPUs
 #         see ~/gamess/libcchem/aaa.readme.1st for more information
 #
-set GPUCODE=false
+set CCHEM=false
+if ($?GMS_LIBCCHEM) then
+   set CCHEM=$GMS_LIBCCHEM
+endif
 #
-#   5. optional MPQC interface
+#   5. optional Natural Bond Orbital (NBO) interface
+#         see http://www.chem.wisc.edu/~nbo6
+#      you must specify the full file name of your NBO library here,
+#      being careful about your choice of i4 or i8 integers.
+#
+set NBO=false
+set NBOLIB="/u1/mike/nbo6/bin/gmsnbo.i8.a"
+#
+#   6. optional MPQC interface
 #
 set MPQC=false
 #
@@ -522,7 +533,9 @@ if ($TARGET == linux64) then
 
    case mkl:
       set mpath=$GMS_MATHLIB_PATH
-      switch ($GMS_MKL_VERNO)
+      set mklver=$GMS_MKL_VERNO
+      if ($CCHEM == true) set mklver=${mklver}-so
+      switch ($mklver)
         case 8:
           set MATHLIBS="-L$mpath -lmkl_lapack64 -lmkl -lguide -lpthread"
           breaksw
@@ -555,7 +568,27 @@ if ($TARGET == linux64) then
           #  note that it does force single-threaded usage.
           set iflib=intel
           if ($GMS_FORTRAN == gfortran) set iflib=gf
-          set MATHLIBS="-L$mpath -lmkl_${iflib}_ilp64 -lmkl_sequential -lmkl_core"
+          if ($CCHEM == false) then
+             set MATHLIBS="-L$mpath -lmkl_${iflib}_ilp64 -lmkl_sequential -lmkl_core"
+          else
+          #  LIBCCHEM fails to link properly against static libraries,
+          #  so it is forced to come here.
+          #  LIBCCHEM prefers to use threading
+          #  LIBCCHEM needs to see ifort's iomp5 library for some reason.
+             switch ($GMS_FORTRAN)
+               case ifort:
+                 set MATHLIBS="-L$mpath -lmkl_${iflib}_ilp64 -lmkl_${iflib}_thread -lmkl_core -liomp5"
+                 breaksw
+               case gfortran:
+                 set MATHLIBS="-L$mpath -lmkl_${iflib}_ilp64 -lmkl_gnu_thread -lmkl_core"
+                 breaksw
+               default:
+                 echo "only ifort and gfortran are supported with LIBCCHEM"
+                 exit 4
+                 breaksw
+             endsw
+          endif
+          breaksw
         default:
           echo "unknown version number for MKL/linux64"
           echo "please edit 'lked' to select the right 64 bit MKL libraries."
@@ -569,10 +602,11 @@ if ($TARGET == linux64) then
       #     If the ATLAS comes with static libraries, link to them,
       #     so that only the compile node has to have the libraries.
       #     Otherwise, attempt a link against shared object libs.
+      #     Alas, recent RPMs for Atlas have only .so libraries.
       #
-      #     Some versions of Atlas come without proper setup to use them.
-      #     For example, you may need to give some specific version such
-      #     as 3.0 some generic names, by doing the right soft links:
+      #     Most RPM versions of Atlas come w/o proper setup to use them.
+      #     For example, your 'root' account should probably do the
+      #     following soft links:
       #          chdir /usr/lib64/atlas   (just 'lib' for linux32)
       #          ln -s libatlas.so.3.0        libatlas.so
       #          ln -s libblas.so.3.0         libblas.so
@@ -586,6 +620,7 @@ if ($TARGET == linux64) then
          set MATHLIBS="$MATHLIBS $GMS_MATHLIB_PATH/libatlas.a"
       else
          set MATHLIBS="-L$GMS_MATHLIB_PATH -lf77blas -latlas"
+         if ($CCHEM == true) set MATHLIBS="$MATHLIBS -llapack"
       endif
       set BLAS=' '
       breaksw
@@ -942,14 +977,29 @@ switch ($TARGET)
                set MPILIBS="-L$GMS_MPI_PATH/lib"
                set MPILIBS="$MPILIBS -lmpich -lrt"
                breaksw
+
             case mvapich2:
+#
 #      v1.6 does not need opa/mpl, although .a libs by these names exist,
 #           so there's no harm searching them (binary identical either way).
-#      v1.7 requires these two (and -lrt) to be linked in, so we include them.
-#      Note that MVAPICH2 also needs to specifically link OFED software.
+#      v1.7 on up requires these two to be linked in, so we include them.
+#
                set MPILIBS="-L$GMS_MPI_PATH/lib -lmpich -lopa -lmpl"
-      set MPILIBS="$MPILIBS -L$GMS_OFED_PATH -libverbs -lrdmacm -libumad -lrt"
+#
+#                   We have a QLogic Infiniband, so we also need to 
+#                   append its "path scale messaging" PSM library.
+#                   Comment out if you have some other Infiniband brand,
+#                   also, this gets ignored if lib doesn't actually exist!
+#
+               set MPILIBS="$MPILIBS -L/usr/lib64 -lpsm_infinipath"
+#
+#                   MVAPICH2 also needs to explicitly link OFED software,
+#                   so append OFED to the end of the MVAPICH2 list,
+#                   some versions need another peek at thread lib.
+#
+               set MPILIBS="$MPILIBS -L$GMS_OFED_PATH -libverbs -lrdmacm -libumad -lrt -lpthread"
                breaksw
+
             case myrinet:
                # very old information, perhaps not correct anymore.
                set MPILIBS="/usr/local/mpich-gm/lib/libmpich.a"
@@ -1098,19 +1148,19 @@ set STANDARD_GAMESS_OBJ1=(aldeci.o algnci.o \
       basccn.o basecp.o basext.o basg3l.o bashuz.o bashz2.o baskar.o  \
       basn21.o basn31.o baspcn.o basg3x.o bassto.o  \
       ccaux.o  ccddi.o  ccqaux.o ccquad.o ccsdt.o   \
-      ceeis.o  chgpen.o cisgrd.o comp.o   cosmo.o  cosprt.o  \
-      cphf.o   cpmchf.o cprohf.o  \
+      ceeis.o  chgpen.o cimf.o   ciminf.o cimi.o   cimlib.o cimsub.o  \
+      cisgrd.o comp.o   cosmo.o  cosprt.o cphf.o   cpmchf.o cprohf.o  \
       dccc.o   dcgrd.o  dcgues.o dcint2.o dclib.o  dcmp2.o   \
       dcscf.o  dctran.o ddilib.o delocl.o demrpt.o  \
       dft.o    dftaux.o dftdis.o dftfun.o dftgrd.o dftint.o  \
       dftxca.o dftxcb.o dftxcc.o dftxcd.o dftxce.o dftxcf.o dftxcg.o  \
-      dmulti.o drc.o     \
+      diab.o   dmulti.o drc.o     \
       eaipcc.o ecp.o    ecpder.o ecplib.o ecppot.o  \
       efchtr.o efdrvr.o efelec.o efgrd2.o efgrda.o efgrdb.o efgrdc.o  \
       efinp.o  efinta.o efintb.o efmo.o   efpaul.o efpcm.o  efpcov.o  \
       efpfmo.o eftei.o   \
-      eigen.o  elglib.o elgloc.o elgscf.o eomcc.o  ewald.o  excorr.o \
-      ffield.o fmo.o    fmocp.o  fmoesd.o fmogrd.o fmohss.o fmoint.o \
+      eigen.o  elglib.o elgloc.o elgscf.o eomcc.o  ewald.o  excorr.o  \
+      ffield.o fmo.o    fmocp.o  fmoesd.o fmogrd.o fmohss.o fmoint.o  \
       fmoio.o  fmolib.o fmomm.o  fmopbc.o fmoprp.o )
 set STANDARD_GAMESS_OBJ2=(frfmt.o  fsodci.o  \
       g3.o     globop.o gmcpt.o  gradex.o guess.o   \
@@ -1129,7 +1179,7 @@ set STANDARD_GAMESS_OBJ2=(frfmt.o  fsodci.o  \
       mp2.o    mp2ddi.o mp2grd.o mp2gr2.o mp2ims.o  \
       mpcdat.o mpcgrd.o mpcint.o mpcmol.o mpcmsc.o  \
       mthlib.o nameio.o nmr.o )
-set STANDARD_GAMESS_OBJ3=(optcix.o ordint.o ormas1.o  \
+set STANDARD_GAMESS_OBJ3=(optcix.o ordint.o ormas1.o ormpt2.o \
       parley.o pcm.o    pcmcav.o pcmcv2.o pcmder.o  \
       pcmdis.o pcmief.o pcmpol.o pcmvch.o  \
       prpamm.o prpel.o  prplib.o prppop.o  \
@@ -1138,13 +1188,13 @@ set STANDARD_GAMESS_OBJ3=(optcix.o ordint.o ormas1.o  \
       roeom.o  rohfcc.o rxncrd.o ryspol.o  \
       scflib.o scfmi.o  scrf.o   sfdft.o  sfgrad.o  \
       sobrt.o  soffac.o solib.o  sozeff.o  \
-      statpt.o surf.o   svpchg.o svpinp.o svpleb.o symorb.o symslc.o  \
+      statpt.o surf.o   svpchg.o svpinp.o svpleb.o  \
+      symhi.o  symorb.o symslc.o  \
       tddft.o  tddefp.o tddfun.o tddfxc.o tddgrd.o tddint.o tddnlr.o  \
       tddxca.o tddxcc.o tddxcd.o tdhf.o     \
       tdx.o    tdxio.o  tdxitr.o tdxni.o  tdxprp.o  \
       trans.o  trfdm2.o trnstn.o trudge.o umpddi.o utddft.o  \
-      vibanl.o vscf.o   vvos.o   zapddi.o zmatrx.o)
-
+      vibanl.o vscf.o   vvos.o   zapddi.o zmatrx.o )
 #
 #     unfortunately, the link command has become too long to show it
 #     explicitly (full command line below will exceed 2048 bytes).
@@ -1207,26 +1257,37 @@ else
    echo "   Nuclear Electron Orbital code skipped, using dummy object $NEOOBJ"
 endif
 #
-#    CUDA (et cetera) libraries below will require editing to match
-#                               your computer's pathnames!
-#    Our two clusters differ in where the CUDA lives.
-#    Gnu's openMP library is needed if --disable-omp was not used:
-if ($GPUCODE == true) then
-   echo "   Using 'libcchem' add-in C++ codes for Nvidia/CUDA GPUs."
-   set GPU_LIBS="-L/home/mike/gamess/libcchem/lib -lcchem_gamess -lcchem -lrysq"
-   set GPU_LIBS="$GPU_LIBS -L/share/apps/cuda/lib64 -lcudart -lcublas"
-   ### GPU_LIBS="$GPU_LIBS -L/usr/local/cuda/lib64  -lcudart -lcublas"
-   set GPU_LIBS="$GPU_LIBS /usr/local/lib/libboost_thread.a"
-   set GPU_LIBS="$GPU_LIBS /usr/local/lib/libhdf5_cpp.a"
-   set GPU_LIBS="$GPU_LIBS /usr/local/lib/libhdf5.a"
-   set GPU_LIBS="$GPU_LIBS -lz"
-   set GPU_LIBS="$GPU_LIBS -lstdc++"
-   ### GPU_LIBS="$GPU_LIBS -lgomp"
-   set GPU_LIBS="$GPU_LIBS -lpthread"
-   echo "   libcchem GPU code's libraries are"
-   echo "$GPU_LIBS"
+#    CUDA (et cetera) libraries may require two edits:
+#       path for CUDA to its two libraries.
+#       path for HDF5 library.
+#
+if ($CCHEM == true) then
+   echo "   Using LIBCCHEM add-in C++ code for CPUs and/or Nvidia/CUDA GPUs."
+   set CCHEM_LIBS="cchem.o"
+   set CCHEM_LIBS="$CCHEM_LIBS -L$GMS_PATH/libcchem/lib -lcchem_gamess -lcchem -lrysq"
+   set CCHEM_LIBS="$CCHEM_LIBS -L$GMS_CUDA_PATH/lib64 -lcudart -lcublas"
+   set CCHEM_LIBS="$CCHEM_LIBS $GMS_PATH/libcchem/boost/lib/libboost_thread.a"
+   set CCHEM_LIBS="$CCHEM_LIBS $GMS_HDF5_PATH/lib/libhdf5.a"
+   set CCHEM_LIBS="$CCHEM_LIBS -lz"
+   set CCHEM_LIBS="$CCHEM_LIBS -lstdc++"
+   set CCHEM_LIBS="$CCHEM_LIBS -lgomp"
+   set CCHEM_LIBS="$CCHEM_LIBS -lpthread"
+   echo "   LIBCCHEM's libraries are"
+   echo "$CCHEM_LIBS"
+   #           must switch to GA rather than DDI, this is echoed later on.
+   set MSG_LIBRARIES="ga.o zga.o $GMS_PATH/libcchem/ga/lib/libga.a $MPILIBS"
 else
-   set GPU_LIBS=""
+   set CCHEM_LIBS="cchdmy.o"
+endif
+#
+#   NBO is turned off with nbostb.o dummy substitute in GAMESS distribution.
+if ($NBO == true) then
+   set NBOOBJ=$NBOLIB
+   echo "   Natural Bond Orbital (NBO) code is taken from library"
+   echo "        $NBOOBJ"
+else
+   set NBOOBJ='nbostb.o'
+   echo "   Natural Bond Orbital (NBO) code skipped, using dummy object $NBOOBJ"
 endif
 #
 #   MPQC is turned off with mpqcst.o dummy substitute in GAMESS distribution.
@@ -1314,9 +1375,9 @@ $LDR  $EXTRA_LINK_FLAGS:q -o $GMS_BUILD_DIR/$EXE.$VERNO.x $LDOPTS \
       $STANDARD_GAMESS_OBJ1 \
       $STANDARD_GAMESS_OBJ2 \
       $STANDARD_GAMESS_OBJ3 \
-      $QMMMOBJ $VBOBJ $NEOOBJ \
+      $QMMMOBJ $VBOBJ $NEOOBJ $NBOOBJ \
       $GMS_EXTRA_OBJS \
-      $GPU_LIBS \
+      $CCHEM_LIBS \
       $MPQCOBJ $MPQCLIBS $LIBINT \
       $MSG_LIBRARIES $LIBRARIES $EXTRA_MPI_LIB_FLAGS:q
 #
