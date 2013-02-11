@@ -375,6 +375,16 @@ c$$$         write(6,*)MEMORY
 !========================================================================
 !------------------------------------------------------------------------
 !*MODULE EXCORR  *DECK MAKE_PT2R12_2RDM
+C> @brief      This routine set up creation for two-paricle density matrix.
+C> 
+C> @author     Luke Roskop
+C>             -2012
+C> 
+C> @details    Memory and tables are created for creation of spin-free DM
+C> 
+C> @date 2/11/13-Luke Roskop
+C> -modified memory managament for distributed DM matrix
+C>
       SUBROUTINE MAKE_PT2R12_2RDM(RDM2TOL)
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
       LOGICAL SOME,GOPARR,DSKWRK,MASWRK,FDIRCT,QCORR,CEECHK
@@ -543,7 +553,9 @@ c$$$         write(6,*)MEMORY
 !
       CALL VALFM(LOADFM)
       KCOEFF = LOADFM +1
-      LAST   = KCOEFF + KST*NCI
+!      LAST  = KCOEFF + KST*NCI
+      ID_FDM2   = KCOEFF + KST*NCI
+      LAST   = ID_FDM2 + (((NACT**4)/NPROC)+1) + 1
 !
 !   ORMAS INTEGER STORAGE IS LAST.
 !
@@ -564,9 +576,10 @@ c$$$         write(6,*)MEMORY
       JB1O1 = JB1IN + NB1EX/NWDVAR + 1
       JB1O2 = JB1O1 + NB1EX/NWDVAR + 1
       IND1O1 = JB1O2 + NB1EX/NWDVAR +1
-      IND1O2 =  IND1O1 + (NA*(NACT-NA))*NSYM +1
-      IFDM2  = IND1O2  + (NA*(NACT-NA))*NSYM +1
-      JB1PO = IFDM2  + NACT**4 + 1
+      IND1O2 =  IND1O1 + (NA*(NACT-NA))*NSYM/NWDVAR +1
+!      IFDM2  = IND1O2  + (NA*(NACT-NA))*NSYM/NWDVAR +1
+!      JB1PO = IFDM2  + NACT**4 + 1
+      JB1PO = IND1O2  + (NA*(NACT-NA))*NSYM/NWDVAR +1
       JB1SY = JB1PO + NB1EX/NWDVAR + 1
       JB1ST = JB1SY + (NB*(NACT-NB))/NWDVAR + 1
 
@@ -632,7 +645,9 @@ C
      *     NB1EX,
      *     X(JB1GR),X(JB1PE),X(JB1IN),X(JB1PO),X(JB1ST),
      *     IDIM1,IDIM2,
-     *     X(JB1O1),X(JB1O2),X(IND1O1),X(IND1O2),X(IFDM2),RDM2TOL)
+!     *     X(JB1O1),X(JB1O2),X(IND1O1),X(IND1O2),X(IFDM2),x(id_fdm2),
+     *     X(JB1O1),X(JB1O2),X(IND1O1),X(IND1O2),x(id_fdm2),
+     *     RDM2TOL)
 !     
       CALL RETFM(NEED4)
       CALL RETFM(NEED3)
@@ -651,6 +666,17 @@ C
 !========================================================================
 !------------------------------------------------------------------------
 !*MODULE EXCORR  *DECK SPINFREE_2RDM
+C> @brief      This routine creates a spin-free two-particle density matrix
+C> 
+C> @author     Luke Roskop
+C>             -2012
+C> 
+C> @details    This routine creates a spin-free two-particle density matrix
+C> 
+C> @date 2/11/13-Luke Roskop
+C> -Distributed the density matrix accross nodes. No longer parallel rountine.
+C>
+C> @param d_fdm2 distributed density matrix chunk
       SUBROUTINE SPINFREE_2RDM(IW,NPRINT,IWTS,WSTATE,SPINS,IPURES,S,K,
      *     NACT,NCI,NA,NB,AB,
      *     Y,NX,INDEX,NSYM,IOB,
@@ -661,7 +687,8 @@ C
      *     ITGA,ITGB,IAST,IBST,
      *     IPOSA,IPERA,IIND1,IGROA,IMMC,
      *     NB1EX,JB1GR,JB1PE,JB1IN,JB1PO,JB1ST,IDIM1,IDIM2,
-     *     JB1O1,JB1O2,IIND1O1,IIND1O2,FDM2,RDM2TOL)
+!     *     JB1O1,JB1O2,IIND1O1,IIND1O2,FDM2,d_fdm2,RDM2TOL)
+     *     JB1O1,JB1O2,IIND1O1,IIND1O2,d_fdm2,RDM2TOL)
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
 !
       LOGICAL SOME,GOPARR,DSKWRK,MASWRK,FDIRCT,QCORR,DSKSAV
@@ -699,23 +726,38 @@ C
       DIMENSION JB1GR(NB1EX),JB1PE(NB1EX),JB1IN(NB1EX),JB1PO(NB1EX)
       DIMENSION JB1ST(IDIM1,IDIM2)
 !
-      DOUBLE PRECISION FDM2(NACT,NACT,NACT,NACT)
+!      DOUBLE PRECISION FDM2(NACT,NACT,NACT,NACT)
 
       INTEGER JB1O1(NB1EX),JB1O2(NB1EX)
       INTEGER IIND1O1(NA*(NACT-NA),NSYM),IIND1O2(NA*(NACT-NA),NSYM)
       CHARACTER*256 FILENM2
       CHARACTER*1 NULL
 
-! INITIALIZE FDM2...
-      DO I = 1,NACT
-         DO II = 1,NACT
-            DO III = 1,NACT
-               DO IV = 1,NACT
-                  FDM2(I,II,III,IV) = 0.0D+00
-               ENDDO
-            ENDDO
-         ENDDO
-      ENDDO
+!// VARIABLES FOR DISTRIBUTED DENSITY MATRIX
+      DOUBLE PRECISION D_FDM2(*) !((NACT**4)/NPROC)+1
+      INTEGER ID_SIZE,MIN_R,MAX_R,N2,N3,N4,IPROC
+
+!// INITAILIZE VARIABLES THAT ARE USED TO INDEX D_FDM2 ARRAY
+      id_size = ((nact**4)/nproc)+1 !size of block
+      n2 = nact                 !nact    :offset
+      n3 = n2*nact              !nact**2 :offset 
+      n4 = n3*nact              !nact**3 :offset
+      min_r = me*id_size         !minimum of range for process me
+      max_r = (me+1)*id_size-1   !maximum of range for process me
+      
+!// INITIALIZE D_FDM2
+      CALL VCLR(d_fdm2  ,1,id_size)
+
+c$$$! INITIALIZE FDM2...
+c$$$      DO I = 1,NACT
+c$$$         DO II = 1,NACT
+c$$$            DO III = 1,NACT
+c$$$               DO IV = 1,NACT
+c$$$                  FDM2(I,II,III,IV) = 0.0D+00
+c$$$               ENDDO
+c$$$            ENDDO
+c$$$         ENDDO
+c$$$      ENDDO
 
 !
 !  ----  STATE-AVERAGED 2E- DENSITY MATRIX  ----
@@ -794,10 +836,10 @@ C
 !  --- BIG LOOP OVER ALL ALPHA STRINGS. ---
 !
 
-      IF (GOPARR) THEN
-         CALL DDI_DLBRESET()
-         CALL DDI_DLBNEXT(MY_TASK)
-      ENDIF
+!//disable      IF (GOPARR) THEN
+!//disable         CALL DDI_DLBRESET()
+!//disable         CALL DDI_DLBNEXT(MY_TASK)
+!//disable      ENDIF
 !
       CALL RESETCO(LBOX1,NSPACE,NA,IAMA,IAMI,LBOX5)
 
@@ -809,7 +851,7 @@ C
 !  THE FULL ALPHA STRING LIST.
 !
          DO 4900 KKA=NAST(IGA)+1,NAST(IGA+1)
-            IF (GOPARR.AND.KKA-1.NE.MY_TASK) GOTO 4899
+!//disable            IF (GOPARR.AND.KKA-1.NE.MY_TASK) GOTO 4899
             JPZA1 = LSPA(KKA)
             JASYM = LSYMA(KKA)
             KSYM=KTAB(JASYM)
@@ -910,17 +952,6 @@ C
               DO 4712 IK=1,NA
                  IF (IK.EQ.IA1) GO TO 4712
                  ION = IACON1(IK)
-                 J1 = INDEX(ION+1)
-                 JMA = MAX(J1,IND)
-                 JMI = MIN(J1,IND)
-                 JMA = MAX(ION,JJ)
-                 JMI = MIN(ION,JJ)
-                 J1 = INDEX(JMA)+JMI
-                 JMA = MAX(IO1,ION)
-                 JMI = MIN(IO1,ION)
-                 J2 = INDEX(JMA)+JMI
-                 JMA = MAX(J1,J2)
-                 JMI = MIN(J1,J2)
 !
 !  LOOP OVER APPROPRIATE BETA DETS AND UPDATE THE 1E DM2
 !
@@ -936,18 +967,33 @@ C
                  DO KKI=1,NXTW
               F_FC = F_FC+ WSTATE(IWTS(KKI))*AB(JCI1,KKI)*AB(JCI2,KKI)
                  ENDDO
-                 F_FC = F_FC*KPER1
+!                 F_FC = F_FC*KPER1
+                 F_FC = F_FC*KPER1/2.0d+00
 
 !A A2 -> A2 A'  WHERE: A'.GT.A    A2.NE.A
-                 FDM2(JJ,ION,ION,IO1) =FDM2(JJ,ION,ION,IO1) +F_FC/2
-                 FDM2(ION,JJ,IO1,ION) =FDM2(ION,JJ,IO1,ION) +F_FC/2
-                 FDM2(JJ,ION,IO1,ION) =FDM2(JJ,ION,IO1,ION) -F_FC/2
-                 FDM2(ION,JJ,ION,IO1) =FDM2(ION,JJ,ION,IO1) -F_FC/2
-!------------ (DE)EXITE BELOW
-                 FDM2(IO1,ION,ION,JJ) =FDM2(IO1,ION,ION,JJ) +F_FC/2
-                 FDM2(ION,IO1,JJ,ION) =FDM2(ION,IO1,JJ,ION) +F_FC/2
-                 FDM2(IO1,ION,JJ,ION) =FDM2(IO1,ION,JJ,ION) -F_FC/2
-                 FDM2(ION,IO1,ION,JJ) =FDM2(ION,IO1,ION,JJ) -F_FC/2
+c$$$                 FDM2(JJ,ION,ION,IO1) =FDM2(JJ,ION,ION,IO1) +F_FC
+c$$$                 FDM2(ION,JJ,IO1,ION) =FDM2(ION,JJ,IO1,ION) +F_FC
+c$$$                 FDM2(JJ,ION,IO1,ION) =FDM2(JJ,ION,IO1,ION) -F_FC
+c$$$                 FDM2(ION,JJ,ION,IO1) =FDM2(ION,JJ,ION,IO1) -F_FC
+c$$$!------------ (DE)EXITE BELOW
+c$$$                 FDM2(IO1,ION,ION,JJ) =FDM2(IO1,ION,ION,JJ) +F_FC
+c$$$                 FDM2(ION,IO1,JJ,ION) =FDM2(ION,IO1,JJ,ION) +F_FC
+c$$$                 FDM2(IO1,ION,JJ,ION) =FDM2(IO1,ION,JJ,ION) -F_FC
+c$$$                 FDM2(ION,IO1,ION,JJ) =FDM2(ION,IO1,ION,JJ) -F_FC
+
+         call dist_dm2(JJ,ION,ION,IO1,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+         call dist_dm2(ION,JJ,IO1,ION,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+
+         call dist_dm2(IO1,ION,ION,JJ,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+         call dist_dm2(ION,IO1,JJ,ION,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+
+
+         f_fc = (-1)*f_fc
+         call dist_dm2(JJ,ION,IO1,ION,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+         call dist_dm2(ION,JJ,ION,IO1,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+
+         call dist_dm2(IO1,ION,JJ,ION,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+         call dist_dm2(ION,IO1,ION,JJ,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
 
  1685         CONTINUE
 !
@@ -979,20 +1025,25 @@ C
                  DO KKI=1,NXTW
               F_FC = F_FC+ WSTATE(IWTS(KKI))*AB(JCI1,KKI)*AB(JCI2,KKI)
                  ENDDO
-                 F_FC = F_FC*KPER1
+                 F_FC = F_FC*KPER1/2.0d+00
 !
                  DO 4670 IK=1,NB
                     ION = IBCON1(IK)
-                    J1 = INDEX(ION+1)
-                    JMA = MAX(J1,IND)
-                    JMI = MIN(J1,IND)
 
 !A B -> B A'  WHERE: A'.GT.A
-                 FDM2(JJ,ION,ION,IO1) =FDM2(JJ,ION,ION,IO1) +F_FC/2
-                 FDM2(ION,JJ,IO1,ION) =FDM2(ION,JJ,IO1,ION) +F_FC/2
-!$$$!------------- (DE)EXCITE BELOW
-                 FDM2(IO1,ION,ION,JJ) =FDM2(IO1,ION,ION,JJ) +F_FC/2
-                 FDM2(ION,IO1,JJ,ION) =FDM2(ION,IO1,JJ,ION) +F_FC/2
+c$$$                 FDM2(JJ,ION,ION,IO1) =FDM2(JJ,ION,ION,IO1) +F_FC
+c$$$                 FDM2(ION,JJ,IO1,ION) =FDM2(ION,JJ,IO1,ION) +F_FC
+c$$$!------------- (DE)EXCITE BELOW
+c$$$                 FDM2(IO1,ION,ION,JJ) =FDM2(IO1,ION,ION,JJ) +F_FC
+c$$$                 FDM2(ION,IO1,JJ,ION) =FDM2(ION,IO1,JJ,ION) +F_FC
+
+
+         call dist_dm2(JJ,ION,ION,IO1,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+         call dist_dm2(ION,JJ,IO1,ION,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+         
+         call dist_dm2(IO1,ION,ION,JJ,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+         call dist_dm2(ION,IO1,JJ,ION,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+
 
  4670            CONTINUE
 !
@@ -1103,15 +1154,6 @@ C
               IPER3 = ((-1)**(JPERA3+JPERA))*2
               KAPOS3 = JPOSA3 + NIAS3
               JPZA3 = LSPA(KAPOS3)
-                 JMA=MAX(JJ3,IO3)
-                 JMI=MIN(JJ3,IO3)
-                 I2 = INDEX(JMA) + JMI
-                 II1 = INDEX(JJ3) + IO1
-                 JMA=MAX(IO3,JJ)
-                 JMI=MIN(IO3,JJ)
-                 II2 = INDEX(JMA) + JMI
-                 JMA=MAX(II1,II2)
-                 JMI=MIN(II1,II2)
 !
 !  LOOP OVER BETA STRINGS OF RIGHT SYMMETRY AND GROUP.
 !
@@ -1128,18 +1170,31 @@ C
                  DO KKI=1,NXTW
               F_FC = F_FC + WSTATE(IWTS(KKI))*AB(JCI1,KKI)*AB(JCI3,KKI)
                  ENDDO
-                 F_FC = F_FC*IPER3
+                 F_FC = F_FC*IPER3/2.0d+00
 
 ! A A2 --> A'2 A'    A' > A    A'2 > A2    A2 > A    A'2 > A'
-                 FDM2(JJ,JJ3,IO3,IO1) =FDM2(JJ,JJ3,IO3,IO1) +F_FC/2
-                 FDM2(JJ3,JJ,IO1,IO3) =FDM2(JJ3,JJ,IO1,IO3) +F_FC/2
-                 FDM2(JJ,JJ3,IO1,IO3) =FDM2(JJ,JJ3,IO1,IO3) -F_FC/2
-                 FDM2(JJ3,JJ,IO3,IO1) =FDM2(JJ3,JJ,IO3,IO1) -F_FC/2
-!$$$!--------------- (DE)DOWN BELOW
-                 FDM2(IO1,IO3,JJ3,JJ) =FDM2(IO1,IO3,JJ3,JJ) +F_FC/2
-                 FDM2(IO3,IO1,JJ,JJ3) =FDM2(IO3,IO1,JJ,JJ3) +F_FC/2
-                 FDM2(IO1,IO3,JJ,JJ3) =FDM2(IO1,IO3,JJ,JJ3) -F_FC/2
-                 FDM2(IO3,IO1,JJ3,JJ) =FDM2(IO3,IO1,JJ3,JJ) -F_FC/2
+c$$$                 FDM2(JJ,JJ3,IO3,IO1) =FDM2(JJ,JJ3,IO3,IO1) +F_FC
+c$$$                 FDM2(JJ3,JJ,IO1,IO3) =FDM2(JJ3,JJ,IO1,IO3) +F_FC
+c$$$                 FDM2(JJ,JJ3,IO1,IO3) =FDM2(JJ,JJ3,IO1,IO3) -F_FC
+c$$$                 FDM2(JJ3,JJ,IO3,IO1) =FDM2(JJ3,JJ,IO3,IO1) -F_FC
+c$$$!--------------- (DE)DOWN BELOW
+c$$$                 FDM2(IO1,IO3,JJ3,JJ) =FDM2(IO1,IO3,JJ3,JJ) +F_FC
+c$$$                 FDM2(IO3,IO1,JJ,JJ3) =FDM2(IO3,IO1,JJ,JJ3) +F_FC
+c$$$                 FDM2(IO1,IO3,JJ,JJ3) =FDM2(IO1,IO3,JJ,JJ3) -F_FC
+c$$$                 FDM2(IO3,IO1,JJ3,JJ) =FDM2(IO3,IO1,JJ3,JJ) -F_FC
+
+       call dist_dm2(JJ,JJ3,IO3,IO1,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+       call dist_dm2(JJ3,JJ,IO1,IO3,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+
+       call dist_dm2(IO1,IO3,JJ3,JJ,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+       call dist_dm2(IO3,IO1,JJ,JJ3,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+
+       f_fc = -f_fc
+       call dist_dm2(JJ,JJ3,IO1,IO3,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+       call dist_dm2(JJ3,JJ,IO3,IO1,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+
+       call dist_dm2(IO1,IO3,JJ,JJ3,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+       call dist_dm2(IO3,IO1,JJ3,JJ,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
 
  3680         CONTINUE
 !
@@ -1180,16 +1235,11 @@ C
 !
             DO 67 II=1,NA
                I1 = IACON1(II)
-               IND1 = INDEX(I1+1)
 !
 !  LOOP OVER BETA STRINGS OF RIGHT SYMMETRY AND GROUP.
 !
               DO 64 JJ=II+1,NA
                  I2 = IACON1(JJ)
-                 IND2 = INDEX(I2+1)
-                 INDM = IND2 - I2 + I1
-                 J1 = INDEX(INDM+1)
-                 J2 = INDEX(IND2) + IND1
 !
               DO 3710 IGB=1,ITGB
               IF (LGCOM(IGB,IGA).NE.1) GOTO 3710
@@ -1204,10 +1254,15 @@ C
                  ENDDO
 
 !A A2 -> A A2
-                 FDM2(I2,I1,I1,I2) =FDM2(I2,I1,I1,I2) +F_FC
-                 FDM2(I2,I1,I2,I1) =FDM2(I2,I1,I2,I1) -F_FC
-                 FDM2(I1,I2,I2,I1) =FDM2(I1,I2,I2,I1) +F_FC
-                 FDM2(I1,I2,I1,I2) =FDM2(I1,I2,I1,I2) -F_FC
+c$$$                 FDM2(I2,I1,I1,I2) =FDM2(I2,I1,I1,I2) +F_FC
+c$$$                 FDM2(I2,I1,I2,I1) =FDM2(I2,I1,I2,I1) -F_FC
+c$$$                 FDM2(I1,I2,I2,I1) =FDM2(I1,I2,I2,I1) +F_FC
+c$$$                 FDM2(I1,I2,I1,I2) =FDM2(I1,I2,I1,I2) -F_FC
+
+            call dist_dm2(I2,I1,I1,I2,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+            call dist_dm2(I2,I1,I2,I1,n2,n3,n4,min_r,max_r,-F_FC,d_fdm2)
+            call dist_dm2(I1,I2,I2,I1,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+            call dist_dm2(I1,I2,I1,I2,n2,n3,n4,min_r,max_r,-F_FC,d_fdm2)
 
  3690         CONTINUE
 !
@@ -1240,13 +1295,12 @@ C
 !
                  DO 4679 IK=1,NB
                     I2 = IBCON1(IK)
-                    IND2 = INDEX(I2+1)
-                    JMI = MIN(IND1,IND2)
-                    JMA = MAX(IND1,IND2)
-                    J2 = INDEX(JMA) + JMI
 ! A B -> B A
-                 FDM2(I1,I2,I2,I1) =FDM2(I1,I2,I2,I1) +F_FC
-                 FDM2(I2,I1,I1,I2) =FDM2(I2,I1,I1,I2) +F_FC
+c$$$                 FDM2(I1,I2,I2,I1) =FDM2(I1,I2,I2,I1) +F_FC
+c$$$                 FDM2(I2,I1,I1,I2) =FDM2(I2,I1,I1,I2) +F_FC
+
+             call dist_dm2(I1,I2,I2,I1,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+             call dist_dm2(I2,I1,I1,I2,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
 
  4679            CONTINUE
 !
@@ -1306,8 +1360,6 @@ C
                   IGB2=JB1GR(JBINDX)
                   IF (LGCOM(IGB2,JGROAE).NE.1) GOTO 2613
 !
-                  JMA=MAX(JINDAE,JB1IN(JBINDX))
-                  JMI=MIN(JINDAE,JB1IN(JBINDX))
                   JCIB=JPOSAE+LDISB(KBSYM,IGB2,JGROAE)+JB1PO(JBINDX)
                   JCIB2=JPZA1+LDISB(KBSYM,IGB2,JGROAE)+JB1PO(JBINDX)
 
@@ -1317,7 +1369,9 @@ C
            F_FC = F_FC + WSTATE(IWTS(KKI))*AB(LABPOS,KKI)*AB(JCIB,KKI)
            F_FC1 =F_FC1+ WSTATE(IWTS(KKI))*AB(LABPOS2,KKI)*AB(JCIB2,KKI)
                  ENDDO
-
+                 F_FC = F_FC/2.0d+00
+                 F_FC1 = F_FC1/2.0d+00
+                 
 ! NEEDED FOR SPIN-FREE 2RDM
                   I1_1=IIND1O1(JSAE,ISAE)
                   I2_1=JB1O1(JBINDX)
@@ -1325,23 +1379,43 @@ C
                   I1_2=IIND1O2(JSAE,ISAE)
 
 !A1 B2 -> A'1 B'2  WHERE: A'1 > A1    B'2 > B2
-                  FDM2(I1_2,I2_2,I2_1,I1_1) = 
-     $                 FDM2(I1_2,I2_2,I2_1,I1_1) + F_FC/2
-                  FDM2(I2_2,I1_2,I1_1,I2_1) = 
-     $                 FDM2(I2_2,I1_2,I1_1,I2_1) + F_FC/2
-                  FDM2(I2_1,I1_1,I1_2,I2_2) = 
-     $                 FDM2(I2_1,I1_1,I1_2,I2_2) + F_FC/2
-                  FDM2(I1_1,I2_1,I2_2,I1_2) = 
-     $                 FDM2(I1_1,I2_1,I2_2,I1_2) + F_FC/2
-!EXCHANGE
-                  FDM2(I1_2,I2_1,I2_2,I1_1) = 
-     $                 FDM2(I1_2,I2_1,I2_2,I1_1) + F_FC1/2
-                  FDM2(I2_1,I1_2,I1_1,I2_2) = 
-     $                 FDM2(I2_1,I1_2,I1_1,I2_2) + F_FC1/2
-                  FDM2(I2_2,I1_1,I1_2,I2_1) = 
-     $                 FDM2(I2_2,I1_1,I1_2,I2_1) + F_FC1/2
-                  FDM2(I1_1,I2_2,I2_1,I1_2) = 
-     $                 FDM2(I1_1,I2_2,I2_1,I1_2) + F_FC1/2
+c$$$                  FDM2(I1_2,I2_2,I2_1,I1_1) = 
+c$$$     $                 FDM2(I1_2,I2_2,I2_1,I1_1) + F_FC
+c$$$                  FDM2(I2_2,I1_2,I1_1,I2_1) = 
+c$$$     $                 FDM2(I2_2,I1_2,I1_1,I2_1) + F_FC
+c$$$                  FDM2(I2_1,I1_1,I1_2,I2_2) = 
+c$$$     $                 FDM2(I2_1,I1_1,I1_2,I2_2) + F_FC
+c$$$                  FDM2(I1_1,I2_1,I2_2,I1_2) = 
+c$$$     $                 FDM2(I1_1,I2_1,I2_2,I1_2) + F_FC
+c$$$!EXCHANGE
+c$$$                  FDM2(I1_2,I2_1,I2_2,I1_1) = 
+c$$$     $                 FDM2(I1_2,I2_1,I2_2,I1_1) + F_FC1
+c$$$                  FDM2(I2_1,I1_2,I1_1,I2_2) = 
+c$$$     $                 FDM2(I2_1,I1_2,I1_1,I2_2) + F_FC1
+c$$$                  FDM2(I2_2,I1_1,I1_2,I2_1) = 
+c$$$     $                 FDM2(I2_2,I1_1,I1_2,I2_1) + F_FC1
+c$$$                  FDM2(I1_1,I2_2,I2_1,I1_2) = 
+c$$$     $                 FDM2(I1_1,I2_2,I2_1,I1_2) + F_FC1
+
+
+      call dist_dm2(I1_2,I2_2,I2_1,I1_1,n2,n3,n4,min_r,max_r,F_FC,
+     $                 d_fdm2)
+      call dist_dm2(I2_2,I1_2,I1_1,I2_1,n2,n3,n4,min_r,max_r,F_FC,
+     $     d_fdm2)
+      call dist_dm2(I2_1,I1_1,I1_2,I2_2,n2,n3,n4,min_r,max_r,F_FC,
+     $     d_fdm2)
+      call dist_dm2(I1_1,I2_1,I2_2,I1_2,n2,n3,n4,min_r,max_r,F_FC,
+     $     d_fdm2)
+              
+      call dist_dm2(I1_2,I2_1,I2_2,I1_1,n2,n3,n4,min_r,max_r,F_FC1,
+     $     d_fdm2)
+      call dist_dm2(I2_1,I1_2,I1_1,I2_2,n2,n3,n4,min_r,max_r,F_FC1,
+     $     d_fdm2)
+      call dist_dm2(I2_2,I1_1,I1_2,I2_1,n2,n3,n4,min_r,max_r,F_FC1,
+     $     d_fdm2)
+      call dist_dm2(I1_1,I2_2,I2_1,I1_2,n2,n3,n4,min_r,max_r,F_FC1,
+     $     d_fdm2)
+              
 
  2613          CONTINUE
 !
@@ -1366,15 +1440,13 @@ C
                   IGB2=JB1GR(JBINDX)
                   IF (LGCOM(IGB2,JGROAE).NE.1) GOTO 2600
 !
-                  JMA=MAX(JINDAE,JB1IN(JBINDX))
-                  JMI=MIN(JINDAE,JB1IN(JBINDX))
                   JCIB=JPOSAE+LDISB(KBSYM,IGB2,JGROAE)+JB1PO(JBINDX)
 
                   F_FC = 0.0D+00
                  DO KKI=1,NXTW
             F_FC = F_FC + WSTATE(IWTS(KKI))*AB(LABPOS,KKI)*AB(JCIB,KKI)
                  ENDDO
-                  F_FC = F_FC*JPERAE*JB1PE(JBINDX)
+                  F_FC = F_FC*JPERAE*JB1PE(JBINDX)/2.0d+00
 
 !B1 12 -> B'1 1'2  WHERE: A'1 > A1    B'2 > B2
                   I1_1=IIND1O1(JSAE,ISAE)
@@ -1383,14 +1455,24 @@ C
                   I1_2=IIND1O2(JSAE,ISAE)
 
 !DN,DN->UP,UP
-                  FDM2(I1_2,I2_2,I2_1,I1_1) = 
-     $                 FDM2(I1_2,I2_2,I2_1,I1_1) + F_FC/2
-                  FDM2(I2_2,I1_2,I1_1,I2_1) = 
-     $                 FDM2(I2_2,I1_2,I1_1,I2_1) + F_FC/2
-                  FDM2(I2_1,I1_1,I1_2,I2_2) = 
-     $                 FDM2(I2_1,I1_1,I1_2,I2_2) + F_FC/2
-                  FDM2(I1_1,I2_1,I2_2,I1_2) = 
-     $                 FDM2(I1_1,I2_1,I2_2,I1_2) + F_FC/2
+c$$$                  FDM2(I1_2,I2_2,I2_1,I1_1) = 
+c$$$     $                 FDM2(I1_2,I2_2,I2_1,I1_1) + F_FC
+c$$$                  FDM2(I2_2,I1_2,I1_1,I2_1) = 
+c$$$     $                 FDM2(I2_2,I1_2,I1_1,I2_1) + F_FC
+c$$$                  FDM2(I2_1,I1_1,I1_2,I2_2) = 
+c$$$     $                 FDM2(I2_1,I1_1,I1_2,I2_2) + F_FC
+c$$$                  FDM2(I1_1,I2_1,I2_2,I1_2) = 
+c$$$     $                 FDM2(I1_1,I2_1,I2_2,I1_2) + F_FC
+
+      call dist_dm2(I1_2,I2_2,I2_1,I1_1,n2,n3,n4,min_r,max_r,F_FC,
+     $                 d_fdm2)
+      call dist_dm2(I2_2,I1_2,I1_1,I2_1,n2,n3,n4,min_r,max_r,F_FC,
+     $     d_fdm2)
+      call dist_dm2(I2_1,I1_1,I1_2,I2_2,n2,n3,n4,min_r,max_r,F_FC,
+     $     d_fdm2)
+      call dist_dm2(I1_1,I2_1,I2_2,I1_2,n2,n3,n4,min_r,max_r,F_FC,
+     $     d_fdm2)
+
 
  2600          CONTINUE
 !
@@ -1413,14 +1495,12 @@ C
                   IGB2=JB1GR(JBINDX)
                   IF (LGCOM(IGB2,IGA).NE.1) GOTO 2603
 !
-                  JMA=MAX(JINDAE,JB1IN(JBINDX))
-                  JMI=MIN(JINDAE,JB1IN(JBINDX))
                   JCIB=JPZA1+LDISB(KSYM,IGB2,IGA)+JB1PO(JBINDX)
                   F_FC = 0.0D+00
                  DO KKI=1,NXTW
             F_FC = F_FC + WSTATE(IWTS(KKI))*AB(LABPOS,KKI)*AB(JCIB,KKI)
                  ENDDO
-                  F_FC = F_FC*JPERAE*JB1PE(JBINDX)
+                  F_FC = F_FC*JPERAE*JB1PE(JBINDX)/2.0d+00
 
 !B1 A2 -> A'1 B'2  WHERE: A'1 > A1    B'2 > B2
                   I1_1=IIND1O1(JSAE,ISAE)
@@ -1429,14 +1509,23 @@ C
                   I1_2=IIND1O2(JSAE,ISAE)
 
 !UP,DN->DN,UP
-                  FDM2(I1_2,I2_1,I2_2,I1_1) = 
-     $                 FDM2(I1_2,I2_1,I2_2,I1_1) + F_FC/2
-                  FDM2(I2_1,I1_2,I1_1,I2_2) = 
-     $                 FDM2(I2_1,I1_2,I1_1,I2_2) + F_FC/2
-                  FDM2(I2_2,I1_1,I1_2,I2_1) = 
-     $                 FDM2(I2_2,I1_1,I1_2,I2_1) + F_FC/2
-                  FDM2(I1_1,I2_2,I2_1,I1_2) = 
-     $                 FDM2(I1_1,I2_2,I2_1,I1_2) + F_FC/2
+c$$$                  FDM2(I1_2,I2_1,I2_2,I1_1) = 
+c$$$     $                 FDM2(I1_2,I2_1,I2_2,I1_1) + F_FC
+c$$$                  FDM2(I2_1,I1_2,I1_1,I2_2) = 
+c$$$     $                 FDM2(I2_1,I1_2,I1_1,I2_2) + F_FC
+c$$$                  FDM2(I2_2,I1_1,I1_2,I2_1) = 
+c$$$     $                 FDM2(I2_2,I1_1,I1_2,I2_1) + F_FC
+c$$$                  FDM2(I1_1,I2_2,I2_1,I1_2) = 
+c$$$     $                 FDM2(I1_1,I2_2,I2_1,I1_2) + F_FC
+
+      call dist_dm2(I1_2,I2_1,I2_2,I1_1,n2,n3,n4,min_r,max_r,F_FC,
+     $                 d_fdm2)
+      call dist_dm2(I2_1,I1_2,I1_1,I2_2,n2,n3,n4,min_r,max_r,F_FC,
+     $     d_fdm2)
+      call dist_dm2(I2_2,I1_1,I1_2,I2_1,n2,n3,n4,min_r,max_r,F_FC,
+     $     d_fdm2)
+      call dist_dm2(I1_1,I2_2,I2_1,I1_2,n2,n3,n4,min_r,max_r,F_FC,
+     $     d_fdm2)
 
  2603          CONTINUE
 !
@@ -1576,8 +1665,6 @@ C
                JCIB = JB1P + JPOSAE + LDISB(KBSYM,IGB2,JGROAE)
 !
                JINDAE=IIND1(JSAE,ISAE)
-               JMA=MAX(JINDAE,IND1)
-               JMI=MIN(JINDAE,IND1)
 !
                JPERAE=IPERA(JSAE,ISAE)
 !
@@ -1585,7 +1672,7 @@ C
              DO KKI=1,NXTW
             F_FC = F_FC + WSTATE(IWTS(KKI))*AB(LABPOS,KKI)*AB(JCIB,KKI)
              ENDDO
-             F_FC = F_FC*JPERAE*QJPER
+             F_FC = F_FC*JPERAE*QJPER/2.0d+00
 
 !B1 12 -> B'1 1'2  WHERE: A'1 > A1    B'2 > B2
                   I1_1=IO1
@@ -1594,14 +1681,23 @@ C
                   I1_2=JJ
 
 !DN,DN->UP,UP
-                  FDM2(I1_2,I2_2,I2_1,I1_1) = 
-     $                 FDM2(I1_2,I2_2,I2_1,I1_1) + F_FC/2
-                  FDM2(I2_2,I1_2,I1_1,I2_1) = 
-     $                 FDM2(I2_2,I1_2,I1_1,I2_1) + F_FC/2
-                  FDM2(I2_1,I1_1,I1_2,I2_2) = 
-     $                 FDM2(I2_1,I1_1,I1_2,I2_2) + F_FC/2
-                  FDM2(I1_1,I2_1,I2_2,I1_2) = 
-     $                 FDM2(I1_1,I2_1,I2_2,I1_2) + F_FC/2
+c$$$                  FDM2(I1_2,I2_2,I2_1,I1_1) = 
+c$$$     $                 FDM2(I1_2,I2_2,I2_1,I1_1) + F_FC
+c$$$                  FDM2(I2_2,I1_2,I1_1,I2_1) = 
+c$$$     $                 FDM2(I2_2,I1_2,I1_1,I2_1) + F_FC
+c$$$                  FDM2(I2_1,I1_1,I1_2,I2_2) = 
+c$$$     $                 FDM2(I2_1,I1_1,I1_2,I2_2) + F_FC
+c$$$                  FDM2(I1_1,I2_1,I2_2,I1_2) = 
+c$$$     $                 FDM2(I1_1,I2_1,I2_2,I1_2) + F_FC
+
+      call dist_dm2(I1_2,I2_2,I2_1,I1_1,n2,n3,n4,min_r,max_r,F_FC,
+     $                 d_fdm2)
+      call dist_dm2(I2_2,I1_2,I1_1,I2_1,n2,n3,n4,min_r,max_r,F_FC,
+     $     d_fdm2)
+      call dist_dm2(I2_1,I1_1,I1_2,I2_2,n2,n3,n4,min_r,max_r,F_FC,
+     $     d_fdm2)
+      call dist_dm2(I1_1,I2_1,I2_2,I1_2,n2,n3,n4,min_r,max_r,F_FC,
+     $     d_fdm2)
 !
  3900       CONTINUE
 !
@@ -1734,15 +1830,13 @@ C
                LABPOS = LAB1 + JPOSAE + LDISB(KBSYM,IGB,JGROAE)
 !
                JINDAE=IIND1(JSAE,ISAE)
-               JMA=MAX(JINDAE,IND1)
-               JMI=MIN(JINDAE,IND1)
 !
                JPERAE=IPERA(JSAE,ISAE)
                F_FC = 0.0D+00
                DO KKI=1,NXTW
             F_FC = F_FC + WSTATE(IWTS(KKI))*AB(LABPOS,KKI)*AB(JCIB,KKI)
                ENDDO
-               F_FC = F_FC*JPERAE*QJPER
+               F_FC = F_FC*JPERAE*QJPER/2.0d+00
 
 !B1 A2 -> A'1 B'2  WHERE: A'1 > A1    B'2 > B2
                   I1_1=IO1
@@ -1751,14 +1845,24 @@ C
                   I1_2=JJ
 
 !UP,DN->DN,UP
-                  FDM2(I1_2,I2_1,I2_2,I1_1) = 
-     $                 FDM2(I1_2,I2_1,I2_2,I1_1) + F_FC/2
-                  FDM2(I2_1,I1_2,I1_1,I2_2) = 
-     $                 FDM2(I2_1,I1_2,I1_1,I2_2) + F_FC/2
-                  FDM2(I2_2,I1_1,I1_2,I2_1) = 
-     $                 FDM2(I2_2,I1_1,I1_2,I2_1) + F_FC/2
-                  FDM2(I1_1,I2_2,I2_1,I1_2) = 
-     $                 FDM2(I1_1,I2_2,I2_1,I1_2) + F_FC/2
+c$$$                  FDM2(I1_2,I2_1,I2_2,I1_1) = 
+c$$$     $                 FDM2(I1_2,I2_1,I2_2,I1_1) + F_FC
+c$$$                  FDM2(I2_1,I1_2,I1_1,I2_2) = 
+c$$$     $                 FDM2(I2_1,I1_2,I1_1,I2_2) + F_FC
+c$$$                  FDM2(I2_2,I1_1,I1_2,I2_1) = 
+c$$$     $                 FDM2(I2_2,I1_1,I1_2,I2_1) + F_FC
+c$$$                  FDM2(I1_1,I2_2,I2_1,I1_2) = 
+c$$$     $                 FDM2(I1_1,I2_2,I2_1,I1_2) + F_FC
+
+      call dist_dm2(I1_2,I2_1,I2_2,I1_1,n2,n3,n4,min_r,max_r,F_FC,
+     $                 d_fdm2)
+      call dist_dm2(I2_1,I1_2,I1_1,I2_2,n2,n3,n4,min_r,max_r,F_FC,
+     $     d_fdm2)
+      call dist_dm2(I2_2,I1_1,I1_2,I2_1,n2,n3,n4,min_r,max_r,F_FC,
+     $     d_fdm2)
+      call dist_dm2(I1_1,I2_2,I2_1,I1_2,n2,n3,n4,min_r,max_r,F_FC,
+     $     d_fdm2)
+
 !
  4300       CONTINUE
 !
@@ -1822,8 +1926,6 @@ C
 !  LOOP OVER SINGLE BETA EXCITES FROM IBPOS
 !
                DO 2621 JBINDX=JB1ST(KSYM,IBPOS),JB1ST(KSYM+1,IBPOS)-1
-                  JMA=MAX(JINDAE,JB1IN(JBINDX))!A->A', B->B'
-                  JMI=MIN(JINDAE,JB1IN(JBINDX))
                   JCIB = JPOSAE+JB1PO(JBINDX)
                   JCIB2 = JPZA1+JB1PO(JBINDX)
                   F_FC = 0.0D+00
@@ -1832,8 +1934,8 @@ C
           F_FC = F_FC + WSTATE(IWTS(KKI))*AB(LABPOS,KKI)*AB(JCIB,KKI)
           F_FC1 =F_FC1+ WSTATE(IWTS(KKI))*AB(LABPOS2,KKI)*AB(JCIB2,KKI)
                  ENDDO
-                  F_FC = F_FC*JPERAE*JB1PE(JBINDX)
-                  F_FC1 = F_FC1*JPERAE*JB1PE(JBINDX)
+                  F_FC = F_FC*JPERAE*JB1PE(JBINDX)/2.0d+00
+                  F_FC1 = F_FC1*JPERAE*JB1PE(JBINDX)/2.0d+00
 
                   I1_1=IIND1O1(JSAE,ISAE)
                   I2_1=JB1O1(JBINDX)
@@ -1841,23 +1943,41 @@ C
                   I1_2=IIND1O2(JSAE,ISAE)
 
 !A1 B2 -> A'1 B'2  WHERE: A'1 > A1    B'2 > B2
-                  FDM2(I1_2,I2_2,I2_1,I1_1) = 
-     $                 FDM2(I1_2,I2_2,I2_1,I1_1) + F_FC/2
-                  FDM2(I2_2,I1_2,I1_1,I2_1) = 
-     $                 FDM2(I2_2,I1_2,I1_1,I2_1) + F_FC/2
-                  FDM2(I2_1,I1_1,I1_2,I2_2) = 
-     $                 FDM2(I2_1,I1_1,I1_2,I2_2) + F_FC/2
-                  FDM2(I1_1,I2_1,I2_2,I1_2) = 
-     $                 FDM2(I1_1,I2_1,I2_2,I1_2) + F_FC/2
-!EXCHANGE
-                  FDM2(I1_2,I2_1,I2_2,I1_1) = 
-     $                 FDM2(I1_2,I2_1,I2_2,I1_1) + F_FC1/2
-                  FDM2(I2_1,I1_2,I1_1,I2_2) = 
-     $                 FDM2(I2_1,I1_2,I1_1,I2_2) + F_FC1/2
-                  FDM2(I2_2,I1_1,I1_2,I2_1) = 
-     $                 FDM2(I2_2,I1_1,I1_2,I2_1) + F_FC1/2
-                  FDM2(I1_1,I2_2,I2_1,I1_2) = 
-     $                 FDM2(I1_1,I2_2,I2_1,I1_2) + F_FC1/2
+c$$$                  FDM2(I1_2,I2_2,I2_1,I1_1) = 
+c$$$     $                 FDM2(I1_2,I2_2,I2_1,I1_1) + F_FC
+c$$$                  FDM2(I2_2,I1_2,I1_1,I2_1) = 
+c$$$     $                 FDM2(I2_2,I1_2,I1_1,I2_1) + F_FC
+c$$$                  FDM2(I2_1,I1_1,I1_2,I2_2) = 
+c$$$     $                 FDM2(I2_1,I1_1,I1_2,I2_2) + F_FC
+c$$$                  FDM2(I1_1,I2_1,I2_2,I1_2) = 
+c$$$     $                 FDM2(I1_1,I2_1,I2_2,I1_2) + F_FC
+c$$$!EXCHANGE
+c$$$                  FDM2(I1_2,I2_1,I2_2,I1_1) = 
+c$$$     $                 FDM2(I1_2,I2_1,I2_2,I1_1) + F_FC1
+c$$$                  FDM2(I2_1,I1_2,I1_1,I2_2) = 
+c$$$     $                 FDM2(I2_1,I1_2,I1_1,I2_2) + F_FC1
+c$$$                  FDM2(I2_2,I1_1,I1_2,I2_1) = 
+c$$$     $                 FDM2(I2_2,I1_1,I1_2,I2_1) + F_FC1
+c$$$                  FDM2(I1_1,I2_2,I2_1,I1_2) = 
+c$$$     $                 FDM2(I1_1,I2_2,I2_1,I1_2) + F_FC1
+
+      call dist_dm2(I1_2,I2_2,I2_1,I1_1,n2,n3,n4,min_r,max_r,F_FC,
+     $                 d_fdm2)
+      call dist_dm2(I2_2,I1_2,I1_1,I2_1,n2,n3,n4,min_r,max_r,F_FC,
+     $     d_fdm2)
+      call dist_dm2(I2_1,I1_1,I1_2,I2_2,n2,n3,n4,min_r,max_r,F_FC,
+     $     d_fdm2)
+      call dist_dm2(I1_1,I2_1,I2_2,I1_2,n2,n3,n4,min_r,max_r,F_FC,
+     $     d_fdm2)
+
+      call dist_dm2(I1_2,I2_1,I2_2,I1_1,n2,n3,n4,min_r,max_r,F_FC1,
+     $     d_fdm2)
+      call dist_dm2(I2_1,I1_2,I1_1,I2_2,n2,n3,n4,min_r,max_r,F_FC1,
+     $     d_fdm2)
+      call dist_dm2(I2_2,I1_1,I1_2,I2_1,n2,n3,n4,min_r,max_r,F_FC1,
+     $     d_fdm2)
+      call dist_dm2(I1_1,I2_2,I2_1,I1_2,n2,n3,n4,min_r,max_r,F_FC1,
+     $     d_fdm2)
 !
  2621          CONTINUE
 !
@@ -1876,8 +1996,6 @@ C
 !
                DO 2601 JBINDX=JB1ST(KBSYM,IBPOS),JB1ST(KBSYM+1,IBPOS)-1
 !
-                  JMA=MAX(JINDAE,JB1IN(JBINDX))
-                  JMI=MIN(JINDAE,JB1IN(JBINDX))
 !$$$  <IIND1O1(JSAE,ISAE) JB1O1(JBINDX)|IIND1O2(JSAE,ISAE) JB1O2(JBINDX)>
 
                   JCIB=JPOSAE+JB1PO(JBINDX)
@@ -1885,7 +2003,7 @@ C
                  DO KKI=1,NXTW
               F_FC = F_FC +WSTATE(IWTS(KKI))*AB(LABPOS,KKI)*AB(JCIB,KKI)
                  ENDDO
-                  F_FC = F_FC*JPERAE*JB1PE(JBINDX)
+                  F_FC = F_FC*JPERAE*JB1PE(JBINDX)/2.0d+00
 
                   I1_1=IIND1O1(JSAE,ISAE)
                   I2_1=JB1O1(JBINDX)
@@ -1894,14 +2012,24 @@ C
 
 !A B A' B'  WHERE: A' > A    B' > B
 !DN,DN->UP,UP
-                  FDM2(I1_2,I2_2,I2_1,I1_1) = 
-     $                 FDM2(I1_2,I2_2,I2_1,I1_1) + F_FC/2
-                  FDM2(I2_2,I1_2,I1_1,I2_1) = 
-     $                 FDM2(I2_2,I1_2,I1_1,I2_1) + F_FC/2
-                  FDM2(I2_1,I1_1,I1_2,I2_2) = 
-     $                 FDM2(I2_1,I1_1,I1_2,I2_2) + F_FC/2
-                  FDM2(I1_1,I2_1,I2_2,I1_2) = 
-     $                 FDM2(I1_1,I2_1,I2_2,I1_2) + F_FC/2
+c$$$                  FDM2(I1_2,I2_2,I2_1,I1_1) = 
+c$$$     $                 FDM2(I1_2,I2_2,I2_1,I1_1) + F_FC
+c$$$                  FDM2(I2_2,I1_2,I1_1,I2_1) = 
+c$$$     $                 FDM2(I2_2,I1_2,I1_1,I2_1) + F_FC
+c$$$                  FDM2(I2_1,I1_1,I1_2,I2_2) = 
+c$$$     $                 FDM2(I2_1,I1_1,I1_2,I2_2) + F_FC
+c$$$                  FDM2(I1_1,I2_1,I2_2,I1_2) = 
+c$$$     $                 FDM2(I1_1,I2_1,I2_2,I1_2) + F_FC
+
+      call dist_dm2(I1_2,I2_2,I2_1,I1_1,n2,n3,n4,min_r,max_r,F_FC,
+     $                 d_fdm2)
+      call dist_dm2(I2_2,I1_2,I1_1,I2_1,n2,n3,n4,min_r,max_r,F_FC,
+     $     d_fdm2)
+      call dist_dm2(I2_1,I1_1,I1_2,I2_2,n2,n3,n4,min_r,max_r,F_FC,
+     $     d_fdm2)
+      call dist_dm2(I1_1,I2_1,I2_2,I1_2,n2,n3,n4,min_r,max_r,F_FC,
+     $     d_fdm2)
+
 !
  2601          CONTINUE
 !
@@ -1918,15 +2046,13 @@ C
 !
                DO 2611 JBINDX=JB1ST(KSYM,IBPOS),JB1ST(KSYM+1,IBPOS)-1
 !
-                  JMA=MAX(JINDAE,JB1IN(JBINDX))
-                  JMI=MIN(JINDAE,JB1IN(JBINDX))
 !$$$  <IIND1O1(JSAE,ISAE) JB1O1(JBINDX)|IIND1O2(JSAE,ISAE) JB1O2(JBINDX)>
                   JCIB=JPZA1+JB1PO(JBINDX)
                   F_FC = 0.0D+00
                  DO KKI=1,NXTW
            F_FC = F_FC + WSTATE(IWTS(KKI))*AB(LABPOS,KKI)*AB(JCIB,KKI)
                  ENDDO
-                  F_FC = F_FC*JPERAE*JB1PE(JBINDX)
+                  F_FC = F_FC*JPERAE*JB1PE(JBINDX)/2.0d+00
 
                   I1_1=IIND1O1(JSAE,ISAE)
                   I2_1=JB1O1(JBINDX)
@@ -1935,14 +2061,23 @@ C
 
 !A B A' B'  WHERE: A' > A    B' > B
 !UP,DN->DN,UP
-                  FDM2(I1_2,I2_1,I2_2,I1_1) = 
-     $                 FDM2(I1_2,I2_1,I2_2,I1_1) + F_FC/2
-                  FDM2(I2_1,I1_2,I1_1,I2_2) = 
-     $                 FDM2(I2_1,I1_2,I1_1,I2_2) + F_FC/2
-                  FDM2(I2_2,I1_1,I1_2,I2_1) = 
-     $                 FDM2(I2_2,I1_1,I1_2,I2_1) + F_FC/2
-                  FDM2(I1_1,I2_2,I2_1,I1_2) = 
-     $                 FDM2(I1_1,I2_2,I2_1,I1_2) + F_FC/2
+c$$$                  FDM2(I1_2,I2_1,I2_2,I1_1) = 
+c$$$     $                 FDM2(I1_2,I2_1,I2_2,I1_1) + F_FC
+c$$$                  FDM2(I2_1,I1_2,I1_1,I2_2) = 
+c$$$     $                 FDM2(I2_1,I1_2,I1_1,I2_2) + F_FC
+c$$$                  FDM2(I2_2,I1_1,I1_2,I2_1) = 
+c$$$     $                 FDM2(I2_2,I1_1,I1_2,I2_1) + F_FC
+c$$$                  FDM2(I1_1,I2_2,I2_1,I1_2) = 
+c$$$     $                 FDM2(I1_1,I2_2,I2_1,I1_2) + F_FC
+
+      call dist_dm2(I1_2,I2_1,I2_2,I1_1,n2,n3,n4,min_r,max_r,F_FC,
+     $                 d_fdm2)
+      call dist_dm2(I2_1,I1_2,I1_1,I2_2,n2,n3,n4,min_r,max_r,F_FC,
+     $     d_fdm2)
+      call dist_dm2(I2_2,I1_1,I1_2,I2_1,n2,n3,n4,min_r,max_r,F_FC,
+     $     d_fdm2)
+      call dist_dm2(I1_1,I2_2,I2_1,I1_2,n2,n3,n4,min_r,max_r,F_FC,
+     $     d_fdm2)
 !
  2611          CONTINUE
 !
@@ -1956,7 +2091,7 @@ C
 !  **** END OF SPECIAL CASE OF ONE SPACE *******
 !
  4898       CONTINUE
-            IF (GOPARR) CALL DDI_DLBNEXT(MY_TASK)
+!//disable            IF (GOPARR) CALL DDI_DLBNEXT(MY_TASK)
  4899       CONTINUE
             CALL MOVEUP2(LBOX1,NSPACE,NA,MSTA,IACON1)
  4900    CONTINUE
@@ -1967,10 +2102,10 @@ C
 !           --- THIS ENDS LOOP OVER ALPHA STRINGS ---
 !          --- NOW LOOP OVER PURE BETA EXCITATIONS ---
 !
-      IF (GOPARR) THEN
-         CALL DDI_DLBRESET()
-         CALL DDI_DLBNEXT(MY_TASK)
-      ENDIF
+!//disable      IF (GOPARR) THEN
+!//disable         CALL DDI_DLBRESET()
+!//disable         CALL DDI_DLBNEXT(MY_TASK)
+!//disable      ENDIF
 !
       CALL RESETCO(LBOX1,NSPACE,NB,IBMA,IBMI,LBOX5)
 !
@@ -1982,7 +2117,7 @@ C
 !  THE FULL BETA STRING LIST.
 !
          DO 7900 KKB=NBST(IGB)+1,NBST(IGB+1)
-            IF (GOPARR.AND.KKB-1.NE.MY_TASK) GOTO 7899
+!//disable            IF (GOPARR.AND.KKB-1.NE.MY_TASK) GOTO 7899
             JPZB1 = LSPB(KKB)
             KBSYM = LSYMB(KKB)
             KSYM=KTAB(KBSYM)
@@ -2043,7 +2178,6 @@ C
                      DO 7850 JJ=ISTA,IEND
                         IS2 = IOB(JJ)
                         IP1 = LGMUL(IS1,IS2)
-                        IND = INDEX(JJ) + IO1
 !
               CALL REDE00(IBCON1,IBCON2,NB,IB1,IGAP-1,JJ,JPERB)
                   IF (LBOX2(ISPB2).GT.IBMA(ISPB2)) GOTO 7800
@@ -2069,17 +2203,6 @@ C
               DO 7712 IK=1,NB
                  IF (IK.EQ.IB1) GOTO 7712
                  ION = IBCON1(IK)
-                 J1 = INDEX(ION+1)
-                 JMA = MAX(J1,IND)
-                 JMI = MIN(J1,IND)
-                 JMA = MAX(ION,JJ)
-                 JMI = MIN(ION,JJ)
-                 J1 = INDEX(JMA)+JMI
-                 JMA = MAX(IO1,ION)
-                 JMI = MIN(IO1,ION)
-                 J2 = INDEX(JMA)+JMI
-                 JMA = MAX(J1,J2)
-                 JMI = MIN(J1,J2)
 !
               DO 7710 IGA=1,ITGA
               IF (LGCOM(IGB,IGA).NE.1.OR.LGCOM(IGB2,IGA).NE.1) GOTO 7710
@@ -2097,18 +2220,28 @@ C
                  DO KKI=1,NXTW
               F_FC = F_FC + WSTATE(IWTS(KKI))*AB(JCI1,KKI)*AB(JCI2,KKI)
                  ENDDO
-                 F_FC = F_FC*KPER1
+                 F_FC = F_FC*KPER1/2.0d+00
 
 !B,B2,B2,B' WHERE : B' > B 
-                 FDM2(JJ,ION,ION,IO1) = FDM2(JJ,ION,ION,IO1) + F_FC/2
-                 FDM2(ION,JJ,IO1,ION) = FDM2(ION,JJ,IO1,ION) + F_FC/2
-                 FDM2(JJ,ION,IO1,ION) = FDM2(JJ,ION,IO1,ION) - F_FC/2
-                 FDM2(ION,JJ,ION,IO1) = FDM2(ION,JJ,ION,IO1) - F_FC/2
-!$$$ (DE)EXCITE BELOW
-                 FDM2(IO1,ION,ION,JJ) = FDM2(IO1,ION,ION,JJ) + F_FC/2
-                 FDM2(ION,IO1,JJ,ION) = FDM2(ION,IO1,JJ,ION) + F_FC/2
-                 FDM2(IO1,ION,JJ,ION) = FDM2(IO1,ION,JJ,ION) - F_FC/2
-                 FDM2(ION,IO1,ION,JJ) = FDM2(ION,IO1,ION,JJ) - F_FC/2
+c$$$                 FDM2(JJ,ION,ION,IO1) = FDM2(JJ,ION,ION,IO1) + F_FC
+c$$$                 FDM2(ION,JJ,IO1,ION) = FDM2(ION,JJ,IO1,ION) + F_FC
+c$$$                 FDM2(JJ,ION,IO1,ION) = FDM2(JJ,ION,IO1,ION) - F_FC
+c$$$                 FDM2(ION,JJ,ION,IO1) = FDM2(ION,JJ,ION,IO1) - F_FC
+c$$$!$$$ (DE)EXCITE BELOW
+c$$$                 FDM2(IO1,ION,ION,JJ) = FDM2(IO1,ION,ION,JJ) + F_FC
+c$$$                 FDM2(ION,IO1,JJ,ION) = FDM2(ION,IO1,JJ,ION) + F_FC
+c$$$                 FDM2(IO1,ION,JJ,ION) = FDM2(IO1,ION,JJ,ION) - F_FC
+c$$$                 FDM2(ION,IO1,ION,JJ) = FDM2(ION,IO1,ION,JJ) - F_FC
+
+         call dist_dm2(JJ,ION,ION,IO1,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+         call dist_dm2(ION,JJ,IO1,ION,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+         call dist_dm2(JJ,ION,IO1,ION,n2,n3,n4,min_r,max_r,-F_FC,d_fdm2)
+         call dist_dm2(ION,JJ,ION,IO1,n2,n3,n4,min_r,max_r,-F_FC,d_fdm2)
+
+         call dist_dm2(IO1,ION,ION,JJ,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+         call dist_dm2(ION,IO1,JJ,ION,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+         call dist_dm2(IO1,ION,JJ,ION,n2,n3,n4,min_r,max_r,-F_FC,d_fdm2)
+         call dist_dm2(ION,IO1,ION,JJ,n2,n3,n4,min_r,max_r,-F_FC,d_fdm2)
 
  7695         CONTINUE
 !
@@ -2141,19 +2274,22 @@ C
                  DO KKI=1,NXTW
               F_FC = F_FC + WSTATE(IWTS(KKI))*AB(JCI1,KKI)*AB(JCI2,KKI)
                  ENDDO
-                 F_FC = F_FC*KPER1
+                 F_FC = F_FC*KPER1/2.0d+00
 !
                  DO 7670 IK=1,NA
                     ION = IACON1(IK)
-                    J1 = INDEX(ION+1)
-                    JMA = MAX(J1,IND)
-                    JMI = MIN(J1,IND)
+
 !$$$ <IO1 ION |JJ ION>
 !B,A,A,B'    WHERE: B' > B
-                 FDM2(JJ,ION,ION,IO1) = FDM2(JJ,ION,ION,IO1) + F_FC/2
-                 FDM2(ION,JJ,IO1,ION) = FDM2(ION,JJ,IO1,ION) + F_FC/2
-                 FDM2(IO1,ION,ION,JJ) = FDM2(IO1,ION,ION,JJ) + F_FC/2
-                 FDM2(ION,IO1,JJ,ION) = FDM2(ION,IO1,JJ,ION) + F_FC/2
+c$$$                 FDM2(JJ,ION,ION,IO1) = FDM2(JJ,ION,ION,IO1) + F_FC
+c$$$                 FDM2(ION,JJ,IO1,ION) = FDM2(ION,JJ,IO1,ION) + F_FC
+c$$$                 FDM2(IO1,ION,ION,JJ) = FDM2(IO1,ION,ION,JJ) + F_FC
+c$$$                 FDM2(ION,IO1,JJ,ION) = FDM2(ION,IO1,JJ,ION) + F_FC
+
+         call dist_dm2(JJ,ION,ION,IO1,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+         call dist_dm2(ION,JJ,IO1,ION,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+         call dist_dm2(IO1,ION,ION,JJ,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+         call dist_dm2(ION,IO1,JJ,ION,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
 
  7670            CONTINUE
 !
@@ -2265,16 +2401,6 @@ C
               KBPOS3 = JPOSB3 + NIBS3
               JPZB3 = LSPB(KBPOS3)
 !
-                 JMA=MAX(JJ3,IO3)
-                 JMI=MIN(JJ3,IO3)
-                 I2 = INDEX(JMA) + JMI
-                 II1 = INDEX(JJ3) + IO1
-                 JMA=MAX(IO3,JJ)
-                 JMI=MIN(IO3,JJ)
-                 II2 = INDEX(JMA) + JMI
-                 JMA=MAX(II1,II2)
-                 JMI=MIN(II1,II2)
-!
 !  LOOP OVER ALPHA STRINGS OF RIGHT SYMMETRY AND GROUP.
 !
               DO 6700 IGA=1,ITGA
@@ -2292,18 +2418,29 @@ C
                  DO KKI=1,NXTW
               F_FC = F_FC + WSTATE(IWTS(KKI))*AB(JCI1,KKI)*AB(JCI3,KKI)
                  ENDDO
-                 F_FC = F_FC*IPER3
+                 F_FC = F_FC*IPER3/2.0d+00
 
 !B B2 -> B'2 B' WHERE: B'2 > B2  B' > B     B2 > B     B'2 > B2' 
-                 FDM2(JJ,JJ3,IO3,IO1) = FDM2(JJ,JJ3,IO3,IO1) + F_FC/2
-                 FDM2(JJ3,JJ,IO1,IO3) = FDM2(JJ3,JJ,IO1,IO3) + F_FC/2
-                 FDM2(JJ,JJ3,IO1,IO3) = FDM2(JJ,JJ3,IO1,IO3) - F_FC/2
-                 FDM2(JJ3,JJ,IO3,IO1) = FDM2(JJ3,JJ,IO3,IO1) - F_FC/2
-!$$$!----(DE)EXCITE BELOW
-                 FDM2(IO1,IO3,JJ3,JJ) = FDM2(IO1,IO3,JJ3,JJ) + F_FC/2
-                 FDM2(IO3,IO1,JJ,JJ3) = FDM2(IO3,IO1,JJ,JJ3) + F_FC/2
-                 FDM2(IO1,IO3,JJ,JJ3) = FDM2(IO1,IO3,JJ,JJ3) - F_FC/2
-                 FDM2(IO3,IO1,JJ3,JJ) = FDM2(IO3,IO1,JJ3,JJ) - F_FC/2
+c$$$                 FDM2(JJ,JJ3,IO3,IO1) = FDM2(JJ,JJ3,IO3,IO1) + F_FC
+c$$$                 FDM2(JJ3,JJ,IO1,IO3) = FDM2(JJ3,JJ,IO1,IO3) + F_FC
+c$$$                 FDM2(JJ,JJ3,IO1,IO3) = FDM2(JJ,JJ3,IO1,IO3) - F_FC
+c$$$                 FDM2(JJ3,JJ,IO3,IO1) = FDM2(JJ3,JJ,IO3,IO1) - F_FC
+c$$$!$$$!----(DE)EXCITE BELOW
+c$$$                 FDM2(IO1,IO3,JJ3,JJ) = FDM2(IO1,IO3,JJ3,JJ) + F_FC
+c$$$                 FDM2(IO3,IO1,JJ,JJ3) = FDM2(IO3,IO1,JJ,JJ3) + F_FC
+c$$$                 FDM2(IO1,IO3,JJ,JJ3) = FDM2(IO1,IO3,JJ,JJ3) - F_FC
+c$$$                 FDM2(IO3,IO1,JJ3,JJ) = FDM2(IO3,IO1,JJ3,JJ) - F_FC
+
+         call dist_dm2(JJ,JJ3,IO3,IO1,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+         call dist_dm2(JJ3,JJ,IO1,IO3,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+         call dist_dm2(JJ,JJ3,IO1,IO3,n2,n3,n4,min_r,max_r,-F_FC,d_fdm2)
+         call dist_dm2(JJ3,JJ,IO3,IO1,n2,n3,n4,min_r,max_r,-F_FC,d_fdm2)
+
+         call dist_dm2(IO1,IO3,JJ3,JJ,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+         call dist_dm2(IO3,IO1,JJ,JJ3,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+         call dist_dm2(IO1,IO3,JJ,JJ3,n2,n3,n4,min_r,max_r,-F_FC,d_fdm2)
+         call dist_dm2(IO3,IO1,JJ3,JJ,n2,n3,n4,min_r,max_r,-F_FC,d_fdm2)
+
 
  6680         CONTINUE
 !
@@ -2346,19 +2483,9 @@ C
 !
             DO 69 II=1,NB
                I1 = IBCON1(II)
-               IND1 = INDEX(I1+1)
 !
               DO 74 JJ=II+1,NB
                  I2 = IBCON1(JJ)
-                 IND2 = INDEX(I2+1)
-                 INDM = IND2 - I2 + I1
-!$$$ <I2 I1 |I1 I2>
-
-                 J1 = INDEX(INDM+1)
-                 JMI = MIN(IND1,IND2)
-                 JMA = MAX(IND1,IND2)
-                 J2 = INDEX(JMA) + JMI
-!$$$ <I1 I2 |I1 I2>
 !
               DO 6710 IGA=1,ITGA
               IF (LGCOM(IGB,IGA).NE.1) GOTO 6710
@@ -2375,10 +2502,15 @@ C
                  ENDDO
 
 !B1 B'2 -> B'2 B1   WHERE: B'2 > B1
-                 FDM2(I1,I2,I2,I1) = FDM2(I1,I2,I2,I1) + F_FC
-                 FDM2(I1,I2,I1,I2) = FDM2(I1,I2,I1,I2) - F_FC
-                 FDM2(I2,I1,I1,I2) = FDM2(I2,I1,I1,I2) + F_FC
-                 FDM2(I2,I1,I2,I1) = FDM2(I2,I1,I2,I1) - F_FC
+c$$$                 FDM2(I1,I2,I2,I1) = FDM2(I1,I2,I2,I1) + F_FC
+c$$$                 FDM2(I1,I2,I1,I2) = FDM2(I1,I2,I1,I2) - F_FC
+c$$$                 FDM2(I2,I1,I1,I2) = FDM2(I2,I1,I1,I2) + F_FC
+c$$$                 FDM2(I2,I1,I2,I1) = FDM2(I2,I1,I2,I1) - F_FC
+
+             call dist_dm2(I1,I2,I2,I1,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+            call dist_dm2(I1,I2,I1,I2,n2,n3,n4,min_r,max_r,-F_FC,d_fdm2)
+             call dist_dm2(I2,I1,I1,I2,n2,n3,n4,min_r,max_r,F_FC,d_fdm2)
+            call dist_dm2(I2,I1,I2,I1,n2,n3,n4,min_r,max_r,-F_FC,d_fdm2)
 
  6690         CONTINUE
 !
@@ -2388,7 +2520,7 @@ C
 !
    69         CONTINUE
 !
-            IF (GOPARR) CALL DDI_DLBNEXT(MY_TASK)
+!//disable            IF (GOPARR) CALL DDI_DLBNEXT(MY_TASK)
  7899       CONTINUE
             CALL MOVEUP2(LBOX1,NSPACE,NB,MSTA,IBCON1)
  7900    CONTINUE
@@ -2396,50 +2528,127 @@ C
          CALL PUSHCO(LBOX1,NSPACE,NB,IBMA,IBMI,LBOX5,IEND)
  8000 CONTINUE
 !
-      IF (GOPARR) THEN
-         CALL DDI_DLBRESET()
-         CALL DDI_GSUMF(2901,FDM2,NACT**4)
-      ENDIF
+!//disable      IF (GOPARR) THEN
+!//disable         CALL DDI_DLBRESET()
+!//disable         CALL DDI_GSUMF(2901,FDM2,NACT**4)
+!//disable      ENDIF
 !
       IF(SOME) WRITE(IW,9390)
       IF(SOME) CALL TIMIT(1)
       IF(SOME)CALL FLSHBF(6)
 !
-      CALL R12_F_NAME('R12INP',FILENM2)
-!
-      NULL = CHAR(0)
-      DO 101 KOL=1,256
-         IF(FILENM2(KOL:KOL).EQ.' '  .OR.
-     *      FILENM2(KOL:KOL).EQ.NULL) GO TO 102
-  101 CONTINUE
-      KOL=257
-  102 CONTINUE
+c$$$      CALL R12_F_NAME('R12INP',FILENM2)
+c$$$!
+c$$$      NULL = CHAR(0)
+c$$$      DO 101 KOL=1,256
+c$$$         IF(FILENM2(KOL:KOL).EQ.' '  .OR.
+c$$$     *      FILENM2(KOL:KOL).EQ.NULL) GO TO 102
+c$$$  101 CONTINUE
+c$$$      KOL=257
+c$$$  102 CONTINUE
+c$$$      KOL=KOL-1
+c$$$!
+c$$$! WRITE THE 2PDM TO DISK FILE 'PT2RDM'
+c$$$      DSKSAV=DSKWRK
+c$$$      DSKWRK=.FALSE.
+c$$$      IF(MASWRK)THEN
+c$$$      OPEN(UNIT=99,FILE=FILENM2(1:KOL)//'.input.pt2r12.rdm2.dat',
+c$$$     $        STATUS='UNKNOWN')
+c$$$      DO I = 1,NACT
+c$$$         DO II = 1,NACT
+c$$$            DO III = 1,NACT
+c$$$               DO 110 IV = 1,NACT
+c$$$!                  IF(ABS(FDM2(I,II,III,IV)).LT.RDM2TOL) go to 110
+c$$$                  WRITE(99,'(4I8,F22.16)')I,II,IV,III,FDM2(I,II,III,IV)
+c$$$  110          CONTINUE
+c$$$            ENDDO
+c$$$         ENDDO
+c$$$      ENDDO
+c$$$      WRITE(99,'(4I8,F22.16)')-1,-1,-1,-1,-1.0D+00
+c$$$      REWIND(99)
+c$$$      CLOSE(UNIT=99,STATUS='KEEP')
+c$$$
+c$$$      ENDIF                     !IF(MASWRK)
+c$$$      DSKWRK=DSKSAV
+
+!///////////////
+!//
+!//   now for some 'ring-around-the-rosey' style data passing
+!//
+!///////////////
+      if(me.eq.master)then
+         CALL R12_F_NAME('R12INP',FILENM2)
+         NULL = CHAR(0)
+         DO KOL=1,256
+            IF(FILENM2(KOL:KOL).EQ.' '.OR.FILENM2(KOL:KOL).EQ.NULL)
+     $           GOTO 103
+         enddo
+         KOL=257
+  103 CONTINUE
       KOL=KOL-1
-!
-! WRITE THE 2PDM TO DISK FILE 'PT2RDM'
-      DSKSAV=DSKWRK
-      DSKWRK=.FALSE.
-      IF(MASWRK)THEN
+!      OPEN(UNIT=99,FILE=FILENM2(1:KOL)//'.partial.rdm2.dat',
       OPEN(UNIT=99,FILE=FILENM2(1:KOL)//'.input.pt2r12.rdm2.dat',
-     $        STATUS='UNKNOWN')
-      DO I = 1,NACT
-         DO II = 1,NACT
-            DO III = 1,NACT
-               DO 110 IV = 1,NACT
-                  IF(ABS(FDM2(I,II,III,IV)).LT.RDM2TOL) go to 110
-                  WRITE(99,'(4I8,F22.16)')I,II,IV,III,FDM2(I,II,III,IV)
-  110          CONTINUE
-            ENDDO
-         ENDDO
-      ENDDO
+     $     STATUS='REPLACE')
+      endif  !(me.eq.master)
+
+!// lets synchonize for fun
+      IF(GOPARR) CALL DDI_SYNC(9205)
+
+      do iproc = 0,nproc-1
+
+         if(me.eq.master)then
+
+!// if iproc is master id, then we do not have to recieve anything, write master info first.
+!//    if master id is not zero, this will not end well...the below assums master id = 0
+            if(iproc.ne.master)then
+               CALL VCLR(d_fdm2  ,1,id_size)
+               CALL DDI_RECV(d_fdm2(1),id_size*8,iproc)
+            endif
+            min_r = (iproc)*id_size
+            max_r = (iproc+1)*id_size-1
+            jj = 0
+            DO I = 1,NACT
+               DO II = 1,NACT
+                  DO III = 1,NACT
+                     DO IV = 1,NACT
+                        jj = jj +1
+                        if(jj.lt.min_r+1.or.jj.gt.max_r+1)cycle
+                        IF(ABS(d_FDM2(jj-min_r)).LT.RDM2TOL)cycle
+                        WRITE(99,'(4I8,F22.16)')I,II,IV,III,
+     $                       d_fdm2(jj-min_r)
+c$$$                        WRITE(6,'(4I8,F22.16,2i8)')I,II,IV,III,
+c$$$     $                       d_fdm2(jj-min_r),jj-min_r,id_size
+
+                     enddo      !IV
+                  ENDDO         !III
+               ENDDO            !II
+            ENDDO               !I
+         elseif(me.eq.iproc)then
+
+!// everyone (but master) sends there d_fdm2 to master
+            CALL DDI_SEND(d_fdm2(1),id_size*8,master)            
+
+         endif                  !(me.eq.master)
+
+!// we have to synchonize processes
+         IF(GOPARR) CALL DDI_SYNC(9206)
+         
+      enddo                     !iproc
+
+!// write the termination string to our dm2 file      
+      if(me.eq.master)then
       WRITE(99,'(4I8,F22.16)')-1,-1,-1,-1,-1.0D+00
-      REWIND(99)
-      CLOSE(UNIT=99,STATUS='KEEP')
-      ENDIF                     !IF(MASWRK)
-      DSKWRK=DSKSAV
-!
+      close(99,status='KEEP')
+      endif
+
+!// publish timing info
+      IF(SOME) WRITE(IW,9395)
+      IF(SOME) CALL TIMIT(1)
+      IF(SOME)CALL FLSHBF(6)
+
+!//
       RETURN
-!
+!//
  9340 FORMAT(1X,'STATE=',I4,'   ENERGY=',F20.10,'   WEIGHT=',F8.5,
      *           '   S=',F6.2/)
  9350 FORMAT(/1X,'***** ERROR *****'/
@@ -2447,6 +2656,8 @@ C
      *       1X,'BUT YOU REQUESTED STATE AVERAGING OF',I5,' ROOTS.'/
      *       1X,'PLEASE EXAMINE YOUR CHOICE OF -NSTATE- INPUT DATA.'/)
  9390 FORMAT(10X,'...DONE WITH 2 PARTICLE SPIN-FREE DENSITY MATRIX...'/)
+ 9395 FORMAT(/3X,'...FINISHED WRITING 2 PARTICLE SPIN-FREE ',
+     $      'DENSITY MATRIX TO DISK...'/)
 !
       END
 !------------------------------------------------------------------------
@@ -2918,6 +3129,52 @@ C
 !
       RETURN
       END
+!------------------------------------------------------------------------
+!========================================================================
+!------------------------------------------------------------------------
+!*MODULE EXCORR  *DECK DIST_DM2
+C> @brief      This routine addes dm2 elemnt to spin-free dm2 vector
+C> 
+C> @author     Luke Roskop
+C>             -2013
+C> 
+C> @details    This routine adds dm2 elemnt to dm2 vector
+C> 
+C> @date 2/11/13-Luke Roskop
+C> -new rountine to added DM element to vector DM2
+C>
+C> @param I orbital index
+C> @param J orbital index
+C> @param K orbital index
+C> @param L orbital index
+C> @param N2 hypercube offset
+C> @param N3 hypercube offset
+C> @param N4 hypercube offset
+C> @param MIN minimum range of processed DM2
+C> @param MAX maximum range of processes DM2
+C> @param ELEMENT element to be added to DM2
+C> @param DM2 spin-free two-particle density matrix
+      SUBROUTINE DIST_DM2(I,J,K,L,N2,N3,N4,MIN,MAX,ELEMENT,DM2)
+      IMPLICIT NONE
+!// PASSED IN
+      INTEGER I,J,K,L,N2,N3,N4,MIN,MAX
+      DOUBLE PRECISION ELEMENT,DM2(*)
+!// LOCAL
+      INTEGER POS
+!//      
+!// FIGURE OUT GLOBAL POSTION (-1) OF DM ELEMENT IN HYPERCUBE
+      POS = I-1 + (J-1)*N2 + (K-1)*N3 + (L-1)*N4
+!//
+!// FIGURE OUT WHEATHER POS IS IN THE RANGE OF THE PROCESSES DM2 CHUNK
+      IF(POS.LT.MIN.OR.POS.GT.MAX)RETURN
+!//
+!// GET POSITION RELATIVE TO PROCESSES LOCAL CHUNK AND ADD ELEMENT TO DM2      
+      POS = POS -MIN +1
+      DM2(POS) = DM2(POS) + ELEMENT
+!//
+      RETURN
+!//
+      END SUBROUTINE DIST_DM2
 !------------------------------------------------------------------------
 !========================================================================
 !------------------------------------------------------------------------
