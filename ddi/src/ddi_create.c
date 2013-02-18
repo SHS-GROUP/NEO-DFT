@@ -8,7 +8,7 @@
  * 10 Jun 09 - RMO - allow for one data server/node on Cray
  * 29 Mar 10 - SS  - add missing 3rd argument to ddi-send-request
  * 18 Aug 10 - MWS - use 64 bit integer for printing of DM total size
- *  6 Feb 13 - MWS - trap for >2 Gword MEMDDI slice size
+ * 18 Feb 13 - MWS - trap for >2 Gword MEMDDI slice size
 \* -------------------------------------------------------------------- */
  # include "ddi_base.h"
 
@@ -130,11 +130,12 @@
       longrows  = idim;
       longcols  = jdim;
       totwrds   = longrows*longcols;
-   /*     big memory pool over 2 Gwords is OK, but each slice    */
-   /*     (MEMDDI per data server) must be under 2 GWords.       */
-   /*     TCP/IP on one node has gv(nd)=-1 since no d.s. exists  */
+   /*     Total distributed array over 2 Gwords is OK, but each  */
+   /*     slice (MEMDDI per data server) must be under 2 GWords. */
+   /*     TCP/IP on one node has gv(nd)=-1 since no d.s. exists, */
+   /*     Cray on one node has gv(nd)=0 since no d.s. exists.    */
       longnd    = gv(nd);
-      if (longnd == -1) longnd=1;
+      if (longnd <= 0) longnd=1;
       longslice = totwrds/longnd;
    /*  next is largest signed 32 bit integer, stored as 64 bit quantity  */
       long2g   = 2147483643;

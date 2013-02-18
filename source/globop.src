@@ -1,3 +1,4 @@
+C 18 Feb 13 - JAB - GLOBDR: fix generation of "linear" random configs 
 C 19 Oct 12 - MWS - synchronize FRGINF common
 C 24 JUL 12 - DGF - PAD COMMON FOR FMO 4.3
 C 17 APR 12 - MWS - DUMP LIST OF CHEMICAL SYMBOLS AT TOP OF .TRJ FILE
@@ -38,6 +39,18 @@ C 13 JUN 01 - MWS - GLOFRG: CALL MEMORY ROUTINE FOR CAVITY CONSTRUCTION
 C 20 FEB 01 - PND - MONTE CARLO/SIMULATED ANNEALING GLOBAL OPTIMIZER
 C
 C*MODULE GLOBOP  *DECK GLOPDR
+C> @brief   Top-level driver for EFP Monte Carlo simulations
+C>
+C> @details Reads $GLOBOP input group, generates random initial cluster
+C> configuration if RNDINI=.true., etc.
+C>
+C> @author  Paul N. Day, 
+C> - Feb 2001 - Subroutine written
+C>
+C> @date Jan 2013, Jerry A. Boatz
+C> - Allocated sufficient memory for array of random numbers, plus bug
+C> - fix for generating "linear" random initial cluster geometries.
+C>
       SUBROUTINE GLOPDR
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
@@ -414,11 +427,19 @@ C
 C
 C        SELECT THE STORAGE SIZE FOR RANDOM NUMBERS
 C
-      IF(AIMOVE.EQ.0.0D+00) THEN
-         IMXRAN = NGEOPT*(6*NFRMOV+1)
-      ELSE
-         IMXRAN = NGEOPT*(6*NFRMOV+3*NAT+1)
-      END IF
+c-orig-jab-24jan2013
+c     IF(AIMOVE.EQ.0.0D+00) THEN
+c        IMXRAN = NGEOPT*(6*NFRMOV+1)
+c     ELSE
+c        IMXRAN = NGEOPT*(6*NFRMOV+3*NAT+1)
+c     END IF
+c-orig-jab-24jan2013
+      mptsum = 0
+      do ifrg=1,nfrg
+         mptsum = mptsum + nmpts(ifrg)
+      end do
+      imxran = nfrg*6*mptsum+1
+      if (aimove .gt. zero) imxran = imxran + 3*nat
 C
       MXBF=0
       DO I = 1, NFRG
@@ -582,6 +603,18 @@ C
             ENDDO
          END IF
 C
+C  GENERATE IMXRAN RANDOM NUMBERS
+C
+         INIT=0
+         IF(MASWRK) THEN
+            CALL RNGEN(XX(LRN),IMXRAN,IRTP,INIT)
+            CALL DDI_BCAST(2600,'F',XX(LRN),IMXRAN,MASTER)
+         ELSE
+            CALL DDI_BCAST(2600,'F',XX(LRN),IMXRAN,MASTER)
+         END IF
+         INIT=1
+         IRN=LRN
+C
          DO 111 IMF=1,NFRG
 C
 C CHOOSE A FRAGMENT WE HAVE NOT YET MOVED
@@ -610,18 +643,6 @@ C
          ELSE
             INF=IMF
          END IF
-C
-C  GENERATE IMXRAN RANDOM NUMBERS
-C
-         INIT=0
-         IF(MASWRK) THEN
-            CALL RNGEN(XX(LRN),IMXRAN,IRTP,INIT)
-            CALL DDI_BCAST(2600,'F',XX(LRN),IMXRAN,MASTER)
-         ELSE
-            CALL DDI_BCAST(2600,'F',XX(LRN),IMXRAN,MASTER)
-         END IF
-         INIT=1
-         IRN=LRN
 C
          NMST=0
          NPST=0
@@ -2629,14 +2650,14 @@ C
            YF = EFC(2,IAT)
            ZF = EFC(3,IAT)
            IF(ICOORD.NE.4) THEN
-           DO 200 I = 1,NAT
+            DO 200 I = 1,NAT
              SEP2 = (XF-C(1,I))**2+(YF-C(2,I))**2+(ZF-C(3,I))**2
              SEP = 8.0D-01*SQRT(SEP2)
              IF(SEP.LT.SEPTOL) THEN
              ALERT = .TRUE.
              RETURN
              END IF
-  200      CONTINUE
+  200       CONTINUE
            END IF
            IAT2=0
            KMASS2=0
@@ -2651,8 +2672,8 @@ C
                  SEP2 = (XF-XF2)**2+(YF-YF2)**2+(ZF-ZF2)**2
                  SEP = 8.0D-01*SQRT(SEP2)
                  IF(SEP.LT.SEPTOL) THEN
-                 ALERT = .TRUE.
-                 RETURN
+                  ALERT = .TRUE.
+                  RETURN
                  END IF
                END IF
   201        CONTINUE
