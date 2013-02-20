@@ -1,3 +1,4 @@
+C 20 Feb 13 - JAM - UHFOP: implement Constrained UHF
 C  6 Feb 13 - MWS - shorten lines past column 72 (mostly format)
 C 19 Oct 12 - MWS - synchronize FRGINF common
 C  7 Sep 12 - AA  - update interface to LIBCCHEM
@@ -343,12 +344,12 @@ C
       END
 C*MODULE RHFUHF  *DECK DEMRHF
 C> @brief      CALCULATE RHF ENERGY FOR DIRECT ENERGY MINIMIZATION.
-C> 
+C>
 C> @author     Unkown
 C>             -Unknown
-C> 
+C>
 C> @details    CALCULATE RHF ENERGY FOR DIRECT ENERGY MINIMIZATION.
-C> 
+C>
 C> @date January 21, 2013-Aaron West
 C> -Modified OVLSEL arguments.
 C>
@@ -387,7 +388,7 @@ C
       CALL GLDIAG(L1,L0,L0,FMO,SCR,EIG,VEC,IGERR,IWRK)
       IF(IGERR.NE.0) CALL ABRT
       CALL TFSQB(VEC,V0,SCR,L0,L1,L1)
-      idum=0 
+      idum=0
       CALL OVLSEL(VEC,EIG,V0,S,SMO,SCR,IWRK,SCR,
      *            IDUM,IDUM,L0,L1,L2,.FALSE.,L0)
       CALL DMTX(D,VEC,OCC,NOCC,L1,L1)
@@ -1865,7 +1866,7 @@ C
       COMMON /RUNLAB/ TITLE(10),ANAM(MXATM),BNAM(MXATM),BFLAB(MXAO)
       COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
       COMMON /SCFOPT/ CONVHF,MAXIT,MCONV,NPUNCH,NPREO(4)
-      COMMON /SCFWFN/ AROHF(3),BROHF(3),PACAVO(6),IACAVO,IUHFNO,
+      COMMON /SCFWFN/ AROHF(3),BROHF(3),PACAVO(6),IACAVO,IUHFNO,ICUHF,
      *                MVOQ
       COMMON /SHLT  / SHLTOL,CUTOFF,ICOUNT,SHLOUT
       COMMON /SIMDAT/ NACC,NREJ,IGOMIN,NRPA,IBWM,NACCT,NREJT,NRPAT,
@@ -2563,7 +2564,7 @@ C     RECORD 16 CONTAINS THE MP2 DENSITY, SO WE READ FROM RECORD 308
 C
       IF(ISEPS  .AND.  MP2ITER.EQ.1) THEN
          CALL DAREAD(IDAF,IODA,X(LD),LL2,308,0)
-         IF (COSBUG) THEN 
+         IF (COSBUG) THEN
           WRITE(IW,*)
           WRITE(IW,*)"    READING IN SCF-DENSITY AGAIN FOR MP2ITER=1"
          END IF
@@ -3164,7 +3165,7 @@ C                      ----- COSMO -----
 C     ADD IN CORRECTION DUE TO SOLVENT SCREENING SELF-CONSISTENTLY
 C     FIXED SCREENING CHARGES FOR HF PART WITHIN MP2 (MP2ITER=1)
 C
-      IF(ISEPS  .AND.  MP2ITER.EQ.0) CALL COSADD(.TRUE.)      
+      IF(ISEPS  .AND.  MP2ITER.EQ.0) CALL COSADD(.TRUE.)
 C
 C     * * * * * END OF SOLVATION MODEL CORRECTIONS TO 1E- TERM * * * * *
 C
@@ -4181,15 +4182,15 @@ C
      *             X(LWRK1),X(LWRK2),X(LWRK3),X(LSCR),X(LIWRK),
      *             L0,L1,L2,L3,NOCC)
       END IF
-C     
+C
 C     ----- RHF STABILITY ANALYSIS ----
 C
-      IF(SCFTYP.EQ.RHF .AND. UHFCHK) THEN 
-         NOCC=NA   
+      IF(SCFTYP.EQ.RHF .AND. UHFCHK) THEN
+         NOCC=NA
          NPRINT = 2
-         LHOMO = NHOMO 
+         LHOMO = NHOMO
          LLUMO = NLUMO
-C 
+C
          IF (LHOMO .LT. -(NOCC-1)) THEN
              WRITE(IW,9400)
              CALL ABRT
@@ -4636,7 +4637,7 @@ C
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
       COMMON /MFRPAR/ MFRZ,NUMFRZ,NORFRZ,IFRZ(MXAO)
       COMMON /ELGIDX/ LCUT   ! RELATED TO ELONGATION METHOD
-      COMMON /SCFWFN/ AROHF(3),BROHF(3),PACAVO(6),IACAVO,IUHFNO,
+      COMMON /SCFWFN/ AROHF(3),BROHF(3),PACAVO(6),IACAVO,IUHFNO,ICUHF,
      *                MVOQ
 C
       DIMENSION FA(L2),FB(L2),FMO(L2),V(L3),SCR(L1),S(L2),T(L3)
@@ -4813,6 +4814,125 @@ C
 C
  9000 FORMAT(//20X, 'UHF/ROHF LAGRANGIAN')
       END
+C
+C*MODULE RHFUHF  *DECK CUHF
+C>
+C>   @brief    assemble constrained UHF Fock operators
+C>
+C>   @author   Jason Byrd and John Montgomery, 2013
+C>
+      SUBROUTINE CUHF(FA,FB,FMOA,FMOB,VA,SCR,S,T,NA,NB,L0,L1,L2,L3,OUT)
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      LOGICAL OUT,JV,IC
+C
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+C
+      DIMENSION FA(*),FB(*),FMOA(*),FMOB(*),VA(*),SCR(*),S(*),T(*)
+C
+      PARAMETER (ZERO=0.0D+00, HALF=0.5D+00)
+C
+C     FORM THE Constrained UHF FOCK MATRICES. SEE:
+C          T. Tsuchimochi and G. E. Scuseria,
+C          J. Chem. Phys. 134, 164101 (2010)
+C
+C     THIS ROUTINE WRITTEN BY JOHN MONTGOMERY, SUMMER 2011
+C
+C
+C     MAKE FA - FB AND TRANSFORM TO MO BASIS
+C
+      CALL VSUB(FB,1,FA,1,FMOB,1,L2)
+      IF(OUT) THEN
+         WRITE(IW,*) '         ALPHA - BETA FOCK MATRIX (AO BASIS)'
+         CALL PRTRIL(FMOB,L1)
+      END IF
+      CALL TFTRI(FMOA,FMOB,VA,SCR,L0,L1,L1)
+      IF(OUT) THEN
+         WRITE(IW,*) '         ALPHA - BETA FOCK MATRIX (MO BASIS)'
+         CALL PRTRIL(FMOA,L0)
+      END IF
+C
+      IF(NB.EQ.0) GO TO 700
+C
+C     MAKE CUHF LAMBDA MATRIX IN MO BASIS.
+C
+      IJ = 0
+      DO 100 J = 1,L0
+         JV = J.GT.NA
+         DO 100 I = 1,J
+            IJ = IJ + 1
+            IC = I.LE.NB
+            IF(IC.AND.JV) THEN
+               FMOA(IJ) = -HALF*FMOA(IJ)
+            ELSE
+               FMOA(IJ) = ZERO
+            ENDIF
+  100 CONTINUE
+C
+      IF(OUT) THEN
+         WRITE(IW,*) '         CUHF LAMBDA FOCK MATRIX (MO BASIS)'
+         CALL PRTRIL(FMOA,L0)
+      END IF
+      CALL TFTRIB(FMOB,FMOA,S,VA,T,SCR,L0,L1,L2,L3)
+      IF(OUT) THEN
+         WRITE(IW,*) '         CUHF LAMBDA FOCK MATRIX (AO BASIS)'
+         CALL PRTRIL(FMOB,L1)
+      END IF
+C
+C     MAKE FA = FA + LAMBDA, FB = FB - LAMBDA
+C
+      CALL VADD(FMOB,1,FA,1,FA,1,L2)
+      CALL VSUB(FMOB,1,FB,1,FB,1,L2)
+C
+  700 CONTINUE
+      RETURN
+      END
+C*MODULE RHFUHF  *DECK CUONE
+C>
+C>   @brief    single excitation contribution to UMP2 energy for CUHF
+C>
+C>   @author   Jason Byrd and John Montgomery, 2013
+C>
+      SUBROUTINE CUONE(FA,FB,VA,VB,EA,EB,NA,NB,L0,L1,L2,L3,FMO,SCR,
+     *                  MASWRK)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      LOGICAL MASWRK
+C
+      DIMENSION FA(L2),FB(L2),VA(L1,L1),VB(L1,L1),EA(L1),EB(L1),
+     *          FMO(L2),SCR(L1)
+C
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /MP2PAR/ OSPT,CODEMP,SCSPT,TOL,METHOD,NWDMP2,MEMPRI,MPPROP,
+     *                NACORE,NBCORE,NOA,NOB,NORB,NBF,NOMIT,MOCPHF,MAXITC
+      COMMON /ONEELC/ EONE,E1A,E1B
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+C
+      DATA DEBUG/8HDEBUG   /
+C
+C     THIS ROUTINE CALCULATES THE SINGLES TERMS FOR CUMP2
+C     THIS IS SIMPLER THAN RMP BECAUSE THE CONVERGED CUHF ORBITALS
+C     ARE ALREADY SEMI-CANONICAL
+C
+      CALL TFTRI(FMO,FA,VA,SCR,L0,L1,L1)
+      CALL RMPONE(FMO,EA,L0,NA,NACORE,NA+1,E1A)
+C
+      IF(NB.GT.0) THEN
+         CALL TFTRI(FMO,FB,VB,SCR,L0,L1,L1)
+         CALL RMPONE(FMO,EB,L0,NB,NBCORE,NB+1,E1B)
+      ENDIF
+C
+      EONE = E1A + E1B
+C
+      IF(EXETYP.EQ.DEBUG .AND. MASWRK) THEN
+         WRITE(IW,*) '  SINGLE EXCITATION CORRECTIONS ARE'
+         WRITE(IW,*) '        ALPHA =',E1A
+         WRITE(IW,*) '        BETA  =',E1B
+      END IF
+C
+      RETURN
+      END
 C*MODULE RHFUHF  *DECK SPIN
       SUBROUTINE SPIN(SZ,S2,DA,DB,S,D,T,IA,NA,NB,L1,L2)
 C
@@ -4938,12 +5058,15 @@ C
       RETURN
       END
 C*MODULE RHFUHF  *DECK UHFOP
-C> @brief      UHF energy driver.
-C> 
-C> @author     Unknown
-C>             -Unknown
 C>
-C> @details    UHF energy driver.
+C> @brief      UHF and high spin ROHF SCF driver.
+C>
+C> @author     originally from HONDO, plus Mike Schmidt, Galina Chaban,
+C>             John Montgomery, Dmitri Fedorov, and many others.
+C>
+C> @details    create Fock matrices, add DFT contributions, add
+C>             solvent model contributions, solve HF equations,
+C>             apply convergence accelerators.
 C>
 C>    @date January 21, 2013-Aaron West
 C>    -Modified OVLSEL arguments.
@@ -5091,7 +5214,7 @@ C
       COMMON /RUNLAB/ TITLE(10),ANAM(MXATM),BNAM(MXATM),BFLAB(MXAO)
       COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
       COMMON /SCFOPT/ CONVHF,MAXIT,MCONV,NPUNCH,NPREO(4)
-      COMMON /SCFWFN/ AROHF(3),BROHF(3),PACAVO(6),IACAVO,IUHFNO,
+      COMMON /SCFWFN/ AROHF(3),BROHF(3),PACAVO(6),IACAVO,IUHFNO,ICUHF,
      *                MVOQ
       COMMON /SHLT  / SHLTOL,CUTOFF,ICOUNT,SHLOUT
       COMMON /SIMDAT/ NACC,NREJ,IGOMIN,NRPA,IBWM,NACCT,NREJT,NRPAT,
@@ -5168,11 +5291,19 @@ C
       END IF
 C
       IF(SCFTYP.EQ.UHF) THEN
-         METHOD='UHF        '
-         IF(DFTYPE.NE.ANONE)
-     *      WRITE(UNIT=METHOD,FMT='(''U-'',A8,'' '')') DFTYPE
-         IF(MPCTYP.NE.NONE)
-     *      WRITE(UNIT=METHOD,FMT='(''U-'',A4,''     '')') MPCTYP
+         IF(ICUHF.EQ.0) THEN
+           METHOD='UHF        '
+           IF(DFTYPE.NE.ANONE)
+     *        WRITE(UNIT=METHOD,FMT='(''U-'',A8,'' '')') DFTYPE
+           IF(MPCTYP.NE.NONE)
+     *        WRITE(UNIT=METHOD,FMT='(''U-'',A4,''     '')') MPCTYP
+         ELSE
+           METHOD='CUHF       '
+           IF(DFTYPE.NE.ANONE)
+     *        WRITE(UNIT=METHOD,FMT='(''CU-'',A8,'''')') DFTYPE
+           IF(MPCTYP.NE.NONE)
+     *        WRITE(UNIT=METHOD,FMT='(''CU-'',A4,''    '')') MPCTYP
+         ENDIF
       ELSE
          METHOD='ROHF       '
          IF(DFTYPE.NE.ANONE)
@@ -5195,8 +5326,10 @@ C
          PRDENS = .TRUE. .AND. MASWRK
       END IF
 C
-      IF(MASPRT.AND.(NFG.EQ.0.OR.NPRINT.NE.-5))
-     *   WRITE(IW,9000) METHOD(1:LENMTH)
+      IF(MASPRT  .AND.  (NFG.EQ.0.OR.NPRINT.NE.-5)) THEN
+         WRITE(IW,9000) METHOD(1:LENMTH)
+         IF(SCFTYP.EQ.UHF  .AND.  ICUHF.EQ.1) WRITE(IW,9001)
+      END IF
 C
 C           START SCF CLOCK
 C
@@ -5336,7 +5469,7 @@ C
 C
       IF(MOM) THEN
          LIWRK2 = LAST
-         LAST  = LIWRK2 + L1
+         LAST   = LIWRK2 + L1
       ENDIF
 C
 C
@@ -5544,6 +5677,21 @@ C
          LAST=LAST+IDFTMEM
          NEED  = LAST -LOADFM -1
       END IF
+C
+C     allocate memory for cuhf
+C
+      IF(ICUHF.EQ.1) THEN
+         LWRK5 = LAST
+         LWRK6 = LWRK5 + L3
+         LWRK7 = LWRK6 + L3
+         LCEIG = LWRK7 + L3
+         LAST  = LCEIG + L1
+      ELSE
+         LWRK5=LAST
+         LWRK6=LAST
+         LWRK7=LAST
+         LCEIG=LAST
+      ENDIF
 C
 C        WE CAN REDUCE MEMORY NEED BY 2N**2 BY DOING MORE DAREADS,
 C        TO OVERLAP -H1- AND -WRK1-, -Q- AND -WRK2-, -S- AND -WRK3-.
@@ -5790,10 +5938,10 @@ C     CONTAINS THE MP2 DENSITY, SO WE READ FROM RECORD 418.
 C
       IF(ISEPS  .AND.  MP2ITER.EQ.1) THEN
          CALL DAREAD(IDAF,IODA,X(LDA),L2,418,0)
-         IF (COSBUG) THEN         
+         IF (COSBUG) THEN
           WRITE(IW,*)
           WRITE(IW,*)"    READING IN SCF-DENSITY AGAIN FOR MP2ITER=1"
-         END IF 
+         END IF
       END IF
 C
 C     ----- READ INITIAL DENSITY -----
@@ -6268,7 +6416,7 @@ C
 C     ----- POLARIZABLE CONTINUUM MODEL CALCULATION -----
 C
       IF(IPCM.EQ.1) THEN
-         call stopwa(7,0) 
+         call stopwa(7,0)
          CALL VADD(X(LDA),1,X(LDB),1,X(LWRK1),1,L2)
 C
 C        USE THE 'BUFFERLESS' DENSITY IN PCMFLD (LWRK2)
@@ -6422,8 +6570,8 @@ C
 C                      ----- COSMO -----
 C     ADD IN CORRECTION DUE TO SOLVENT SCREENING SELF-CONSISTENTLY
 C     FIXED SCREENING CHARGES FOR HF PART WITHIN MP2 (MP2ITER=1)
-C        
-      IF(ISEPS  .AND.  MP2ITER.EQ.0) CALL COSADD(.TRUE.)      
+C
+      IF(ISEPS  .AND.  MP2ITER.EQ.0) CALL COSADD(.TRUE.)
 
 C
 C     * * * * * END OF SOLVATION MODEL CORRECTIONS TO 1E- TERM * * * * *
@@ -6433,13 +6581,13 @@ C     WE EITHER ADD THE FOCK OPERATOR OF THE PREVIOUS ITERATION TO
 C     THE CHANGE IN THE FOCK MATRIX, OR WE ADD THE ONE ELECTRON
 C     HAMILTONIAN TO THE FULLY COMPUTED TWO ELECTRON OPERATOR.
 C
-C    
+C
 C     FOR COSMO, WE NEED TO UPDATE THE ONE-ELECTRON HAMILTONIAN FOR
 C     CONVENTIONAL SCF-COSMO AND FOR THE INNER SCF WITHIN THE
 C     MP2-COSMO ITERATIONS FOR BOTH SCF TYPES
-C    
+C
       IF(ISEPS) CALL DAREAD(IDAF,IODA,X(LH1),L2,11,0)
-C              
+C
 C     FOR DIRECT SCF-COSMO WHERE THE SURFACE CHARGES ARE UPDATED EACH
 C     SCF ITERATION, WE NEED THE CHANGE IN H BETWEEN THE CURRENT AND
 C     THE PREVIOUS SCF ITERATION, SO THE CURRENT H IS ADDED FROM
@@ -6541,7 +6689,7 @@ C
 C
 C
 C   COSMO ENERGY CORRECTION FOR CAVITY CREATION
-C    
+C
       IF(ISEPS) EHF = EHF - SECORR
 C
       ETOT0= ETOT
@@ -6630,7 +6778,7 @@ C     GOES OFF, IT SHOULD STAY OFF FOR -NONDMX- ITERATIONS.
 C     DIISDMP AND NONDMX ARE CLEARLY ADJUSTABLE PARAMETERS.
 C     SET UP FOR EXTRAPOLATION/DAMPING WHILE DIIS IS OFF.
 C
-      IF(SCFTYP.EQ.UHF  .AND.
+      IF(SCFTYP.EQ.UHF  .AND.  ICUHF.EQ.0  .AND.
      *   DODIIS  .AND.  ITDIIS.NE.1  .AND.  ITNOND.GT.NONDMX  .AND.
      *   DELE.GT.ZERO  .AND.  DELE.LT.0.005D+00  .AND.
      *  (DELE+DELE0).GT.1.0D-06) THEN
@@ -6669,7 +6817,8 @@ C            MAKE SURE WE DON'T ACCIDENTALLY SWITCH TO FINE DFT GRID
 C
 C     NOW STOP SOSCF IF NEEDED
 C
-      IF(SCFTYP.EQ.UHF  .AND.  SOSCF  .AND. ITSO.GT.0 .AND.
+      IF(SCFTYP.EQ.UHF  .AND.  ICUHF.EQ.0
+     *       .AND.  SOSCF  .AND. ITSO.GT.0 .AND.
      *   DELE.GT.ZERO  .AND.  DELE.LT.0.005D+00  .AND.
      *  (DELE+DELE0).GT.1.0D-08) THEN
          ITSO=0
@@ -6690,6 +6839,27 @@ C
       SOGTOL = SOGNEW
       IF(ITNOND.LE.NONDMX) ETHRSH = ZERO
       IF(ITNOND.LE.NONDMX) SOGTOL = ZERO
+C
+C     MAKE FOCK MATRICES FOR CONSTRAINED UHF
+C
+      IF(SCFTYP.EQ.UHF  .AND.  ICUHF.EQ.1) THEN
+         IF(ITER.EQ.1) then
+            CALL DAREAD(IDAF,IODA,X(LVA),L3,15,0)
+            CALL DAREAD(IDAF,IODA,X(LVB),L3,19,0)
+         endif
+         call dcopy(l2,x(lda),1,x(lwrk5),1)
+         call dcopy(l2,x(ldb),1,x(lwrk6),1)
+         call vadd(x(lwrk5),1,x(lwrk6),1,x(lwrk5),1,L2)
+         CALL UHFNOS(x(LCEIG),x(liwrk),X(LSCR),X(lwrk5),x(lwrk6),
+     *               X(lwrk1),x(lwrk7),X(LQ),L0,L1,L2,0)
+         if(dbg) then
+            WRITE(IW,*) 'UHF natural orbitals'
+            CALL PREVNL(X(lwrk1),x(LCEIG),L0,L1,1)
+         endif
+         IF(MINMEM) CALL DAREAD(IDAF,IODA,X(LS),L2,12,0)
+         CALL CUHF(X(LFA),X(LFB),X(lwrk5),x(lwrk6),X(lwrk1),
+     *             X(LSCR),X(LS),X(lwrk7),NA,NB,L0,L1,L2,L3,DBG)
+      END IF
 C
 C     ----- POSSIBLE SECOND ORDER SCF -----
 C     ON THE VERY FIRST ITERATION OF THE VERY FIRST GEOMETRY, WE MUST
@@ -7019,7 +7189,7 @@ C
          WRITE(IW,*) '*** END OF DEBUG OUTPUT FOR ITERATION',ITER
       END IF
 C     ----- COSMO SAVE ORBITALS AND DENSITIES AND ENERGIES -----
-C 
+C
       IF (ISEPS) THEN
        NDAF = 15
        CALL SCFSAV(X(LVA),X(LDA),X(LEA),NDAF,L1,L2,L3)
@@ -7694,6 +7864,15 @@ C
      *               X(LWRK1),X(LEA),X(LWRK3),X(LSCR),X(LIWRK),MASPRT)
       END IF
 C
+C     ----- CUHF-MP2 SINGLES CALCULATION -----
+C
+      if(scftyp.eq.uhf  .and.  ICUHF.EQ.1  .AND.  mplevl.eq.2) then
+         CALL DAREAD(IDAF,IODA,X(LFA),L2,14,0)
+         CALL DAREAD(IDAF,IODA,X(LFB),L2,18,0)
+         CALL CUONE(X(LFA),X(LFB),X(LVA),X(LVB),x(lea),x(leb),
+     *               NA,NB,L0,L1,L2,L3,X(LWRK3),X(LSCR),MASPRT)
+      endif
+C
 C     ----- GENERATE UHF/ROHF LAGRANGIAN -----
 C     -LFA- AND -LDA- ARE USED FOR BOTH ALPHA AND BETA.
 C     -LWRK2- IS USED AS A SCRATCH SQUARE MATRIX.
@@ -7782,6 +7961,8 @@ C
  8010 FORMAT(A8)
 C
  9000 FORMAT(/10X,27(1H-)/10X,A11,' SCF CALCULATION'/10X,27(1H-))
+ 9001 FORMAT(10X,'  CONSTRAINED UHF BY J.N.BYRD AND J.A.MONTGOMERY,'/
+     *       10X,'PRODUCING SPIN-RESTRICTED RESULTS ALA HIGH SPIN ROHF')
  9005 FORMAT(/1X,'OVERLAPPING STORAGE FOR H,S,Q MATRICES,',
      *        1X,'TO SAVE',I10,' WORDS.'/1X,'ADDING THIS AMOUNT',
      *        1X,'MAY IMPROVE EFFICIENCY SOMEWHAT.')
@@ -8012,14 +8193,14 @@ C
      *          10X,'SO ORBITAL ORDER MATCHES THE ROHF DENSITY')
       END
 C
-C*MODULE RHFUHF  *DECK STBINTS 
+C*MODULE RHFUHF  *DECK STBINTS
       SUBROUTINE STBINTS(NFT,XBUF,IXBUF,EIG,LL1,L0,NOCC,NINTMX)
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
 C
       LOGICAL GOPARR,DSKWRK,MASWRK,UHFCHK
 C
-      DIMENSION XBUF(NINTMX),IXBUF(NINTMX) 
+      DIMENSION XBUF(NINTMX),IXBUF(NINTMX)
       DIMENSION EIG(LL1)
 C
       COMMON /IOFILE/ IR,IW,IP,IJKO,IJKT,IDAF,NAV,IODA(950)
@@ -8029,12 +8210,12 @@ C
 C
 C
 C     ----- READ ORBITAL ENERGIES AND 2E INTEGRALS IN MO BASIS -----
-C  AND COLLECT THE CORRESPONDING INTEGRAL VALUES FOR A SPECIFIC 
+C  AND COLLECT THE CORRESPONDING INTEGRAL VALUES FOR A SPECIFIC
 C  PAIR OF ORBITALS (IHOMO AND JLUMO) FOR THE RHF STABILITY ANALYSIS
 C
 C     ----- READ ORBITAL ENERGIES -----
 C
-         DO IHOMO = 0, NHOMO, -1 
+         DO IHOMO = 0, NHOMO, -1
             II = 1 - NHOMO + IHOMO
             DO JLUMO = 0, NLUMO
                JJ = 2 - NHOMO + JLUMO
@@ -8106,16 +8287,16 @@ C
 C
           IF      ((K .EQ. II) .AND. (L .EQ. II) .AND.
      *             (I .EQ. II) .AND. (J .EQ. II)) THEN
-                    VJ11 = VAL 
+                    VJ11 = VAL
           ELSE IF ((K .EQ. II) .AND. (L .EQ. II) .AND.
      *             (I .EQ. JJ) .AND. (J .EQ. JJ)) THEN
-                    VJ12 = VAL 
+                    VJ12 = VAL
           ELSE IF ((K .EQ. JJ) .AND. (L .EQ. II) .AND.
      *             (I .EQ. JJ) .AND. (J .EQ. II)) THEN
-                    VK12 = VAL 
+                    VK12 = VAL
           ELSE IF ((K .EQ. JJ) .AND. (L .EQ. JJ) .AND.
      *             (I .EQ. JJ) .AND. (J .EQ. JJ)) THEN
-                    VJ22 = VAL 
+                    VJ22 = VAL
           END IF
 C
   700    CONTINUE
@@ -8131,7 +8312,7 @@ C
       RETURN
       END
 C
-C*MODULE RHFUHF  *DECK STBEIGVAL 
+C*MODULE RHFUHF  *DECK STBEIGVAL
       SUBROUTINE STBEIGVAL(E,NMO,NOCC,IHOMO,JLUMO)
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
@@ -8144,7 +8325,7 @@ C
       COMMON /PACKOE/ EPS1,EPS2
 C
 C     ----- COLLECT ORBITAL ENERGIES EPS1 AND EPS2 ----
-C      FOR A SPECIFIC PAIR OF ORBITALS (IHOMO AND JLUMO) 
+C      FOR A SPECIFIC PAIR OF ORBITALS (IHOMO AND JLUMO)
 C            FOR THE STABILITY ANALYSIS ROUTINE.
 C
       NH = NOCC + IHOMO
@@ -8153,7 +8334,7 @@ C
          DO I = 1, NMO
             DO J = NOCC, NH, -1
               DO K = NOCC,NL, +1
-                 EPS1 = E(J) 
+                 EPS1 = E(J)
                  EPS2 = E(K)
               END DO
             END DO
@@ -8170,16 +8351,16 @@ C> @details    pairwise-only orbital rotation stability analysis
 C>
 C> @uthor      Nuwan DeSilva, May 2012
 C>
-      SUBROUTINE STBANL(IHOMO,JLUMO,VJ11,VJ12,VK12,VJ22) 
+      SUBROUTINE STBANL(IHOMO,JLUMO,VJ11,VJ12,VK12,VJ22)
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
 C
       LOGICAL GOPARR,DSKWRK,MASWRK
-      CHARACTER*20 RESULT 
+      CHARACTER*20 RESULT
 C
       COMMON /IOFILE/ IR,IW,IP,IJK,IPK,IDAF,NAV,IODA(950)
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
-      COMMON /PACKOE/ EPS1,EPS2 
+      COMMON /PACKOE/ EPS1,EPS2
 C
       PARAMETER (ZERO=0.0D+00, TOL=1.1D+00)
       PARAMETER (ONE=1.0D+00, TWO=2.0D+00, THREE=3.0D+00, FOUR=4.0D+00)
@@ -8203,15 +8384,15 @@ C  ESD  = THE 2nd DERIVATIVE OF THE ENERGY AT THE RESTRICTED SOLUTION,
 C         WHICH DETERMINES THE NATURE OF THE RESTRICTED SOLUTION,
 C         WHERE THETA = ZERO
 C
-C  REFERENCE - A. Szabo and N. S. Ostlund, Modern Quantum Chemistry: 
+C  REFERENCE - A. Szabo and N. S. Ostlund, Modern Quantum Chemistry:
 C              Introduction to Advanced Electronic Structure Theory.
 C              McGraw-Hill, New York, 1989.
-C              Pages 221-229 
+C              Pages 221-229
 C-------------------------------------------------------------------
 C
       H11 = EPS1 - VJ11
       H22 = EPS2 - (TWO*VJ12) + VK12
-C 
+C
 C     ---- ETA IN TERMS OF 1E INTEGRALS ----
 C
 C      ETA = (H22 - H11 + VJ22 - VJ12 + (TWO*VK12))
@@ -8240,7 +8421,7 @@ C
           WRITE(IW,9010) IHOMO, ETA, RESULT
       ELSE IF (IHOMO .EQ. 0  .AND. JLUMO .EQ. 0) THEN
           WRITE(IW,9020) ETA, RESULT
-      ELSE IF (IHOMO .LT. 0  .AND. JLUMO .GT. 0) THEN 
+      ELSE IF (IHOMO .LT. 0  .AND. JLUMO .GT. 0) THEN
           WRITE(IW,9030) IHOMO,JLUMO, ETA, RESULT
       END IF
 C

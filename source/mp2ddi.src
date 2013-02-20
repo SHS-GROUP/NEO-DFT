@@ -1,3 +1,4 @@
+C 20 Feb 13 - JAM - MP2DDI: print label if CUHF-MP2
 C 19 DEC 12 - JI  - Avoid derivative memory check during property run
 C 19 Oct 12 - MWS - synchronize FRGINF common
 C 13 FEB 12 - MWS - TRAN34: PROTECT AGAINST THERE BEING NO VIRTUALS
@@ -62,6 +63,14 @@ C  MOL. PHYS., VOL. 91, P431 (1997).
 C
 C        -         -         -         -         -         -         - C
 C*MODULE MP2DDI  *DECK MP2DDI
+C>
+C>  @brief   driver for distributed data MP2 energy or gradient
+C>
+C>  @details MP2 for RHF, UHF, ROHF references are all handled here,
+C>           with necessary solvent contributions for gradients
+C>
+C>  @author  Graham Fletcher
+C>
       SUBROUTINE MP2DDI
 C
 C -----------------------------------------------------------------
@@ -98,6 +107,8 @@ C
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
       COMMON /PCMPAR/ IPCM,NFT26,NFT27,IRPPCM,IEF,IP_F,NFMOPCM
       COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+      COMMON /SCFWFN/ AROHF(3),BROHF(3),PACAVO(6),IACAVO,IUHFNO,ICUHF,
+     *                MVOQ
       COMMON /TRFOPT/ CUTTRF,NWDTRF,MPTRAN,ITRFAO,NOSYMT,IPURTF,DIRTRF
       COMMON /UMPPTR/ IWMATB,IPMATB,IVECSB,IPSCFB,IVALSB,ILABSB
       COMMON /UMP2XB/ NBCORE,NACTB,NOCCB,NVIRB,NOVB,NOSB,NVSB,NOTB,
@@ -228,7 +239,13 @@ C
         END IF
         IF (NDER.EQ.0 .AND. MPPROP.EQ.0) THEN
           IF (SCFTYP.EQ.RHF) WRITE(ICHANL,2)
-          IF (SCFTYP.EQ.UHF) WRITE(ICHANL,5)
+          IF (SCFTYP.EQ.UHF) THEN
+             IF(ICUHF.EQ.0) THEN
+                WRITE(ICHANL,5) 'UMP2'
+             ELSE
+                WRITE(ICHANL,5) 'CUHF-MP2'
+             END IF
+          END IF
           IF (OSPT.EQ.ZAPT)  WRITE(ICHANL,3)
         ELSE
           IF (SCFTYP.EQ.RHF) WRITE(ICHANL,1)
@@ -547,7 +564,7 @@ C
      *          5X,'PROGRAM WRITTEN BY C. AIKENS'/
      *          1X,30('-'),5X,28('-')/)
     5 FORMAT(///1X,28('-'),5X,28('-')/
-     *          1X,'DISTRIBUTED DATA UMP2 ENERGY',
+     *          1X,'DISTRIBUTED DATA ',A,' ENERGY',
      *          5X,'PROGRAM WRITTEN BY C. AIKENS'/
      *          1X,28('-'),5X,28('-')/)
     6 FORMAT(///1X,31('-'),5X,28('-')/
@@ -2857,11 +2874,11 @@ C
 C
 C  PCM CONTRIBUTION TO W(2)
 C
-      IF(IPCM.EQ.1 .AND. IEF.EQ.10 .AND. IEFP.EQ.0) 
+      IF(IPCM.EQ.1 .AND. IEF.EQ.10 .AND. IEFP.EQ.0)
      *                  CALL PCM1PDM(PMAT,WMAT,CMO)
-C     
+C
 C  INDUCED DIPOLE CONTRIBUTION TO W(2)
-C    
+C
       IF(NFRG.GT.0 .AND. IEFP.EQ.1 .AND. IPCM.EQ.0)
      *                  CALL POL1PDM(PMAT,WMAT,CMO)
       IF(NFFAT.GT.0)
@@ -2869,7 +2886,7 @@ C
 C
 C  PCM-INDUCED DIPOLE CONTRIBUTION TO W(2)
 C
-      IF(NFRG.GT.0 .AND. IEFP.EQ.1 .AND. IPCM.EQ.1 .AND. IEF.EQ.10) 
+      IF(NFRG.GT.0 .AND. IEFP.EQ.1 .AND. IPCM.EQ.1 .AND. IEF.EQ.10)
      *                  CALL PCMPOL1PDM(PMAT,WMAT,CMO)
 C
 C  COMBINE TERMS OF LAGRANGIAN - COPY INTO XX(IZ)
@@ -5772,7 +5789,7 @@ C
          LRM    = LGTOT  + 3*NAT +  6*NFRG
          LX     = LRM    + 3*NAT + 21*NFRG
          LP     = LX     + 3*NAT +  6*NFRG
-         LAST   = LP     + 3*NAT +  6*NFRG 
+         LAST   = LP     + 3*NAT +  6*NFRG
          NEEDP  = LAST-LOADFM-1
          CALL GETFM(NEEDP)
          CALL PRJGRD(DE,C,X(LX),X(LGTOT),X(LRM),X(LP),ZMASS,
@@ -7668,7 +7685,7 @@ C
       COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
      *                MPLEVL,MPCTYP
 C
-C     THIS ROUTINE INDUCES EFP DIPOLES DUE TO DENSITY DEN, 
+C     THIS ROUTINE INDUCES EFP DIPOLES DUE TO DENSITY DEN,
 C     AND DO THE 1-E INTEGRAL OF THE EFP POL FIELD
 C
 C     NOTE TO PROGRAMMERS:
@@ -8220,8 +8237,8 @@ C
       CALL GETFM(NEED)
 C
 C     -- ELECTRIC FIELDS AT POL-TENSORS
-C        DINDMP(3,MXFGPT) AND DINDDMP(3,MXFGPT) ARE EMPTY 
-C        BEFORE DIPIT IS CALLED. SO USE THEM TO STORE 
+C        DINDMP(3,MXFGPT) AND DINDDMP(3,MXFGPT) ARE EMPTY
+C        BEFORE DIPIT IS CALLED. SO USE THEM TO STORE
 C        THE ELECTRIC FIELDS
 C
       CALL VCLR(DINDMP,1,3*MXFGPT)
