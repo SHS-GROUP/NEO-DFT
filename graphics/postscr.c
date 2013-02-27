@@ -98,6 +98,13 @@ FILE *fp;
 #define number number_
 #endif /* ifdef UNDERSCORE */
 
+#ifdef ANSI
+char *getenv(const char *name );
+void exit(int status);
+#else
+char *getenv( );
+#endif
+
 /*  ----------------------------- OPENPS -----------------------------
              REAL XMAX,YMAX
              INTEGER ROTATE,WNAME(4)
@@ -134,11 +141,6 @@ char  *wname;
 {
 float xsize,ysize,xmx,ymx;
 char *filename;
-#ifdef ANSI
-char *getenv(const char *name );
-#else
-char *getenv( );
-#endif
 
    flip= *rotate;
    xmx = *xmax;

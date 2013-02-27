@@ -133,6 +133,12 @@ extern void number();
 extern int nonblank();
 extern void xwinsz();
 
+#ifdef ANSI
+char *getenv(const char *name );
+void exit(int status);
+#else
+char *getenv( );
+#endif
 
 /*  ----------------------------- OPENCC -------------------------------
              REAL XMAX,YMAX
@@ -167,12 +173,6 @@ float xsize, ysize;
 unsigned int mask;
 char  macx[32], *icon_name;
 Window child, root, focus_window;
-
-#ifdef ANSI
-char *getenv(const char *name );
-#else
-char *getenv( );
-#endif
 
    flip= *rotate;
    xmx = *xmax;
