@@ -1896,6 +1896,64 @@ C
  1200 FORMAT(/1X,'ESTIMATE OF NUCLEAR CHARGE',F15.5)
       END
 C*MODULE PCMIEF  *DECK IXMATV
+!> @brief calculates total mep from solute and
+!>        induces charges on the surface
+!>
+!> @date February, 2013 - Casper Steinmann
+!> - added semi-empirical methods interfaced with pcm
+!>
+!> @param D density matrix
+!> @param XX the matrix to be evaluated
+!> @param SCR work area
+!> @param DMATM1
+!> @param QPOT current potential on each tesserae
+!> @param SCRPOT
+!> @param Q0
+!> @param Q1
+!> @param Q2
+!> @param Q3
+!> @param D0
+!> @param SCR 
+!> @param DIMAT
+!> @param QREP
+!> @param TMP
+!> @param TMP1
+!> @param TMP2
+!> @param IPVT
+!> @param POTTMP
+!> @param RMUL
+!> @param QET
+!> @param TCH
+!> @param QESC
+!> @param QETN
+!> @param NFT27 index for disk based storage
+!> @param IPCFP include potential from induced dipoles from EFP
+!> @param L2 size of upper triangular matrix storage. used for D, XX and SCR
+!> @param MXDII1 maximum number of pcm-diis iterations
+!> @param NTSPAR
+!> @param XCTS x-coordinates of each tesserae
+!> @param YCTS y-coordinates of each tesserae
+!> @param ZCTS z-coordinates of each tesserae
+!> @param AS
+!> @param QSN
+!> @param QSE
+!> @param QSED
+!> @param Q_FS
+!> @param VEC_MUL EFP potential on tesserae
+!> @param CHG2
+!> @param CHG2N
+!> @param PEL
+!> @param XE x-coordinates of center of cavity-defining spheres
+!> @param YE y-coordinates of center of cavity-defining spheres
+!> @param ZE z-coordinates of center of cavity-defining spheres
+!> @param RE
+!> @param ISPHE
+!> @param LIST
+!> @param ASCCRD
+!> @param ASCCHG
+!> @param ASCDIP
+!> @param ASCQAD
+!>
       SUBROUTINE IXMATV(D,XX,SCR,DMATM1,QPOT,SCRPOT,
      *                  Q0,Q1,Q2,Q3,D0,QA,DIMAT,QREP,TMP,
      *                  TMP1,TMP2,IPVT,POTTMP,RMUL,QET,TCH,QESC,QETN,
@@ -1923,6 +1981,7 @@ C
      *        TDDFT, SG1T, MP2PCM, TAMMD, TPA, NOTRF
 C
       COMMON /CONV  / ACURCY,ENUCR,AJUNK(3),DIFF,ITERRO,ICALCP,ICBET
+      COMMON /CORE  / TORE(107)
       COMMON /FMCOM / WORK(1)
       COMMON /ABIIMG/ XMAX,XMIN,YMAX,YMIN,ZMAX,ZMIN,
      *                NAMIMG(3*MXATM),
@@ -1935,6 +1994,10 @@ C
      *                NSTAT,NTRIAL,MAXVEC,NTHST,IRECTD,ITDFG,NONEQR,
      *                ITDPRP,TAMMD,TPA
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /MOLMEC/ HTYPE(4),NHCO(4,200),NNHCO,ITYPE
+      COMMON /MOLKST/ NUMAT,NAT2(MXATM),NFIRST(MXATM),NMIDLE(MXATM),
+     *                NLAST(MXATM), NORBS, NELECS,NALPHA,NBETA,
+     *                NCLOSE,NOPEN,NDUMY,FRACT
       COMMON /NTNOPT/ ENERGY,ENERG0,DEMAX,SQCDF,ITERMC,MICRO,NOTRF
       COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
@@ -2047,8 +2110,12 @@ C    *             WRITE(IW,*) 'IMGABI USED',KTIMES,'TIMES'
 C
         ELSE
           CALL VCLR(QPOT,1,NTS)
-          CALL EPOTEN(ONE,XCTS,YCTS,ZCTS,QPOT,D,NTS,L2)
+          IF(ITYPE.EQ.0) THEN
+            CALL EPOTEN(ONE,XCTS,YCTS,ZCTS,QPOT,D,NTS,L2)
 C         EPOTEN IS PARALLELISED, BUT NO GLOBAL SUM INSIDE.
+          ELSE
+            CALL MPCEPOTEN(ONE,XCTS,YCTS,ZCTS,QPOT,D,NTS,L2)
+          ENDIF
           IF(GOPARR) CALL DDI_GSUMF(2451,QPOT,NTS)
         ENDIF
       ELSE
@@ -2249,7 +2316,9 @@ C
      *            (XCTS(ITS)-C(1,IAT))**2+
      *            (YCTS(ITS)-C(2,IAT))**2+
      *            (ZCTS(ITS)-C(3,IAT))**2)
-             VNUC=VNUC+ZAN(IAT)*DINVR
+             Z=ZAN(IAT)
+             IF(ITYPE.GT.0) Z=TORE(NAT2(IAT))
+             VNUC=VNUC+Z*DINVR
           ENDDO
           ENPCM = ENPCM + (PEL(ITS)+VNUC+VEC_MUL(ITS))*QSE(ITS)
         ENDDO
@@ -2373,6 +2442,7 @@ C
 C         -- ITERATIVE
 C
       IF(IPCMIT.EQ.1) THEN
+        CALL VCLR(SCR,1,L2)
 C
 C             -- NO USE IMGASC --
 C
@@ -2389,7 +2459,11 @@ C                     GO PARALLEL!
                 IF(MOD(IPCOUNT,NPROC).NE.0) GO TO 120
               END IF
 C
-              CALL INTMEP(SCR,XCTS(ITS),YCTS(ITS),ZCTS(ITS))
+              IF(ITYPE.EQ.0) THEN
+                CALL INTMEP(SCR,XCTS(ITS),YCTS(ITS),ZCTS(ITS))
+              ELSE
+                CALL MPCMEP(SCR,XCTS(ITS),YCTS(ITS),ZCTS(ITS))
+              ENDIF
               DO IBAS = 1, L2
                 XX(IBAS) = XX(IBAS) - SCR(IBAS) * QSE(ITS)
               ENDDO
@@ -3541,6 +3615,13 @@ C
       END
 C
 C*MODULE PCMIEF  *DECK ADDPOT
+C> @brief Calculates nuclear contribution to the potential
+C>
+C> @author unknown
+C>
+C> @date February, 2013 - Casper Steinmann
+C> - add semi-empirical methods and pcm interface
+C>
       SUBROUTINE ADDPOT(QPOT,VEC_MUL,IPCFP,XCTS,YCTS,ZCTS)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
@@ -3555,6 +3636,11 @@ C
 C
       LOGICAL IPCFP
 C
+      COMMON /CORE  / TORE(107)
+      COMMON /MOLKST/ NUMAT,NAT2(MXATM),NFIRST(MXATM),NMIDLE(MXATM),
+     1                NLAST(MXATM), NORBS, NELECS,NALPHA,NBETA,
+     2                NCLOSE,NOPEN,NDUMY,FRACT
+      COMMON /MOLMEC/ HTYPE(4),NHCO(4,200),NNHCO,ITYPE
       COMMON /EFMULT/ EFC(3,MXFGPT),EFCHG(2,MXFGPT),EFATRM(MXFGPT),
      *                EFBTRM(MXFGPT),EFATRM2(MXFGPT),EFBTRM2(MXFGPT),
      *                EFDIP(3,MXFGPT),EFQAD(6,MXFGPT),
@@ -3588,7 +3674,9 @@ C     THIS IS CONSIDERED IN PCMNUP
      *           (XCTS(ITS)-C(1,IAT))**2+
      *           (YCTS(ITS)-C(2,IAT))**2+
      *           (ZCTS(ITS)-C(3,IAT))**2)
-            QPOT(ITS)=QPOT(ITS)-ZAN(IAT)*DINVR
+            Z=ZAN(IAT)
+            IF(ITYPE.GT.0) Z=TORE(NAT2(IAT))
+            QPOT(ITS)=QPOT(ITS)-Z*DINVR
          ENDDO
       ENDDO
       END IF

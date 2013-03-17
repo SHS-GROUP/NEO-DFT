@@ -1,0 +1,790 @@
+C*MODULE MPCPCM   *DECK MPCEPOTEN
+!> @brief evaluates the electrostatic potential on all points given
+!>        in XCOORD, YCOORD and ZCOORD from nddo integrals and stores
+!>        it in the array VALUE
+!>
+!> @author Casper Steinmann
+!> - February 2013
+!>
+!> @param ACONST  : scaling coefficient
+!> @param XCOORD  : x-coordinates
+!> @param YCOORD  : y-coordinates
+!> @param ZCOORD  : z-coordinates
+!> @param VALUE   : current potential on each tesserae
+!> @param DA      : density matrix
+!> @param NP      : number of points
+!> @param L2      : size of Fock matrix
+      subroutine mpcepoten(aconst,xcoord,ycoord,zcoord,value,da,np,l2)
+c
+      implicit double precision (a-h,o-z)
+c
+      dimension xcoord(np),ycoord(np),zcoord(np),value(np),da(l2)
+c
+      logical goparr, dskwrk, maswrk, nxt
+c
+      parameter (mxatm=2000)
+      common /infoa / nat,ich,mul,num,nqmt,ne,na,nb,
+     *                zan(mxatm),c(3,mxatm),ian(mxatm)
+      common /fmcom / x(1)
+      common /par   / me,master,nproc,ibtyp,iptim,goparr,dskwrk,maswrk
+C
+C     parallelization is over tesserae here because the
+C     number of tesserae usually wins over the number
+C     of integrals we evaluate in mpcmep
+C
+C     allocate memory for temporary work array
+      call valfm(loadfm)
+      lwrk = loadfm+1
+      last = lwrk + l2
+      need = last -loadfm-1
+      call getfm(need)
+C
+      nxt = ibtyp.eq.1
+      next  = -1
+      kount = -1
+      do ipt=1,np
+        if(goparr) then
+          kount=kount+1
+          if(nxt) then
+            if(kount.gt.next) call ddi_dlbnext(next)
+            if(next.ne.kount) goto 500
+          else
+            if(mod(kount,nproc).ne.me) goto 500
+          endif
+        endif
+        call vclr(x(lwrk),1,l2)
+        xpp = xcoord(ipt)
+        ypp = ycoord(ipt)
+        zpp = zcoord(ipt)
+        call mpcmep(x(lwrk),xpp,ypp,zpp)
+        value(ipt) = aconst*tracep(da,x(lwrk),num)
+  500   continue
+      enddo
+      if(goparr.and.nxt) call ddi_dlbreset
+c
+      call retfm(need)
+      return
+      end
+C
+C
+C
+C*MODULE MPCPCM   *DECK MPCMEP
+!> @brief calculates MEP from NDDO integrals
+!>
+!> @details calculates the MEP based on integrals following
+!>          Dewar MJS, Thiel W; Theoret. Chim. Acta (Bert.) 46, 89-104 (1977)
+!>
+!> @author Casper Steinmann
+!> - February 2013
+!>
+!> @param VALUE : integral over basis functions
+!> @param XPP   : the x-coordinate of the current tesserae
+!> @param YPP   : the y-coordinate of the current tesserae
+!> @param ZPP   : the z-coordinate of the current tesserae
+      subroutine mpcmep(value,xpp,ypp,zpp)
+c
+      implicit double precision (a-h,o-z)
+c
+      dimension value(*),x(3),y(3),z(3)
+      logical iandj
+c
+      parameter (mxsh=5000, mxgtot=20000, mxatm=2000)
+c
+      common /infoa / nat,ich,mul,num,nqmt,ne,na,nb,
+     *                zan(mxatm),c(3,mxatm),ian(mxatm)
+      common /molkst/ numat,nat2(mxatm),nfirst(mxatm),nmidle(mxatm),
+     1                nlast(mxatm), norbs, nelecs,nalpha,nbeta,
+     2                nclose,nopen,ndumy,fract
+      common /nshel / ex(mxgtot),cs(mxgtot),cp(mxgtot),cd(mxgtot),
+     *                cf(mxgtot),cg(mxgtot),ch(mxgtot),ci(mxgtot),
+     *                kstart(mxsh),katom(mxsh),ktype(mxsh),kng(mxsh),
+     *                kloc(mxsh),kmin(mxsh),kmax(mxsh),nshell
+      common /multip/ dd(107),qq(107),am(107),ad(107),aq(107)
+      parameter (one=1.0d+00, two=2.0d+00,
+     *           half=one/two,fourth=half/two)
+c
+      do ii=1,nshell
+        iat = katom(ii)
+        xi = c(1,iat)
+        yi = c(2,iat)
+        zi = c(3,iat)
+c        lit = ktype(ii)
+        imin = kmin(ii)
+        imax = kmax(ii)
+        loci = kloc(ii) - imin
+        niat = nat2(iat)
+        do jj=1,ii
+          jat = katom(jj)
+          jmin = kmin(jj)
+          jmax = kmax(jj)
+          locj = kloc(jj) - jmin
+c          njat = nat2(jat)
+c
+c         in nddo, only include effects from same atoms
+          iandj=ii.eq.jj
+          if(iat.ne.jat) goto 10
+c
+c         setup local coordinate system and projections
+c         taken from subroutine REPP in mpcint.src
+c         first up is to generate unit vectors for local coordinate system
+          x(1)=xi-xpp
+          x(2)=yi-ypp
+          x(3)=zi-zpp
+c          print *,xpp,ypp,zpp,xi,yi,zi
+          r2 = X(1)**2 + X(2)**2 + X(3)**2
+          r  = sqrt(r2)
+          A = one/r
+c         now generate unit vectors
+          x(1) = x(1)*a
+          x(2) = x(2)*a
+          x(3) = x(3)*a
+          z(3)=sqrt(1.0d+00-x(3)*x(3))
+          a=one/z(3)
+          y(1)=-a*x(2)*sign(1.0d+00,x(1))
+          y(2)=abs(a*x(1))
+          y(3)=0.0d+00
+          z(1)=-a*x(1)*x(3)
+          z(2)=-a*x(2)*x(3)
+c         generate some useful projections
+          xx11 = x(1)*x(1)
+          xx21 = x(2)*x(1)
+          xx22 = x(2)*x(2)
+          xx31 = x(3)*x(1)
+          xx32 = x(3)*x(2)
+          xx33 = x(3)*x(3)
+          yy11 = y(1)*y(1)
+          yy21 = y(2)*y(1)
+          yy22 = y(2)*y(2)
+          zz11 = z(1)*z(1)
+          zz21 = z(2)*z(1)
+          zz22 = z(2)*z(2)
+          zz31 = z(3)*z(1)
+          zz32 = z(3)*z(2)
+          zz33 = z(3)*z(3)
+          yyzz11 = yy11+zz11
+          yyzz21 = yy21+zz21
+          yyzz22 = yy22+zz22
+          r1i = one / r
+c         obtain correct index in the fock matrix
+c         index = 1
+          max = jmax
+          do i=imin,imax
+            li = loci +i
+            ni = li*(li-1)/2
+            if(iandj) max = i
+            do j=jmin,max
+              lj = locj +j
+              nj = lj + ni
+c              wint = zero
+              qval = qq(niat)
+              dval = dd(niat)
+c
+c             calculate the 4 types of ideal integrals
+c             Dewar MJS, Thiel W; Theoret. Chim. Acta (Bert.) 46, 89-104 (1977)
+c             (ss|ss) is eq. 28
+c             (ss|spz) is eq. 41
+c             (ss|popo) is eq. 29
+c             (ss|pzpz) is eq. 30
+              ssss   = r1i
+              sspzs  = half*(one/(r+dval) - one/(r-dval))
+              sspopo = half/sqrt(r2+4*qval*qval)
+              sspopo = sspopo - half*r1i
+              sspopo = sspopo + r1i
+              sspzpz = one/(r+2*qval) + one/(r-2*qval)
+              sspzpz = sspzpz - two*r1i
+              sspzpz = sspzpz * fourth
+              sspzpz = sspzpz + r1i
+c
+c             by default we just assign the ssss integral
+              value(nj) = ssss
+c
+c             now do rotation of the integrals
+c             (ss|pxs)
+              if(i.eq.2.and.j.eq.1) value(nj)= sspzs*x(1)
+c             (ss|pxpx)
+              if(i.eq.2.and.j.eq.2) value(nj)= sspzpz*xx11+sspopo*yyzz11
+c             (ss|pys)
+              if(i.eq.3.and.j.eq.1) value(nj)= sspzs*x(2)
+c             (ss|pypx)
+              if(i.eq.3.and.j.eq.2) value(nj)= sspzpz*xx21+sspopo*yyzz21
+c             (ss|pypy)
+              if(i.eq.3.and.j.eq.3) value(nj)=sspzpz*xx22+sspopo*yyzz22
+c             (ss|pzs)
+              if(i.eq.4.and.j.eq.1) value(nj)= sspzs*x(3)
+c             (ss|pzpx)
+              if(i.eq.4.and.j.eq.2) value(nj)= sspzpz*xx31+sspopo*zz31
+c             (ss|pzpy)
+              if(i.eq.4.and.j.eq.3) value(nj)= sspzpz*xx32+sspopo*zz32
+c             (ss|pzpz)
+              if(i.eq.4.and.j.eq.4) value(nj)= sspzpz*xx33+sspopo*zz33
+            enddo
+          enddo
+c         loop over jj
+   10     continue
+        enddo
+c       loop over ii
+      enddo
+      RETURN
+      END
+C
+C
+C*MODULE MPCPCM   *DECK MPCFELECQ
+!> @brief calculates the derivative of the mep using
+!>        nddo integrals
+!>
+!> @details calculates the MEP based on integrals following
+!>          Dewar MJS, Thiel W; Theoret. Chim. Acta (Bert.) 46, 89-104 (1977)
+!>
+!> @author Casper Steinmann
+!> - February 2013
+!>
+!> @param DEN : the density
+!> @param QS : surface charges
+!> @param FEQ : mep field gradient
+!> @param l2: dimension of fock-matrix
+!> @param xcts: x-coordinates for tesserae
+!> @param ycts: y-coordinates for tesserae
+!> @param zcts: z-coordinates for tesserae
+      subroutine mpcfelecq(den,qs,feq,l2,xcts,ycts,zcts)
+c
+      implicit double precision (a-h,o-z)
+c
+      dimension xcts(*),ycts(*),zcts(*)
+      dimension x(3),y(3),z(3)
+      logical iandj, goparr, dskwrk, maswrk, nxt
+c
+      parameter (mxsh=5000, mxgtot=20000, mxatm=2000)
+c
+      common /infoa / nat,ich,mul,num,nqmt,ne,na,nb,
+     *                zan(mxatm),c(3,mxatm),ian(mxatm)
+      common /molkst/ numat,nat2(mxatm),nfirst(mxatm),nmidle(mxatm),
+     1                nlast(mxatm), norbs, nelecs,nalpha,nbeta,
+     2                nclose,nopen,ndumy,fract
+      common /nshel / ex(mxgtot),cs(mxgtot),cp(mxgtot),cd(mxgtot),
+     *                cf(mxgtot),cg(mxgtot),ch(mxgtot),ci(mxgtot),
+     *                kstart(mxsh),katom(mxsh),ktype(mxsh),kng(mxsh),
+     *                kloc(mxsh),kmin(mxsh),kmax(mxsh),nshell
+      common /multip/ dd(107),qq(107),am(107),ad(107),aq(107)
+      common /par   / me,master,nproc,ibtyp,iptim,goparr,dskwrk,maswrk
+      common /pcmdim/ mxsp,mxts,mempcm1,mempcm2,nts
+      parameter (zero=0.0d+00, one=1.0d+00, two=2.0d+00,
+     *           four=two*two,
+     *           half=one/two,fourth=half/two)
+c
+      dimension den(l2),qs(nts),feq(3,nat,nts)
+c
+      call derchk(maxder)
+      if(maxder.eq.0) return
+      call vclr(feq,1,3*nat*nts)
+C
+      nxt = ibtyp.eq.1
+      next  = -1
+      kount = -1
+c
+c     fix density
+      l1=num
+      loop=0
+      do i=1,l1
+        do j=1,i-1
+          loop=loop+1
+          den(loop)=den(loop)*two
+        enddo
+c       skip the diagonal
+        loop=loop+1
+      enddo
+c
+      do ii=1,nshell
+        if(goparr) then
+          kount=kount+1
+          if(nxt) then
+            if(kount.gt.next) call ddi_dlbnext(next)
+            if(next.ne.kount) goto 500
+          else
+            if(mod(kount,nproc).ne.me) goto 500
+          endif
+        endif
+        iat = katom(ii)
+        xi = c(1,iat)
+        yi = c(2,iat)
+        zi = c(3,iat)
+c        lit = ktype(ii)
+        imin = kmin(ii)
+        imax = kmax(ii)
+        loci = kloc(ii) - imin
+        niat = nat2(iat)
+c
+c
+        do jj=1,ii
+          jat = katom(jj)
+c          ljt = ktype(jj)
+          jmin = kmin(jj)
+          jmax = kmax(jj)
+          locj = kloc(jj) - jmin
+c          njat = nat2(jat)
+c
+c         in nddo, only include effects from same atoms
+          iandj=ii.eq.jj
+          if(iat.ne.jat) goto 10
+
+          do its=1,nts
+C
+c
+c         setup local coordinate system and projections
+c         taken from subroutine REPP in mpcint.src
+c         first up is to generate unit vectors for local coordinate system
+          x(1)=xi-xcts(its)
+          x(2)=yi-ycts(its)
+          x(3)=zi-zcts(its)
+c          print *,xpp,ypp,zpp,xi,yi,zi
+          r2 = X(1)**2 + X(2)**2 + X(3)**2
+          r  = sqrt(r2)
+          a = one/r
+c         now generate unit vectors
+          x(1) = x(1)*a
+          x(2) = x(2)*a
+          x(3) = x(3)*a
+          z(3)=sqrt(1.0d+00-x(3)*x(3))
+          a=one/z(3)
+          y(1)=-a*x(2)*sign(1.0d+00,x(1))
+          y(2)=abs(a*x(1))
+          y(3)=0.0d+00
+          z(1)=-a*x(1)*x(3)
+          z(2)=-a*x(2)*x(3)
+c         generate some useful projections
+          xx11 = x(1)*x(1)
+          xx21 = x(2)*x(1)
+          xx22 = x(2)*x(2)
+          xx31 = x(3)*x(1)
+          xx32 = x(3)*x(2)
+          xx33 = x(3)*x(3)
+          yy11 = y(1)*y(1)
+          yy21 = y(2)*y(1)
+          yy22 = y(2)*y(2)
+          zz11 = z(1)*z(1)
+          zz21 = z(2)*z(1)
+          zz22 = z(2)*z(2)
+          zz31 = z(3)*z(1)
+          zz32 = z(3)*z(2)
+          zz33 = z(3)*z(3)
+          yyzz11 = yy11+zz11
+          yyzz21 = yy21+zz21
+          yyzz22 = yy22+zz22
+c
+c some helper definitions
+          dX = xi-xcts(its)
+          dY = yi-ycts(its)
+          dZ = zi-zcts(its)
+          r1i = one / r
+          r2i = one / r2
+          r3i = r1i*r2i
+
+c         obtain correct index in the fock matrix
+c          index = 1
+          max = jmax
+          do i=imin,imax
+            li = loci +i
+            ni = li*(li-1)/2
+            if(iandj) max = i
+            do j=jmin,max
+              lj = locj +j
+              nj = lj + ni
+c              wint = zero
+              qval = qq(niat)
+              dval = dd(niat)
+c
+c             calculate the 4 types of ideal integrals
+c             Dewar MJS, Thiel W; Theoret. Chim. Acta (Bert.) 46, 89-104 (1977)
+c             (ss|ss) is eq. 28
+c             (ss|spz) is eq. 41
+c             (ss|popo) is eq. 29
+c             (ss|pzpz) is eq. 30
+c              ssss   = r1i
+              sspzs  = half*(one/(r+dval) - one/(r-dval))
+              sspopo = half/sqrt(r2+4*qval*qval)
+              sspopo = sspopo - half*r1i
+              sspopo = sspopo + r1i
+              sspzpz = one/(r+2*qval) + one/(r-2*qval)
+              sspzpz = sspzpz - two*r1i
+              sspzpz = sspzpz * fourth
+              sspzpz = sspzpz + r1i
+
+c derivative of (ss|ss) integrals
+              if(i.eq.1.and.j.eq.1) then
+                dum=r3i*den(nj)*qs(its)
+c
+                feq(1,iat,its) = feq(1,iat,its) - dx*dum
+                feq(2,iat,its) = feq(2,iat,its) - dy*dum
+                feq(3,iat,its) = feq(3,iat,its) - dz*dum
+              endif
+
+c derivative of (ss|spx) integrals
+              if(i.eq.2.and.j.eq.1) then
+                rval=(r2-dval*dval)**2
+                dum1= two*dval/rval
+                dum2x =(r2-dx*dx)*r3i
+                dum2y =-dx*dy*r3i
+                dum2z =-dx*dz*r3i
+                dumx = dx*dum1*x(1)+sspzs*dum2x
+                dumy = dy*dum1*x(1)+sspzs*dum2y
+                dumz = dz*dum1*x(1)+sspzs*dum2z
+c
+                feq(1,iat,its) = feq(1,iat,its)+dumx*den(nj)*qs(its)
+                feq(2,iat,its) = feq(2,iat,its)+dumy*den(nj)*qs(its)
+                feq(3,iat,its) = feq(3,iat,its)+dumz*den(nj)*qs(its)
+              endif
+c
+c derivative of (ss|spy) integrals
+              if(i.eq.3.and.j.eq.1) then
+                rval=(r2-dval*dval)**2
+                dum1= two*dval/rval
+                dum2x =-dx*dy*r3i
+                dum2y =(r2-dy*dy)*r3i
+                dum2z =-dz*dy*r3i
+                dumx = dx*dum1*x(2)+sspzs*dum2x
+                dumy = dy*dum1*x(2)+sspzs*dum2y
+                dumz = dz*dum1*x(2)+sspzs*dum2z
+c
+                feq(1,iat,its) = feq(1,iat,its)+dumx*den(nj)*qs(its)
+                feq(2,iat,its) = feq(2,iat,its)+dumy*den(nj)*qs(its)
+                feq(3,iat,its) = feq(3,iat,its)+dumz*den(nj)*qs(its)
+              endif
+c
+c derivative of (ss|spz) integrals
+              if(i.eq.4.and.j.eq.1) then
+                rval=(r2-dval*dval)**2
+                dum1= two*dval/rval
+                dum2x =-dz*dx*r3i
+                dum2y =-dz*dy*r3i
+                dum2z =(r2-dz*dz)*r3i
+                dumx = dx*dum1*x(3)+sspzs*dum2x
+                dumy = dy*dum1*x(3)+sspzs*dum2y
+                dumz = dz*dum1*x(3)+sspzs*dum2z
+c
+                feq(1,iat,its) = feq(1,iat,its)+dumx*den(nj)*qs(its)
+                feq(2,iat,its) = feq(2,iat,its)+dumy*den(nj)*qs(its)
+                feq(3,iat,its) = feq(3,iat,its)+dumz*den(nj)*qs(its)
+              endif
+c
+c derivative of (ss|pxpx) integrals
+              if(i.eq.2.and.j.eq.2) then
+c               derivative of (ss|pzpz)
+c               3.7 -> 3.9
+                rp=one/(r+two*qval)
+                rn=one/(r-two*qval)
+                dum1=-half*(r3i+half*r1i*(rp*rp+rn*rn))
+c
+c               derivative of xx11 projection operator
+c               4.1.10 -> 4.1.12
+                dumpx= two*dx*r2i*r2i*(r2-dx*dx)
+                dumpy=-two*dx*dx*dy*r2i*r2i
+                dumpz=-two*dx*dx*dz*r2i*r2i
+c
+c               derivative of (ss|popo)
+c               3.4 -> 3.6
+                rd = r2+four*qval*qval
+                rds= sqrt(rd)*rd
+                dum2 = -half*(r3i+one/rds)
+c
+c               derivative of yyzz11 projection operator
+                r2xy=one/(dx*dx+dy*dy)
+                dx2r=dx*dx*r2i
+                dy2r=dy*dy*r2i
+                dz2r=dz*dz*r2i
+c               yy11: 4.2.1 -> 4.2.6
+                dump2x=-two*dx*dy*dy*r2xy*r2xy
+                dump2y= two*dy*r2xy*(one-dy*dy*r2xy)
+                dump2z= zero
+c               zz11: 4.3.1 -> 4.3.6
+                dump3x = two*dz2r*r2xy*dx*(one-dx2r-dx*dx*r2xy)
+                dump3y =-two*dx2r*r2xy*dz*dz*dy*(r2i+r2xy)
+                dump3z = two*dx2r*r2xy*dz*(one-dz2r)
+c
+c first part of the derivative of the integral
+c
+                dumx = dx*dum1*xx11+sspzpz*dumpx
+                dumy = dy*dum1*xx11+sspzpz*dumpy
+                dumz = dz*dum1*xx11+sspzpz*dumpz
+c
+c second part of the derivative of the integral
+                dumx= dumx+dx*dum2*yyzz11
+                dumx= dumx+sspopo*(dump2x+dump3x)
+c
+                dumy= dumy+dy*dum2*yyzz11
+                dumy= dumy+sspopo*(dump2y+dump3y)
+c
+                dumz= dumz+dz*dum2*yyzz11
+                dumz= dumz+sspopo*(dump2z+dump3z)
+c
+                feq(1,iat,its) = feq(1,iat,its)+dumx*den(nj)*qs(its)
+                feq(2,iat,its) = feq(2,iat,its)+dumy*den(nj)*qs(its)
+                feq(3,iat,its) = feq(3,iat,its)+dumz*den(nj)*qs(its)
+              endif
+c
+c derivative of (ss|pypy) integrals
+              if(i.eq.3.and.j.eq.3) then
+c               derivative of (ss|pzpz)
+c               3.7 -> 3.9
+                rp=one/(r+two*qval)
+                rn=one/(r-two*qval)
+                dum1=-half*(r3i+half*r1i*(rp*rp+rn*rn))
+c
+c               derivative of xx22 projection operator
+c               4.1.13 -> 4.1.15
+                dumpx=-two*dy*dy*dx*r2i*r2i
+                dumpy= two*dy*r2i*r2i*(r2-dy*dy)
+                dumpz=-two*dy*dy*dz*r2i*r2i
+c
+c               derivative of (ss|popo)
+c               3.4 -> 3.6
+                rd = r2+four*qval*qval
+                rds= sqrt(rd)*rd
+                dum2 = -half*(r3i+one/rds)
+c
+c               derivative of yyzz22 projection operator
+                r2xy=one/(dx*dx+dy*dy)
+                dx2r=dx*dx*r2i
+                dy2r=dy*dy*r2i
+                dz2r=dz*dz*r2i
+c               yy22: 4.2.13 -> 4.2.18
+                dump2x= two*dx*r2xy*(one-dx*dx*r2xy)
+                dump2y=-two*dx*dx*dy*r2xy*r2xy
+                dump2z= zero
+c               zz22: 4.3.7 -> 4.3.12
+                dump3x =-two*dy2r*r2xy*dz*dz*dx*(r2i+r2xy)
+                dump3y = two*dz2r*r2xy*dy*(one-dy2r-dy*dy*r2xy)
+                dump3z = two*dy2r*r2xy*dz*(one-dz2r)
+c
+c first part of the derivative of the integral
+c
+                dumx = dx*dum1*xx22+sspzpz*dumpx
+                dumy = dy*dum1*xx22+sspzpz*dumpy
+                dumz = dz*dum1*xx22+sspzpz*dumpz
+c
+c second part of the derivative of the integral
+                dumx= dumx+dx*dum2*yyzz22
+                dumx= dumx+sspopo*(dump2x+dump3x)
+c
+                dumy= dumy+dy*dum2*yyzz22
+                dumy= dumy+sspopo*(dump2y+dump3y)
+c
+                dumz= dumz+dz*dum2*yyzz22
+                dumz= dumz+sspopo*(dump2z+dump3z)
+c
+                feq(1,iat,its) = feq(1,iat,its)+dumx*den(nj)*qs(its)
+                feq(2,iat,its) = feq(2,iat,its)+dumy*den(nj)*qs(its)
+                feq(3,iat,its) = feq(3,iat,its)+dumz*den(nj)*qs(its)
+              endif
+c
+c derivative of (ss|pzpz) integrals
+              if(i.eq.4.and.j.eq.4) then
+c               derivative of (ss|pzpz)
+c               3.7 -> 3.9
+                rp=one/(r+two*qval)
+                rn=one/(r-two*qval)
+                dum1=-half*(r3i+half*r1i*(rp*rp+rn*rn))
+c
+c               derivative of xx33 projection operator
+c               4.1.16 -> 4.1.18
+                dumpx=-two*dz*dz*dx*r2i*r2i
+                dumpy=-two*dz*dz*dy*r2i*r2i
+                dumpz= two*dz*r2i*r2i*(r2-dz*dz)
+c
+c               derivative of (ss|popo)
+c               3.4 -> 3.6
+                rd = r2+four*qval*qval
+                rds= sqrt(rd)*rd
+                dum2 = -half*(r3i+one/rds)
+c
+c first part of the derivative of the integral
+c
+                dumx = dx*dum1*xx33+sspzpz*dumpx
+                dumy = dy*dum1*xx33+sspzpz*dumpy
+                dumz = dz*dum1*xx33+sspzpz*dumpz
+c
+c second part of the derivative of the integral
+                dumx= dumx+dx*dum2*zz33
+                dumx= dumx-sspopo*dumpx
+c
+                dumy= dumy+dy*dum2*zz33
+                dumy= dumy-sspopo*dumpy
+c
+                dumz= dumz+dz*dum2*zz33
+                dumz= dumz-sspopo*dumpz
+c
+                feq(1,iat,its) = feq(1,iat,its)+dumx*den(nj)*qs(its)
+                feq(2,iat,its) = feq(2,iat,its)+dumy*den(nj)*qs(its)
+                feq(3,iat,its) = feq(3,iat,its)+dumz*den(nj)*qs(its)
+              endif
+c
+c derivative of (ss|pxpy) integrals
+              if(i.eq.3.and.j.eq.2) then
+c               derivative of (ss|pzpz)
+c               3.7 -> 3.9
+                rp=one/(r+two*qval)
+                rn=one/(r-two*qval)
+                dum1=-half*(r3i+half*r1i*(rp*rp+rn*rn))
+c
+c               derivative of xx21 projection operator
+c               4.1.13 -> 4.1.15
+                dumpx= dy*r2i*(one-two*dx*dx*r2i)
+                dumpy= dx*r2i*(one-two*dy*dy*r2i)
+                dumpz=-two*dx*dy*dz*r2i*r2i
+c
+c               derivative of (ss|popo)
+c               3.4 -> 3.6
+                rd = r2+four*qval*qval
+                rds= sqrt(rd)*rd
+                dum2 = -half*(r3i+one/rds)
+c
+c               derivative of yyzz21 projection operator
+                r2xy=one/(dx*dx+dy*dy)
+                dx2r=dx*dx*r2i
+                dy2r=dy*dy*r2i
+                dz2r=dz*dz*r2i
+c               yy21: 4.2.13 -> 4.2.18
+                dump2x= dy*r2xy*(two*dx*dx*r2xy-one)
+                dump2y= dx*r2xy*(two*dy*dy*r2xy-one)
+                dump2z= zero
+c               zz21: 4.3.7 -> 4.3.12
+                dump3x = dy*dz2r*r2xy*(one-two*dx2r-two*dx*dx*r2xy)
+                dump3y = dx*dz2r*r2xy*(one-two*dy2r-two*dy*dy*r2xy)
+                dump3z = two*dx*dy*dz*r2xy*r2i*(one-dz2r)
+c
+c first part of the derivative of the integral
+c
+                dumx = dx*dum1*xx21+sspzpz*dumpx
+                dumy = dy*dum1*xx21+sspzpz*dumpy
+                dumz = dz*dum1*xx21+sspzpz*dumpz
+c
+c second part of the derivative of the integral
+                dumx= dumx+dx*dum2*yyzz21
+                dumx= dumx+sspopo*(dump2x+dump3x)
+c
+                dumy= dumy+dy*dum2*yyzz21
+                dumy= dumy+sspopo*(dump2y+dump3y)
+c
+                dumz= dumz+dz*dum2*yyzz21
+                dumz= dumz+sspopo*(dump2z+dump3z)
+c
+                feq(1,iat,its) = feq(1,iat,its)+dumx*den(nj)*qs(its)
+                feq(2,iat,its) = feq(2,iat,its)+dumy*den(nj)*qs(its)
+                feq(3,iat,its) = feq(3,iat,its)+dumz*den(nj)*qs(its)
+              endif
+c
+c derivative of (ss|pxpz) integrals
+              if(i.eq.4.and.j.eq.2) then
+                dx2r=dx*dx*r2i
+                dy2r=dy*dy*r2i
+                dz2r=dz*dz*r2i
+c               derivative of (ss|pzpz)
+c               3.7 -> 3.9
+                rp=one/(r+two*qval)
+                rn=one/(r-two*qval)
+                dum1=-half*(r3i+half*r1i*(rp*rp+rn*rn))
+c
+c               derivative of xx31 projection operator
+c               4.1.13 -> 4.1.15
+                dumpx= dz*r2i*(one-two*dx2r)
+                dumpy=-two*dx*dy*dz*r2i*r2i
+                dumpz= dx*r2i*(one-two*dz2r)
+c
+c               derivative of (ss|popo)
+c               3.4 -> 3.6
+                rd = r2+four*qval*qval
+                rds= sqrt(rd)*rd
+                dum2 = -half*(r3i+one/rds)
+c
+c first part of the derivative of the integral
+c
+                dumx = dx*dum1*xx31+sspzpz*dumpx
+                dumy = dy*dum1*xx31+sspzpz*dumpy
+                dumz = dz*dum1*xx31+sspzpz*dumpz
+c
+c second part of the derivative of the integral
+                dumx= dumx+dx*dum2*zz31
+                dumx= dumx-sspopo*dumpx
+c
+                dumy= dumy+dy*dum2*zz31
+                dumy= dumy-sspopo*dumpy
+c
+                dumz= dumz+dz*dum2*zz31
+                dumz= dumz-sspopo*dumpz
+c
+                feq(1,iat,its) = feq(1,iat,its)+dumx*den(nj)*qs(its)
+                feq(2,iat,its) = feq(2,iat,its)+dumy*den(nj)*qs(its)
+                feq(3,iat,its) = feq(3,iat,its)+dumz*den(nj)*qs(its)
+              endif
+c
+c derivative of (ss|pypz) integrals
+              if(i.eq.4.and.j.eq.3) then
+                dx2r=dx*dx*r2i
+                dy2r=dy*dy*r2i
+                dz2r=dz*dz*r2i
+c               derivative of (ss|pzpz)
+c               3.7 -> 3.9
+                rp=one/(r+two*qval)
+                rn=one/(r-two*qval)
+                dum1=-half*(r3i+half*r1i*(rp*rp+rn*rn))
+c
+c               derivative of xx31 projection operator
+c               4.1.13 -> 4.1.15
+                dumpx=-two*dx*dy*dz*r2i*r2i
+                dumpy= dz*r2i*(one-two*dy2r)
+                dumpz= dy*r2i*(one-two*dz2r)
+c
+c               derivative of (ss|popo)
+c               3.4 -> 3.6
+                rd = r2+four*qval*qval
+                rds= sqrt(rd)*rd
+                dum2 = -half*(r3i+one/rds)
+c
+c first part of the derivative of the integral
+c
+                dumx = dx*dum1*xx32+sspzpz*dumpx
+                dumy = dy*dum1*xx32+sspzpz*dumpy
+                dumz = dz*dum1*xx32+sspzpz*dumpz
+c
+c second part of the derivative of the integral
+                dumx= dumx+dx*dum2*zz32
+                dumx= dumx-sspopo*dumpx
+c
+                dumy= dumy+dy*dum2*zz32
+                dumy= dumy-sspopo*dumpy
+c
+                dumz= dumz+dz*dum2*zz32
+                dumz= dumz-sspopo*dumpz
+c
+                feq(1,iat,its) = feq(1,iat,its)+dumx*den(nj)*qs(its)
+                feq(2,iat,its) = feq(2,iat,its)+dumy*den(nj)*qs(its)
+                feq(3,iat,its) = feq(3,iat,its)+dumz*den(nj)*qs(its)
+              endif
+            enddo
+          enddo
+c         end loop over tesserae
+          enddo
+c         loop over jj
+   10     continue
+        enddo
+c       loop over ii
+  500   continue
+      enddo
+c
+c fix density
+c
+      loop=0
+      do i=1,l1
+        do j=1,i-1
+          loop=loop+1
+          den(loop)=den(loop)/two
+        enddo
+c       skip the diagonal
+        loop=loop+1
+      enddo
+c
+      if(goparr) then
+         if(nxt) call ddi_dlbreset
+         call ddi_gsumf(2450,feq,3*nat*nts)
+      end if
+      call dscal(3*nat*nts,-one,feq,1)
+      return
+      end
