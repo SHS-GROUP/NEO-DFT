@@ -310,6 +310,13 @@ setenv BONDDPF $SCR/$JOB.F299
 setenv VB2000PATH $GMSPATH/vb2000
 setenv GMSJOBNAME $JOB
 
+# Next files are used during EFMO runs
+set efmo = `grep -i IEFMO= $SCR/$JOB.F05 | wc -l`
+if ($efmo > 0) then
+  setenv EFMOI $SCR/$JOB.F102
+  setenv EFMOF $SCR/$JOB.F103
+endif
+
 #    Next files are used for explicitly correlated methods 
 set pt2r12=`egrep -i '(PT212=.TRUE.|PT2R12=.T.)' $SCR/$JOB.F05 | wc -l`
 if ($pt2r12 > 0) then
