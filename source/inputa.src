@@ -1,3 +1,4 @@
+C 25 Feb 13 - CAS - Added RDMTYP to CONTROL group and check parameters for P2RDM calculation.
 C 20 Feb 13 - MWS - ensure CUHF+MP2 does not try for gradients
 C 19 DEC 12 - JI  - Add more stringent checks for angular momentum limits
 C                   Add h/i data for calls to PCNBAS,CCNBAS
@@ -3174,6 +3175,7 @@ C
       COMMON /TINOPT/ MPARTI,MMONLY, QMMM
       COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
      *                MPLEVL,MPCTYP
+      COMMON /RDMOPT/ RDMTYP
       COMMON /VBINTF/ VBENGY
       COMMON /ZMAT  / NZMAT,NZVAR,NVAR,NSYMC,LINEAR
       COMMON /ZMTALT/ NZMAT2,NZVAR2,NVAR2,NZMTRD,ICOORD
@@ -3204,7 +3206,7 @@ C
 C
 C      ----- SET UP NAMELIST $CONTRL TABLES -----
 C
-      PARAMETER (NNAM=43)
+      PARAMETER (NNAM=44)
       DIMENSION QNAM(NNAM),KQNAM(NNAM)
       DATA CONTRL /8HCONTRL  /
       DATA QNAM/8HSCFTYP  ,8HRUNTYP  ,8HEXETYP  ,8HICHARG  ,
@@ -3218,10 +3220,10 @@ C
      *          8HNUMGRD  ,8HGRDTST  ,8HGRDTYP  ,8HVBTYP   ,
      *          8HDFTTYP  ,8HTDDFT   ,8HISKPRP  ,8HNFFLVL  ,
      *          8HETOLLZ  ,8HIAHARD  ,
-     *          8HCIMTYP  /
+     *          8HCIMTYP  ,8HRDMTYP  /
       DATA KQNAM /5,5,5,1,  1,5,5,5,  1,1,1,1,  1,1,1,1,
      *            1,5,1,0,  5,5,0,0,  5,5,1,5,  5,1,3,5,
-     *            0,0,5,5,  5,5,1,1,  3,1,5/
+     *            0,0,5,5,  5,5,1,1,  3,1,5,5/
 C
       DATA C1/8HC1      /
       DATA BLANK/8H        /, RUN/8HRUN      /
@@ -3229,9 +3231,9 @@ C
       DATA NONE,RNONE/4HNONE,8HNONE    /
       DATA RHF,UHF,ROHF,GVB/8HRHF     ,8HUHF     ,8HROHF    ,8HGVB     /
       DATA RMC,ZAPT/8HMCSCF   ,8HZAPT    /
-      DATA GUGA,ALDET,CIS,GENCI,FSOCI,ORMAS,GMCCI,SFCIS
+      DATA GUGA,ALDET,CIS,GENCI,FSOCI,ORMAS,GMCCI,SFCIS,P2RDM
      *          /8HGUGA    ,8HALDET   ,8HCIS     ,8HGENCI   ,8HFSOCI   ,
-     *           8HORMAS   ,8HGMCCI   ,8HSFCIS   /
+     *           8HORMAS   ,8HGMCCI   ,8HSFCIS   ,8HP2RDM   /
       DATA DETWRD,GENWRD,DRTWRD/8HDET     ,8HGENCI   ,8HDRT     /
 C
       DATA LCCD,CCD,CCSD,CCSDT,CCSDTQ,RCC,CRCC,CRCCQ,CRCCL
@@ -3330,6 +3332,7 @@ C
       RPAC  =.FALSE.  !   DEFUNCT OPTION
       NUMGRD=.FALSE.
       GRDTST=.FALSE.
+      RDMTYP = BLANK
 C
 C     FMO HAS ITS OWN COORDINATE AND BASIS SET INPUT TO BE READ LATER.
 C     NOW WE ONLY CHECK IF FMO IS ACTIVE AND SET NFG TEMPORARILY TO 1/0.
@@ -3376,7 +3379,7 @@ C
      *            NOSYM,GEOM,MPLEVL,AIMPAC,PP,ECP,PLTORB,MOLPLT,
      *            COORD,FRIEND,NOSO,CITYP,CCTYP,ISPHER,QMTTOL,RMETHOD,
      *            NUMGRD,GRDTST,GRDTYP,VBTYP,DFTYPE,TDDFTYP,ISKPRP,
-     *            NFFLVL,ETOLLZ,IAHARD,cimtyp,0,
+     *            NFFLVL,ETOLLZ,IAHARD,cimtyp,RDMTYP,
      *   0,0,0,0,0,    0,0,0,0,0,   0,0,0,0,0,   0,0,0,0,0)
       IF(JRET .EQ. 2) THEN
          IF (MASWRK) WRITE (IW,9005)
@@ -3707,6 +3710,29 @@ C
          NERR = NERR+1
       END IF
 C
+C     Check the RDMTYP calculation
+      OK = .FALSE.
+      if(RDMTYP.eq.BLANK) then
+        RDMTYP = RNONE
+      end if
+C     Set NUMGRD to true for optimizations with P2RDM
+      if(RDMTYP.eq.P2RDM) then
+        OK = .TRUE.
+        if(RUNTYP.eq.OPTIM) then
+          NUMGRD = .TRUE.
+          write(*,*) 'SETTING NUMGRD = T FOR YOUR OPTIMIZATION.'
+        end if
+        if(RUNTYP.eq.SADPT) then
+          NUMGRD = .TRUE.
+          write(*,*) 'SETTING NUMGRD = T FOR YOUR SADDLE POINT SEARCH.'
+        end if
+      end if
+      if((OK.eqv..FALSE.).and.(RDMTYP.ne.RNONE)) then
+        write(*,*) 'The 2-RDM calculation was not correctly requested!'
+        write(*,*) 'Please use RDMTYP = P2RDM in $CONTRL'
+        NERR = NERR + 1
+      end if
+
 C     CHECK THE COUPLED CLUSTERS JOB
 C
       OK = .FALSE.
@@ -4120,7 +4146,7 @@ C
      *                   PLTORB, MOLPLT, AIMPAC, FRIEND,
      *                   NPRINT, IREST,  GEOM,
      *                   NORMF,  NORMP,  ITOL,   ICUT,
-     *                   TYPINT, GRDTYP, QMTTOL
+     *                   TYPINT, GRDTYP, QMTTOL, RDMTYP
          IF(NOSO.EQ.1) WRITE(IW,*) 'UNDOCUMENTED OPTION -NOSO- SELECTED'
          COREFL= ICORFL.EQ.1
          XNP = NPROCTOT
@@ -4899,7 +4925,8 @@ C
      * 1X,'PLTORB=',L8,5X,'MOLPLT=',L8,5X,'AIMPAC=',L8,5X,'FRIEND=',A8/
      * 1X,'NPRINT=',I8,5X,'IREST =',I8,5X,'GEOM  =',A8/
      * 1X,'NORMF =',I8,5X,'NORMP =',I8,5X,'ITOL  =',I8,5X,'ICUT  =',I8/
-     * 1X,'INTTYP=',A8,5X,'GRDTYP=',A8,5X,'QMTTOL=',1P,E8.1,0P)
+     * 1X,'INTTYP=',A8,5X,'GRDTYP=',A8,5X,'QMTTOL=',1P,E8.1,0P,
+     * 5X, 'RDMTYP=',A8,5X)
  9530 FORMAT(/5X,'$SYSTEM OPTIONS'/5X,15(1H-)/
      *  1X,' REPLICATED MEMORY=',I12,' WORDS (ON EVERY NODE).'/
      *  1X,'DISTRIBUTED MEMDDI=',I12,' MILLION WORDS IN AGGREGATE,'/
