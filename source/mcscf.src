@@ -1,3 +1,4 @@
+C 15 Apr 13 - MWS - include solvent energy into all state energies
 C 19 Oct 12 - MWS - synchronize FRGINF common
 C  2 Sep 12 - MWS - MCSCF,NTNCAN: diabatization, and FINCI option added
 C 14 AUG 12 - ACW - MCSCF,NTNCAN: for cpmchf, ensure sym. Lagrangian.
@@ -164,12 +165,12 @@ C 13 OCT 88 - MWS - IMPLEMENT MICHEL'S HONDO7 MCSCF PROGRAM IN GAMESS
 C
 C*MODULE MCSCF   *DECK CANMCV
 C> @brief      This routine drives generation of canonical orbitals.
-C> 
+C>
 C> @author     Mike Schmidt
 C>             -November 15, 1991
-C> 
+C>
 C> @details    This routine drives generation of canonical orbitals.
-C> 
+C>
 C> @date January 16, 2013-Aaron West
 C> -Added VVOS option for MCSCF.
 C>
@@ -587,15 +588,15 @@ C
       END
 C*MODULE MCSCF   *DECK LINMC
 C> @brief      This routine drives the line search MCSCF optimization.
-C> 
+C>
 C> @author     Guru Das
 C>             -1997
-C> 
+C>
 C> @details    This routine drives the line search MCSCF converger
 C>             option.  Line searches are inefficient but
 C>             powerful at enforcing an eventual convergence in
 C>             problematic cases.
-C> 
+C>
 C> @date November 09, 2012-Aaron West
 C> -Added icimalmq argument to detfci and defcci calls.
 C>
@@ -1386,12 +1387,12 @@ C
       END
 C*MODULE MCSCF   *DECK MCSCF
 C> @brief      This routine drives an MCSCF energy run.
-C> 
+C>
 C> @author     Michel Dupuis and Mike Schmidt
 C>             -1988
-C> 
+C>
 C> @details    This routine drives an MCSCF energy run.
-C> 
+C>
 C> @date November 09, 2012-Aaron West
 C> -Added icimalmq argument to detfci and defcci calls.
 C>
@@ -1800,7 +1801,20 @@ C
          CALL RETFM(NEED)
       END IF
 C
+C     ------- solvation models -------
+C
+      EEFP     = ZERO
+      PB       = ZERO
+      PC       = ZERO
+      PX       = ZERO
+      ENPCM    = ZERO
+      ESVP     = ZERO
+C
 C     -- SET UP COMBINED EFP/PCM
+C     note, this is mistakenly programmed.  EFP model is really
+C     determined by NFRG>0, with the possibility that its dipole
+C     polarizability term (IEFP) is not actually being used.
+C     Note that the present code restores IPCM/IEFP on exit.
 C
       IF(IPCM.EQ.1 .AND. IEFP.EQ.1) THEN
          IPCM=0
@@ -2293,48 +2307,61 @@ C
      *                       DOVVVO,DOVVVV,DOCORE)
 C
 C        FINAL SOLVENT ENERGY CORRECTIONS
-C     NOTE: ONSAGER MODEL PUT FREE ENERGY CORRECTIONS INTO -EN- ALREADY
+C     These kind of additive constants tend to be placed into ENUCR,
+C     where they seem to be added twice into the MCSCF energy:
+C     probably once in the CI iterations, and again in NEWTON?
+C     This is a centralized location to correct the total energy,
+C     and same constant is then added to the energy of all CI states.
+C     Printing of multiple states looks better that way.
 C
       ESOLV = ZERO
 C
-      IF(NBUFMO.GT.0  .AND.  ITER.GT.1) THEN
-         E = E - EEFP
-         ESOLV = EEFP
+C     Onsager reaction field puts corrections into -ENUCR- only once?
+C     At any rate, no correction is added by any of our SCF procedures.
+C
+      IF (IZRF.EQ.1) THEN
+         ESOLV = ESOLV + ZERO
       END IF
 C
-      IF((IPCFP.OR.IPCM.EQ.1).AND.ITER.GT.1) THEN
+C     Effective Fragment Potential
+C
+      IF(NBUFMO.GT.0) THEN
+         ESOLV = ESOLV + EEFP
+      END IF
+C
+C     Polarizable Continuum Method - various corrections
+C     The first block, and the FMO block, are never simultaneously true.
+C
+      IF(IPCFP  .OR.  IPCM.EQ.1) THEN
         IF(IPCMIT.EQ.0) THEN
-           E=E     -0.50D+00*(PB+PX-PC)
-           ESOLV = -0.50D+00*(PB+PX-PC)
+           ESOLV = ESOLV - 0.50D+00*(PB+PX-PC)
         ELSE
-           E=E   + PX-0.50D+00*ENPCM
-           ESOLV = PX-0.50D+00*ENPCM
+           ESOLV = ESOLV + PX-0.50D+00*ENPCM
         END IF
+        ESOLV = ESOLV + (GCAVP+GDISP+GREP)/627.509541D+00
       END IF
       IF(NFMOPCM.NE.0) THEN
-        E=E   + 0.5D+00*(PC+PX)
-        ESOLV = 0.5D+00*(PC+PX)
+        ESOLV = ESOLV + 0.5D+00*(PC+PX)
       END IF
 C
-      IF(IPCM.EQ.1) THEN
-        E=E           + (GCAVP+GDISP+GREP)/627.509541D+00
-        ESOLV = ESOLV + (GCAVP+GDISP+GREP)/627.509541D+00
+C     SVP/SVPE MODEL'S FREE ENERGY CORRECTION
+C
+      IF(ISVP.EQ.1) THEN
+         ESOLV = ESOLV + HALF*ESVP
       END IF
 C
 C     POLARIZABLE FORCE FIELD CORRECTION
 C
-      IF(NFFAT.GT.0 .AND. ITER.GT.1) THEN
-         E=E+EN12+EN123+EN123R4+EN123B4+EN234W1
-     *      +ENCHAR+ENLJR +ENLJD +ENUCCH+ENCENT+ENCMAP
-     *      +ENPOL +XENPOL+ENRXN +ENRXNPOL+ENRXNR+XENRXN
+      IF(NFFAT.GT.0) THEN
+         ESOLV=ESOLV+EN12  +EN123 +EN123R4+EN123B4+EN234W1
+     *              +ENCHAR+ENLJR +ENLJD +ENUCCH  +ENCENT+ENCMAP
+     *              +ENPOL +XENPOL+ENRXN +ENRXNPOL+ENRXNR+XENRXN
       END IF
 C
-C     SVP MODEL'S FREE ENERGY CORRECTION
-C
-      IF(ISVP.EQ.1) THEN
-         E = E + HALF*ESVP
-         ESOLV = HALF*ESVP
-      END IF
+      E = E + ESOLV
+      DO ISTAT=1,MXRT
+         ESTATE(ISTAT) = ESTATE(ISTAT)+ESOLV
+      ENDDO
 C
       EMC0=EMC
       EMC =E
@@ -2544,7 +2571,7 @@ C
          IF(CISTEP.EQ.GUGA) THEN
             ESPEC = ESTATE(IROOT)
          END IF
-         E = ESPEC + ESOLV
+         E = ESPEC
       END IF
       IF(EMC.NE.ZERO) THEN
          EMC  = E
@@ -2561,17 +2588,17 @@ C PRINT DYNAMIC MCSCF WEIGHTS (IF APPLICABLE)
 C
       NXTR = 0
       IF(IDWEIGH.GT.0) THEN
-         IF(MASWRK)WRITE(6,9115)
+         IF(MASWRK) WRITE(IW,9115)
          DO 107 ISTAT = 1,KDET
             IF(IPURES.EQ.1.AND.ABS(SPINS(ISTAT)-SDET).GT.0.03D+00)
      *             GO TO 107
             NXTR=NXTR+1
-            IF(WSTATE(NXTR).GT.ZERO)THEN
-               IF(MASWRK)WRITE(6,9116)ISTAT,ESTATE(ISTAT),WSTATE(NXTR),
-     *              SPINS(ISTAT)
-            ENDIF               !(WSTATE(NXTR).GT.ZERO)
-  107    CONTINUE               !ISTAT
-      ENDIF                     !(DWEIGH)
+            IF(WSTATE(NXTR).GT.ZERO) THEN
+               IF(MASWRK) WRITE(IW,9116) ISTAT,ESTATE(ISTAT),
+     *                                   WSTATE(NXTR),SPINS(ISTAT)
+            ENDIF
+  107    CONTINUE
+      ENDIF
 C
 C         SOLVATION OUTPUT FOR PCM MODEL
 C
@@ -2583,7 +2610,7 @@ C
 C
       QTT=0.0D+00
       DO I=0,NTS-1
-C        QT=QSE(I)+QSN(I)+Q_FS(I)+Q_IND(I)
+C        QT=   QSE(I)+   QSN(I)+  Q_FS(I)+  Q_IND(I)
          QT=X(LQSE+I)+X(LQSN+I)+X(LQFS+I)+X(LQIND+I)
          QTT=QTT+QT
       ENDDO
@@ -3908,14 +3935,14 @@ C
       END
 C*MODULE MCSCF   *DECK NTNCAN
 C> @brief      This routine canonicalizes MCSCF runs.
-C> 
+C>
 C> @author     Mike Schmidt
 C>             -1998
-C> 
+C>
 C> @details    This routine performs orbital canonicalization
 C>             and sets up for any additional runs such as
 C>             MRPT2 or gradients or whatever.
-C> 
+C>
 C> @date November 09, 2012-Aaron West
 C> -Added icimalmq argument to detfci and defcci calls
 C>  and malmq_cidriv call for future development.
