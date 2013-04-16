@@ -146,7 +146,7 @@
 \* -------------------------- */
    void DDI_Comm_divide(int,int,int*);
    void DDI_Comm_create(int,int*,int,int,int,int*);
-   void DDI_Comm_destory(int);
+   void DDI_Comm_destroy(int);
 
    void DDI_NProc_comm(int,int*,int*);
    void DDI_NNode_comm(int,int*,int*);
