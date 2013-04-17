@@ -8,7 +8,7 @@
       integer  na,ma,arrhand,indmin(2),indmax(2)
       integer  ngroups,comm(0:2),ddi_me_glob,ngroups0,mygroup,
      *         ddi_world,ddi_group,ddi_masters,mannod(0:1),
-     *         dlb_counter_glob,master_id(0:1)
+     *         dlb_counter_glob,master_id(0:1),ibuff(100)
       integer  itemp,lensm,sm_handle,locsm
       character*1 addr(1)
       logical extra
@@ -496,6 +496,26 @@ c
       if(ddi_me.eq.0) write(6,202) lensm,valsum,expected
       if(ddi_me.eq.0) write(6,*) 'done with SMP tests.'
 c
+c     11. test scatter_accumulate
+c         create/use/destroy sequence
+c         (currently limited to row vector)
+c
+      call ddi_create(1,10,handle)
+      j = 0
+      do i = 1,10
+         if(mod(i,ddi_np).eq.ddi_me)then
+         j = j+1
+         ibuff(j) = i
+
+         buff(j) = i*1.0d+00
+         endif
+      enddo
+      call ddi_scatter_acc(handle,j,ibuff,buff,1.0d+00)
+      call ddi_sync(911)
+      if(ddi_me.eq.0)call ddi_get(handle,1,1,1,10,buff)
+      if(ddi_me.eq.0)write(6,203)buff(1:10)
+      call ddi_destroy(handle)
+c
       if(ddi_me.eq.0) write(6,*) ' '
       call ddi_finalize()
       stop
@@ -555,6 +575,9 @@ c
   202 format(2x,'SMP shared memory region test:'/
      *       2x,'sum of first',i8,' integers inside each node=',f10.1/
      *       2x,'test passes if the value above is ',f10.1)
+  203 format(/'The following tests the scatter accumulate function: '/
+     *     2x,'the vector increments by 1.00 from 1.00 to 10.00'/,10f7.2)
+
       end
 c
       subroutine print2d(a,n,m)

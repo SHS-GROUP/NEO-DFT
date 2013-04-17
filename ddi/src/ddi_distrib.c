@@ -90,3 +90,40 @@
      # endif
    }
 
+/* -------------------------------------------------------- *\
+   DDI_Scatter_NDistribP(handle,rank,patch)
+   ================================
+   [IN]  handle - handle of array
+   [IN]  rank   - rank of a node
+   [OUT] patch  - patch of array 'handle' stored on node
+                - 'rank'
+\* -------------------------------------------------------- */
+   void DDI_Scattered_NDistribP(int handle,int rank,DDI_Scattered *patch) {
+     # if FULL_SMP
+       patch->handle = handle;
+       patch->ilo    = 0;
+       patch->ihi    = gv(nrow)[handle]-1;
+       patch->jlo    = gv(ncmap)[handle][rank];
+       patch->jhi    = gv(ncmap)[handle][rank+1]-1;
+
+     # else
+       DDI_Scatter_DistribP(handle,rank,patch);
+     # endif
+   }
+
+/* -------------------------------------------------------- *\
+   DDI_Scatter_DistribP(handle,rank,patch)
+   ===============================
+   [IN]  handle - handle of array
+   [IN]  rank   - rank of compute process
+   [OUT] patch  - patch of array 'handle' stored on compute
+                - process 'rank'
+\* -------------------------------------------------------- */
+   void DDI_Scattered_DistribP(int handle,int rank,DDI_Scattered *patch) {
+
+       patch->handle = handle;
+       patch->ilo    = 0;
+       patch->ihi    = gv(nrow)[handle]-1;
+       patch->jlo    = gv(pcmap)[handle][rank];
+       patch->jhi    = gv(pcmap)[handle][rank+1]-1;
+   }

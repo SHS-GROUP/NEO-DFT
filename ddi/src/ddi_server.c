@@ -61,7 +61,7 @@
 
       int np,me,nn,my;
    /* ------------------------------------------------ *\
-      Discovery Identity -- If it only were this easy!
+      Discovery Identity -- If it only were this easy! 
    \* ------------------------------------------------ */
       DDI_NProc(&np,&me);
       DDI_NNode(&nn,&my);
@@ -203,7 +203,21 @@
                  "%s: (DS) Finished DDI_GETACC request from %i.\n",
                  DDI_Id(),from))
               break;
-              
+
+
+         # if defined WINTEL
+          fprintf(stdout,"%s: DDI_Scatter_Acc for WINTEL not implemented.\n",DDI_Id());
+          Fatal_error(911);
+           case DDI_ACC_OP:
+         # else
+           case DDI_SCATTER_ACC:
+         # endif
+              DEBUG_OUT(LVL2,(stdout,
+                 "%s: (DS) Received DDI_SCATTER_ACC request from %i.\n",DDI_Id(),from))
+              DDI_Scatter_Acc_server(msg,from);
+              DEBUG_OUT(LVL3,(stdout,
+                 "%s: (DS) Finished DDI_SCATTER_ACC request from %i.\n",DDI_Id(),from))
+              break;
               
          # if defined WINTEL
            case DDI_DLBRESET_OP:

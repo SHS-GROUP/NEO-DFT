@@ -58,6 +58,24 @@
 
    } DDI_Patch;
 
+   typedef struct {
+     int oper;
+     int handle;
+     int ilo;
+     int ihi;
+     int jlo;
+     int jhi;
+
+       //       size_t start;
+       //       size_t end;
+       size_t size; //message size in bytes
+       size_t nelem; //total number of elements to be accumulated
+       size_t nlocal; //number of local elements for subp[i]
+     /*  possible scale factor, e.g. for DAXPY-type accumulates  */
+     double alpha;
+
+   } DDI_Scattered;
+
 
 /* ----------------------- *\
    DDI Function Prototypes
@@ -76,10 +94,12 @@
    void DDI_Get(int,int,int,int,int,void*);
    void DDI_Put(int,int,int,int,int,void*);
    void DDI_Acc(int,int,int,int,int,void*);
+   void DDI_Scatter_Acc(int,int,int,int,int,void*);
    void DDI_GetAcc(int,int,int,int,int,void*);
    void DDI_GetP(int,DDI_Patch*,void*);
    void DDI_PutP(int,DDI_Patch*,void*);
    void DDI_AccP(int,DDI_Patch*,double,void*);   
+   void DDI_Scatter_AccS(int,DDI_Scattered*,double,long*,void*);   
    void DDI_GetAccP(int,DDI_Patch*,void*);   
    void DDI_DLBReset();
    void DDI_DLBNext(size_t*);
@@ -140,6 +160,8 @@
    void DDI_NDistrib(int,int,int*,int*,int*,int*);
    void DDI_NDistribP(int,int,DDI_Patch*);
 
+   void DDI_Scatter_NDistribP(int,int,DDI_Scattered*);
+   void DDI_Scatter_DistribP(int,int,DDI_Scattered*);
 
 /* -------------------------- *\
    DDI Communicator Routines
@@ -231,6 +253,7 @@
 # endif
  
  # define DDI_FENCE         13
+ # define DDI_SCATTER_ACC   14
  # define DDI_DEBUGFLAG     20
  # define DB_CREATE_ENTRY   30
  # define DB_READ_ENTRY     31

@@ -338,7 +338,7 @@ void F77_Comm_destroy(int_f77 *commid) {
                                  int_f77 *jlo, int_f77 *jhi, void *buff) {
       DDI_Patch Patch;
       double alpha = (double)1.0;
-      
+
     # if defined WINTEL
       Patch.oper   = DDI_ACC_OP;
     # else
@@ -351,6 +351,23 @@ void F77_Comm_destroy(int_f77 *commid) {
       Patch.jhi    = (int) *jhi - 1;
       
       DDI_AccP(Patch.handle,&Patch,alpha,buff);
+   }
+
+/* ------------------------------------ *\
+   FORTRAN Wrapper for DDI_Scatter_Acc
+\* ------------------------------------ */
+void F77_Scatter_Acc(int_f77 *handle, int_f77 *nelem,long *ibuff, void *buff) {
+      DDI_Scattered Scattered;
+      double alpha = (double)1.0;
+    # if defined WINTEL
+      fprintf(stdout,"%s: DDI_Scatter_Acc for WINTEL not implemented.\n",DDI_Id());
+      Fatal_error(911);
+    # endif
+      Scattered.oper   = DDI_ACC;
+      Scattered.handle = (int) *handle;
+      Scattered.nelem = (int) *nelem;
+      Scattered.alpha = alpha;
+      DDI_Scatter_AccS(Scattered.handle,&Scattered,alpha,ibuff,buff);
    }
 
 
