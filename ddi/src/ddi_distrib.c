@@ -91,7 +91,7 @@
    }
 
 /* -------------------------------------------------------- *\
-   DDI_Scatter_NDistribP(handle,rank,patch)
+   DDI_Scattered_NDistribP(handle,rank,patch)
    ================================
    [IN]  handle - handle of array
    [IN]  rank   - rank of a node
@@ -107,12 +107,12 @@
        patch->jhi    = gv(ncmap)[handle][rank+1]-1;
 
      # else
-       DDI_Scatter_DistribP(handle,rank,patch);
+       DDI_Scattered_DistribP(handle,rank,patch);
      # endif
    }
 
 /* -------------------------------------------------------- *\
-   DDI_Scatter_DistribP(handle,rank,patch)
+   DDI_Scattered_DistribP(handle,rank,patch)
    ===============================
    [IN]  handle - handle of array
    [IN]  rank   - rank of compute process
