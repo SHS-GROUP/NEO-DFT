@@ -94,7 +94,6 @@
    void DDI_Get(int,int,int,int,int,void*);
    void DDI_Put(int,int,int,int,int,void*);
    void DDI_Acc(int,int,int,int,int,void*);
-   void DDI_Scatter_Acc(int,int,int,int,int,void*);
    void DDI_GetAcc(int,int,int,int,int,void*);
    void DDI_GetP(int,DDI_Patch*,void*);
    void DDI_PutP(int,DDI_Patch*,void*);
@@ -160,8 +159,8 @@
    void DDI_NDistrib(int,int,int*,int*,int*,int*);
    void DDI_NDistribP(int,int,DDI_Patch*);
 
-   void DDI_Scatter_NDistribP(int,int,DDI_Scattered*);
-   void DDI_Scatter_DistribP(int,int,DDI_Scattered*);
+   void DDI_Scattered_DistribP(int,int,DDI_Scattered*);
+   void DDI_Scattered_NDistribP(int,int,DDI_Scattered*);
 
 /* -------------------------- *\
    DDI Communicator Routines

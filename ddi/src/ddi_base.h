@@ -444,8 +444,8 @@ static size_t gv(mem_heap_total) = 0;
    void DDI_Scattered_data(int,const DDI_Scattered*,long*,int*,int*,DDI_Scattered*);
    void DDI_Scattered_comm(int,const DDI_Scattered*,int*,int*,DDI_Scattered*,int,long*);
    void DDI_Scatter_Acc_local(const DDI_Scattered*,double,void*,void*);
+   void DDI_Scatter_Acc_server(const DDI_Patch*,int);
    void DDI_Scatter_Acc_remote(double,void *, void *,void*,int);
-   void DDI_Scattered_Acc_server(const DDI_Patch*,int);
 
 /* ----------------------------------- *\
   Functions For Sorting Scattered Data

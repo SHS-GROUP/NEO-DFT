@@ -576,7 +576,7 @@ c
      *       2x,'sum of first',i8,' integers inside each node=',f10.1/
      *       2x,'test passes if the value above is ',f10.1)
   203 format(/'The following tests the scatter accumulate function: '/
-     *     2x,'the vector increments by 1.00 from 1.00 to 10.00'/,10f7.2)
+     *    2x,'the vector increments by 1.00 from 1.00 to 10.00'/,10f7.2)
 
       end
 c
