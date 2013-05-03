@@ -154,8 +154,6 @@ setenv GMCVEF $SCR/$JOB.F96
 setenv GMCDIN $SCR/$JOB.F97
 setenv GMC2SZ $SCR/$JOB.F98
 setenv GMCCCS $SCR/$JOB.F99
-setenv D1WRT  $SCR/$JOB.D1
-setenv JBNME  $SCR/$JOB
 
 #    Next files are used only during closed shell coupled cluster runs.
 #    Display the numerous definitions iff they are going to be used.
