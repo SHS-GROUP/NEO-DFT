@@ -1,3 +1,4 @@
+C  1 May 13 - MWS - changes for MCQDPT-level diabatization
 C  2 Sep 12 - MWS - synchronize MCINP
 C  7 MAR 12 - MWS - ALIGN DETWFN COMMON
 C 17 Feb 12 - LBR - updated DETWFN common block
@@ -541,8 +542,8 @@ C**** GET SOLUTIONS FOR REQUIRED SYMMETRY ******************************
           DO I=1,NSTCI
             DO J=I,NCI
               IF(ABS(DIAVEC(MAINCS(1),LORDER(J))).GE.1.0D-08 .OR.
-     *          ABS(DIAVEC(MAINCS(2),LORDER(J))).GE.1.0D-08 .OR.
-     *          ABS(DIAVEC(MAINCS(3),LORDER(J))).GE.1.0D-08) THEN
+     *           ABS(DIAVEC(MAINCS(2),LORDER(J))).GE.1.0D-08 .OR.
+     *           ABS(DIAVEC(MAINCS(3),LORDER(J))).GE.1.0D-08) THEN
                 K        =LORDER(I)
                 LORDER(I)=LORDER(J)
                 LORDER(J)=K
@@ -556,7 +557,9 @@ C**** GET SOLUTIONS FOR REQUIRED SYMMETRY ******************************
  240        CONTINUE
           END DO
         END IF
+C
 C**** SAVE THE SOLUTIONS ***********************************************
+C
         N=0
         DO I=1,NSTCI
           IF(KSTATE(I)) THEN
@@ -2502,6 +2505,11 @@ C=======================================================================
       RETURN
       END
 C*MODULE MCQDPT  *DECK MQDRV
+C>
+C> @brief   main driver of MCQDPT
+C>
+C> @details see the source code for outline of the procedure.
+C>
       SUBROUTINE MQDRV(GROUP,GRPV)
 C=======================================================================
 C====                                                              =====
@@ -2513,10 +2521,15 @@ C====             E-MAIL: NAKANO@QCL.T.U-TOKYO.AC.JP               =====
 C====                                                              =====
 C=======================================================================
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-      PARAMETER (MXATM=2000, MXRT=100)
-      LOGICAL TRACE
-      COMMON /FMCOM / D(1)
+      PARAMETER (MXATM=2000, MXRT=100, MXNORO=250)
+      LOGICAL TRACE,CANONC,FCORE,FORS,EKT,LINSER
+      DOUBLE PRECISION METHODMC
 C**** COMMON FOR GAMESS ROUTINE ****************************************
+      COMMON /FMCOM / D(1)
+      COMMON /MCINP / METHODMC,CISTEP,FINALCI,ACURCY,ENGTOL,DAMP,
+     *                MICIT,NWORD,NORB,NOROT(2,MXNORO),MOFRZ(15),
+     *                NPFLG(10),NOFO,MCFMO,IDIABAT,
+     *                CANONC,FCORE,FORS,EKT,LINSER
       COMMON /MRPTIN/ TYPMRMP,INORBMC,MCVEC
       COMMON /IOFILE/ IR,IW,IP,IJK,IPK,IDAF,NAV,IODA(950)
       COMMON /INFOA / NAT,IDUM1,IDUM2,NGO,NQMT,IDUM4,IDUM5,IDUM6,
@@ -4627,7 +4640,7 @@ C.... WORK   ...........................................................
       N012=MQADDR(MAXERI,'D')
 C.... HCORE2 ...........................................................
       N013=MQADDR(NMO*NMO,'D')
-C.... STORAGE USED BY XMCQDPT 
+C.... STORAGE USED BY XMCQDPT
       NVPP    =MQADDR(NSTATE*NSTATE,'D')
       NVPPR   =MQADDR(NSTATE*NSTATE,'D')
       LIWRK   = MAX(4*NSTATE,MIN(10,NCSF)*NSTATE)
@@ -5531,6 +5544,8 @@ C.... HEFFVC ...........................................................
       N012=MQADDR(NSTATE*NSTATE,'D')
 C       STORAGE USED BY XMCQDPT
       NVPPR=MQADDR(NSTATE*NSTATE,'D')
+C       dominant CAS-CI coefficient storage
+      NSIFT=MQADDR(NSTATE*10,'D')
 C
       LASTP1=MQMNXT()
       NEED2=LASTP1-N001
@@ -5558,7 +5573,6 @@ C**** WRITE HEFF, EIGVAL, HEFFVC ***************************************
 C
 C        PRINT PERTURBED STATE ENERGIES AND EIGENVECTORS
 C
-      IF(MASWRK) WRITE(LUNOUT,9570)
  9570 FORMAT(/1X,'THE UNPERTURBED CAS-CI STATE(S) WERE PRINTED ABOVE')
  9580 FORMAT(/1X,'THE PERTURBED STATE IS THE SAME AS THE UNPERTURBED',
      *           ' STATE,'/
@@ -5566,10 +5580,28 @@ C
  9590 FORMAT(/1X,'*** PERTURBED MCQDPT STATES ***'/
      *           1X,'(FROM DIAGONALIZATION OF 2ND ORDER',
      *              ' EFFECTIVE HAMILTONIAN)')
+ 9600 FORMAT(/1X,'THE ROTATION FROM CAS-CI STATES (ROWS) TO QDPT',
+     *           ' STATES (COLUMNS) IS')
+C
+      IF(MASWRK) WRITE(LUNOUT,9570)
       IF(NSTATE.EQ.1) THEN
          IF(MASWRK) WRITE(LUNOUT,9580)
       ELSE
          IF(MASWRK) WRITE(LUNOUT,9590)
+         IF(MASWRK) WRITE(LUNOUT,9600)
+         CALL PRSQ(D(N007),NSTATE,NSTATE,NSTATE)
+C
+C           in case this run is a MCQDPT diabatization, save
+C              a) adiabatic QDPT energies
+C              b) rotation from MCSCF to QDPT states
+C              c) largest coefs in CAS-CI states, for phase matching
+C
+         IF(IDIABAT.GT.0) THEN
+            CALL DAWRIT(IDAF,IODA,D(N007),NSTATE*NSTATE,543,0)
+            CALL DAWRIT(IDAF,IODA,D(N003),NSTATE,544,0)
+            CALL SIFTADIAB(D(N001),D(NSIFT),NCSF,NSTATE)
+            CALL DAWRIT(IDAF,IODA,D(NSIFT),NSTATE*10,545,0)
+         END IF
          L001=MQADDR((NMOACT+1)*NOCF,'I')
          L002=MQADDR((MAXSOC+1)*MAXSPF,'I')
          L003=MQADDR(2*NCSF,'I')
@@ -6057,8 +6089,11 @@ C.... MOSYM  ...........................................................
         N011=MQADDR(NMO,'I')
 C.... VAL2   ...........................................................
         N012=MQADDR(NSTATE,'D')
+C       dominant CAS-CI coefficient storage
+      NSIFT=MQADDR(NSTATE*10,'D')
 C.... VTWOEL ...........................................................
-        LASTP1=MQMNXT()
+      LASTP1=MQMNXT()
+C
         NR=N001+NGOTMX-LASTP1
 C       NR=MQMLFT()
         NDSIZE=(NMODOC+NMOACT)**2*NMOEXT
@@ -6281,6 +6316,14 @@ C
          IF(MASWRK) WRITE(LUNOUT,9580)
       ELSE
          IF(MASWRK) WRITE(LUNOUT,9590)
+         IF(MASWRK) WRITE(LUNOUT,9600)
+         CALL PRSQ(D(N007),NSTATE,NSTATE,NSTATE)
+         IF(IDIABAT.GT.0) THEN
+            CALL DAWRIT(IDAF,IODA,D(N007),NSTATE*NSTATE,543,0)
+            CALL DAWRIT(IDAF,IODA,D(N003),NSTATE,544,0)
+            CALL SIFTADIAB(D(N001),D(NSIFT),NCSF,NSTATE)
+            CALL DAWRIT(IDAF,IODA,D(NSIFT),NSTATE*10,545,0)
+         END IF
          LL01=MQADDR((NMOACT+1)*NOCF,'I')
          LL02=MQADDR((MAXSOC+1)*MAXSPF,'I')
          LL03=MQADDR(2*NCSF,'I')
@@ -7154,6 +7197,12 @@ C
       RETURN
       END
 C*MODULE MCQDPT  *DECK MQGETE
+C>
+C>    @brief   GENERATE QUASI-DEGENERATE 2ND ORDER ENERGY
+C>
+C>    @details GENERATE QUASI-DEGENERATE 2ND ORDER energies and
+C>             approximate "states".
+C>
       SUBROUTINE MQGETE(LUNOUT,LPOUT ,
      *                  NCSF  ,NSTATE,NWRKM1,NWRKM2,IROT  ,
      *                  HEFF  ,CASVEC,CASENE,EIGVAL,EIGVEC,
@@ -7336,7 +7385,10 @@ C.... REORDER THE SOLUTIONS ............................................
           END IF
         END DO
       END DO
-C.... SAVE THE SOLUTIONS ...............................................
+C
+C         generate approximate perturbed states, by applying the
+C         QDPT diagonalization's rotation to the CAS-CI states.
+C
       DO I=1,NSTATE
         J=LORDER(I)
         EIGVAL(I)=DIAVAL(J)
@@ -7346,7 +7398,7 @@ C.... SAVE THE SOLUTIONS ...............................................
           END DO
         END DO
       END DO
-C@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+C
 C**** DIAGONALIZATION OF EFFECTIVE HAMILTONIAN (ROT) *******************
       IF(IROT.EQ.2) THEN
         N=0
@@ -7465,9 +7517,8 @@ C
       END DO
 C
       EMP2=EIGVAL(NSTATE)
-C***RKC
-      IF(IVOCAS)EMP2=CASENE(NSTATE)
-C***RKC
+      IF(IVOCAS) EMP2=CASENE(NSTATE)
+C
       RETURN
       END
 C*MODULE MCQDPT  *DECK MQHTRN
@@ -10558,7 +10609,7 @@ C
             VPP(ISTATE,JSTATE) = VPP(ISTATE,JSTATE) + EIJ
             VPP(JSTATE,ISTATE) = VPP(JSTATE,ISTATE) + EIJ
           END DO
-
+C
           EIJ = 0.0D0
           DO I=1,NCSF
             EIJ = EIJ + ECONF(I)*CASVEC(I,ISTATE)*CASVEC(I,ISTATE)
@@ -12828,6 +12879,15 @@ C
  9008 FORMAT(I2,I3,1P,5E15.8)
       END
 C*MODULE MCQDPT  *DECK MQREAD
+C>
+C>    @brief   read $MCQDPT input
+C>
+C>    @details $MCQDPT input controls the CSF version of MCQDPT
+C>             There is an attempt to inherit parameters from either
+C>             the determinant or CSF-based MCSCF calculation.
+C>
+C>    @author  Haruyuki Nakano
+C>
       SUBROUTINE MQREAD(GROUP,GRPV,OUTPAR)
 C=======================================================================
 C====                                                              =====
@@ -12848,7 +12908,8 @@ C
 C
       CHARACTER*8 GRPC
 C
-      PARAMETER (MXATM=2000, MXRT=100, MXNORO=250, MXAO=8192)
+      PARAMETER (MXATM=2000, MXRT=100, MXNORO=250, MXAO=8192,
+     *           MXDIABACT=30)
 C
       DIMENSION KSTATE(MXRT),WSTATE(MXRT)
       DIMENSION EDSHFT(2),SYMTAB(8,9),GRPTAB(9),NGRPTAB(9)
@@ -12863,6 +12924,12 @@ C
      *                NFLGDM(MXRT),IWTS(MXRT),NCORSV,NCOR,NACTDT,NORBDT,
      *                NADET,NBDET,KDET,KSTDET,IROOT,IPURES,MAXW1,NITDET,
      *                MAXP,NCIDET,IGPDET,KSTSYM,NFTGCI,IDWEIGH
+      COMMON /DIABAT/ ALPHA_N,ALPHA_R,ALPHA_T,
+     *                TH_DOC,TH_VIR,SLCTTH,CONV_TH,WBLOCK(3),
+     *                NDFRM,NDMOSYM,NRCSF,NMLAP,NDLAP,NORIENT,
+     *                MOSLAB_CHARACT(MXDIABACT),
+     *                MAX_ITER,NGRSTATE,NEXSTATE,NSTDIAB,
+     *                NSYMBOL_DOC,NSYMBOL_VAL,NSYMBOL_VIR
       COMMON /GUGWFN/ NFZC,NMCC,NDOC,NAOS,NBOS,NALP,NVAL,NEXT,NFZV,
      *                IFORS,IEXCIT,ICICI,NOIRR
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
@@ -13153,6 +13220,30 @@ C
       DOORD0=.TRUE.
       DELSCR=.FALSE.
 C
+C         a diabatization run should inherit parameters from $DIABAT
+C         In fact, it is best if the diabatization run does not even
+C         give a $MCQDPT input group, as below sets the state weights
+C         equal to those used during the DMO generation.
+C
+      IF(IDIABAT.EQ.1) THEN
+         IFORB=0
+         NXXXSTATE=NGRSTATE+NSTDIAB+NEXSTATE
+         IF(CISTEP.EQ.GUGA) THEN
+            DO IST=1,NXXXSTATE
+               IF(IST.LE.NGRSTATE  .OR.  IST.GT.NGRSTATE+NSTDIAB) THEN
+                  KSTATE(IST) = 0
+                  WSTATE(IST) = 0.0D+00
+               ELSE
+                  KSTATE(IST) = 1
+                  WSTATE(IST) = 1.0D+00/NSTDIAB
+               END IF
+            ENDDO
+         ELSE
+            IF(MASWRK) WRITE(IW,9060)
+            CALL ABRT
+         END IF
+      END IF
+C
 C**** READ NAMELIST ****************************************************
       CALL NAMEIO(LUNIN,JRET,GROUP,NNAM,QNAM,KQNAM,
      *            IFORB ,IROT  ,ISELCT,ISTSYM,STSYM ,LENGTH,LPOUT ,
@@ -13169,7 +13260,9 @@ C
             IF(MASWRK) WRITE(IW,920)
             CALL ABRT
          ENDIF
-         WRITE(IW,9010) GROUP
+         IF(IDIABAT.EQ.0) THEN
+            WRITE(IW,9010) GROUP
+         ENDIF
       ELSE IF(JRET .EQ. 2) THEN
          IF(MASWRK) WRITE(IW,910)
          CALL ABRT
@@ -13303,7 +13396,6 @@ C
          NERR=NERR+1
       END IF
 C
-C***RKC
 C   [ALLOW TO PERFORM IVO-CASCI-CALCULATIONS FOR DIFFERENT SPIN STATES]
 C
       IF(.NOT.IVOCAS)THEN
@@ -13321,7 +13413,6 @@ C
       END IF
 C
       ENDIF
-C***RKC
 C
       IF(IFORB.GT.2..AND.RUNTYP.EQ.TRANST.AND.NUMVEC.NE.-NUMCI) THEN
          NUMVEC=-NUMCI
@@ -13443,13 +13534,15 @@ C
      *       1X,'YOU MIGHT THINK ABOUT KSTATE, WSTATE, AND ISTSYM.')
  9020 FORMAT(1X,'ERROR: SPATIAL STATE SYMMETRY WAS NOT INPUT,'/
      *       1X,'AND WAS NOT INHERITED FROM $DET OR $DRT.'/
-     *       1X,'PLEASE PROVIDE -ISTSYM- IN YOUR $MCQDPT INPUT.')
+     *       1X,'PLEASE PROVIDE -STSYM- IN YOUR $MCQDPT INPUT.')
  9030 FORMAT(/1X,'THE WEIGHTS OF THE CAS STATES IN THE DENSITY MATRIX',
      *           ' AVERAGING ARE')
  9040 FORMAT(5(1X,I3,'=',F10.6))
  9050 FORMAT(/1X,'NOTE: MCQDPT RUNS CANNOT BE AO INTEGRAL DIRECT.'/
      *       1X,'AN AO INTEGRAL FILE WILL STILL BE GENERATED,'/
      *       1X,'BEFORE THE MCQDPT CALCULATION IS STARTED.')
+ 9060 FORMAT(1X,'MQREAD: THERE IS NO CODE FOR DIABATIZATION',
+     *          ' EXCEPT BY CISTEP=GUGA')
       END
 C*MODULE MCQDPT  *DECK MQREF
       SUBROUTINE MQREF(LUNOUT,LPOUT,MULT,NORB,MAXROW,
