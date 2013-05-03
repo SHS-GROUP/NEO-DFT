@@ -45,21 +45,31 @@ if (null$MODULE == null) then
    echo No compile module name given...
    exit
 endif
-# AG: we will need these later in the script
-set MODULE_F=$MODULE.f
+#
+#     in case a module was in free format style
+switch ($MODULE)
+   case xxx:
+     set MODULE_F=$MODULE.f90
+     breaksw
+   default:
+     set MODULE_F=$MODULE.f
+     breaksw
+endsw
 set MODULE_OBJ=$MODULE.o
-# AG: user may explicitly request not to remove the preprocessed file
+#
 if ( $?GMS_DO_NOT_REMOVE == 0 ) set GMS_DO_NOT_REMOVE=0
-# AG: If a path given rather than a module name, user wants to compile that particular file
-# AG:  with flags appropriate for the $TARGET, but without activation or even copying,
-# AG:  and surely without removing!
+#
+# AG: If a path given rather than a module name, user wants to compile
+#      that particular file with flags appropriate for the $TARGET,
+#      but without activation or even copying, and surely without removing!
+#             (this is probably not an active option)
 set MODULE_DIR = $1:h
 if ( $MODULE_DIR != $MODULE ) then
     if ( $?GMS_OTHER_OBJDIR == 0 ) set GMS_OTHER_OBJDIR = $MODULE_DIR/
     set GMS_OTHER_SRCDIR = $MODULE_DIR/
     set GMS_DO_NOT_REMOVE = 1
     set MODULE_F = $MODULE
-    # Guess the object file name (to test later whether it will be generated) 
+    # Guess the object file name (to test later whether it will be generated)
     set MODULE_OBJ = `cd $GMS_OTHER_OBJDIR && pwd`/"$MODULE:t:r".o
 endif
 # AG: user may request to compile into a particular dir
@@ -68,7 +78,7 @@ if ( $?GMS_OTHER_OBJDIR ) then
 else
     chdir $GMS_BUILD_DIR/object
 endif
-   
+
 #
 echo ======================== $MODULE ==============================
 date
@@ -156,7 +166,7 @@ if  ($TARGET == sgi64)        set BLAS3=true
 if (($TARGET == sun32) && (-e /opt/SUNWspro/lib/libsunperf.so)) set BLAS3=true
 if (($TARGET == sun64) && (-e /opt/SUNWspro/lib/libsunperf.so)) set BLAS3=true
 if  ($TARGET == win32) then
-   switch ($GMS_FORTRAN) 
+   switch ($GMS_FORTRAN)
        case pgfortran:
          if ($GMS_MATHLIB == blas ) then
            if (-e $PGI\\win32\\12.4\\lib\\libblas.lib) set BLAS3=true
@@ -173,7 +183,7 @@ if  ($TARGET == win32) then
    endsw
 endif
 if  (($TARGET == win64) || ($TARGET == winazure)) then
-   switch ($GMS_FORTRAN) 
+   switch ($GMS_FORTRAN)
        case pgfortran:
          if ($GMS_MATHLIB == blas ) then
            if (-e $PGI\\win64\\12.4\\lib\\libblas.lib) set BLAS3=true
@@ -183,7 +193,7 @@ if  (($TARGET == win64) || ($TARGET == winazure)) then
          endif
          breaksw
        case ifort:
-         if ($GMS_MATHLIB == mkl) then 
+         if ($GMS_MATHLIB == mkl) then
             set BLAS3=true
             echo "Using Intel's blas library for BLAS3"
          endif
@@ -469,11 +479,14 @@ if ($MODULE == xmvb)   goto act
 #
 if (($BLAS3 == true) && ($MODULE == mthlib)) goto act
 #
+# AG: If module is not to be removed, it is not to be activated or 
+#     copied either.  It avoids irritating situation when errors are 
+#     reported NOT in the file where they are to be fixed!
+#           (this probably is not an active option)
+if ( $GMS_DO_NOT_REMOVE ) goto cmp
+#
 #   All other modules are straight FORTRAN, just copy them.
 #
-# AG: If module is not to be removed, it is not to be activated or copied either.
-# AG: It avoids irritating situation when errors are reported NOT in the file where they are to be fixed!
-if ( $GMS_DO_NOT_REMOVE ) goto cmp
 echo Copying source code, $MODULE.src does not require activation.
 cp $SRCDIR/$MODULE.src $MODULE_F
 goto cmp
@@ -651,24 +664,32 @@ endif
 #
 echo "Activating $SRCDIR/$MODULE.src to create $MODULE_F for target $TARGET..."
 #
-if (($TARGET == win32) || ($TARGET == win64) || ($TARGET == winazure)) then
-  setenv   SRCIN c:/cygwin/$SRCDIR/$MODULE.src
-  rm -f $MODULE_F
-else
-  setenv   SRCIN $SRCDIR/$MODULE.src
-endif
+setenv   SRCIN $SRCDIR/$MODULE.src
 setenv CODEOUT $MODULE_F
 if (-e $MODULE_F) rm -f $MODULE_F
-switch ($TARGET)
-   case ibm64-sp:
-   case ibm-bg:
-   case cray-xt:
-      sed -e "s/^$MACHIN/    /" $SRCIN > $CODEOUT
+#
+if (($TARGET == win32) || ($TARGET == win64) || ($TARGET == winazure)) then
+  setenv   SRCIN c:/cygwin/$SRCDIR/$MODULE.src
+endif
+#
+switch ($MODULE_F:e)
+   case f:
+      switch ($TARGET)
+         case ibm64-sp:
+         case ibm-bg:
+         case cray-xt:
+            sed -e "s/^$MACHIN/    /" $SRCIN > $CODEOUT
+            breaksw
+         default:
+            $GMS_BUILD_DIR/tools/actvte.x > /dev/null
+            breaksw
+      endsw
       breaksw
-   default:
-      $GMS_BUILD_DIR/tools/actvte.x > /dev/null
+   case f90:
+      cp $SRCIN $CODEOUT
       breaksw
 endsw
+#
 unsetenv SRCIN
 unsetenv CODEOUT
 #
@@ -935,7 +956,7 @@ if ($TINKER == true) then
    endif
 endif
 #
-#          Windows 64-Bit Timer hack 
+#          Windows 64-Bit Timer hack
 #
 if (($MODULE == unport) && ($TARGET == win64)) then
   if($GMS_FORTRAN == pgfortran) then
@@ -1134,7 +1155,7 @@ if ($TARGET == cray-xd1) then
    unset echo
 endif
 #
-#   Cray XT Series:  
+#   Cray XT Series:
 #
 if ($TARGET == cray-xt) then
 #
@@ -1357,13 +1378,22 @@ if ($TARGET == hpux64) then
           guess.junk > guess.f
       rm -f guess.junk
    endif
+   switch ($MODULE_F:e)
+      case f90:
+         set FORM='+extend_source'
+         breaksw
+      case f:
+      default:
+         set FORM=''
+         breaksw
+   endsw
 #      +O3 failed to run 9 of 37 example jobs correctly, so +O2 is safer.
    set OPT='+O2'
    if ($MODULE == unport) set OPT="$OPT +U77"
    if ($MODULE == trfdm2) set OPT="+O1"   # for CI gradients, exam05
    if ($MODULE == zheev)  set OPT='+O0'   # defensive compiling
    set echo
-   f90 -c $OPT +DD64 +i8 +nosave +noppu $MODULE_F
+   f90 -c $OPT +DD64 +i8 +nosave +noppu $FORM $MODULE_F
    unset echo
 endif
 #
@@ -1404,8 +1434,17 @@ endif
 #   is available for Linux (not AIX) at valgrind.org.  Untried by MWS.
 #
 if (($TARGET == ibm32) || ($TARGET == ibm64) || ($TARGET == ibm64-sp)) then
-   set FORT='xlf'
-   if ($TARGET == ibm64-sp) set FORT='mpxlf_r'
+   switch ($MODULE_F:e)
+      case f90:
+        set FORT='xlf90 -qsuffix=f=f90 -qfree=f90'
+        if ($TARGET == ibm64-sp) set FORT='mpxlf90_r -qsuffix=f=f90 -qfree=f90'
+        breaksw
+      case f:
+      default:
+        set FORT='xlf'
+        if ($TARGET == ibm64-sp) set FORT='mpxlf_r'
+        breaksw
+   endsw
 #         old 32 bit workstations, whether Power, Power2, or PowerPC
 #         should all select plain vanilla common architecture.  It is
 #         faster, and runs on any combination of these chips you own.
@@ -1548,6 +1587,13 @@ if ($TARGET == linux32) then
       if ($MODULE == rohfcc) set OPT='-O0'
       if ($MODULE == tddgrd) set OPT='-O0'
    endif
+#
+   set EXTRAOPT=''
+   if ($MODULE_F:e == f90) then
+      set EXTRAOPT="$EXTRAOPT -ffree-line-length-none"
+   else
+      set EXTRAOPT="$EXTRAOPT -std=legacy"
+   endif
 #        as of 4.6 tested in late 2011, gfortran can do q.p.!
    switch ($GMS_GFORTRAN_VERNO)
       case 4.0:
@@ -1556,7 +1602,6 @@ if ($TARGET == linux32) then
       case 4.3:
       case 4.4:
       case 4.5:
-         set extraflags=''
          if (($MODULE == qeigen) || ($MODULE == int2c)) then
             mv -f $MODULE_F $MODULE.junk
             sed -e "s/Q-/D-/g" \
@@ -1567,16 +1612,16 @@ if ($TARGET == linux32) then
          breaksw
       case 4.6:
       case 4.7:
-         set extraflags='-fno-whole-file'
+         set EXTRAOPT="$EXTRAOPT -fno-whole-file"
          breaksw
       default:
-         echo Unrecognized gfortran version
+         echo Unrecognized gfortran version for linux32
          exit 4
          breaksw
    endsw
 #
    set echo
-   gfortran -c $OPT -std=legacy $MODULE_F
+   gfortran -c $OPT $EXTRAOPT $MODULE_F
    unset echo
    breaksw
 #
@@ -1726,13 +1771,18 @@ if ($TARGET == linux64) then
       if ($MODULE == zheev)  set OPT='-O0'  # defensive compiling
 
       set EXTRAOPT=" "
+      if ($MODULE:e == f90) then
+         set EXTRAOPT="$EXTRAOPT -ffree-line-length-none"
+      else
+         set EXTRAOPT="$EXTRAOPT -std=legacy"
+      endif
 
       if (($MODULE == cchem) || ($MODULE == ga)) then
          mv $MODULE.f $MODULE.F
          set MODULE_F=$MODULE.F
          if ($GMS_LIBCCHEM == true) then
-            if ($MODULE == cchem) set EXTRAOPT="-DHAVE_CCHEM"
-            if ($MODULE == ga)    set EXTRAOPT="-I$GMS_PATH/libcchem/ga/include"
+            if ($MODULE == cchem) set EXTRAOPT="$EXTRAOPT -DHAVE_CCHEM"
+            if ($MODULE == ga)    set EXTRAOPT="$EXTRAOPT -I$GMS_PATH/libcchem/ga/include"
          endif
       endif
 #
@@ -1757,13 +1807,13 @@ if ($TARGET == linux64) then
             set EXTRAOPT="$EXTRAOPT -fno-whole-file"
             breaksw
          default:
-            echo Unrecognized gfortran version
+            echo Unrecognized gfortran version for linux64
             exit 4
             breaksw
       endsw
 
       set echo
-      gfortran -c -fdefault-integer-8 $OPT -std=legacy $EXTRAOPT $MODULE_F
+      gfortran -c -fdefault-integer-8 $OPT $EXTRAOPT $MODULE_F
       unset echo
       breaksw
 
@@ -1940,7 +1990,7 @@ endif
 #          http://www.webmo.net/support/fortran_osx.html
 #
 if ($TARGET == mac32) then
-#  there are two supported 32 bit compilers: g77, gfortran
+#      g77 may no longer work
    switch ($GMS_FORTRAN)
    case g77:
       set OPT = '-O2'
@@ -1965,15 +2015,42 @@ if ($TARGET == mac32) then
    case gfortran:
       set OPT='-O2'
       if ($MODULE == zheev)  set OPT='-O0'  # defensive compiling
-      if (($MODULE == qeigen) || ($MODULE == int2c)) then
-         mv -f $MODULE_F $MODULE.junk
-         sed -e "s/Q-/D-/g" \
-             -e "s/Q+00/D+00/g" \
-             -e "s/REAL\*16/DOUBLE PRECISION/" $MODULE.junk > $MODULE_F
-         rm -f $MODULE.junk
+#
+      set EXTRAOPT=''
+      if ($MODULE_F:e == f90) then
+         set EXTRAOPT="$EXTRAOPT -ffree-line-length-none"
+      else
+         set EXTRAOPT="$EXTRAOPT -std=legacy"
       endif
+
+#        as of 4.6 tested in late 2011, gfortran can do q.p.!
+      switch ($GMS_GFORTRAN_VERNO)
+         case 4.0:
+         case 4.1:
+         case 4.2:
+         case 4.3:
+         case 4.4:
+         case 4.5:
+            if (($MODULE == qeigen) || ($MODULE == int2c)) then
+               mv -f $MODULE_F $MODULE.junk
+               sed -e "s/Q-/D-/g" \
+                   -e "s/Q+00/D+00/g" \
+                   -e "s/REAL\*16/DOUBLE PRECISION/" $MODULE.junk > $MODULE_F
+               rm -f $MODULE.junk
+            endif
+            breaksw
+         case 4.6:
+         case 4.7:
+            set EXTRAOPT="$EXTRAOPT -fno-whole-file"
+            breaksw
+         default:
+            echo Unrecognized gfortran version for mac32
+            exit 4
+            breaksw
+      endsw
+#
       set echo
-      gfortran -c $OPT -std=legacy $MODULE_F
+      gfortran -c $OPT $EXTRAOPT $MODULE_F
       unset echo
       breaksw
    default:
@@ -1996,6 +2073,14 @@ if ($TARGET == mac64) then
       if ($MODULE == tddgrd) set OPT='-O0'
    endif
    if ($MODULE == zheev)  set OPT='-O0'  # defensive compiling
+#
+   set EXTRAOPT=''
+   if ($MODULE_F:e == f90) then
+      set EXTRAOPT="$EXTRAOPT -ffree-line-length-none"
+   else
+      set EXTRAOPT="$EXTRAOPT -std=legacy"
+   endif
+
 #        as of 4.6 tested in late 2011, gfortran can do q.p.!
    switch ($GMS_GFORTRAN_VERNO)
       case 4.0:
@@ -2004,7 +2089,6 @@ if ($TARGET == mac64) then
       case 4.3:
       case 4.4:
       case 4.5:
-         set extraflags=''
          if (($MODULE == qeigen) || ($MODULE == int2c)) then
             mv -f $MODULE_F $MODULE.junk
             sed -e "s/Q-/D-/g" \
@@ -2015,15 +2099,16 @@ if ($TARGET == mac64) then
          breaksw
       case 4.6:
       case 4.7:
-         set extraflags='-fno-whole-file'
+         set EXTRAOPT="$EXTRAOPT -fno-whole-file"
          breaksw
       default:
-         echo Unrecognized gfortran version
+         echo Unrecognized gfortran version for mac64
          exit 4
          breaksw
    endsw
+
    set echo
-   gfortran -c -m64 -fdefault-integer-8 $OPT -std=legacy $extraflags $MODULE_F
+   gfortran -c -m64 -fdefault-integer-8 $OPT $EXTRAOPT $MODULE_F
    unset echo
 endif
 #
@@ -2205,8 +2290,18 @@ if (($TARGET == sun32) || ($TARGET == sun64)) then
       if ($MODULE == vibanl) set OPT='-fast -O4 -nodepend'  # for PRJGRD
       if ($MODULE == zheev)  set OPT='-O0'
       set WARN='-erroff=WARNING_1278,WARNING_1279,WARNING_1615'
+      switch ($MODULE_F:e)
+         case f90:
+#                  -e extends line length to f90 standard of 132
+            set FORM='-free -e'
+            breaksw
+         case f:
+         default:
+            set FORM=''
+            breaksw
+      endsw
       set echo
-      f90 -c -stackvar -xtypemap=integer:$BITS $OPT $WARN $ARCH $MODULE_F
+      f90 -c -stackvar -xtypemap=integer:$BITS $OPT $WARN $ARCH $FORM $MODULE_F
       unset echo
    else
 #
@@ -2429,7 +2524,7 @@ if (($TARGET == win64) || ($TARGET == winazure)) then
 #     Word around:
 #     - used the DDI version of MP2, $mp2 code=ddi $end
 #     - take the winazure route below and set GMS_FORTRAN to pgf77
-# 
+#
 #     Note that $MP2RES will write to fort.35 since F77 and F90 runtime
 #     libraries are different and do not know about filepaths set but the other.
 #

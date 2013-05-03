@@ -143,7 +143,7 @@
          {
             fprintf(stdout,"\n");
             fprintf(stdout," DDI: trouble creating distributed array!\n");
-            fprintf(stdout," Current number of data servers is %i\n",longnd);
+            fprintf(stdout," Current number of data servers is %li\n",longnd);
             fprintf(stdout," so each data server's slice of array");
             fprintf(stdout," [%i] is %li words\n",*handle,longslice);
             fprintf(stdout,"\n");
