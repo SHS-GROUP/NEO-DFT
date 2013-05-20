@@ -1,13 +1,14 @@
 #!/bin/csh
 #
-#   4 Feb 2013:    This front-end 'gms' script runs interactively,
+#  17 May 2013:    This front-end 'gms' script runs interactively,
 #   to send the back-end 'rungms' GAMESS job to a batch schedular,
 #   namely Sun Grid Engine (SGE) -or- Portable Batch System (PBS)
 #
 #   Three of our clusters use this 'gms' front-end:
-#        dynamo   = SGE, 8-core nodes, most with old Tesla GPUs
+#        dynamo   = SGE, 8 core nodes, most with old Tesla GPUs
 #        chemphys = PBS, 6 core nodes, no GPUs
 #        exalted  = SGE, 6 core nodes, many Fermi GPUs, one Kepler GPU
+#        bolt     = SGE, 6 core nodes, 9 with Kepler and 9 with MIC
 #   All of them use Infiniband.  That means that the 'rungms' back-end
 #   is either using execution target 'mpi' to run GAMESS, or execution
 #   target 'ga' to run GAMESS+LIBCCHEM on the GPUs.  The mpi/ga parts
@@ -65,6 +66,18 @@ switch (`hostname`)
       set CLUSTER=exalted
       set PPN_MAX=6
       set NUMGPU=2
+      breaksw
+   case bolt.iprt.iastate.edu:
+#                  necessary 'rungms' customizations for ISU:
+#           change both mpi/ga parts!!!
+#           change the ifort version number to composerxe-2013.xxxxx
+#           change the MKL   version number to composerxe-2013.xxxxx
+#           modes with a MIC are compute-0-x, with a K20 are compute-1-x
+#              official policy is to require the use of the GPUs!
+      set SCHED=SGE
+      set CLUSTER=bolt
+      set PPN_MAX=6
+      set NUMGPU=1
       breaksw
    default:
       echo "This cluster is unrecognized, please customize for your site."
@@ -199,7 +212,7 @@ end
 if ($NUMGPU > 0) set PPN_MAX=1
 #
 if ($?JOB == 0)     set JOB=help
-if ($?VERNO == 0)   set VERNO=130
+if ($?VERNO == 0)   set VERNO=00
 if ($?LOGFILE == 0) set LOGFILE=default
 if ($?XPATH == 0)   set XPATH=none
 if ($?NCPUS == 0)   set NCPUS=0
@@ -237,9 +250,9 @@ if ($JOB == help) then
    echo "Other options, including GPU flags, can be displayed by 'gms -help'."
    echo "This cluster's hardware can be displayed by 'gms -cluster'."
 
-   if($CLUSTER == exalted) then
+   if (($CLUSTER == exalted) || ($CLUSTER == bolt)) then
    echo " "
-   echo "EXALTED runs only a GAMESS+LIBCCHEM binary: it is a GPU cluster."
+   echo "$CLUSTER runs only a GAMESS+LIBCCHEM binary: it is a GPU cluster."
    echo "The -p argument is actually a NODE count, not a CPU count."
    echo "The -ppn argument is hardwired to 1 in all jobs (always -hog)."
    echo "MPI/GA execution will use all cores in the 'X' nodes assigned by -p,"
@@ -282,6 +295,16 @@ if ($JOB == morehelp) then
    echo "   -test    executes in a 2-node 'dev'          programming queue."
    echo "   -kepler  executes in a 1-node 'experimental' programming queue,"
    echo "            which contains a single Kepler GPU."
+   echo " "
+   echo "      NOTE: the standard -p flag counts in units of nodes,"
+   echo "            not cores, if the job is running on GPUs."
+   breaksw
+ case bolt:
+   echo "   -gpu n   requests nodes with n=1 GPUs."
+   echo "            the GPU is Kepler K20, 4800 GBytes ECC memory each."
+   echo "            There are 9 nodes possessing one K20 board each."
+   echo "            The only choice is n=1, and there is no non-GPU binary."
+   echo "   -ccmem M core's memory limit (default M=6g). Include m/g units!"
    echo " "
    echo "      NOTE: the standard -p flag counts in units of nodes,"
    echo "            not cores, if the job is running on GPUs."
@@ -348,6 +371,28 @@ if ($JOB == cluster_config) then
    echo "This cluster is based on Rocks/Linux, with the SGE batch schedular,"
    echo "and all the usual software: gfortran/ifort, MKL, various MPIs..."
    breaksw
+ case bolt:
+   echo "The head node of this cluster is named bolt.iprt.iastate.edu,"
+   echo "     head node has 3.20 GHz hex-core E5-1650 (Sandy Bridge E)."
+   echo "     Its permanent file storage is called /home/$USER"
+   echo " "
+   echo "The 18 compute nodes in this cluster are named"
+   echo "     compute-0-0, compute-0-1, ..., compute-0-8, for MIC nodes."
+   echo "     compute-1-0, compute-1-1, ..., compute-1-8, for K20 nodes."
+   echo "Every compute node is the same,"
+   echo "     one hex core 3.20 GHz E5-1650, 32 GB RAM (5.3 GB/core), and"
+   echo "     900 GBytes of /scratch disk."
+   echo "except for the add-in processor type: MIC or K20."
+   echo " "
+   echo "The GPUs are Nvidia Kepler K20 type, unknown memory amount."
+   echo " "
+   echo "The network in this cluster is Mellanux Infiniband, QDR quality,"
+   echo "offering 32 Gbit/sec unidirectional bandwidth.  Of course, there"
+   echo "is also a gigabit ethernet for ordinary system management."
+   echo " "
+   echo "This cluster is based on Rocks/Linux, with the SGE batch schedular,"
+   echo "and all the usual software: gfortran/ifort, MKL, MVAPICH2,..."
+   breaksw
 #
 #           the gordon nodes are compute-0-x, x=0 to 10 (11 total)
 #           the  evans nodes are compute-1-x, x=0 to  4
@@ -357,7 +402,7 @@ if ($JOB == cluster_config) then
    echo "The head node of this cluster is named chemphys2011.fi.ameslab.gov,"
    echo "     and is a Silicon Mechanics R308 node, with"
    echo "     one Intel 2.66 GHz hex-core X5650 chip."
-   echo "     It's permanent file storage is called /home/$USER"
+   echo "     Its permanent file storage is called /home/$USER"
    echo " "
    echo "The 11 available Silicon Mechanics R4410 compute nodes are named"
    echo "     compute-0-0, compute-0-1, ..., compute-0-10."
@@ -544,16 +589,29 @@ if ($SCHED == SGE) then
    set WHOLENODE=true
    if ($TESTJOB == false) then
 #
-#          at ISU, the 'exclusive' queue is for production runs.
-#          As the name suggests, this queue allocates entire nodes to
-#          a batch job, so all cores/GPUs/RAM/disk belong to this job.
-      set SGE_RESOURCES="$SGE_RESOURCES -l exclusive -q exclusive.q"
+#          at ISU, production runs allocate entire nodes to a batch job,
+#                  by picking up the right queue in our SGE configurations,
+#                  so all cores/GPUs/RAM/disk belong to this job.
+      switch ($CLUSTER)
+         case dynamo:
+         case exalted:
+           set SGE_RESOURCES="$SGE_RESOURCES -l exclusive -q exclusive.q"
+           breaksw
+         case bolt:
+           set SGE_RESOURCES="$SGE_RESOURCES -q k20dev.q"
+           breaksw
+         default:
+           echo No exclusive queue setup for this cluster.
+           exit 8
+           breaksw
+      endsw
    else
 #
 #          at ISU, reserved, dev, or experimental resource allocates nodes
 #          from batch queues by those specific names.  These are queues at
 #          our specific site which are dedicated to runs which may explore
 #          new GPUs, experimental software, or just new GAMESS code.
+#          Note: there is no test queue on 'bolt' or 'chemphys' clusters.
       if ($CLUSTER == dynamo) then
          set SGE_RESOURCES="$SGE_RESOURCES -l reserved"
       endif
@@ -596,6 +654,8 @@ endif
 #                  but GAMESS+LIBCCHEM can be used if user's wish.
 #    ISU's exalted cluster has some nodes with 2, and some with 4 GPUs,
 #                  and it is policy that GPUs are -always- to be used.
+#    ISU's bolt cluster has nodes with 1 K20,
+#                  and it is policy that GPUs are -always- to be used.
 #    the GPU-possessing nodes are set up as a consumable resource in SGE.
 #    we keep GAMESS linked to two binaries:
 #         gamess.$VERNO.x or if LIBCHEM added, as gamess.cchem.$VERNO.x
@@ -626,6 +686,12 @@ switch ($CLUSTER)
          if ($NUMGPU >= 3) set GPURESOURCE=4
          set SGE_RESOURCES="$SGE_RESOURCES -l gpu=$GPURESOURCE"
       endif
+      breaksw
+   case bolt:
+#        The batch queue name of 'k20dev.q' implies one K20 per node,
+#        hence the SGE queue doesn't have a separate GPU resource.
+#        For this script's convenience, force the presence of that K20.
+      if ($NUMGPU >= 0) set NUMGPU=1
       breaksw
 endsw
 #
