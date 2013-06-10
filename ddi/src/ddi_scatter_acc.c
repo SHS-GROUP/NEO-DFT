@@ -69,9 +69,17 @@ void DDI_Scatter_AccS(int handle,DDI_Scattered *scattered,double alpha,long *ibu
       Ensure the scattered has the correct info
    \* ------------------------------------- */
 
+# if defined WINTEL
+      scattered->oper   = DDI_SCATTER_ACC_OP;
+# else
       scattered->oper   = DDI_SCATTER_ACC;
+# endif
       scattered->handle = handle;
+# if defined WINTEL
+      trojen.oper = DDI_SCATTER_ACC_OP;
+# else
       trojen.oper = DDI_SCATTER_ACC;
+# endif
 
    /* ---------------------------------- *\
       Check calling arguments for errors

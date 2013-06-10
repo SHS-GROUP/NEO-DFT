@@ -29,6 +29,7 @@
 @FINDSTR /I /R /C:"FOCKDER=" %ENVFIL%
 @FINDSTR /I /R /C:"WORK19=" %ENVFIL%
 @FINDSTR /I /R /C:"DASORT=" %ENVFIL%
+@FINDSTR /I /R /C:"DIABDAT=" %ENVFIL%
 @FINDSTR /I /R /C:"DFTINTS=" %ENVFIL%
 @FINDSTR /I /R /C:"DFTGRID=" %ENVFIL%
 @FINDSTR /I /R /C:"JKFILE=" %ENVFIL%
@@ -60,6 +61,7 @@
 @FINDSTR /I /R /C:"AABB41=" %ENVFIL%
 @FINDSTR /I /R /C:"BBAA42=" %ENVFIL%
 @FINDSTR /I /R /C:"BBBB43=" %ENVFIL%
+@FINDSTR /I /R /C:"REMD=" %ENVFIL%
 @FINDSTR /I /R /C:"MCQD50=" %ENVFIL%
 @FINDSTR /I /R /C:"MCQD51=" %ENVFIL%
 @FINDSTR /I /R /C:"MCQD52=" %ENVFIL%
@@ -265,7 +267,6 @@
 @REM
 @REM Next files are used only during divide-and-conquer runs
 @REM
-@IF %DEBUG%==TRUE (
 @FINDSTR /I /R /C:"DCSUB=" %ENVFIL%
 @FINDSTR /I /R /C:"DCVEC=" %ENVFIL%
 @FINDSTR /I /R /C:"DCEIG=" %ENVFIL%
@@ -283,8 +284,24 @@
 @REM
 @REM Next value is used only within the VB2000 add-on code
 @REM
+@FINDSTR /I /R /C:"VB2000PATH=" %ENVFIL%
 @FINDSTR /I /R /C:"GMSJOBNAME=" %ENVFIL%
+@REM
+@REM Next files are used during EFMO runs
+@REM
+@FINDSTR /I /R /C:"IEFMO=" %UNC_SCRATCHDIR%\%JOB%.F05 > NUL
+@IF NOT ERRORLEVEL 1 (
+  @FINDSTR /I /R /C:"EFMOI" %ENVFIL%
+  @FINDSTR /I /R /C:"EFMOF" %ENVFIL%
 )
+@REM
+@REM Next files are used only during CIM runs
+@REM
+@FINDSTR /I /R /C:"CIMFILE" %ENVFIL%
+@FINDSTR /I /R /C:"CIMDMN" %ENVFIL%
+@FINDSTR /I /R /C:"CIMDCT" %ENVFIL%
+@FINDSTR /I /R /C:"CIMAOI" %ENVFIL%
+@FINDSTR /I /R /C:"CIMMOI" %ENVFIL%
 @REM
 @REM We are done echo-ing out the job's environmental variables
 @REM
