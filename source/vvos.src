@@ -1,3 +1,4 @@
+C  3 Jul 13 - MWS - VVOS: orthog atomic side, TFAO5D: fix d transf.
 C  6 Feb 13 - MWS - remove small AXP compiler warning
 C 05 MAY 12 - DPT - SAFLG logical keyword added to DETPAR common block
 C 17 APR 12 - MWS - DEFEND AGAINST CASE OF VVO'S WITH NO EXTERNAL ORBS
@@ -19,8 +20,7 @@ C
 C*MODULE VVOS    *DECK VVOS
 C> @brief      Routine drives formation of valence virtual orbitals.
 C>
-C> @author     Mike Schmidt
-C>             -2000s
+C> @author     Mike Schmidt, 2007
 C>
 C> @details   Routine drives formation of valence virtual orbitals.
 C>            W.C.LU, C.Z.WANG, T.L.CHAN, K.RUEDENBERG, K.M.HO
@@ -245,16 +245,62 @@ C
          IF(MASWRK  .AND.  IERR2.NE.0) WRITE(IW,9030) MXGMBS
          IF(IERR1.NE.0  .OR.  IERR2.NE.0) CALL ABRT
       ENDDO
+C
       NAT = NATSV
+      L2MBS = (L1MBS*L1MBS*L1MBS)/2
+      L3MBS = L1MBS*L1MBS
 C
       CALL VALFM(LOADFM)
       LOVLP = LOADFM + 1
-      LAST  = LOVLP  + L1*L1MBS
-      NEED2 = LAST -LOADFM -1
+      LSMBS = LOVLP  + L1*L1MBS
+      LEVAL = LSMBS  + MAX(L2MBS,L3MBS)
+      LEVEC = LEVAL  + L1MBS
+      LSMHF = LEVEC  + L3MBS
+      LAST  = LSMHF  + L3MBS
+      NEED2 = LAST - LOADFM - 1
       CALL GETFM(NEED2)
 C
       IF(EXETYP.EQ.CHECK) L0MBS=L1MBS
       IF(EXETYP.EQ.CHECK) GO TO 110
+C
+C        STEP (0), PRE-ORTHOGONALIZE THE LARGE GTO BASIS SET SPACE
+C           a) get the metric for the large GTO basis set
+C           b) transform it to spherical harmonics, after
+C              which it is unit matrices on the diagonal,
+C              but overlaps in between the atoms.
+C           c) generate S**(-1/2) orthogonalizing transformation
+C        We actually apply the Lowdin orthogonalization at step (I)!
+C        This step was not included in the initial implementation
+C        of 2007, from 2004 equations, but was added in 6/2013.
+C
+      MODE=0
+      DUMMY=ZERO
+      IDUMMY=1
+      CALL COOVLP(MODE,XX(LSMBS),DUMMY,L1MBS,IDUMMY,L2MBS,NAT,
+     *            NGAUMBS,NSHLMBS,XX(LEXMBS),XX(LCSMBS),XX(LCPMBS),
+     *            XX(LCDMBS),DUMMY,DUMMY,DUMMY,DUMMY,
+     *            XX(LKSTRMBS),XX(LKATMMBS),XX(LKTYPMBS),XX(LKNGMBS),
+     *            XX(LKLOCMBS),XX(LKMINMBS),XX(LKMAXMBS),
+     *            IDUMMY,IDUMMY,DUMMY,
+     *            DUMMY,DUMMY,DUMMY,DUMMY,DUMMY,DUMMY,DUMMY,
+     *            IDUMMY,IDUMMY,IDUMMY,IDUMMY,IDUMMY,IDUMMY,IDUMMY,
+     *            C,DUMMY)
+C
+      MODE=0
+      DUMMY=ZERO
+      CALL TFAO5D(MODE,XX(LSMBS),DUMMY,XX(LKTYPMBS),WRK1,
+     *            WRK2,WRK3,L1,NSHLMBS,L0MBS,L1MBS,L2MBS)
+C
+C          get S**(-1/2) for later Lowdin orthogonalization
+C
+      CALL GLDIAG(L0MBS,L0MBS,L0MBS,XX(LSMBS),SCR,XX(LEVAL),
+     *            XX(LEVEC),IERR,IWRK)
+      CALL VCLR(XX(LSMBS),1,L3MBS)
+      DO I=1,L0MBS
+         XX(LSMBS-1+(I-1)*L0MBS+I) = ONE/SQRT(XX(LEVAL-1+I))
+      ENDDO
+      CALL TRPOSQ(XX(LEVEC),L0MBS)
+      CALL TFSQU(XX(LSMHF),XX(LSMBS),XX(LEVEC),SCR,L0MBS,L0MBS)
 C
 C        STEP (I), GENERATION OF THE MATRIX "LITTLE-A-STAR", IN -WRK1-
 C
@@ -281,13 +327,24 @@ C
 C        POSSIBLY, TRANSFORM AUXILIARY BASIS FROM CARTESIAN TO
 C        SPHERICAL HARMONICS, REDUCING -L1MBS- TO -L0MBS-.
 C
-      CALL TFAO5D(XX(LOVLP),XX(LKTYPMBS),WRK1,WRK2,
-     *            L1,NSHLMBS,L1MBS,L0MBS)
+      MODE=1
+      DUMMY=ZERO
+      CALL TFAO5D(MODE,DUMMY,XX(LOVLP),XX(LKTYPMBS),
+     *            WRK1,WRK2,DUMMY,L1,NSHLMBS,L0MBS,L1MBS,L2MBS)
 C
-C        SAVE THE (L1,L0MBS) "SV" MATRIX FOR USE IN SVD.
+C        SAVE THE (L1,L0MBS) "SV" MATRIX FOR POSSIBLE USE IN
+C        SUBSEQUENT EXTERNAL SPACE SVD STAGES.
 C        NOTE:  WORKS WHETHER L1MBS=L0MBS OR NOT.
 C
       CALL DAWRIT(IDAF,IODA,XX(LOVLP),L1*L0MBS,533,0)
+C
+C          rotate the MBS side to the orthogonal AO space A* here.
+C          The behavior of this code between 2007 and 2013 can be
+C          recovered by avoiding the next Lowdin orthogonalization.
+C
+      CALL DGEMM('N','N',L1,L0MBS,L0MBS,
+     *           ONE,XX(LOVLP),L1,XX(LSMHF),L0MBS,ZERO,WRK1,L1)
+      CALL DCOPY(L1*L0MBS,WRK1,1,XX(LOVLP),1)
 C
 C        TRANSFORM FROM TRUE AO SPACE TO THE SCF MO BASIS (OCC+VIRT).
 C        -WRK1- IS OVERLAP BETWEEN SCF ORBITALS AND THE AUXILIARY
@@ -576,7 +633,7 @@ C     CONTINUE ON OTHERWISE...
 C
 C
       IF(SCFTYP.EQ.RMC) THEN
-C       RE-ORDER VVOS SUCH THAT WE DO NOT KEEP THE SAME 2 OR MORE ORBITALS
+C       RE-ORDER VVOS SUCH THAT WE DO NOT KEEP THE SAME 2 OR MORE ORBS
         CALL DAREAD(IDAF,IODA,WRK1,L3,15,0)
         CALL DAREAD(IDAF,IODA,WRK2,L2,12,0)
         IDUM=0
@@ -682,20 +739,20 @@ C
       END
 C
 C*MODULE VVOS    *DECK NVVOS_NUMCOR
-c> @brief      Routine returns number of chemical core orbitals.
-c>
-c> @author     Mike Schmidt
-c>             -1990s
-c>
-c> @details    Routine accounts for semi-cores so that only the truly valence
-c>             orbitals are not included in the core.
-c>
-c> @param IATM1 indicates which cores to return when ITYPE equals 1.
-c> @param ITYPE indicates whether to return cores for all atoms or one.
-c> @date November 4, 2012-Aaron West
-c> -Modified routine to return cores for all or individual atoms.
-c>
-c> @see NUMCOR
+C> @brief      Routine returns number of chemical core orbitals.
+C>
+C> @author     Mike Schmidt
+C>             -1990s
+C>
+C> @details    Routine accounts for semi-cores so that only the truly
+C>             valence orbitals are not included in the core.
+C>
+C> @param IATM1 indicates which cores to return when ITYPE equals 1.
+C> @param ITYPE indicates whether to return cores for all atoms or one.
+C> @date November 4, 2012-Aaron West
+C> -Modified routine to return cores for all or individual atoms.
+C>
+C> @see NUMCOR
       INTEGER FUNCTION NVVOS_NUMCOR(IATM1,ITYPE)
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
@@ -763,26 +820,45 @@ C
  9002 FORMAT(/1X,'NVVOS_NUMCOR: IZ IS LESS THAN 1.  WRONG.')
       END
 C*MODULE VVOS    *DECK TFAO5D
-      SUBROUTINE TFAO5D(OVLP,KTYPE,TF,WORK,L1,NSHLMBS,L1MBS,L0MBS)
+C>
+C>    @brief   transform large GTO MBS to spherical harmonics.
+C>
+C>    @details transform the minimal basis set side(s) of either
+C>             the overlap within the MBS, or between the virtual
+C>             orbitals and the MBS.  Nothing happens at all if
+C>             there are no atoms with occupied d's.
+C>
+      SUBROUTINE TFAO5D(MODE,SMBS,OVLP,KTYPE,TF,WORK,VWRK,
+     *                  L1,NSHLMBS,L0MBS,L1MBS,L2MBS)
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
-      DIMENSION OVLP(L1,L1MBS),KTYPE(NSHLMBS),TF(L1MBS,L1MBS),
-     *          WORK(L1,*)
+C          only one of SMBS/VWRK or OVLP should be given,
+C          depending on the execution MODE.
+C          WORK is L2MBS for MODE=0, and L1*L1 for MODE=1
+      DIMENSION SMBS(L2MBS),OVLP(L1,L1MBS),KTYPE(NSHLMBS),
+     *          TF(L1MBS,L1MBS),WORK(*),VWRK(L1MBS)
       DIMENSION IDEG(4)
-      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00)
+      PARAMETER (ZERO=0.0D+00, ONE=1.0D+00, HALF=0.5D+00)
       DATA IDEG/1,3,6,10/
 C
-C       TRANSFORM THE MINIMAL ATOMIC BASIS TO SPHERICAL HARMONICS
-C       ON ENTRY, -OVLP- IS L1 BY L1MBS, ON EXIT IT IS L1 BY L0MBS,
+C       TRANSFORM THE MINIMAL ATOMIC BASIS TO SPHERICAL HARMONICS,
 C       AND -L0MBS- WILL BE SET TO THE NUMBER OF SPHERICAL HARMONICS
-C       IN THE MINIMAL BASIS SET.
 C
-      V314  = SQRT( 3.0D+00/14.0D+00)
-      V1214 = SQRT(12.0D+00/14.0D+00)
-      V34   = SQRT( 3.0D+00/ 4.0D+00)
+C       IF MODE=0, THE METRIC IS THAT OF THE MINIMAL BASIS SPACE,
+C                  AND NEEDS TO BE TRANSFORMED TO THE SPHERICAL
+C                  HARMONIC PART OF THIS SPACE.
+C                  ON ENTRY, -SMBS- IS L1MBS TRI, ON EXIT L0MBS TRI
+C       IF MODE=1, THE METRIC IS BETWEEN THE MBS AND THE VIRTUAL
+C                  ORBITALS OF SOME MOLECULAR BASIS, SO ONLY THE
+C                  MBS SIDE SHOULD BE CHANGED TO SPHERICAL HARMONICS.
+C                  ON ENTRY, -OVLP- IS L1 X L1MBS, ON EXIT L1 X L0MBS
+C
+      V34 = SQRT(3.0D+00/4.0D+00)
 C
       CALL VCLR(TF,1,L1MBS*L1MBS)
       L1ROW=0
       L0COL=0
+C
+C        NOTE THAT OUR MBS IS A LARGE GTO EXPANSION W/O ANY L SHELLS
 C
       DO ISH=1,NSHLMBS
          KTYP = KTYPE(ISH)
@@ -797,9 +873,9 @@ C
             L0COL = L0COL + 3
          END IF
          IF(KTYP.EQ.3) THEN
-            TF(L1ROW+1,L0COL+1) =  V314
-            TF(L1ROW+2,L0COL+1) =  V314
-            TF(L1ROW+3,L0COL+1) = -V1214
+            TF(L1ROW+1,L0COL+1) =  HALF
+            TF(L1ROW+2,L0COL+1) =  HALF
+            TF(L1ROW+3,L0COL+1) = -ONE
             TF(L1ROW+1,L0COL+2) =  V34
             TF(L1ROW+2,L0COL+2) = -V34
             TF(L1ROW+4,L0COL+3) = ONE
@@ -818,7 +894,14 @@ C
 C
 C        IF NEED BE, TRANSFORM MINIMAL BASIS SET TO SPHERICAL HARMONICS
 C
-      IF(L0MBS.LT.L1MBS) THEN
+      IF(L0MBS.EQ.L1MBS) RETURN
+C
+      IF(MODE.EQ.0) THEN
+         CALL TFTRI(WORK,SMBS,TF,VWRK,L0MBS,L1MBS,L1MBS)
+         CALL DCOPY(L2MBS,WORK,1,SMBS,1)
+      END IF
+C
+      IF(MODE.EQ.1) THEN
          CALL DGEMM('N','N',L1,L0MBS,L1MBS,ONE,OVLP,L1,TF,L1MBS,
      *              ZERO,WORK,L1)
          CALL DCOPY(L1*L0MBS,WORK,1,OVLP,1)
@@ -1152,7 +1235,7 @@ C                                    Sc-Ni
          NS=26
          NP=17
          ND=13
-         IF(NUCZ.EQ.29 .or. NUCZ.EQ.30) ND=14
+         IF(NUCZ.EQ.29 .OR. NUCZ.EQ.30) ND=14
          NPASS=7
          ITLIST(1)=1
          ITLIST(2)=1
@@ -1198,7 +1281,7 @@ C                                    RB-SR
 C                                    Y-Cd
   100  IF(NUCZ.GT.48) GO TO 110
          NS = 27
-         IF(NUCZ.GE.44 .and. NUCZ.LE.48) NS = 28
+         IF(NUCZ.GE.44 .AND. NUCZ.LE.48) NS = 28
          NP = 20
          ND = 17
          NPASS=10
@@ -5949,7 +6032,8 @@ C
          I0=I0+1
          E(I0)=ZETA(I)
       ENDDO
-      End
+      RETURN
+      END
 C
 C
 C*MODULE VVOS    *DECK WTBSFIVE
@@ -10944,7 +11028,8 @@ C
          I0=I0+1
          E(I0)=ZETA(I)
       ENDDO
-      End
+      RETURN
+      END
 C
 C*MODULE VVOS    *DECK BNDANX
 C> @brief      Routine drives formation and orientiation of vvos.
