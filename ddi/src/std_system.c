@@ -10,7 +10,9 @@
 
  # if defined WINDOWS64
      # include <stdlib.h>
+  # if defined WINTEL
      # include <malloc.h>
+  # endif
  # endif
 
 /* ------------------------- *\

@@ -252,7 +252,17 @@
 # endif
  
  # define DDI_FENCE         13
+
+# if defined WINTEL
+
+ # define DDI_SCATTER_ACC_OP 14
+
+# else
+
  # define DDI_SCATTER_ACC   14
+
+# endif
+
  # define DDI_DEBUGFLAG     20
  # define DB_CREATE_ENTRY   30
  # define DB_READ_ENTRY     31

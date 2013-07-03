@@ -206,9 +206,7 @@
 
 
          # if defined WINTEL
-          fprintf(stdout,"%s: DDI_Scatter_Acc for WINTEL not implemented.\n",DDI_Id());
-          Fatal_error(911);
-           case DDI_ACC_OP:
+           case DDI_SCATTER_ACC_OP:
          # else
            case DDI_SCATTER_ACC:
          # endif

@@ -1,4 +1,8 @@
 @REM
+@REM
+@REM May   28, 2013 :: Sarom Leang :: New exam files
+@REM
+@REM
 @REM March 25, 2010 :: Sarom Sok :: Windows batch file version of the runall script.
 @REM
 @SETLOCAL
@@ -57,7 +61,7 @@
 @ECHO  [ncpus]   = The number of CPUs requested for this job      ^(default:  1^)
 @ECHO              [ncpus] = 1 will run all the exam files in serial
 @ECHO              [ncpus] ^> 1 will run all the exam files in parallel except
-@ECHO              for 05, 23, 25, 27, 32, 39, and 42 which only run in serial
+@ECHO              for 05, 23, 25, 27, 32, 39, 42, and 45-47 which only run in serial
 @ECHO =========================================================================
 @REM
 @IF [%1]==[] (
@@ -95,7 +99,7 @@
 :runallserial
 @REM
 @ECHO ----------------------------------------------
-@ECHO   Running GAMESS exam files 1 - 44 in serial
+@ECHO   Running GAMESS exam files 1 - 47 in serial
 @ECHO   Using gamess.%VERSION%.exe binary
 @ECHO   NCPUS = %NCPUS%
 @ECHO ----------------------------------------------
@@ -319,15 +323,30 @@
 @CALL rungms %CURRENTJOB% %VERSION% %NCPUS% 0 %CURRENTJOB%.log > NUL
 @PING -n 5 127.0.0.1 > NUL
 @REM
+@SET  CURRENTJOB=%JOB%45
+@ECHO   Running %CURRENTJOB%
+@CALL rungms %CURRENTJOB% %VERSION% %NCPUS% 0 %CURRENTJOB%.log > NUL
+@PING -n 5 127.0.0.1 > NUL
+@REM
+@SET  CURRENTJOB=%JOB%46
+@ECHO   Running %CURRENTJOB%
+@CALL rungms %CURRENTJOB% %VERSION% %NCPUS% 0 %CURRENTJOB%.log > NUL
+@PING -n 5 127.0.0.1 > NUL
+@REM
+@SET  CURRENTJOB=%JOB%47
+@ECHO   Running %CURRENTJOB%
+@CALL rungms %CURRENTJOB% %VERSION% %NCPUS% 0 %CURRENTJOB%.log > NUL
+@PING -n 5 127.0.0.1 > NUL
+@REM
 @GOTO:eof
 
 :runallparallel
 @REM
 @ECHO ----------------------------------------------
-@ECHO  Running GAMESS exam files 1 - 44 in parallel
+@ECHO  Running GAMESS exam files 1 - 47 in parallel
 @ECHO.
 @ECHO   The following serial-only jobs are omitted
-@ECHO   05, 23, 25, 27, 32, 39, and 42
+@ECHO   05, 23, 25, 27, 32, 39, 42, 45, 46, and 47
 @ECHO.
 @ECHO   Using gamess.%VERSION%.exe binary
 @ECHO   NCPUS = %NCPUS%

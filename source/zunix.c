@@ -636,8 +636,9 @@ double windowstimer_(double *a)
 #ifdef WINDOWS64
 
 #include <stdlib.h>
-#include <malloc.h>
-
+ #ifdef WINTEL
+  #include <malloc.h>
+ #endif
 #define FORTINT __int64
 
 FORTINT memget_(nwords) FORTINT *nwords;
