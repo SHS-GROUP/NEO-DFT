@@ -53,32 +53,40 @@ C>  that preserve the waveFxN invariance.
 C>  However, MCSCF+extloc=atmnos runs mix
 C>  all orbitals in the MBS valence for the SVD orbitals.
 C>
+C> @date July 12, 2013-Aaron West
+C> -Small correction for EXTLOC runs with MCSCF.
+C>  Density matrix is now handled with care.
+C>  This fix does not affect:
+C>  non-EXTLOC runs or Hartree-Fock EXTLOC runs.
+C>
 C> @param IORBF1 indicates daf dict file with starting orbitals
 C>               from which the localized orbitals are formed.
-      SUBROUTINE LOCAL_LMOSVD(IORBF1)
+C> @param SCFTYP_TRUTH should be fed in as the true SCFTYP.
+      SUBROUTINE LOCAL_LMOSVD(IORBF1,SCFTYP_TRUTH)
 C-----------------------------------------------------------------------
       IMPLICIT NONE
 C
 C     VARS
 C     MASWRK LINE PLACED BELOW TO MATCH...
-      LOGICAL KEEPER,KEEPER_ISVMOR,COMBO
+      LOGICAL KEEPER,KEEPER_ISVMOR,COMBO,SWITCH_ORBS
       LOGICAL SVDEXTORBSNUM,SVDAOS,SVDPRJ,SVDMBSNUM,
      *        SVD_INVAR,SVD_INVAR2,SVD_INVAR3,SVD_AOSCF
       DOUBLE PRECISION :: X
-      DOUBLE PRECISION :: RMC,RHF,SVD,RNONE
+      DOUBLE PRECISION :: RMC,RHF,ROHF,RNONE
+      DOUBLE PRECISION :: SCFTYP_TRUTH
       INTEGER NGOTMX,LAST,LOADFM,NDAWN1,
      *        LEIG1,LIWRK,LS,LS2,LSAOMO,LSV,LSVMBS,LUVEC,LVOLD,LVSAV,
-     *        LEIG1SAV,LVTVECSAV,LIPOSMBS,LILENMBS,LVTMP,LVTVEC,LWRKSVD,
-     *        LWSPHER
+     *        LEIG1SAV,LVTVECSAV,LIPOSMBS,LILENMBS,LIPOSCOR,LILENCOR,
+     *        LVTMP,LVTVEC,LWRKSVD,LWSPHER
       INTEGER ISIZE_FCCWFN
       INTEGER NERR,I,ITMP,IORBF1,ISIZSVD,ISIZSVD2,
-     *        L0,L0MBS,L1,L2,L3,NCORTOT,NACT
-      INTEGER NSKIP,NSKIP2,NVIR2,NCOR_GET,NACT_GET,NACTSV,NCORSV,
-     *        NACT_EXTLOC_SAV
-      INTEGER ISWMBS
-      INTEGER LOCAL_NUMVAL
-      INTEGER NVVOS_NUMCOR
-C
+     *        L0,L0MBS,IMBS,L1,L2,L3,NCORTOT,NACT
+      INTEGER NSKIP,NSKIP2,NSKIP_SING,
+     *        NVIR2,NCOR_GET,NACT_GET,NACTSV,NCORSV,
+     *        NACT_EXTLOC_SAV,NACTSV_EXTLOC_SAV
+      INTEGER ISWMBS,IDENFIL,IDENSIZ
+      INTEGER LOCAL_NUMVAL,NVVOS_NUMCOR
+C-----------------------------------------------------------------------
 C     NEW CODING STANDARDS VARS
 C
       DOUBLE PRECISION :: C
@@ -127,8 +135,7 @@ C
       INTEGER ILOCAL,IAHARD
 C
       INTEGER IVVOS,NVVOS
-      DOUBLE PRECISION ::
-     *       BNDDEN
+      DOUBLE PRECISION :: BNDDEN
 C
       DOUBLE PRECISION :: SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP
       INTEGER MPLEVL,MPCTYP
@@ -174,10 +181,10 @@ C
 C     DATA STUFF
       DATA CHECK/8HCHECK   /
       DATA ORMAS/8HORMAS   /
-      DATA RMC/8HMCSCF   /
       DATA RHF/8HRHF     /
+      DATA RMC/8HMCSCF   /
+      DATA ROHF/8HROHF    /
       DATA RNONE/8HNONE    /
-      DATA SVD/8HSVD     /
 C
 C     DEFINE PRINT STUFF
       SOME = NPRINT.NE.-5 .AND. MASWRK
@@ -194,16 +201,22 @@ C     SET UP SOME DIMENSIONS
       L2 = (L1*L1+L1)/2
       L3 = L1*L1
       ISIZE_FCCWFN=51
+      IMBS=0
+      ISWMBS=1
+      DO I=1,NAT
+        IMBS=IMBS+LOCAL_NUMVAL(I,ISWMBS)
+      ENDDO
+      L0MBS=IMBS+NVVOS_NUMCOR(0,0)
+C
+C     ALWAYS INITIALIZE NSPACE2 HERE REGARDLESS OF OPTIONS.
+      NSPACE2=1
 C
       IF(SCFTYP.EQ.RMC) THEN
         CALL LOCAL_SVDVVOS_RMC_SETUP1(NCOR_GET,NACT_GET)
         NSPACE2=1
         IF(CISTEP.EQ.ORMAS) NSPACE2=NSPACE
-      ELSEIF(SCFTYP.EQ.RHF) THEN
-        IF(EXTLOC.NE.RNONE) THEN
-          NSPACE=1
-          NSPACE2=1
-        ENDIF
+      ELSEIF(SCFTYP.EQ.RHF.OR.SCFTYP.EQ.ROHF) THEN
+        IF(EXTLOC.NE.RNONE) NSPACE=1
         NCOR_GET=NVVOS_NUMCOR(0,0)
         NACT_GET=L0-NCOR_GET
       ELSE
@@ -213,6 +226,9 @@ C
         STOP
       ENDIF
 C
+C     NOTE:
+C     SOME OF THESE GET PERMANENTLY CHANGED FOR VVOS IN ROUTINES BELOW...
+C     SO, BECAREFUL.
       NCORSV=NCOR_GET
       NCORTOT=NCOR_GET
       NACT=NACT_GET
@@ -223,7 +239,7 @@ C----------------------------------------------------
 C----------------------------------------------------
 C     MAKE SOME ERROR OUTS
       NERR=0
-      COMBO=CISTEP.EQ.ORMAS.OR.SCFTYP.EQ.RHF
+      COMBO=CISTEP.EQ.ORMAS.OR.SCFTYP.EQ.RHF.OR.SCFTYP.EQ.ROHF
       IF(.NOT.COMBO.AND.IVVOS.NE.0) THEN
         IF(MASWRK) WRITE(IW,9050)
         NERR=NERR+1
@@ -239,13 +255,19 @@ C     NOTE:  THIS ERROR IS AN 'ABSOLUTIST'S' ERROR.
         IF(MASWRK) WRITE(IW,9052)
         NERR=NERR+1
       ENDIF
-      IF(EXTLOC.EQ.SVD.AND.IVVOS.EQ.0) THEN
+      IF(EXTLOC.NE.RNONE.AND.IVVOS.EQ.0) THEN
         IF(MASWRK) WRITE(IW,9053)
         NERR=NERR+1
       ENDIF
       IF(EXTLOC.NE.RNONE.AND.ILOCAL.EQ.4) THEN
         IF(MASWRK) WRITE(IW,9054)
         NERR=NERR+1
+      ENDIF
+      IF(SCFTYP.EQ.RHF.OR.SCFTYP.EQ.ROHF) THEN
+        IF(IVVOS.EQ.0) THEN
+          IF(MASWRK) WRITE(IW,9055)
+          NERR=NERR+1
+        ENDIF
       ENDIF
       IF(NERR.GT.0) THEN
         CALL FLSHBF(IW)
@@ -344,6 +366,9 @@ CGARBRHF      ELSEIF(SCFTYP.EQ.RHF.AND.ISVDOP.EQ.1) THEN
 CGARBRHFC       KEEP THE ORIGINAL CLOSED-SHELL AND VIRTUALS.
 CGARBRHF        SVD_AOSCF=.TRUE.
 CGARBRHF        IF(SOME) WRITE(IW,9081)
+      ELSEIF(SCFTYP.EQ.ROHF.AND.ISVDOP.EQ.0) THEN
+        SVD_AOSCF=.TRUE.
+        IF(SOME) WRITE(IW,9081)
       ELSE
         IF(MASWRK) WRITE(IW,9090)
         CALL FLSHBF(IW)
@@ -372,12 +397,15 @@ C     OLD ACTIVE BLOCK:   NACTSV
 C     NEW ACTIVE BLOCK:   NACT-NACTSV
 C     NEW ACTIVE TOTAL:   NACTSV+NSKIP+NSKIP2
 C
+      NSKIP=0
+      NSKIP2=0
       IF(IVVOS.NE.0) THEN
         CALL LOCAL_SVDVVOS_REDIM_STEP1(
      *       SCFTYP,ISVDOP,
      *       NAT,NCORSV,NACTSV,L0,
      *       NSPACE,NSPACE_SAV,
      *       NCORTOT,NSKIP,NACT,NSKIP2,NVIR2,
+     *       NA,NB,
      *       MASWRK,IW)
         NSPACE2=NSPACE
         IF(SOME) WRITE(IW,9100) NCORTOT,NSKIP,NACTSV,NSKIP2,NVIR2
@@ -387,19 +415,6 @@ C----------------------------------------------------------------------
 C     END OF SVD-VVOS OVERHAUL:  STEP 1
 C----------------------------------------------------------------------
 C----------------------------------------------------------------------
-C
-C----------------------------------------------------
-C----------------------------------------------------
-C     SETUP ISVDOP=10 DIMENSION AFTER VVOS INFO.
-C     NOTE:  GO BACK TO THE BASIC NVVOS_NUMCOR INFO HERE
-C            SINCE VVOS IS IN MBS NUMBERS.
-      L0MBS=NVVOS_NUMCOR(0,0)
-      ISWMBS=1
-      DO I=1,NAT
-        L0MBS=L0MBS+LOCAL_NUMVAL(I,ISWMBS)
-      ENDDO
-C----------------------------------------------------
-C----------------------------------------------------
 C
 C     BEFOREHAND, DETERMINE SIZES OF ANY EXTRA WORK ARRAYS
 C     NOTE:  EXPLICITLY DETERMINE LARGEST WORKSPACE
@@ -435,8 +450,10 @@ C     A BUNCH OF ORBITAL MEMORY.
       LSVMBS = LIWRK + L2
       LIPOSMBS = LSVMBS + L1*L0MBS
 C     MORE MEMORY FOR INDEXING.
-      LILENMBS = LIPOSMBS + (NAT+1)
-      LIATMSTA2 = LILENMBS + NAT
+      LILENMBS  = LIPOSMBS + (NAT+1)
+      LIPOSCOR  = LILENMBS + NAT
+      LILENCOR  = LIPOSCOR + (NAT+1)
+      LIATMSTA2 = LILENCOR + NAT
 C     MORE MEMORY FOR ATOM ASSIGNMENTS.
       LIATMSTA = LIATMSTA2  + NSPACE2*NAT
       LEIG1SAV = LIATMSTA + NSPACE2*NAT
@@ -454,6 +471,10 @@ C----------------------------------------------------------------------
 C     SVD-VVOS OVERHAUL:  STEP 2
 C----------------------------------------------------------------------
 C----------------------------------------------------------------------
+C
+C     INITIALIZE SWITCH_ORBS VARIABLE.
+      SWITCH_ORBS=.FALSE.
+C
 C     MAKE A COPY OF THE ORIGINAL MSTA ARRAY.
 C     TEMPORARILY RESET THE MSTA ARRAY.
 C     FOREVER RESET IORBF1 ORDERINGS.
@@ -462,12 +483,19 @@ C
         CALL LOCAL_SVDVVOS_REDIM_STEP2(
      *       SCFTYP,ISVDOP,NAT,L0,
      *       ISIZE_FCCWFN,NSPACE,MSTA,X(LMSTA_SAV),
-     *       NCORTOT,NSKIP2,MASWRK,IW)
+     *       NCORTOT,NSKIP,NSKIP2,MASWRK,SOME,IW)
 C       NOTE:  SEE NOTES IN LOCAL_SVDVVOS_MOS
 C              ON POSSIBLE IORBF1 OVER-WRITES.
-        IF(SCFTYP.EQ.RMC.AND.CISTEP.EQ.ORMAS) THEN
-          CALL LOCAL_SVDVVOS_MOS(X(LVOLD),X(LVTMP),IORBF1,
-     *         L0,L1,L3,NCORSV,NCORTOT,NACTSV,NSKIP,NSKIP2,MASWRK)
+        COMBO=SCFTYP.EQ.RMC.AND.CISTEP.EQ.ORMAS
+        COMBO=COMBO.OR.SCFTYP.EQ.ROHF
+        IF(COMBO) THEN
+          CALL VICLR(X(LIWRK),1,L2)
+          CALL LOCAL_SVDVVOS_MOS(
+     *         SWITCH_ORBS,X(LIWRK),SCFTYP,IMBS,
+     *         L0,NCORSV,NCORTOT,NACTSV,NSKIP,NSKIP2,MASWRK,IW)
+          CALL DAREAD(IDAF,IODA,X(LVTMP),L3,15,0)
+          CALL REORDR(X(LVTMP),X(LIWRK),L0,L1)
+          CALL DAWRIT(IDAF,IODA,X(LVTMP),L3,15,0)
         ENDIF
       ENDIF
 C----------------------------------------------------------------------
@@ -480,7 +508,7 @@ CKEEPIVVOSC
 CKEEPIVVOSC     IF NEEDED, PRINT OUT CANONICAL MCSCF OCCUPIEDS + VVOS
 CKEEPIVVOS      IF(IVVOS.NE.0) THEN
 CKEEPIVVOS        CALL DAREAD(IDAF,IODA,X(LVTMP),L3,15,0)
-CKEEPIVVOS        WRITE(IW,9060)
+CKEEPIVVOS        IF(MASWRK) WRITE(IW,9060)
 CKEEPIVVOS        CALL PRSQL(X(LVTMP),L0,L1,L1)
 CKEEPIVVOS        GO TO 8999
 CKEEPIVVOS      ENDIF
@@ -511,7 +539,8 @@ C     SETUP KEEPER_ISVMOR.
 C
 C     SETUP VVOS AOS IF NEEDED.
 C     NOTE:  IF DIMENSION ISSUE, THEN THE WRITE STATEMENT MIGHT HELP.
-      IF(SVD_AOSCF) THEN
+      COMBO=SVD_AOSCF.OR.IVVOS.NE.0
+      IF(COMBO) THEN
 C       READ IN THE REDUCED SV OVERLAP MATRIX FROM VVOS RUN.
         IF(SOME) WRITE(IW,9200)
         CALL FLSHBF(IW)
@@ -537,6 +566,7 @@ C     MAKE THE CALLS FOR SVD-BASED ORBITALS.
      *     ISIZSVD,L0,L1,L2,L3,
      *     LIMLOW,LIMSUP,NAT,SVDAOS,
      *     ISPHER,KTYPE,KATOM,KMIN,KMAX,NSHELL,X(LWSPHER),
+     *     L0MBS,SVD_AOSCF,X(LIPOSCOR),X(LILENCOR),X(LSVMBS),
      *     SOME,MASWRK)
       CALL LOCAL_PPASVD(
      *     NCORTOT,IORBF1,X(LS2),
@@ -555,40 +585,44 @@ C     MAKE THE CALLS FOR SVD-BASED ORBITALS.
      *     ISPHER,KTYPE,KATOM,KMIN,KMAX,NSHELL,X(LWSPHER),
      *     NATMOR,MASWRK,SOME)
 C
+C     1. FINAL ORBITAL ORDER ==> FILE 527
+C     2. FINAL ATOM ORDER    ==> FILE 531
+      CALL MALMQ_REORDER1(NAT,L1,X(LEIG1),NATMOR,
+     *                    NACT,NCORTOT,KEEPER,
+     *                    SOME)
+C
 C     STASH A COPY OF THE 'TRUE' NACT.
+C     STASH A COPY OF THE 'TRUE' NACTSV FOR COMPLICATED EXTLOC RUNS.
       NACT_EXTLOC_SAV=NACT
+      NACTSV_EXTLOC_SAV=NACTSV
 C
-C     USE SCFTYP AND SETUP FOR LOCAL_PPADEN
-      IF(SCFTYP.EQ.RMC) THEN
-C       DO NOTHING.  KEEP IN THE LIST THOUGH.
-      ELSEIF(SCFTYP.EQ.RHF.AND.EXTLOC.EQ.RNONE) THEN
-C       WORKS FOR RHF AND ISVDOP=0.
-        NSKIP =NA-NCORTOT
-        NSKIP2=0
-      ELSEIF(SCFTYP.EQ.RHF.AND.EXTLOC.NE.RNONE) THEN
-        NSKIP=NA-NCORTOT
-        NSKIP2=0
-        NACT=0
-        ISWMBS=1
-        DO I=1,NAT
-          NACT=NACT+LOCAL_NUMVAL(I,ISWMBS)
-        ENDDO
-      ELSE
-        IF(MASWRK) WRITE(IW,9090)
-        CALL FLSHBF(IW)
-        CALL ABRT
-      ENDIF
-C
-C     FORM THE SVD DENSITY MATRIX.
-C     ----LATER, MIGHT PROVIDE CHOICES IF DOING NONORTHOGONAL ORBITALS.
-C     ----THE EXTLOC STATEMENTS ARE IMPORTANT
-C         AND ELIMINATE FILE CONFLICTS EVERYWHERE...
+C     OBTAIN SVD DENSITY.
+C     --NSKIP_SING MUST ALWAYS BE INITIALIZED AT THIS POINT.
+C     --ONLY ORTHOGONAL ORBITALS AT THIS POINT FOR DENSITY.
+C     --EXTLOC STATEMENTS ARE IMPORANT
+C       AND ELIMINATE FILE CONFLICTS EVERYWHERE.
+      NSKIP_SING=0
+      CALL LOCAL_SETUP_PPADEN(
+     *     IORBF1,SCFTYP,SCFTYP_TRUTH,EXTLOC,SWITCH_ORBS,
+     *     NSKIP,NSKIP2,NSKIP_SING,NACT,NACTSV,
+     *     NCORTOT,NA,NB,IMBS,L1,IDENFIL,IDENSIZ,
+     *     SOME,MASWRK,IW)
       CALL LOCAL_PPADEN(
-     *     X(LVTMP),X(LVSAV),X(LVOLD),X(LSV),
-     *     NSKIP,NSKIP2,NCORTOT,NCORSV,NACT,NACTSV,L1,L3,
-     *     NATMOR,NAT,KEEPER,SCFTYP,EXTLOC,
-     *     IVVOS,IORBF1,MASWRK)
+     *     X(LVTMP),X(LVSAV),X(LVOLD),X(LSV),X(LIWRK),
+     *     NSKIP,NSKIP2,NSKIP_SING,
+     *     NCORTOT,NCORSV,NACT,NACTSV,L1,L3,
+     *     NAT,SCFTYP,EXTLOC,
+     *     IVVOS,IORBF1,IDENFIL,IDENSIZ,
+     *     SOME,MASWRK)
+      ITMP=(NACT*NACT+NACT)/2
+      CALL LOCAL_CHECK_DENS(
+     *     X(LVTMP),ITMP,NACT,NCORTOT,NE,
+     *     MASWRK,IW)
+C
+C     RIGHT AFTER SVD DENSITY,
+C     RESTORE NACT AND NACTSV BEFORE PROCEEDING.
       NACT=NACT_EXTLOC_SAV
+      NACTSV=NACTSV_EXTLOC_SAV
 C
 C     FOR ORIENTATION DILRMO ROUTINE:
 C     LOCAL_PPADEN PUTS DENSITY ON DAF FILE 285.
@@ -599,12 +633,6 @@ C         AND ELIMINATE FILE CONFLICTS EVERYWHERE...
         CALL DAREAD(IDAF,IODA,X(LVTMP),L3,521,0)
         CALL DAWRIT(IDAF,IODA,X(LVTMP),L3,71,0)
       ENDIF
-C
-C     1. FINAL ORBITAL ORDER ==> FILE 527
-C     2. FINAL ATOM ORDER    ==> FILE 531
-      CALL MALMQ_REORDER1(NAT,L1,X(LEIG1),NATMOR,
-     *                    NACT,NCORTOT,KEEPER,
-     *                    SOME)
 C
 C----------------------------------------------------------------------
 C----------------------------------------------------------------------
@@ -617,7 +645,7 @@ C
       IF(IVVOS.NE.0) THEN
         CALL LOCAL_SVDVVOS_REDIM_STEPLAST(
      *       SCFTYP,NACT,NACTSV,NSPACE,NSPACE_SAV,ISIZE_FCCWFN,
-     *       MSTA,X(LMSTA_SAV),MASWRK,IW)
+     *       MSTA,X(LMSTA_SAV),MASWRK,SOME,IW)
       ENDIF
 C----------------------------------------------------------------------
 C----------------------------------------------------------------------
@@ -629,8 +657,10 @@ C     RELEASE ALL MEMORY FOR ATOMIC-LIKE ORBITALS.
  8999 CONTINUE
       CALL RETFM(NDAWN1)
 C
-      IF(MASWRK) WRITE(IW,9300)
-      CALL TIMIT(1)
+      IF(SOME) THEN
+        WRITE(IW,9300)
+        CALL TIMIT(1)
+      ENDIF
       RETURN
  9000 FORMAT(/5X,60(1H-)/
      *   5X,'LOCAL_LMOSVD NOW LOCALIZES ATOMIC BASIS ONTO MO SPACE.'/
@@ -651,10 +681,12 @@ C
      *        1X,'IN THE AO BASIS EARLIER IN THE CODE.',
      *       /1X,'SO, NATURAL ORBITALS CANNOT BE USED.')
  9053 FORMAT(/1X,'LOCAL_LMOSVD ERROR:',
-     *        1X,'EXTLOC=SVD RUNS MUST RUN WITH VVOS=.T.',
+     *        1X,'EXTLOC RUNS MUST RUN WITH VVOS=.T.',
      *       /1X,'SET VVOS TO TRUE IN SCF OR MCSCF GROUP.')
  9054 FORMAT(/1X,'LOCAL_LMOSVD ERROR:',
      *        1X,'LOCAL=SVD AND EXTLOC DO NOT WORK TOGETHER.')
+ 9055 FORMAT(/1X,'LOCAL_LMOSVD ERROR:',
+     *        1X,'RHF AND ROHF ALWAYS NEED VVOS=TRUE.')
 CKEEPIVVOS 9060 FORMAT(//10X,'MCSCF OCCUPIEDS+VVOS LOCALIZED ORBITALS')
  9070 FORMAT(/1X,'CHECKING OUT ISVDOP OPTIONS.')
  9071 FORMAT(1X,'USING REGULAR SVD OPTION.')
@@ -679,11 +711,12 @@ CKEEPIVVOS 9060 FORMAT(//10X,'MCSCF OCCUPIEDS+VVOS LOCALIZED ORBITALS')
      *      /1X,'FOR MORE THAN MBS ORBITALS,',
      *       1X,'USE SVD TO AO BASIS SET FOR THE EXTRA ORBITALS.')
  9081 FORMAT(1X,'USING SVD_AOSCF OPTION:  ',
-     *      /1X,'FOR RHF OCCUPIEDS, USE THE TRUE AOS FROM VVOS.',
-     *      /1X,'FOR RHF EXTERNALS,',
+     *      /1X,'FOR OCCUPIEDS, USE THE TRUE AOS FROM VVOS.',
+     *      /1X,'FOR EXTERNALS,',
      *       1X,'USE SVD TO AO BASIS SET FOR THE EXTRA ORBITALS.')
  9085 FORMAT(1X,'USING SVD AOS AWAY FROM OTHER ATOMS OPTION:  ')
- 9090 FORMAT(1X,'THIS OPTION DOES NOT EXIST IN THE CODE.')
+ 9090 FORMAT(/1X,'LOCAL_LMOSVD ERROR:',
+     *       /1X,'THIS OPTION DOES NOT EXIST IN THE CODE.')
  9100 FORMAT(/1X,'RE-DEFINING ORBITAL SIZES FOR VVOS RUN...'/
      *       /1X,'CHEMICAL     CORE    ORBTIALS =',I5,
      *       /1X,'ORIG. FILLED VALENCE ORBITALS =',I5,
@@ -1088,13 +1121,14 @@ C---------------------------------------------------
       LOGICAL ORIENT,ORIKIN,ORMFUL
       DOUBLE PRECISION :: ZAN,C,BNDDEN
       INTEGER IR,IW,IP,IS,IPK,IDAF,NAV,IODA
-      INTEGER MXATM,NAT,ICH,MUL,NUM,NQMT,NEX,NA,NB,IAN
-      INTEGER NATMOR,ISVMOR,ISVDOP,MXAO
+      INTEGER NAT,ICH,MUL,NUM,NQMT,NEX,NA,NB,IAN
+      INTEGER NATMOR,ISVMOR,ISVDOP
       DOUBLE PRECISION :: EXTLOC,EREFATM
       INTEGER ME,MASTER,NPROC,IBTYP,IPTIM
       LOGICAL GOPARR,DSKWRK,MASWRK
       INTEGER IVVOS,NVVOS
 C---------------------------------------------------
+      INTEGER MXATM,MXAO
       PARAMETER (MXATM=2000, MXAO=8192)
 C---------------------------------------------------
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
@@ -1242,6 +1276,17 @@ C>                     e.g. f is a shell.
 C> @param WSPHER       will hold the atomic Cartesian-to-Spherical
 C>                     transformation matrix.
 C>                     It is not normalized at the start.
+C> @param L0MBS        is the dimension of the minimal basis set number of
+C>                     orbitals.  L0MBS is derived from NCORTOT+LOCAL_NUMVAL.
+C> @param SVD_AOSCF    is an option to use the AOs from VVOS
+C>                     with high basis set quality.
+C> @param IPOSCOR      denotes the integer array that holds the starting
+C>                     position for the 1st CORE AO on a given atom.
+C> @param ILENCOR      denotes the integer array that holds the number of
+C>                     CORE AOs on a given atom.
+C> @param SVMBS        is an array that holds the overlap to the true AOs
+C>                     from the VVOS run.
+C>                     This overlap has a dimension of L1xL0MBS.
 C> @param SOME   is true for master process with nprint not equal -5.
 c> @param MASWRK indicates the master process.
 c> @see   LOCAL_PPASVD
@@ -1253,11 +1298,12 @@ c> @see   LOCAL_PPASVD
      *           ISIZSVD,L0,L1,L2,L3,
      *           LIMLOW,LIMSUP,NAT,SVDAOS,
      *           ISPHER,KTYPE,KATOM,KMIN,KMAX,NSHELL,WSPHER,
+     *           L0MBS,SVD_AOSCF,IPOSCOR,ILENCOR,SVMBS,
      *           SOME,MASWRK)
 C-----------------------------------------------------------------------
       IMPLICIT NONE
 C     VARS
-      LOGICAL SOME,MASWRK,SVDAOS
+      LOGICAL SOME,MASWRK,SVDAOS,SVD_AOSCF
       INTEGER MXATM
       PARAMETER (MXATM=2000)
       DOUBLE PRECISION :: ONE,TOL
@@ -1265,8 +1311,8 @@ C     VARS
      *        NVVOS_NUMCOR
       PARAMETER (ONE=1.0D+00, TOL=1.0D-06)
       INTEGER I,IATM1,IBAS1,IBAS2,IERR2,IERR3,IHACT,
-     *        ILTH_FIX,ILTH,IMO,IORBF1,ISIZSVD,J,L0,L1,L2,L3,
-     *        NCORTOT,NUMCOR1,IJ2,ITMP
+     *        ILTH_FIX,ILTH_SAV,ILTH,IMO,IORBF1,ISIZSVD,J,L0,L1,L2,L3,
+     *        L0MBS,NCORTOT,NUMCOR1,IJ2,ITMP,IPOS
 C---------SPHERICAL HARMONIC STUFF---------------------
       LOGICAL IGNORE_SPHER
       INTEGER ISPHER,NSHELL
@@ -1283,13 +1329,16 @@ C-----------------------------------------------------------------------
      *       UVEC(L1,L1),EIG(L1),VTVEC(L0,L0),
      *       WRKSVD(ISIZSVD),
      *       VOLD(L1,L1),VTMP(L1,L1),VSAV(L1,L1),
-     *       SV(L1,L1),SAOMO(L1,L1)
-      INTEGER IWRK(L2)
+     *       SV(L1,L1),SAOMO(L1,L1),SVMBS(L1,L0MBS)
+      INTEGER IPOSCOR(NAT+1),ILENCOR(NAT),IWRK(L2)
 C
 C     -------------------------------------------------------
 C     SEE LOCAL_PPASVD ROUTINE FOR ANALOGOUS COMMENTS.
 C     -------------------------------------------------------
 C
+C
+C     SET UP THE IPOSCOR AND ILENCOR ARRAYS.
+      CALL LOCAL_VVOS_ORB_RANGE_CORE(IPOSCOR,ILENCOR,NAT)
 C
 C     READ IN THE DESIRED ORBITALS.
       CALL DAREAD(IDAF,IODA,VOLD,L3,IORBF1,0)
@@ -1314,6 +1363,7 @@ C       SET UP BASIS DIMENSIONS AND OVERLAP.
      *       LIMLOW,LIMSUP,IATM1,NAT,L2,
      *       S2,S,
      *       IBAS1,IBAS2,ILTH)
+        ILTH_SAV=ILTH
 C
 C-------------BEGIN: DEAL WITH SPHERICAL ISSUES1-------------------
         IGNORE_SPHER=.FALSE.
@@ -1363,23 +1413,33 @@ C       DO MATVEC TO S_IATM1**(-1/2)
 C-------------END: ELSE FROM DEAL WITH SPHERICAL ISSUES1---------------------
 C
 C       SAOMO= OVERLAP MATRIX B/T CORE MO AND AOS ON IATM1.
-        CALL VCLR(UVEC,1,L3)
-        DO IMO=1,NCORTOT
-          CALL DCOPY(ILTH,SV(IBAS1,IMO),1,UVEC(1,IMO),1)
-        ENDDO
         CALL VCLR(SAOMO,1,L3)
-        CALL MRARBR(VTMP,L1,ILTH_FIX,ILTH,UVEC,L1,NCORTOT,SAOMO,L1)
 C
 C---------------------------------------------------------------
-C       IMPLEMENT SVDAOS OR SVDPRJ OPTIONS.
+C       IMPLEMENT SAOMO OPTIONS.
 C---------------------------------------------------------------
-        IF(SVDAOS) THEN
+        IF(SVD_AOSCF) THEN
+          IPOS=IPOSCOR(IATM1)
+          ITMP=ILENCOR(IATM1)
+          CALL MRTRBR(SVMBS(1,IPOS),L1,L1,ITMP,
+     *                VOLD(1,1),L1,NCORTOT,SAOMO,L1)
+          ILTH_FIX=ITMP
+C
+          IF(SOME) WRITE(IW,9002) ILTH_FIX,IATM1
+        ELSEIF(SVDAOS) THEN
           DO IMO=1,NCORTOT
             CALL DCOPY(ILTH,SV(IBAS1,IMO),1,SAOMO(1,IMO),1)
           ENDDO
+        ELSE
+          CALL VCLR(UVEC,1,L3)
+          DO IMO=1,NCORTOT
+            CALL DCOPY(ILTH,SV(IBAS1,IMO),1,UVEC(1,IMO),1)
+          ENDDO
+          CALL VCLR(SAOMO,1,L3)
+          CALL MRARBR(VTMP,L1,ILTH_FIX,ILTH,UVEC,L1,NCORTOT,SAOMO,L1)
         ENDIF
 C---------------------------------------------------------------
-C       END OF IMPLEMENT SVDAOS OR SVDPRJ OPTIONS.
+C       END OF IMPLEMENT SAOMO OPTIONS.
 C---------------------------------------------------------------
 C
 C       PERFORM SVD FOR IATM1
@@ -1390,6 +1450,9 @@ C       PERFORM SVD FOR IATM1
      *              ILTH_FIX,NCORTOT,SAOMO,L1,EIG,
      *              UVEC,L1,VTVEC,L0,
      *              WRKSVD,ISIZSVD,INFO)
+C
+C       IMMEDIATELY RESET ILTH_FIX
+        ILTH_FIX=ILTH_SAV
 C
 C       FORM TRANSFORMATION MATRIX VTVEC-TRANS FOR THE NEWLY PROJECTED MOS.
         CALL TRPOSQ(VTVEC,L0)
@@ -1500,6 +1563,8 @@ C     PERFORM FINAL ERROR OUTS.
       ENDIF
 C
       RETURN
+ 9002 FORMAT(1X,'SVD_AOSCF OPTION FINDS',I4,' CORE ORBITALS',
+     *       1X,'FOR ATOM NUMBER=',I4)
  9003 FORMAT(1X,'*** ERROR IN LOCAL_PPASVDCORE ROUTINE.'/
      *       1X,'ERROR OCCURS FOR GLDIAG CALL.')
  9004 FORMAT(1X,'*** ERROR IN LOCAL_PPASVDCORE ROUTINE.'/
@@ -1657,7 +1722,7 @@ C     VARS
       INTEGER MXATM
       PARAMETER (MXATM=2000)
       DOUBLE PRECISION :: ONE,TOL,TOL2,TMP,TMP2,
-     *                    SCFTYP,RHF,RMC
+     *                    SCFTYP,RHF,ROHF,RMC
       PARAMETER (ONE=1.0D+00)
       PARAMETER (TOL=1.0D-06, TOL2=1.0D-08)
       INTEGER NAT,LIMLOW(MXATM),LIMSUP(MXATM)
@@ -1698,6 +1763,7 @@ C
 C     DEFINE SOME DATA STUFF
       DATA RMC/8HMCSCF   /
       DATA RHF/8HRHF     /
+      DATA ROHF/8HROHF    /
 C
 C     INITIALIZE ALL POSSIBLE IERR VARS.
       IERR0=0
@@ -1736,7 +1802,7 @@ C
 C     A FEW LAST CHECKS JUST TO BE SURE.
 C     NOTE:  THIS NEXT CHECK IS IMPORTANT.  PLEASE KEEP IT.
       IF(KEEPER) THEN
-        IF(MASWRK) WRITE(IW,9000)
+        IF(SOME) WRITE(IW,9000)
         IERR0=0
         DO I=1,NSPACE_LIMIT
           DO J=1,NAT
@@ -2102,10 +2168,21 @@ C           SO, WE MIMIC AS IF WE HAD 4 VAL ORBS FOR CARBON.
             ILTH_FIX=ITMP
 C-----------END OF NEXT SECTION -----------------------------------
           ELSEIF(SVD_AOSCF) THEN
-            COMBO =NACT.EQ.L0-NCORTOT
-            COMBO2=NACT.EQ.L0MBS-NCORTOT
-            IF(COMBO.AND.ISPACE.EQ.1.OR.COMBO2) THEN
-              IF(MASWRK.AND.IATM1.EQ.1) WRITE(IW,9038) ISPACE
+            COMBO =NACT.EQ.L0-NCORTOT.AND.ISPACE.EQ.1
+            COMBO =COMBO.OR.NACT.EQ.L0MBS-NCORTOT
+            COMBO2=NACT.EQ.L0-NCORTOT.AND.ISPACE.EQ.2
+ccccccccccccc
+CKEEPROHF        uncomment these lines in order to
+CKEEPROHF        make the singly occupied space
+CKEEPROHF        a separate 'active' ormas group.
+CKEEPROHF        search on this for other places to uncomment...
+CKEEPROHF            IF(SCFTYP.EQ.ROHF) THEN
+CKEEPROHF              COMBO =ISPACE.EQ.1.OR.ISPACE.EQ.2
+CKEEPROHF              COMBO2=ISPACE.EQ.3
+CKEEPROHF            ENDIF
+ccccccccccccc
+            IF(COMBO) THEN
+              IF(SOME.AND.IATM1.EQ.1) WRITE(IW,9038) ISPACE
 C
 C             E.G. FOR CARBON... FORM (4,L1)*(L1,NACTFIN) MATRIX.
 C             THE INNER CONTRACTION IS NOW ACROSS ALL AO FXNS.
@@ -2121,8 +2198,8 @@ C
 C             NOTE:  THE USE OF ILTH_SAV ABOVE.
               ILTH=ITMP
               ILTH_FIX=ITMP
-            ELSEIF(COMBO.AND.ISPACE.EQ.2) THEN
-              IF(MASWRK.AND.IATM1.EQ.1) WRITE(IW,9039) ISPACE
+            ELSEIF(COMBO2) THEN
+              IF(SOME.AND.IATM1.EQ.1) WRITE(IW,9039) ISPACE
               III=1
               DO JJJ=JORB1,JORB2
                 CALL DCOPY(ILTH,SV(IBAS1,JJJ),1,UVEC(1,III),1)
@@ -2162,7 +2239,7 @@ C
 C         PRINT EVALUES FOR EACH SVD.
 C         NOTE:  FOR SVDEXTORBSNUM OPTION, THIS PIECE WILL BE MEANINGLESS
 C                FOR THE TOP-MOST EVALUES.
-          IF(MASWRK) THEN
+          IF(SOME) THEN
             IF(ISPACE.EQ.1) WRITE(IW,9045) IATM1
             DO I=1,NACTFIN
               WRITE(IW,9050) ISPACE,I,EIG(I)
@@ -2292,7 +2369,7 @@ C     PLEASE SEE THE VARIOUS RESTRICTIONS IN LOCAL_PPAERR.
         CALL LOCAL_SVDEXTORBSNUM_CASE(
      *       NACT,L0,NSPACE,NAT,
      *       NATMOR,IATMSTA,ISVMOR,EIGSAV,VTVECSAV,
-     *       MASWRK,IW)
+     *       SOME,IW)
       ENDIF
 
 C
@@ -2323,7 +2400,7 @@ C       RE-DEFINE NATMOR ARRAY.
       ENDIF
 C
 C     PRINT OFF NEW ORBITAL NUMBERS ON EACH ATOM.
-      IF(MASWRK) THEN
+      IF(SOME) THEN
         WRITE(IW,9054)
         IF(SVDEXTORBSNUM) WRITE(IW,9055)
         DO IATM1=1,NAT
@@ -2357,7 +2434,7 @@ C     RECHECK ISVMOR THROUGH LOCAL_NUMVAL INTEGER FUNCTION.
         IERR5=0
         IF(ITMP.NE.NACT) IERR5=1
         IF(IERR5.GT.0) GO TO 8999
-      ELSEIF(SCFTYP.EQ.RHF) THEN
+      ELSEIF(SCFTYP.EQ.RHF.OR.SCFTYP.EQ.ROHF) THEN
 C       NO CHECK HERE.
 C       IF CHECK IS DESIRED, ADD NEW ARGUMENTS TO LOCAL_NUMVAL.
       ELSE
@@ -2460,7 +2537,7 @@ C     --PERFORM ORMAS CHECKS ON ORBITAL TRANSFORMATION.
 C     --WRITE NONORTHOG. ORBITAL TRANSFORMATION OUT TO FILE 523.
 C     --GET THE NONORTHOG. ORBITALS.
 C     --WRITE NONORTHOG. ORBITALS OUT TO FILE 522
-      IF(KEEPER.AND.MASWRK) WRITE(IW,9060)
+      IF(KEEPER.AND.SOME) WRITE(IW,9060)
       DO I=NCORTOT+NACT+1,L0
         VSAV(I,I)=1.0D+00
       ENDDO
@@ -2485,7 +2562,7 @@ C     --WRITE NONORTHOG. ORBITALS OUT TO FILE 522
       CALL DAWRIT(IDAF,IODA,VTMP,L3,522,0)
 C
 C     PRINT OFF THE NONORTHOGONAL ORBITALS TO .LOG FILE NOW.
-      IF(MASWRK) THEN
+      IF(SOME) THEN
         WRITE(IW,9069)
         CALL PRSQL(VTMP,NCORTOT+NACT,L1,L1)
       ENDIF
@@ -2595,7 +2672,7 @@ C
 C
 C     PRINT OUT FINAL ORIENTED ORBITALS TO GAMESS .LOG FILE.
 C-----PRINT OUT CORES+VALENCE ORBITALS ONLY.
-      IF(MASWRK) THEN
+      IF(SOME) THEN
         WRITE(IW,9070)
         CALL PRSQL(VTMP,NCORTOT+NACT,L1,L1)
       ENDIF
@@ -2741,77 +2818,260 @@ C
  9080 FORMAT('PPASVD LOCALIZED ORBITALS'/' $VEC')
  9085 FORMAT(' $END')
       END
+C*MODULE LOCAL   *DECK LOCAL_SETUP_PPADEN
+C> @brief      Sets up SVD densities for different runs.
+C>
+C> @author     Aaron West
+C>             -July 13, 2013
+C>
+C> @details    Sets up SVD densities for different runs.
+C>             The set up depends on many options:
+C>             VVOs,orbital swappings,scftyp,extloc,etc.
+C>
+C> @param IORBF1        denotes the initial orbital file.
+C> @param SCFTYP        denotes RHF,RMC,ROHF,etc.
+C> @param SCFTYP_TRUTH  denotes the initial SCFTYP setting.
+C> @param EXTLOC        defines the external orbital procedure (if any).
+C> @param SWITCH_ORBS   indicates if the VVOs orbital group was moved.
+C> @param NSKIP         denotes the number of valence doubly occupieds.
+C> @param NSKIP2        denotes the number of orbitals to skip over
+C>                      (if any) when the VVOs were shifted.
+C> @param NSKIP_SING    denotes the number of singly occupied orbitals
+C>                      (if any).
+C> @param NACT          denotes the number of localized valence orbitals.
+C>                      This variable controls resultant file sizes
+C>                      for different kinds of runs.
+C> @param NACTSV        is often the total number of MCSCF active orbitals
+C>                      before VVOS dimensional changes.
+C> @param NCORTOT       denotes the total number of chemical core orbitals.
+C> @param NA            denotes the core+valence occupieds for some runs.
+C>                      e.g. RHF,ROHF
+C> @param NB            denotes the total core+valence doubly occupieds.
+C> @param IMBS          is the total number of MBS valence orbitals.
+C> @param L1            is the total number of AOs for the molecule.
+C> @param IDENFIL       indicates the DAF file that holds the density.
+C> @param IDENSIZ       indicates the size of the file read.
+C> @param SOME          is true for master process with nprint not equal -5.
+C> @param MASWRK        indicates the master process.
+C> @param IW            indicates write out to the log file.
+      SUBROUTINE LOCAL_SETUP_PPADEN(
+     *           IORBF1,SCFTYP,SCFTYP_TRUTH,EXTLOC,SWITCH_ORBS,
+     *           NSKIP,NSKIP2,NSKIP_SING,NACT,NACTSV,
+     *           NCORTOT,NA,NB,IMBS,L1,IDENFIL,IDENSIZ,
+     *           SOME,MASWRK,IW)
+      IMPLICIT NONE
+      LOGICAL SOME,MASWRK,SWITCH_ORBS
+      DOUBLE PRECISION :: SCFTYP,SCFTYP_TRUTH,EXTLOC
+      INTEGER IORBF1,NSKIP,NSKIP2,NSKIP_SING,NACT,NACTSV,
+     *        NCORTOT,NA,NB,IMBS,L1,
+     *        IW
+C
+      DOUBLE PRECISION :: RHF,RMC,ROHF,RNONE,SVD
+      INTEGER IDENFIL,IDENSIZ,NACTSV2,ITMP,ITMP2
+C
+C     DATA STUFF
+      DATA RHF/8HRHF     /
+      DATA RMC/8HMCSCF   /
+      DATA ROHF/8HROHF    /
+      DATA RNONE/8HNONE    /
+      DATA SVD/8HSVD     /
+C
+C     INITIALIZE IDENSIZ AND IDENFIL
+      IDENFIL=0
+      IDENSIZ=0
+C
+C     ALL EXTLOC RUNS FAKED OUT TO BE SVD RUNS.
+      IF(EXTLOC.NE.RNONE.AND.EXTLOC.NE.SVD) THEN
+        IF(MASWRK) WRITE(IW,9001)
+        CALL FLSHBF(IW)
+        CALL ABRT
+      ENDIF
+C
+C     LONG PASSAGE TO SET UP DENSITY,ETC, FOR DIFFERENT KIND OF RUNS.
+      IF(SCFTYP.EQ.RMC.AND.EXTLOC.EQ.RNONE) THEN
+C       DO NOTHING FOR NSKIP STUFF.
+        IF(IORBF1.EQ.15) THEN
+          IF(SOME) WRITE(IW,9010)
+C         ALWAYS PUT FILE DEFS LAST.
+          IDENFIL=320
+          NACTSV2=(NACTSV*NACTSV+NACTSV)/2
+          IDENSIZ=NACTSV2
+        ELSEIF(IORBF1.EQ.19) THEN
+          IF(SOME) WRITE(IW,9020)
+C         ALWAYS PUT FILE DEFS LAST.
+          IDENFIL=19
+          IDENSIZ=L1
+        ELSE
+          IF(MASWRK) WRITE(IW,9030)
+          IF(MASWRK) WRITE(IW,9500)
+          CALL FLSHBF(IW)
+          CALL ABRT
+        ENDIF
+      ELSEIF(SCFTYP.EQ.RHF.AND.EXTLOC.EQ.RNONE.AND.IORBF1.EQ.15) THEN
+        IF(SOME) WRITE(IW,9040)
+C       WORKS FOR RHF AND ISVDOP=0.
+        NSKIP =NA-NCORTOT
+        NSKIP2=0
+      ELSEIF(SCFTYP.EQ.RHF.AND.EXTLOC.NE.RNONE.AND.IORBF1.EQ.15) THEN
+        IF(SCFTYP_TRUTH.EQ.RHF) THEN
+          IF(SOME) WRITE(IW,9040)
+          NSKIP=NA-NCORTOT
+          NSKIP2=0
+          NACT=IMBS
+        ELSEIF(SCFTYP_TRUTH.EQ.RMC) THEN
+          IF(SOME) WRITE(IW,9050)
+          CALL LOCAL_SVDVVOS_RMC_SETUP1(ITMP,ITMP2)
+          NSKIP=ITMP-NCORTOT
+          NACTSV=ITMP2
+          NSKIP2=0
+C         ALWAYS PUT FILE DEFS LAST.
+          IDENFIL=320
+          NACTSV2=(NACTSV*NACTSV+NACTSV)/2
+          IDENSIZ=NACTSV2
+        ELSE
+          IF(MASWRK) WRITE(IW,9500)
+          CALL FLSHBF(IW)
+          CALL ABRT
+        ENDIF
+      ELSEIF(SCFTYP.EQ.ROHF.AND.EXTLOC.EQ.RNONE.AND.IORBF1.EQ.15) THEN
+        IF(SOME) WRITE(IW,9060)
+        NSKIP=NB-NCORTOT
+        NSKIP2 =IMBS-(NA-NCORTOT)
+        NSKIP_SING=IMBS-NSKIP-NSKIP2
+      ELSEIF(SCFTYP.EQ.ROHF.AND.EXTLOC.NE.RNONE.AND.IORBF1.EQ.15) THEN
+        IF(SOME) WRITE(IW,9060)
+        NSKIP=NB-NCORTOT
+        NSKIP2 =IMBS-(NA-NCORTOT)
+        NSKIP_SING=IMBS-NSKIP-NSKIP2
+        NACT=IMBS
+      ELSE
+        IF(MASWRK) WRITE(IW,9500)
+        CALL FLSHBF(IW)
+        CALL ABRT
+      ENDIF
+C     END OF LONG PASSAGE TO SET UP DENSITY FOR DIFFERENT KINDS OF RUNS.
+C
+C
+C
+C     ERROR OUT FOR SWITCH_ORBS
+C     --IF SWITCH_ORBS IS TRUE,
+C       THE THE VVOS ORBITALS WERE RE-POSITIONED.
+      IF(SWITCH_ORBS.AND.NSKIP2.EQ.0) THEN
+        IF(MASWRK) WRITE(IW,9200)
+        CALL FLSHBF(IW)
+        CALL ABRT
+      ENDIF
+      IF(.NOT.SWITCH_ORBS.AND.NSKIP2.NE.0) THEN
+        IF(MASWRK) WRITE(IW,9210)
+        CALL FLSHBF(IW)
+        CALL ABRT
+      ENDIF
+C
+      RETURN
+ 9001 FORMAT(/1X,'LOCAL_SETUP_PPADEN ERROR:',
+     *       /1X,'RE-WORK EXTLOC FOR NO FAKING SVD...')
+ 9010 FORMAT(/1X,'LOCAL_SETUP_PPADEN:  STARTING WITH CANONICAL ORBITAL',
+     *        1X,'DENSITY FROM DAF FILE 320.')
+ 9020 FORMAT(/1X,'LOCAL_SETUP_PPADEN:  STARTING WITH NATURAL ORBITAL',
+     *        1X,'DENSITY FROM DAF FILE 21.')
+ 9030 FORMAT(/1X,'LOCAL_SETUP_PPADEN:  IORBF1 ORBITAL CHOICE HAS NO',
+     *        1X,'DENSITY FILE PROGRAMED.  PLEASE ADD ONE.')
+ 9040 FORMAT(/1X,'LOCAL_SETUP_PPADEN:  STARTING WITH RHF DENSITY.')
+ 9050 FORMAT(/1X,'LOCAL_SETUP_PPADEN:',
+     *       /1X,'THIS RHF EXTLOC RUN STARTED WITH MCSCF.',
+     *       /1X,'SO, A DENSITY MATRIX MUST BE PICKED UP.')
+ 9060 FORMAT(/1X,'LOCAL_SETUP_PPADEN:  STARTING WITH ROHF DENSITY.')
+ 9200 FORMAT(/1X,'LOCAL_SETUP_PPADEN ERROR:',
+     *       /1X,'THIS RUN MOVED THE VVOS ORBITAL GROUP.',
+     *        1X,'HOWEVER, NSKIP2 EQUALS 0.',
+     *       /1X,'THIS COMBINATION IS PROBABLY NOT POSSIBLE.')
+ 9210 FORMAT(/1X,'LOCAL_SETUP_PPADEN ERROR:',
+     *       /1X,'THIS RUN DID NOT MOVE THE VVOS ORBITAL GROUP.',
+     *        1X,'HOWEVER, NSKIP2 IS GREATER THAN 0.',
+     *       /1X,'THIS COMBINATION IS PROBABLY NOT POSSIBLE.')
+ 9500 FORMAT(/1X,'LOCAL_SETUP_PPADEN ERROR:',
+     *       /1X,'THIS OPTION DOES NOT EXIST IN THE CODE.')
+      END
 C*MODULE LOCAL   *DECK LOCAL_PPADEN
-c> @brief      Routine forms density in orthogonal quasi-atomic MO basis.
-c>
-c> @author     Aaron West and Klaus Ruedenberg
-c>             -November 4, 2012
-c>
-c> @details    Routine forms density in orthogonal quasi-atomic MO basis.
-c>             The density of the canonical orbitals in daf dict. file 15
-c>             is transformed over to the orthogonal quasi-atomic MO basis.
-c>             Please also see MALMQ_DEN for any information
-c>             on orbital re-ordering.
-c>             Special note:  NATMOR array must be correct to get out
-c>                            the right atomic valence orbital populations.
-c>                            I've finally nailed the automatic versus hand-select
-c>                            orbitals issue here.
-c>                            If you care, take a look at the bottom of
-c>                            local_ppaerr routine.
+C> @brief      Routine forms density in orthogonal quasi-atomic MO basis.
+C>
+C> @author     Aaron West and Klaus Ruedenberg
+C>             -November 4, 2012
+C>
+C> @details    Routine forms density in orthogonal quasi-atomic MO basis.
+C>             The density of the canonical orbitals in daf dict. file 15
+C>             is transformed over to the orthogonal quasi-atomic MO basis.
+C>             Please also see MALMQ_DEN for any information
+C>             on orbital re-ordering.
+C>             Special note:
+C>             NATMOR array must be correct to get out
+C>             the right atomic valence orbital populations.
+C>             I've finally nailed the automatic versus hand-select
+C>             orbitals issue here.
+C>             If you care, take a look at the bottom of
+C>             local_ppaerr routine.
 C>
 C> @date January 19, 2013-Aaron West
 C> -Re-worked for VVOS runs.
 C>
-c> @param VTMP holds the overall orthogonal orbital transformation.
-c> @param DEN contains the original density in the canonical MO basis.
-c> @param DEN2 will hold the transformed density.
-c> @param SCR is workspace for the transformation.
-c> @param NSKIP  indicates how many doubly occupieds to skip over
-c>               for VVOS run.
-c> @param NSKIP2 indicates how many virtuals to re-assign to active orbitals
-c>               for VVOS run.
-c> @param NCORTOT is the total number of MCSCF core orbitals.
-c>        For VVOS run, it is adjusted.
-c> @param NCORSV is the total number of MCSCF core orbitals used
-c>        for initial mcscf calculation.
-c> @param NACT is the total number of MCSCF active oribtals.
-c> @param NACTSV is the total number of MCSCF active orbitals
-c>               before VVOS dimensional changes.
-c> @param L1 is the length of the AO coefficients.
-c> @param L3 is the square of L1.
-C> @param NATMOR is the user input array that creates a correspondence
-C>               between an oribital and which atom it resides on.
-C> @param NAT    is the number of atoms.
-C> @param KEEPER is a logical that equals true when
-C>               cistep=ormas and nspace>1 and ormful=false.
-C> @param SCFTYP is wave function type from the common.
-C> @param EXTLOC defines the external orbital procedure (if any).
-C>               Here, ext. orbs. means outside of the typical
-C>                     mcscf starting active orbitals.
-C> @param IVVOS        equals 1 indicates a VVOS run.
-C>                     At this point, running VVOS orbitals through SVD.
-c> @param IORBF1 indicates daf dict file with starting orbitals
-c>               from which the localized orbitals are formed.
-c> @param MASWRK indicates master process.
+C> @date July 13, 2013-Aaron West
+C> -Re-worked with the addition of setup_ppaden.
+C>  Also, made some simplifications after more experience.
+C>
+C> @param VTMP       holds the overall orthogonal
+C>                   orbital transformation.
+C> @param DEN        contains the original density in the
+C>                   canonical MO basis.
+C> @param DEN2       will hold the transformed density.
+C> @param SCR        is workspace for the transformation.
+C> @param IWRK       is integer scratch space.
+C> @param NSKIP      indicates how many doubly occupieds to
+C>                   skip over for VVOS run.
+C> @param NSKIP2     indicates how many virtuals to re-assign to
+C>                   active orbitals for VVOS run.
+C> @param NSKIP_SING indicates how many singly occupieds. e.g. ROHF.
+C> @param NCORTOT    is the total number of MCSCF core orbitals.
+C>                   For VVOS run, it is adjusted.
+C> @param NCORSV     is the total number of MCSCF core orbitals used
+C>                   for initial mcscf calculation.
+C> @param NACT       is the total number of MCSCF active oribtals.
+C> @param NACTSV     is often the total number of MCSCF active orbitals
+C>                   before VVOS dimensional changes.
+C> @param L1         is the length of the AO coefficients.
+C> @param L3         is the square of L1.
+C> @param NAT        is the number of atoms.
+C> @param SCFTYP     is wave function type from the common.
+C> @param EXTLOC     defines the external orbital procedure (if any).
+C> @param IVVOS      equals 1 indicates a VVOS run.
+C>                   At this point, running VVOS orbitals through SVD.
+C> @param IORBF1     indicates daf dict file with starting orbitals
+C> @param IDENFIL    indicates the DAF file that holds the density.
+C> @param IDENSIZ    indicates the size of the file read.
+C>                   from which the localized orbitals are formed.
+C> @param SOME       is true for master process with
+C>                   nprint not equal -5.
+C> @param MASWRK     indicates master process.
       SUBROUTINE LOCAL_PPADEN(
-     *           VTMP,DEN,DEN2,SCR,
-     *           NSKIP,NSKIP2,NCORTOT,NCORSV,NACT,NACTSV,L1,L3,
-     *           NATMOR,NAT,KEEPER,SCFTYP,EXTLOC,
-     *           IVVOS,IORBF1,MASWRK)
+     *           VTMP,DEN,DEN2,SCR,IWRK,
+     *           NSKIP,NSKIP2,NSKIP_SING,
+     *           NCORTOT,NCORSV,NACT,NACTSV,L1,L3,
+     *           NAT,SCFTYP,EXTLOC,
+     *           IVVOS,IORBF1,IDENFIL,IDENSIZ,
+     *           SOME,MASWRK)
 C-----------------------------------------------------------------------
       IMPLICIT NONE
 C     VARS
-      LOGICAL KEEPER,MASWRK
+      LOGICAL SOME,MASWRK
       DOUBLE PRECISION ::
-     *       TWO,ATSUM,ATSUM2,TOLDEN,TMP,
-     *       SCFTYP,EXTLOC,RHF,RMC,SVD,RNONE
-      PARAMETER (TWO=2.0D+00,TOLDEN=0.1D+00)
+     *       ONE,TWO,ATSUM,ATSUM2,TOLDEN,TMP,
+     *       SCFTYP,EXTLOC,RMC,RNONE
+      PARAMETER (ONE=1.0D+00,TWO=2.0D+00,TOLDEN=0.1D+00)
       INTEGER L1,L3,NCORTOT,NCORSV,
      *              NACT,NACT2,
-     *              NACTSV,NACTSV2,NSKIP,NSKIP2,
+     *              NACTSV,NACTSV2,NSKIP,NSKIP2,NSKIP_SING,
      *        IPOS,IJ,IJ2,I,J,I2,J2,IVVOS,IORBF1,NAT,
-     *        ITMP1,ITMP2
-      INTEGER LOCAL_NUMVAL,NATMOR(L1)
+     *        IDENFIL,IDENSIZ
+      INTEGER IWRK(L1)
 C     NEW CODING STANDARDS VARS
       INTEGER IR,IW,IP,IS,IPK,IDAF,NAV,IODA
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
@@ -2820,8 +3080,6 @@ C----------------------------------------------------------------------
      *       VTMP(L1,L1),DEN(L3),DEN2(L3),SCR(L3)
 C----------------------------------------------------------------------
       DATA RMC/8HMCSCF   /
-      DATA RHF/8HRHF     /
-      DATA SVD/8HSVD     /
       DATA RNONE/8HNONE    /
 C----------------------------------------------------------------------
 C
@@ -2829,10 +3087,6 @@ C     DAF FILE  68 CONTAINS THE DENSITY IN THE CANONICAL MO BASIS.
 C     DAF FILE 320 CONTAINS THE DENSITY IN THE CANONICAL MO BASIS
 C                  OVER ACTIVE ORBITALS
 C     DAF FILE  21 CONTAINS NO DENSITIES IN THE ACT BLOCK.
-C
-C     NOTES:  NACTSV IS THE DIMENSION OF ACTIVE SPACE ON DAF FILES.
-C             FOR NO VVOS, NACT IS THE SAME DIMENSION.
-C             FOR VVOS,    NACT IS A LARGER DIMENSION.
 C
 C     DEFINE SOME NEEDED DIMENSIONS.
       NACT2 = (NACT*NACT+NACT)/2
@@ -2844,14 +3098,20 @@ C     CLEAR OUT SOME ARRAYS
       CALL VCLR(SCR,1,L3)
 C
 C     READ IN THE DENSITY
-      IF(EXTLOC.EQ.RNONE) THEN
-ccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-      IF(SCFTYP.EQ.RMC.AND.IORBF1.EQ.15) THEN
-        IF(MASWRK) WRITE(IW,9001)
-        CALL DAREAD(IDAF,IODA,DEN,NACTSV2,320,0)
-      ELSEIF(SCFTYP.EQ.RMC.AND.IORBF1.EQ.19) THEN
-        IF(MASWRK) WRITE(IW,9002)
-        CALL DAREAD(IDAF,IODA,SCR,L1,21,0)
+      IF(IDENSIZ.NE.0.AND.IDENFIL.NE.0) THEN
+        CALL DAREAD(IDAF,IODA,DEN,IDENSIZ,IDENFIL,0)
+      ENDIF
+C
+C     PERFORM ANY NON-VVOS EXTRA OPERATIONS TO REORDER DENSITY
+      IF(SCFTYP.EQ.RMC.AND.IORBF1.EQ.19) THEN
+        IF(SOME) WRITE(IW,9002)
+        IF(IDENSIZ.EQ.0.OR.IDENFIL.EQ.0) THEN
+          IF(MASWRK) WRITE(IW,9003)
+          CALL FLSHBF(IW)
+          CALL ABRT
+        ENDIF
+        CALL DCOPY(L1,DEN,1,SCR,1)
+        CALL VCLR(DEN,1,L3)
         DO I=1,NACTSV
           SCR(I)=SCR(I+NCORSV)
         ENDDO
@@ -2859,26 +3119,9 @@ ccccccccccccccccccccccccccccccccccccccccccccccccccccccc
           IJ=(I*I-I)/2 + I
           DEN(IJ)=SCR(I)
         ENDDO
-      ELSEIF(SCFTYP.EQ.RHF.AND.IORBF1.EQ.15) THEN
-        IF(MASWRK) WRITE(IW,9007)
-        CALL VCLR(DEN,1,L3)
-      ELSE
-        IF(MASWRK) WRITE(IW,9003)
-        CALL FLSHBF(IW)
-        CALL ABRT
-        STOP
-      ENDIF
-ccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-      ELSEIF(EXTLOC.EQ.SVD) THEN
-        IF(MASWRK) WRITE(IW,9101)
-        CALL VCLR(DEN,1,L3)
-      ELSE
-        IF(MASWRK) WRITE(IW,9100)
-        CALL FLSHBF(IW)
-        CALL ABRT
-        STOP
       ENDIF
 C
+C     DEAL OUT ANY OCCUPATIONS FROM THE VVOS STUFF.
       IF(IVVOS.NE.0) THEN
         CALL VCLR(DEN2,1,L3)
         CALL DCOPY(NACTSV2,DEN,1,DEN2,1)
@@ -2888,7 +3131,12 @@ C
           DEN(IJ)=TWO
         ENDDO
 C
-        IPOS=NSKIP+NSKIP2
+        DO I=NSKIP+NSKIP2+1,NSKIP+NSKIP2+NSKIP_SING
+          IJ=(I*I-I)/2 + I
+          DEN(IJ)=ONE
+        ENDDO
+C
+        IPOS=NSKIP+NSKIP_SING+NSKIP2
         DO I=1,NACTSV
           DO J=1,I
             IJ =(I*I-I)/2 + J
@@ -2900,10 +3148,10 @@ C
         ENDDO
 C
         IF(SCFTYP.EQ.RMC) THEN
-          IF(MASWRK) WRITE(IW,9005)
+          IF(SOME) WRITE(IW,9005)
         ENDIF
 C
-        IF(MASWRK) WRITE(IW,9006)
+        IF(SOME) WRITE(IW,9006)
         CALL PRTRI(DEN,NACT)
       ENDIF
 C
@@ -2926,43 +3174,27 @@ C     ----FILE 285 FOR ORIENTATION
       ENDIF
 C
 C     PRINT OUT THE DENSITY.
-      IF(MASWRK) WRITE(IW,9000)
+      IF(SOME) WRITE(IW,9000)
       CALL PRTRI(DEN2,NACT)
 C
+C     GRAB ATOM-ORBITAL CORRESPONDENCE.
+      CALL VCLR(IWRK,1,L1)
+      CALL DAREAD(IDAF,IODA,IWRK,NACT,528,1)
+C
 C     PRINT OUT ATOMIC POPULATIONS.
-      IF(KEEPER) THEN
-        DO J=1,NAT
-          ATSUM =0.0D+00
-          ATSUM2=0.0D+00
-          DO I=1,NACT
-            IF(NATMOR(NCORTOT+I).EQ.J) THEN
-              IJ=(I*I-I)/2 + I
-              TMP=DEN2(IJ)
-              ATSUM=ATSUM+TMP
-              IF(TMP.GT.TOLDEN) ATSUM2=ATSUM2+TMP
-            ENDIF
-          ENDDO
-          IF(MASWRK) WRITE(IW,9020) J,ATSUM,TOLDEN,ATSUM2
-        ENDDO
-      ELSE
-        ITMP1=0
-        ITMP2=0
-        DO J=1,NAT
-          ATSUM =0.0D+00
-          ATSUM2=0.0D+00
-          ITMP2=ITMP2+LOCAL_NUMVAL(J,0)
-          DO I=ITMP1,ITMP2
+      DO J=1,NAT
+        ATSUM =0.0D+00
+        ATSUM2=0.0D+00
+        DO I=1,NACT
+          IF(IWRK(I).EQ.J) THEN
             IJ=(I*I-I)/2 + I
             TMP=DEN2(IJ)
             ATSUM=ATSUM+TMP
             IF(TMP.GT.TOLDEN) ATSUM2=ATSUM2+TMP
-          ENDDO
-          ITMP1=ITMP2+1
-C
-          IF(MASWRK) WRITE(IW,9020) J,ATSUM,TOLDEN,ATSUM2
-C
+          ENDIF
         ENDDO
-      ENDIF
+        IF(SOME) WRITE(IW,9020) J,ATSUM,TOLDEN,ATSUM2
+      ENDDO
 C
 C     FINAL CHECK ON CORRECT DENSITY.
       IF(IVVOS.NE.0.AND.IORBF1.NE.15) THEN
@@ -2976,12 +3208,11 @@ C
  9000 FORMAT(/1X,'DENSITY MATRIX IN THE',
      *        1X,'ORTHOGONAL QUASI-ATOMIC SVD MO BASIS',
      *       /1X,'OVER ACTIVE ORBITALS IS')
- 9001 FORMAT(/1X,'LOCAL_PPADEN:  STARTING WITH CANONICAL ORBITAL',
-     *        1X,'DENSITY FROM DAF FILE 320.')
  9002 FORMAT(/1X,'LOCAL_PPADEN:  STARTING WITH NATURAL ORBITAL',
      *        1X,'DENSITY FROM DAF FILE 21.')
- 9003 FORMAT(/1X,'LOCAL_PPADEN:  IORBF1 ORBITAL CHOICE HAS NO',
-     *        1X,'DENSITY FILE PROGRAMED.  PLEASE ADD ONE.')
+ 9003 FORMAT(/1X,'LOCAL_PPADEN ERROR:',
+     *       /1X,'DAF FILE 19 REQUIRES NON-ZERO VALUES FOR,'
+     *        1X,'IDENFIL,IDENSIZE.')
  9004 FORMAT(/1X,'LOCAL_PPADEN:  YOUR DENSITY IS PROBABLY WRONG!',
      *       /1X,'VVOS WAS PROGRAMMED TO WORK WITH DAF FILE 15.',
      *        1X,'RE-RERUN OR RE-PROGRAM WITH FAO FOR NOS',
@@ -2991,13 +3222,8 @@ C
      *        1X,'NOT CANONICAL DENSITY.')
  9006 FORMAT(/1X,'DENSITY MATRIX FOR VVOS BEFORE ORTHORGONAL',
      *       /1X,'QUASI-ATOMIC SVD MO ORBITAL TRANSFORMATION.')
- 9007 FORMAT(/1X,'LOCAL_PPADEN:  STARTING WITH RHF DENSITY.')
  9020 FORMAT(/1X,'ATOM',I5,3X,'SVD POPULATION=',F5.3,
      *        3X,'GREATER THAN ',F5.3,' CONTRIBUTIONS=',F5.3)
- 9100 FORMAT(/1X,'LOCAL_PPADEN ERROR:',
-     *       /1X,'THIS EXTLOC OPTION IS NOT DEFINED.')
- 9101 FORMAT(/1X,'LOCAL_PPADEN:',
-     *        1X,'STARTING WITH RHF DENSITY BUT ONLY IN VALENCE.')
       END
 C*MODULE LOCAL   *DECK MALMQ_REORDER1
 C> @brief      This routine initializes daf files 527,528,531 after SVD.
@@ -3054,7 +3280,6 @@ C       ORMAS NSPACE=1 + CASSCF
 C
 C
       CALL DAWRIT(IDAF,IODA,IAT,NACT,528,1)
-      CALL DAWRIT(IDAF,IODA,IAT,NACT,531,1)
 C
 C     INITIALIZE FILE 527 HERE TO HAVE A 527 FOR DA READS.
       DO I=1,L1
@@ -3153,7 +3378,7 @@ C>
       SUBROUTINE LOCAL_KEEPER_SETUP(KEEPER)
       IMPLICIT NONE
       LOGICAL KEEPER
-      DOUBLE PRECISION :: ORMAS,RMC,RHF
+      DOUBLE PRECISION :: ORMAS,RMC,RHF,ROHF
 C
 C----------------------------------------------------------------
       INTEGER MXNORO
@@ -3205,11 +3430,12 @@ C
       DATA ORMAS/8HORMAS   /
       DATA RMC/8HMCSCF   /
       DATA RHF/8HRHF     /
+      DATA ROHF/8HROHF    /
 C
 C     SETUP THE 'KEEPER' VAR
       IF(SCFTYP.EQ.RMC) THEN
         KEEPER=CISTEP.EQ.ORMAS.AND.NSPACE.GT.1.AND..NOT.ORMFUL
-      ELSEIF(SCFTYP.EQ.RHF) THEN
+      ELSEIF(SCFTYP.EQ.RHF.OR.SCFTYP.EQ.ROHF) THEN
         KEEPER=.TRUE.
       ELSE
         IF(MASWRK) WRITE(IW,9000)
@@ -3235,68 +3461,94 @@ C>      LOCAL_SVDVVOS_REDIM_STEP2
 C>      LOCAL_SVDVVOS_REDIM_STEPLAST
 C>      LOCAL_SVDVVOS_MOS
 C>
-C> @param VOLD    is scratch space of L3 size.
-C> @param VTMP    is scratch space of L3 size.
-C> @param IORBF1  indicates daf dict file with starting orbitals
-C>                from which the localized orbitals are formed.
+C> @param SWITCH_ORBS is an array that determines if any orbital
+C>                    switchings actually occur.
+C> @param IWRK    is scratch array for integers that will
+C>                reorder MOs.
+C> @param SCFTYP  gives the wave function type e.g. mcscf,rhf,etc.
+C> @param IMBS    is the minimal basis valence number of orbitals.
 C> @param L0      is the length of the MO variational space.
-C> @param L1      is the length of the AO coefficients.
-C> @param L3      is the square of L1.
 C> @param NCORSV  denotes the original MCSCF run doubly occupied size.
 C> @param NCORTOT denotes the chemical cores as defined by NVVOS_NUMCOR.
 C> @param NACTSV  denotes the original MCSCF run active space size.
 C> @param NSKIP   denotes the number of filled doubly occupieds i.e. MDOC.
 C> @param NSKIP2  denotes the now filled but previously empty virutals.
-C> @param MASWRK       indicates the master process.
-      SUBROUTINE LOCAL_SVDVVOS_MOS(VOLD,VTMP,IORBF1,
-     *           L0,L1,L3,NCORSV,NCORTOT,NACTSV,NSKIP,NSKIP2,MASWRK)
+C> @param MASWRK  indicates the master process.
+C> @param IW      indicates write out to the log file.
+      SUBROUTINE LOCAL_SVDVVOS_MOS(
+     *           SWITCH_ORBS,IWRK,SCFTYP,IMBS,
+     *           L0,NCORSV,NCORTOT,NACTSV,NSKIP,NSKIP2,MASWRK,IW)
 
       IMPLICIT NONE
-      LOGICAL MASWRK
-      INTEGER IORBF1,L0,L1,L3,NCORSV,NCORTOT,NACTSV,NSKIP,NSKIP2,
-     *        I,ITOT
-      DOUBLE PRECISION ::
-     *       VOLD(L1,L1),VTMP(L1,L1)
+      LOGICAL MASWRK,SWITCH_ORBS
+      INTEGER IMBS,L0,NCORSV,NCORTOT,NACTSV,NSKIP,NSKIP2,IW
+      INTEGER IWRK(L0)
+      INTEGER I,NERR,ISING,ITOT
+      DOUBLE PRECISION :: SCFTYP,RMC,ROHF
 C
-      INTEGER IR,IW,IP,IS,IPK,IDAF,NAV,IODA
-      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      DATA RMC/8HMCSCF   /
+      DATA ROHF/8HROHF    /
 C
-      CALL DAREAD(IDAF,IODA,VOLD,L3,IORBF1,0)
-      CALL VCLR(VTMP,1,L3)
 C
+      NERR=0
+      CALL VICLR(IWRK,1,L0)
+C
+      IF(SCFTYP.EQ.RMC) THEN
       ITOT=0
-C
       DO I=1,NCORTOT+NSKIP
         ITOT=ITOT+1
-        CALL DCOPY(L1,VOLD(1,I),1,VTMP(1,I),1)
+        IWRK(I)=I
       ENDDO
-C
       DO I=1,NSKIP2
         ITOT=ITOT+1
-        CALL DCOPY(L1,VOLD(1,NCORSV+NACTSV+I),1,
-     *                VTMP(1,NCORTOT+NSKIP+I),1)
+        IWRK(NCORTOT+NSKIP+I)=NCORSV+NACTSV+I
       ENDDO
-C
       DO I=1,NACTSV
         ITOT=ITOT+1
-        CALL DCOPY(L1,VOLD(1,NCORSV+I),1,
-     *                VTMP(1,NCORTOT+NSKIP+NSKIP2+I),1)
+        IWRK(NCORTOT+NSKIP+NSKIP2+I)=NCORSV+I
       ENDDO
-C
       DO I=NCORSV+NACTSV+NSKIP2+1,L0
         ITOT=ITOT+1
-        CALL DCOPY(L1,VOLD(1,I),1,VTMP(1,I),1)
+        IWRK(I)=I
       ENDDO
 C
-C     WRITE RE-ORDERED ORBITALS BACK OUT TO FILE 15
-C     NOTE:  SO, DAF 15 GETS OVERWROTE HERE IF IORBF1=15.
-C                CAN. MOS WERE ALREADY OVERWROTE WITH VVOS MOS.
-C                IF WANT CHANGED, BOTH NEED TO BE RE-VISITED.
-      CALL DAWRIT(IDAF,IODA,VTMP,L3,15,0)
+      ELSEIF(SCFTYP.EQ.ROHF) THEN
+      ISING=IMBS-NSKIP-NSKIP2
+      ITOT=0
+      DO I=1,NCORTOT+NSKIP
+        ITOT=ITOT+1
+        IWRK(I)=I
+      ENDDO
+      DO I=1,NSKIP2
+        ITOT=ITOT+1
+        IWRK(NCORTOT+NSKIP+I)=NCORTOT+NSKIP+ISING+I
+      ENDDO
+      DO I=1,ISING
+        ITOT=ITOT+1
+        IWRK(NCORTOT+NSKIP+NSKIP2+I)=NCORTOT+NSKIP+I
+      ENDDO
+      DO I=NCORTOT+NSKIP+NSKIP2+ISING+1,L0
+        ITOT=ITOT+1
+        IWRK(I)=I
+      ENDDO
+C
+      ELSE
+        IF(MASWRK) WRITE(IW,9000)
+        NERR=NERR+1
+      ENDIF
+C
+C     POSSIBLY SET SWITCH_ORBS TO TRUE.
+      DO I=1,L0
+        IF(IWRK(I).NE.I) SWITCH_ORBS=.TRUE.
+      ENDDO
 C
 C     CHECK NUMBER OF ORBITALS COPIED OVER MAKES SENSE.
       IF(ITOT.NE.L0) THEN
-        IF(MASWRK) WRITE(IW,9000)
+        IF(MASWRK) WRITE(IW,9001)
+        NERR=NERR+1
+      ENDIF
+C
+      IF(NERR.NE.0) THEN
         CALL FLSHBF(IW)
         CALL ABRT
         STOP
@@ -3304,6 +3556,8 @@ C     CHECK NUMBER OF ORBITALS COPIED OVER MAKES SENSE.
 C
       RETURN
  9000 FORMAT(/1X,'LOCAL_SVDVVOS_MOS ERROR:',
+     *        1X,'SCFTYP WAS NOT PROGRAMED FOR ORBITAL REORDERING.')
+ 9001 FORMAT(/1X,'LOCAL_SVDVVOS_MOS ERROR:',
      *        1X,'VVOS DIMENSIONS MUST BE WRONG.',
      *        1X,'ORBITALS COPIED DOES NOT TOTAL UP TO L0 MOS.')
       END
@@ -3333,6 +3587,9 @@ C> @param NSKIP      denotes the number of filled doubly occupieds i.e. MDOC.
 C> @param NACT       denotes the number of VVOS active space orbitals.
 C> @param NSKIP2     denotes the now filled but previously empty virutals.
 C> @param NVIR2      denotes the number of VVOS virtual orbitals.
+C> @param NA         is total occupieds for RHF,ROHF.
+C>                   Here, it is only used for ROHF.
+C> @param NB         is total doubly occupieds for ROHF.
 C> @param MASWRK     indicates the master process.
 C> @param IW         indicates write out to the log file.
 C>
@@ -3341,20 +3598,23 @@ C>
      *           NAT,NCORSV,NACTDT,L0,
      *           NSPACE,NSPACE_SAV,
      *           NCORTOT,NSKIP,NACT,NSKIP2,NVIR2,
+     *           NA,NB,
      *           MASWRK,IW)
 C
       IMPLICIT NONE
       LOGICAL MASWRK
 C
-      DOUBLE PRECISION :: RMC,RHF
+      DOUBLE PRECISION :: RMC,RHF,ROHF
       DATA RMC/8HMCSCF   /
       DATA RHF/8HRHF     /
+      DATA ROHF/8HROHF    /
 C
       DOUBLE PRECISION :: SCFTYP
       INTEGER ISVDOP,NAT,NCORSV,NACTDT,L0,
      *        NSPACE,NSPACE_SAV,
-     *        NCORTOT,NSKIP,NACT,NSKIP2,NVIR2
-      INTEGER IW,I,IMBS
+     *        NCORTOT,NSKIP,NACT,NSKIP2,NVIR2,
+     *        NA,NB
+      INTEGER IW,I,IMBS,ISWMBS
       INTEGER LOCAL_NUMVAL,NVVOS_NUMCOR
 C
       IF(SCFTYP.EQ.RMC) THEN
@@ -3372,16 +3632,35 @@ C       NOTES:  SEE VVOS ROUTINE FOR SIMILAR VARS.
         NSKIP2 =IMBS-NSKIP-NACTDT
         NACT   =NACTDT+NSKIP+NSKIP2
         NVIR2  =L0-NCORTOT-NSKIP-NSKIP2-NACTDT
-      ELSEIF(SCFTYP.EQ.RHF) THEN
-        IF(ISVDOP.EQ.0) THEN
-          NSPACE_SAV=NSPACE
-          NSPACE=2
-          NCORTOT=NVVOS_NUMCOR(0,0)
-          NSKIP  =NCORSV-NCORTOT
-          NSKIP2 =0
-          NACT   =NACTDT+NSKIP+NSKIP2
-          NVIR2  =L0-NCORTOT-NSKIP-NSKIP2-NACTDT
-        ENDIF
+      ELSEIF(SCFTYP.EQ.RHF.AND.ISVDOP.EQ.0) THEN
+        NSPACE_SAV=NSPACE
+        NSPACE=2
+        NCORTOT=NVVOS_NUMCOR(0,0)
+        NSKIP  =NCORSV-NCORTOT
+        NSKIP2 =0
+        NACT   =NACTDT
+        NVIR2  =L0-NCORTOT-NSKIP-NSKIP2-NACTDT
+      ELSEIF(SCFTYP.EQ.ROHF.AND.ISVDOP.EQ.0) THEN
+CKEEPROHF        uncomment these lines in order to
+CKEEPROHF        make the singly occupied space
+CKEEPROHF        a separate 'active' ormas group.
+CKEEPROHF        search on this for other places to uncomment...
+CKEEPROHF        the singly occupied are copied out in a later routine.
+CKEEPROHF        so, nskip,nskip2 must still be defined in correct manner
+CKEEPROHF            for rohf.
+        ISWMBS=1
+        IMBS=0
+        DO I=1,NAT
+          IMBS=IMBS+LOCAL_NUMVAL(I,ISWMBS)
+        ENDDO
+        NSPACE_SAV=NSPACE
+        NSPACE=2
+CKEEPROHF        NSPACE=3
+        NCORTOT=NVVOS_NUMCOR(0,0)
+        NSKIP  =NB-NCORTOT
+        NSKIP2 =IMBS-(NA-NCORTOT)
+        NACT   =NACTDT
+        NVIR2  =L0-NCORTOT-NACTDT
       ELSE
         IF(MASWRK) WRITE(IW,9000)
         CALL FLSHBF(IW)
@@ -3417,50 +3696,64 @@ C> @param NSPACE         is the number of ORMAS groups.
 C> @param MSTA           contains the ORMAS orbital ranges.
 C> @param MSTA_SAV       saves the original MCSCF orbital ranges.
 C> @param NCORTOT        is the number of chemical cores from NVVOS_NUMCOR.
+C> @param NSKIP          is the number of doubly occupied valence orbitals.
 C> @param NSKIP2         is the number of newly occupied VVOS orbitals
 C>                       that are virtual orbitals in the original MCSCF.
 C> @param MASWRK         indicates the master process.
+C> @param SOME          is true for master process with nprint not equal -5.
 C> @param IW             indicates write out to the log file.
 C>
       SUBROUTINE LOCAL_SVDVVOS_REDIM_STEP2(
      *           SCFTYP,ISVDOP,NAT,L0,
      *           ISIZE_FCCWFN,NSPACE,MSTA,MSTA_SAV,
-     *           NCORTOT,NSKIP2,MASWRK,IW)
+     *           NCORTOT,NSKIP,NSKIP2,MASWRK,SOME,IW)
 C
       IMPLICIT NONE
 C
-      DOUBLE PRECISION :: RMC,RHF
+      DOUBLE PRECISION :: RMC,RHF,ROHF
       DATA RMC/8HMCSCF   /
       DATA RHF/8HRHF     /
+      DATA ROHF/8HROHF    /
 C
-      LOGICAL MASWRK
+      LOGICAL MASWRK,SOME
       DOUBLE PRECISION :: SCFTYP
-      INTEGER ISVDOP,NAT,L0,ISWMBS,ITMP
-      INTEGER I,NSKIP2,NCORTOT,IW,ISIZE_FCCWFN,NSPACE
+      INTEGER ISVDOP,NAT,L0,ISWMBS,IMBS,ITRASH
+      INTEGER I,NSKIP,NSKIP2,NCORTOT,IW,ISIZE_FCCWFN,NSPACE
       INTEGER MSTA(ISIZE_FCCWFN),MSTA_SAV(ISIZE_FCCWFN)
       INTEGER LOCAL_NUMVAL
 C
       CALL ICOPY(ISIZE_FCCWFN,MSTA,1,MSTA_SAV,1)
+C
+      ISWMBS=1
+      IMBS=0
+      DO I=1,NAT
+        IMBS=IMBS+LOCAL_NUMVAL(I,ISWMBS)
+      ENDDO
 C
       IF(SCFTYP.EQ.RMC) THEN
         DO I=NSPACE,1,-1
           MSTA(I+1)=MSTA(I)+NSKIP2
         ENDDO
         MSTA(1)=NCORTOT+1
-      ELSEIF(SCFTYP.EQ.RHF) THEN
-        IF(ISVDOP.EQ.0) THEN
-          ISWMBS=1
-          ITMP=0
-          DO I=1,NAT
-            ITMP=ITMP+LOCAL_NUMVAL(I,ISWMBS)
-          ENDDO
-          MSTA(1)=NCORTOT+1
-          MSTA(2)=NCORTOT+ITMP+1
-          MSTA(3)=L0+1
+      ELSEIF(SCFTYP.EQ.RHF.AND.ISVDOP.EQ.0) THEN
+        MSTA(1)=NCORTOT+1
+        MSTA(2)=NCORTOT+IMBS+1
+        MSTA(3)=L0+1
 CGARBRHF          MSTA(1)=NCORTOT+1
 CGARBRHF          MSTA(2)=NA+1
 CGARBRHF          MSTA(3)=L0+1
-        ENDIF
+      ELSEIF(SCFTYP.EQ.ROHF.AND.ISVDOP.EQ.0) THEN
+        MSTA(1)=NCORTOT+1
+        MSTA(2)=NCORTOT+IMBS+1
+        MSTA(3)=L0+1
+CKEEPROHF        uncomment these lines in order to
+CKEEPROHF        make the singly occupied space
+CKEEPROHF        a separate 'active' ormas group.
+CKEEPROHF         search on this for other places to uncomment...
+CKEEPROHF        MSTA(1)=NCORTOT+1
+CKEEPROHF        MSTA(2)=NCORTOT+NSKIP+NSKIP2+1
+CKEEPROHF        MSTA(3)=NCORTOT+IMBS+1
+CKEEPROHF        MSTA(4)=L0+1
       ELSE
         IF(MASWRK) WRITE(IW,9000)
         CALL FLSHBF(IW)
@@ -3468,7 +3761,10 @@ CGARBRHF          MSTA(3)=L0+1
         STOP
       ENDIF
 C
-      IF(MASWRK) WRITE(IW,9001) NSPACE,(MSTA(I),I=1,NSPACE)
+      IF(SOME) WRITE(IW,9001) NSPACE,(MSTA(I),I=1,NSPACE)
+C
+      ITRASH=NSKIP
+      ITRASH=ITRASH-ITRASH
 C
       RETURN
  9000 FORMAT(//1X,'LOCAL_SVDVVOS_REDIM_STEP2 ERROR:',
@@ -3500,32 +3796,34 @@ C> @param ISIZE_FCCWFN is the common block size of MSTA.
 C> @param MSTA         holds the orbital ranges for ORMAS groups.
 C> @param MSTA_SAV     is the original orbital ORMAS group ranges.
 C> @param MASWRK       indicates the master process.
+C> @param SOME          is true for master process with nprint not equal -5.
 C> @param IW           indicates write out to the log file.
 C>
       SUBROUTINE LOCAL_SVDVVOS_REDIM_STEPLAST(
      *           SCFTYP,NACT,NACTDT,NSPACE,NSPACE_SAV,ISIZE_FCCWFN,
-     *           MSTA,MSTA_SAV,MASWRK,IW)
+     *           MSTA,MSTA_SAV,MASWRK,SOME,IW)
 C
       IMPLICIT NONE
 C
-      DOUBLE PRECISION :: RMC,RHF
+      DOUBLE PRECISION :: RMC,RHF,ROHF
       DATA RMC/8HMCSCF   /
       DATA RHF/8HRHF     /
+      DATA ROHF/8HROHF    /
 C
-      LOGICAL MASWRK,OK
+      LOGICAL MASWRK,SOME,OK
       DOUBLE PRECISION :: SCFTYP
       INTEGER I,IW,NACT,NACTDT,NSPACE,NSPACE_SAV,ISIZE_FCCWFN
       INTEGER MSTA(ISIZE_FCCWFN),MSTA_SAV(ISIZE_FCCWFN)
 C
       OK=.FALSE.
       IF(SCFTYP.EQ.RMC) OK=.TRUE.
-      IF(SCFTYP.EQ.RHF) OK=.TRUE.
+      IF(SCFTYP.EQ.RHF.OR.SCFTYP.EQ.ROHF) OK=.TRUE.
 C
       IF(OK) THEN
         NACT=NACTDT
         NSPACE=NSPACE_SAV
         CALL ICOPY(ISIZE_FCCWFN,MSTA_SAV,1,MSTA,1)
-        IF(MASWRK) WRITE(IW,9001) NSPACE,(MSTA(I),I=1,NSPACE)
+        IF(SOME) WRITE(IW,9001) NSPACE,(MSTA(I),I=1,NSPACE)
       ELSE
         IF(MASWRK) WRITE(IW,9000)
         CALL FLSHBF(IW)
@@ -3571,16 +3869,16 @@ C>                     For each atom, an SVD is done.
 C> @param VTVECSAV     temporarily saves orbital transformations
 C>                     for ALL SVDs from which transform elements
 C>                     are selected.
-C> @param MASWRK       indicates the master process.
+C> @param SOME          is true for master process with nprint not equal -5.
 C> @param IW           indicates write out to the log file.
 C>
       SUBROUTINE LOCAL_SVDEXTORBSNUM_CASE(
      *           NACT,L0,NSPACE,NAT,
      *           NATMOR,IATMSTA,ISVMOR,EIGSAV,VTVECSAV,
-     *           MASWRK,IW)
+     *           SOME,IW)
 C
       IMPLICIT NONE
-      LOGICAL MASWRK
+      LOGICAL SOME
       INTEGER IHOLD,IMARK,J,ISPACE,NACTFIN,IATM1,ITMP,ISWMBS,
      *        III,K,IPOS,JPOS
       INTEGER NAOCART,NAOSPH,NAOSPH_VAL
@@ -3671,7 +3969,7 @@ C           I.E. DEGENERATE UP TO NACTFIN+IDEGEN
 C       2)  NON-DEGENERATE POSITIONS GOING DOWN FROM NACTFIN.
 C       NOW SWAP OUT SOME VECTORS.
         IF(IMARK.NE.0) THEN
-          IF(MASWRK) WRITE(IW,9002) IATM1
+          IF(SOME) WRITE(IW,9002) IATM1
           III=0
           DO JPOS=NACTFIN+1,IMARK
             ITMP = (IATM1-1)*NSPACE_LIMIT + ISPACE
@@ -3680,7 +3978,7 @@ C       NOW SWAP OUT SOME VECTORS.
             CALL DSWAP(NACTFIN,VTVECSAV(1,IPOS,ITMP),1,
      *                         VTVECSAV(1,JPOS,ITMP),1)
 C
-            IF(MASWRK) WRITE(IW,9003) IATM1,ISPACE,JPOS,IPOS
+            IF(SOME) WRITE(IW,9003) IATM1,ISPACE,JPOS,IPOS
 C
           ENDDO
         ENDIF
@@ -3757,18 +4055,22 @@ C>             localized orbitals.
 C>             It then combines two sets of localized orbitals
 C>             and outputs the VEC group into .log and .dat files.
 C>
-      SUBROUTINE LOCAL_LMOEXT
+C> @param IMODE=1 runs through the entire routine.
+C>             =2 just creates a new DAF534 file.
+      SUBROUTINE LOCAL_LMOEXT(IMODE)
 C-----------------------------------------------------------------------
       IMPLICIT NONE
 C     VARS
       LOGICAL SOME,COMBO
+      INTEGER IMODE
       INTEGER IORBF1,IORBF52x,ISAV_ISVDOP,NERR
       INTEGER L0,L1,L3
-      INTEGER NGOTMX,LOADFM,LAST,NEED_EXTLOC,LVEC1,LVEC2,LVEC3
-      INTEGER L0MBS,I,ITMP,ISWMBS
+      INTEGER NGOTMX,LOADFM,LAST,NEED_EXTLOC,LDEN,LVEC1,LVEC2,LVEC3
+      INTEGER IMBS,IMBSTRI,L0MBS,I,ITMP,ISWMBS
       INTEGER NVVOS_NUMCOR
       INTEGER LOCAL_NUMVAL
-      DOUBLE PRECISION :: SCFTYP_SAV,RHF,SVD,ATMNOS
+      DOUBLE PRECISION :: SCFTYP_TRUTH,SCFTYP_SAV,RMC,RHF,ROHF,SVD,
+     *                    ATMNOS,SPLITQA
       DOUBLE PRECISION :: EXTLOC_SAV
 C-----------------------------------------------------------------------
       DOUBLE PRECISION :: X
@@ -3796,8 +4098,7 @@ C
       INTEGER NEVALS,NGLEVL,NHLEVL
 C
       INTEGER IVVOS,NVVOS
-      DOUBLE PRECISION ::
-     *       BNDDEN
+      DOUBLE PRECISION :: BNDDEN
 C
       DOUBLE PRECISION :: SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP
       INTEGER MPLEVL,MPCTYP
@@ -3825,28 +4126,34 @@ C     DEFINE PRINT STUFF
       SOME = NPRINT.NE.-5 .AND. MASWRK
 C
 C     DATA STUFF
+      DATA ATMNOS/8HATMNOS  /
       DATA CHECK/8HCHECK   /
       DATA RHF/8HRHF     /
+      DATA RMC/8HMCSCF   /
+      DATA ROHF/8HROHF    /
+      DATA SPLITQA/8HSPLITQA /
       DATA SVD/8HSVD     /
-      DATA ATMNOS/8HATMNOS  /
 C
 C     DETERMINE IF ANALYSIS IS POSSIBLE.
 C     IF NOT, EXIT OUT.
       COMBO=.FALSE.
       IF(EXTLOC.EQ.SVD) COMBO=.TRUE.
       IF(EXTLOC.EQ.ATMNOS) COMBO=.TRUE.
+      IF(EXTLOC.EQ.SPLITQA) COMBO=.TRUE.
       IF(.NOT.COMBO) RETURN
 C
 C     PRINT BANNER
-      IF(SOME) WRITE(IW,9000)
+      IF(SOME.AND.IMODE.EQ.1) WRITE(IW,9000)
       CALL FLSHBF(IW)
 C
 C     CALCULATE L0MBS,ETC,FOR FUTURE USE.
       ISWMBS=1
-      L0MBS=NVVOS_NUMCOR(0,0)
+      IMBS=0
       DO I=1,NAT
-        L0MBS=L0MBS+LOCAL_NUMVAL(I,ISWMBS)
+        IMBS=IMBS+LOCAL_NUMVAL(I,ISWMBS)
       ENDDO
+      IMBSTRI=(IMBS*IMBS+IMBS)/2
+      L0MBS=IMBS+NVVOS_NUMCOR(0,0)
 C
       ITMP=NVVOS_NUMCOR(0,0)
       DO I=1,NAT
@@ -3873,24 +4180,44 @@ C
 C     SKIP FOR EXETYP
       IF(EXETYP.EQ.CHECK) GO TO 8999
 C
+C     SKIP FOR IMODE=2
+      IF(IMODE.EQ.2) GO TO 7999
+C
 C     FORM EXTERNAL LOCALIZED ORBITALS.
 C     NOTE1:  THE NEXT CALL REPLACES DAF FILE 71
-C             ONLY IF NOT EXTLOC=SVD.
+C             ONLY IF NOT EXTLOC=RNONE.
 C     NOTE2:  THE RHF IS SETUP TO GRAB OUT THE EXTERNAL VIRTUALS.
 C             SO, FAKE THE RHF SCFTYP.
+C     NOTE3:  SPLITQA WAS THE VERY LAST ADDITION TO POSSIBILITIES.
+C             AS SUCH, THINGS GOT MORE COMPLICATED.
+C             THE PREVIOUS EXTLOC EXAMPLE RESULTS WERE PRESERVEDC
+C             VIA OLD TEST CASES.
       ISAV_ISVDOP=ISVDOP
       ISVDOP=0
       SCFTYP_SAV=SCFTYP
-      SCFTYP=RHF
+ccccccc
+      IF(SCFTYP.EQ.RMC) THEN
+        SCFTYP=RHF
+      ELSEIF(SCFTYP.EQ.RHF) THEN
+      ELSEIF(SCFTYP.EQ.ROHF) THEN
+      ELSE
+        IF(MASWRK) WRITE(IW,9010)
+        CALL FLSHBF(IW)
+        CALL ABRT
+        STOP
+      ENDIF
+ccccccc
       EXTLOC_SAV=EXTLOC
       EXTLOC=SVD
       IORBF1=15 ! ,15,
-      CALL LOCAL_LMOSVD(IORBF1)
+      SCFTYP_TRUTH=SCFTYP_SAV
+      CALL LOCAL_LMOSVD(IORBF1,SCFTYP_TRUTH)
       ISVDOP=ISAV_ISVDOP
       SCFTYP=SCFTYP_SAV
       EXTLOC=EXTLOC_SAV
 C
 C     PRINT OFF SECOND BANNER
+ 7999 CONTINUE
       IF(SOME) WRITE(IW,9001)
       CALL FLSHBF(IW)
 C
@@ -3902,12 +4229,25 @@ C
 C     ALLOCATE MEMORY.
       CALL GOTFM(NGOTMX)
       CALL VALFM(LOADFM)
-      LVEC1 = LOADFM + 1
-      LVEC2 = LVEC1 + L3
-      LVEC3 = LVEC2 + L3
-      LAST  = LVEC3 + L3
+      LDEN  = LOADFM + 1
+      LVEC1 = LDEN   + IMBSTRI
+      LVEC2 = LVEC1  + L3
+      LVEC3 = LVEC2  + L3
+      LAST  = LVEC3  + L3
       NEED_EXTLOC = LAST - LOADFM - 1
       CALL GETFM(NEED_EXTLOC)
+C
+C     PREPARE SOME SUPER-SPECIAL PIECES FOR SPLITQA RUNS.
+C     NOTE1:  CHANGING THE EXTLOC GUTS OF LOCAL_LMOSVD IS MADNESS.
+C     NOTE2:  DIRLMO REQUIRES ORTHOGONAL VALENCE-INTERNAL ORBITALS.
+C             I.E. DAF521
+      IF(EXTLOC.EQ.SPLITQA.AND.IMODE.EQ.1) THEN
+        CALL DAREAD(IDAF,IODA,X(LVEC1),L3,521,0)
+        CALL DAWRIT(IDAF,IODA,X(LVEC1),L3,71,0)
+        CALL VCLR(X(LVEC1),1,L3)
+        CALL DAREAD(IDAF,IODA,X(LDEN),IMBSTRI,536,0)
+        CALL DAWRIT(IDAF,IODA,X(LDEN),IMBSTRI,285,0)
+      ENDIF
 C
 C     COMBINE ORBITAL PIECES FROM 2 ORBITAL SETS
 C     NOTE:  EXTERNALS MUST BE ORTHOGONAL TO INTERNALS AT THIS POINT.
@@ -3939,7 +4279,7 @@ C
       ENDIF
       CALL FLSHBF(IW)
 C
-C     ADD 'ER' INTERNALS TO 'SVD' EXTERNALS.
+C     ADD INTERNALS TO 'SVD' EXTERNALS.
       CALL DCOPY(L1*L0,X(LVEC2),1,X(LVEC3),1)
       CALL DCOPY(L1*L0MBS,X(LVEC1),1,X(LVEC3),1)
       CALL VCLR(X(LVEC1),1,L3)
@@ -3949,13 +4289,13 @@ C     SAVE ORBITALS OFF TO DAF FILE 534
       CALL DAWRIT(IDAF,IODA,X(LVEC3),L3,534,0)
 C
 C     PRINT OUT FINAL ER+EXT ORBITALS TO GAMESS .LOG FILE.
-      IF(SOME) THEN
+      IF(SOME.AND.IMODE.EQ.1) THEN
         WRITE(IW,9070)
         CALL PRSQL(X(LVEC3),L0,L1,L1)
       ENDIF
 C
 C     PRINT OUT ER+EXT ORBITALS TO .DAT FILE.
-      IF(MASWRK) THEN
+      IF(MASWRK.AND.IMODE.EQ.1) THEN
         WRITE(IP,9080)
         CALL PUSQL(X(LVEC3),L0,L1,L1)
         WRITE(IP,9085)
@@ -3966,8 +4306,10 @@ C     DEALLOCATE MEMORY.
 C
 C
  8999 CONTINUE
-      IF(MASWRK) WRITE(IW,9300)
-      CALL TIMIT(1)
+      IF(SOME) THEN
+        WRITE(IW,9300)
+        CALL TIMIT(1)
+      ENDIF
       RETURN
  9000 FORMAT(/5X,60(1H-)/
      *   5X,'LOCAL_LMOEXT NOW FORMS LOCALIZED EXTERNAL ORBITALS.'/
@@ -3983,6 +4325,9 @@ C
  9004 FORMAT(//1X,'LOCAL_LMOEXT ERROR:',
      *        /1X,'ILOCAL=4 HAS FILE CONFLICTS FOR',
      *         1X,'EXTLMO=SVD OPTION.')
+ 9010 FORMAT(//1X,'LOCAL_LMOEXT ERROR:',
+     *        /1X,'LOCAL_LMOEXT REQUIRES AN EXPLICIT SCFTYP CHOICE',
+     *         1X,'WHAT IN ORDER TO RUN THROUGH LOCAL_LMOSVD.')
  9020 FORMAT(1X,'USING NONORTHOGONAL ORBITALS FROM FILE 522...')
  9021 FORMAT(1X,'USING ORTHOGONAL ORBITALS FROM FILE 521...')
  9022 FORMAT(//1X,'LOCAL_LMOEXT ERROR:',
@@ -4084,7 +4429,7 @@ C     VARS
       INTEGER NVVOS_NUMCOR
       INTEGER LOCAL_NUMVAL
       DOUBLE PRECISION :: CUTOFF_IATORB
-      DOUBLE PRECISION :: ATMNOS,SVD,RNONE
+      DOUBLE PRECISION :: ATMNOS,SVD,SPLITQA,RNONE
       INTEGER NERR
 C
       INTEGER IKIND
@@ -4143,14 +4488,16 @@ C
 C     DATA STUFF
       DATA ATMNOS/8HATMNOS  /
       DATA CHECK/8HCHECK   /
-      DATA SVD/8HSVD     /
       DATA RNONE/8HNONE    /
+      DATA SPLITQA/8HSPLITQA /
+      DATA SVD/8HSVD     /
 C
 C     DETERMINE IF ANALYSIS IS POSSIBLE.
 C     IF NOT, EXIT OUT.
       COMBO=.FALSE.
       IF(EXTLOC.EQ.SVD) COMBO=.TRUE.
       IF(EXTLOC.EQ.ATMNOS) COMBO=.TRUE.
+      IF(EXTLOC.EQ.SPLITQA) COMBO=.TRUE.
       IF(ILOCAL.EQ.4) COMBO=.TRUE.
       IF(.NOT.COMBO) RETURN
 C
@@ -4184,7 +4531,7 @@ C     NOTE:  DAF 521 SERVES TO DEFINE THE ATOM-ORBITAL CORRESPONDENCE.
 C            OTHER ORBITALS SETS ARE RELATED TO DAF 521.
       IORBF1=0
       IORBF52x=521 ! ,521,
-      IF(EXTLOC.EQ.SVD.OR.EXTLOC.EQ.ATMNOS) THEN
+      IF(EXTLOC.NE.RNONE) THEN
         NUML0=L0
         IORBF1=534 ! ,534,
       ELSEIF(ILOCAL.EQ.4) THEN
@@ -4204,8 +4551,14 @@ C     ERROR OUT FOR IORBF1=0
         IF(MASWRK) WRITE(IW,9110)
         NERR=NERR+1
       ENDIF
-      IF(ORIENT.AND.EXTLOC.NE.RNONE) THEN
-        IF(MASWRK) WRITE(IW,9111)
+      IF(EXTLOC.NE.SPLITQA) THEN
+        IF(ORIENT.AND.EXTLOC.NE.RNONE) THEN
+          IF(MASWRK) WRITE(IW,9111)
+          NERR=NERR+1
+        ENDIF
+      ENDIF
+      IF(EXTLOC.NE.RNONE.AND.ILOCAL.EQ.4) THEN
+        IF(MASWRK) WRITE(IW,9112)
         NERR=NERR+1
       ENDIF
       IF(NERR.NE.0) THEN
@@ -4301,9 +4654,7 @@ C
       ENDIF
       CALL FLSHBF(IW)
 C
-C     GET THE ATOM NUMBERS FOR THE CHEMICAL CORE ORBITALS.
-C     READ IN THE ATOM NUMBERS FOR FILE 528.
-C     COMBINE THESE IN A DISJUNCT WAY.
+C     READ IN ATOM LABELS FOR ALL ORBITALS.
 C     ---NOTE:  WE DO NOT WANT TO DISTURB HOW FILE 528 WORKS.
 C               THAT WOULD BE IDIOTIC AND A LOT OF WORK.
       CALL LOCAL_READ_FILE528_WITH_CORES(X(LIATSVD),NAT,NUML0,MASWRK)
@@ -4314,7 +4665,7 @@ C     AND
 C     ROWS FROM ...
 C     E.G.  ER SEP. LOC. 'OCCUPIED' ON DAF FILE 534
 C     E.G.  DAF FILE 521 AGAIN
-C     NOTE:  VEC1,VEC2 RATHER THAN VEC2,VEC1 MATTERS HERE.
+C     NOTE:  VEC1,VEC2 ==> (VEC2,VEC1) DIMS.
 C     NOTE:  NEXT CALL GIVES PRISTINE MATRIX.
 C            I.E. NO GARBAGE OUTSIDE THE L0XL0 BLOCK.
       CALL MALMQ_TORB(
@@ -4348,8 +4699,10 @@ C     DEALLOCATE MEMORY.
 C
 C
  8999 CONTINUE
-      IF(MASWRK) WRITE(IW,9300)
-      CALL TIMIT(1)
+      IF(SOME) THEN
+        WRITE(IW,9300)
+        CALL TIMIT(1)
+      ENDIF
       RETURN
 C 9000 FORMAT(/1X,'SKIPPING LOCAL_LCAO_WGHTS:',
 C     *       /1X,'LOCAL_LCAO_WGHTS CANNOT DETERMINE',
@@ -4384,6 +4737,9 @@ C     *        1X,'ORBITAL DAF FILE.')
      *       /1X,'NO NO. THIS WILL BE A SEPARATE RUN.',
      *       /1X,'THE LOCAL INPUT SHOULD HAVE PREVENTED US',
      *        1X,'US FROM REACHING HERE. PLEASE RE-THINK.')
+ 9112 FORMAT(/1X,'LOCAL_LCAO_WGHTS ERROR:',
+     *       /1X,'ANY GIVEN EXTLOC OPTION CANNOT HAVE',
+     *        1X,'ILOCAL=4.')
  9300 FORMAT(1X,'... DONE WITH LCAO RELATIVE',
      *       1X,'ATOMIC WEIGHTS SQUARED ...')
       END
@@ -5221,1610 +5577,6 @@ C
  9011 FORMAT(1X,'FORMING ATOMIC SPHERICAL HARMONICS',
      *       1X,'FOR VALENCE ORBITALS.')
       END
-C*MODULE LOCAL   *DECK LOCAL_NOS_EXT
-C> @brief      Forms atomic external NOs.
-C>
-C> @author     Aaron West
-C>             -March 21, 2013
-C>
-C> @details    Forms atomic external NOs.
-C>             There are three similar NOS_EXT routines.
-C>             Some parts must remain the identical.
-C>             I will add more later.
-C>
-      SUBROUTINE LOCAL_NOS_EXT
-C-----------------------------------------------------------------------
-      IMPLICIT NONE
-C     VARS
-      LOGICAL SOME,OK,COMBO
-C
-      INTEGER MCORE,NERR,IMOPROJ,IEXTORB,ISIZE_FCCWFN
-      INTEGER NHIGH,NELS,III_NEXT,III_OCC_ORB,III_DIRECT,IEXCIT
-C
-      DOUBLE PRECISION :: ATMNOS,ORMAS,RMC,RHF,RNONE
-C
-      INTEGER I,J,IJ,ISAV_NOS,ICOUNT_NOS,IOPTION
-C
-      INTEGER L0,L1,L2,L3,L0MBS,L0TRI
-      INTEGER ITOTOCC,MAX_NACT_ORBS,MAX_NACT_ORBS_TRI
-C
-      INTEGER IATM1,ISWMBS
-      INTEGER LOCAL_NUMVAL
-      INTEGER NVVOS_NUMCOR
-C-----MEMORY VARIABLES
-      INTEGER NGOTMX,LOADFM,LAST,NEED_NOS_EXT,NEED_NOS_EXT2
-c     persistent mem vars
-      INTEGER LS,LVECF15SAV,LVECCOL,LVEC,LIPOSMBS,LILENMBS,LIATSVD,
-     *        LIPOSEXT
-      INTEGER LEIGHLD
-c     mini-mem #1 mem vars
-      INTEGER LMOIRP,LMOLAB
-c     mini-mem #2 - #4 mem vars
-      INTEGER LVEC2,LVEC3,LVEC534,LSVMBS,LEIG
-      INTEGER LWRK,LIWRK,LDEN
-      INTEGER LSTRI,LIWRKP,LRADWGT,LSAVWGT
-C-----END OF MEMORY VARIABLES
-      CHARACTER*5 CICODE
-      DOUBLE PRECISION :: FANT,GANT
-      INTEGER LFANT
-      INTEGER NRNFG(10),NPFLG2(10)
-C
-      DOUBLE PRECISION :: TMP,ENUC
-      INTEGER II,ITMP,ITMP2,IERR,ICHK,ICHK2,IKIND
-C-----------------------------------------------------------------------
-C
-      LOGICAL ANALYS,SAFLG
-      INTEGER ICLBBR,IPRTSA
-C
-      DOUBLE PRECISION ::
-     *       CRIT,DWPARM,GLIST,GRPDET,PRTTOL,S,SPINS,SZ,
-     *       WSTATE,STSYM
-      INTEGER IDWEIGH,IGPDET,IPURES,IROOT,IWTS,KDET,KSTDET,
-     *        KSTSYM,MAXP,MAXW1,NACTDT,NADET,NBDET,NCI,NCOR,NCORSV,
-     *        NFLGDM,NFTGCI,NITDET,NORBDT
-C
-      DOUBLE PRECISION ::
-     *       ENUCR,EELCT,ETOT,STOT,SZZ,ECORE,ESCF,EERD,E1,E2,
-     *       VEN,VEE,EPOT,EKIN,ESTATE,STATN,EDFT,EDISP
-C
-      LOGICAL FDIRCT,QCORR
-      INTEGER NSPACE,MSTA,MNUM,MINI,MAXI,IAMI,IAMA,IBMI,IBMA,IDIMFCC,
-     *        LBST,NREF0
-      DOUBLE PRECISION :: C0SQ
-C
-      LOGICAL BLOCK
-C
-      DOUBLE PRECISION :: X
-C
-      DOUBLE PRECISION :: C
-      DOUBLE PRECISION :: ZAN
-      INTEGER ICH,NQMT,NUM,MUL,NA,NAT,NB,NE,IAN
-C
-      INTEGER IR,IW,IP,IS,IPK,IDAF,NAV,IODA
-C
-      LOGICAL CANONC,FCORE,FORS,EKT,LINSER
-      DOUBLE PRECISION ::
-     *       FINALCI,METHOD,CISTEP,ACURCY,ENGTOL,DAMP
-      INTEGER MICIT,NWRDMC,NORBMC,NOROT,MOFRZ,
-     *        NPFLG,NOFO,MCFMO,IDIABAT
-C
-      LOGICAL ORIENT,ORIKIN,ORMFUL
-      INTEGER NATMOR,ISVMOR,ISVDOP
-      DOUBLE PRECISION :: EXTLOC,EREFATM
-C
-      INTEGER NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
-C
-      INTEGER ME,MASTER,NPROC,IBTYP,IPTIM
-      LOGICAL GOPARR,DSKWRK,MASWRK
-C
-      DOUBLE PRECISION ::
-     *       RUNTYP,EXETYP,CHECK
-      INTEGER NEVALS,NGLEVL,NHLEVL
-C
-      DOUBLE PRECISION :: SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP
-      INTEGER MPLEVL,MPCTYP
-C
-      INTEGER IVVOS,NVVOS
-      DOUBLE PRECISION ::
-     *       BNDDEN
-C
-C-----------------------------------------------------------------------
-      INTEGER MXAO,MXATM,MXRT,MXNORO
-      PARAMETER (MXAO=8192, MXATM=2000, MXRT=100, MXNORO=250)
-      INTEGER ISIZE_EDFT
-      PARAMETER (ISIZE_EDFT=2)
-C-----------------------------------------------------------------------
-
-C-----------------------------------------------------------------------
-C     EXTENSIVE LIST OF CLONED VARS.
-C-----------------------------------------------------------------------
-C
-      LOGICAL ANALYS_SAV,SAFLG_SAV
-      INTEGER ICLBBR_SAV,IPRTSA_SAV
-C
-      DOUBLE PRECISION ::
-     *       WSTATE_SAV(MXRT),SPINS_SAV(MXRT),CRIT_SAV,PRTTOL_SAV,
-     *       S_SAV,SZ_SAV,GRPDET_SAV,STSYM_SAV,GLIST_SAV,DWPARM_SAV
-      INTEGER NFLGDM_SAV(MXRT),IWTS_SAV(MXRT),NCORSV_SAV,NCOR_SAV,
-     *        NACTDT_SAV,NORBDT_SAV,NADET_SAV,NBDET_SAV,KDET_SAV,
-     *        KSTDET_SAV,IROOT_SAV,IPURES_SAV,MAXW1_SAV,NITDET_SAV,
-     *        MAXP_SAV,NCI_SAV,IGPDET_SAV,KSTSYM_SAV,NFTGCI_SAV,
-     *        IDWEIGH_SAV
-C
-      DOUBLE PRECISION ::
-     *       ENUCR_SAV,EELCT_SAV,ETOT_SAV,STOT_SAV,SZZ_SAV,
-     *       ECORE_SAV,ESCF_SAV,EERD_SAV,E1_SAV,E2_SAV,
-     *       VEN_SAV,VEE_SAV,EPOT_SAV,EKIN_SAV,ESTATE_SAV(MXRT),
-     *       STATN_SAV,EDFT_SAV(ISIZE_EDFT),EDISP_SAV
-C
-      LOGICAL FDIRCT_SAV,QCORR_SAV
-      DOUBLE PRECISION :: C0SQ_SAV
-      INTEGER NSPACE_SAV,
-     *        MSTA_SAV(51),MNUM_SAV(51),MINI_SAV(51),MAXI_SAV(51),
-     *        IAMI_SAV(51),IAMA_SAV(51),IBMI_SAV(51),IBMA_SAV(51),
-     *        IDIMFCC_SAV(51),LBST_SAV(51),NREF0_SAV
-C
-      LOGICAL BLOCK_SAV
-C
-      DOUBLE PRECISION :: SCFTYP_SAV,CITYP_SAV
-C
-      DOUBLE PRECISION :: ZAN_SAV(MXATM)
-      INTEGER ICH_SAV,MUL_SAV,IAN_SAV(MXATM)
-C
-C-----------------------------------------------------------------------
-C     END OF EXTENSIVE LIST OF CLONED VARS.
-C-----------------------------------------------------------------------
-C     NOTES:
-C     IF ANY ARGUMENTS ARE ADDED TO THESE COMMONS,
-C     PLEASE SET UP THE SAVING VARS IN THIS ROUTINE
-C     OR
-C     NOTIFY AARON SO THAT HE MAY DO SO...
-C
-      COMMON /DETPAR/ ICLBBR,ANALYS,SAFLG,IPRTSA
-      COMMON /DETWFN/ WSTATE(MXRT),SPINS(MXRT),CRIT,PRTTOL,S,SZ,
-     *                GRPDET,STSYM,GLIST,DWPARM,
-     *                NFLGDM(MXRT),IWTS(MXRT),NCORSV,NCOR,NACTDT,NORBDT,
-     *                NADET,NBDET,KDET,KSTDET,IROOT,IPURES,MAXW1,NITDET,
-     *                MAXP,NCI,IGPDET,KSTSYM,NFTGCI,IDWEIGH
-      COMMON /ENRGYS/ ENUCR,EELCT,ETOT,STOT,SZZ,ECORE,ESCF,EERD,E1,E2,
-     *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2),EDISP
-      COMMON /FCCWFN/ NSPACE,MSTA(51),MNUM(51),MINI(51),MAXI(51),
-     *                IAMI(51),IAMA(51),IBMI(51),IBMA(51),IDIMFCC(51),
-     *                LBST(51),NREF0,FDIRCT,QCORR,C0SQ
-      COMMON /FCCWFO/ BLOCK
-      COMMON /FMCOM / X(1)
-      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
-     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
-      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
-      COMMON /MCINP / METHOD,CISTEP,FINALCI,ACURCY,ENGTOL,DAMP,
-     *                MICIT,NWRDMC,NORBMC,NOROT(2,MXNORO),MOFRZ(15),
-     *                NPFLG(10),NOFO,MCFMO,IDIABAT,
-     *                CANONC,FCORE,FORS,EKT,LINSER
-      COMMON /ORNTMO/ EXTLOC,EREFATM,
-     *                NATMOR(MXAO),ISVMOR(MXATM),ISVDOP,
-     *                ORIENT,ORIKIN,ORMFUL
-      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
-      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
-      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
-      COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
-     *                MPLEVL,MPCTYP
-      COMMON /VVOPAR/ IVVOS,NVVOS,BNDDEN
-C-----------------------------------------------------------------------
-      DOUBLE PRECISION :: ONE,TWO,TOL_NOS_EXT,TOL_CUTDEN
-      PARAMETER (ONE=1.0D+00, TWO=2.0D+00)
-      PARAMETER (TOL_NOS_EXT=1.0D-08) ! part. int. gave 1.2d-10 error diff
-      PARAMETER (TOL_CUTDEN=1.0D-03)
-C-----------------------------------------------------------------------
-C
-C     DEFINE PRINT STUFF
-      SOME  = NPRINT.NE.-5 .AND. MASWRK
-C
-C     DATA STUFF
-      DATA ATMNOS/8HATMNOS  /
-      DATA CHECK/8HCHECK   /
-      DATA RMC,ORMAS/8HMCSCF   ,8HORMAS   /
-      DATA RHF/8HRHF     /
-      DATA RNONE/8HNONE    /
-      DATA FANT/8HC1      /
-      DATA LFANT/1/
-      DATA GANT/8HA       /
-C      DATA LGANT/0/
-      DATA NRNFG /1,1,1,0,1,0,0,0,0,0/
-      DATA NPFLG2 /0,0,0,0,0,0,0,0,0,0/
-C
-C     DETERMINE IF ANALYSIS IS POSSIBLE.
-C     IF NOT, EXIT OUT.
-      COMBO=.FALSE.
-      IF(EXTLOC.EQ.ATMNOS) COMBO=.TRUE.
-      IF(.NOT.COMBO) RETURN
-C
-C     PRINT BANNER
-      IF(SOME) WRITE(IW,9000)
-      CALL FLSHBF(IW)
-C
-C------------------------------------------
-C     SET UP SOME DIMENSIONS
-      L0 = NQMT
-      L1 = NUM
-      L2 = (L1*L1+L1)/2
-      L3 = L1*L1
-      L0TRI = (L0*L0+L0)/2
-C     SET UP L0MBS DIMENSION
-      ISWMBS=1
-      L0MBS=NVVOS_NUMCOR(0,0)
-      DO I=1,NAT
-        L0MBS=L0MBS+LOCAL_NUMVAL(I,ISWMBS)
-      ENDDO
-C     SET UP ISIZE_FCCWFN
-      ISIZE_FCCWFN=51
-C------------------------------------------
-C
-C     ERROR OUTS
-C     NOTE:  CONSIDER ADDING SCFTYP=ORMAS HERE LATER.
-      NERR=0
-      OK=.FALSE.
-      IF(SCFTYP.EQ.RHF) OK=.TRUE.
-      IF(SCFTYP.EQ.RMC.AND.CISTEP.EQ.ORMAS) OK=.TRUE.
-      IF(.NOT.OK) THEN
-        IF(MASWRK) WRITE(IW,9002)
-        NERR=NERR+1
-      ENDIF
-      IF(IVVOS.EQ.0.AND.ISVDOP.NE.10) THEN
-        IF(MASWRK) WRITE(IW,9003)
-        NERR=NERR+1
-      ENDIF
-      IF(L0.EQ.L0MBS) THEN
-        IF(MASWRK) WRITE(IW,9004)
-        NERR=NERR+1
-      ENDIF
-C
-      IF(NERR.GT.0) THEN
-        CALL FLSHBF(IW)
-        CALL ABRT
-        STOP
-      ENDIF
-C
-C     SKIP FOR EXETYP
-      IF(EXETYP.EQ.CHECK) GO TO 8999
-C
-C     ALLOCATE MEMORY.
-C     THIS MEM IS SAVED THROUGHOUT THE ROUTINE
-C     UNLIKE THE MINI-MEM IN THE LOOP BELOW.
-      CALL GOTFM(NGOTMX)
-      CALL VALFM(LOADFM)
-      LS         = LOADFM     + 1
-      LVECF15SAV = LS         + L2
-      LVECCOL    = LVECF15SAV + L3
-      LVEC       = LVECCOL    + L3
-      LIPOSMBS   = LVEC       + L3
-      LILENMBS   = LIPOSMBS   + (NAT+1)
-      LIATSVD    = LILENMBS   + NAT
-      LIPOSEXT   = LIATSVD    + L1
-      LEIGHLD    = LIPOSEXT   + (NAT+1)
-      LAST      = LEIGHLD    + L1*NAT
-      NEED_NOS_EXT = LAST - LOADFM - 1
-      CALL GETFM(NEED_NOS_EXT)
-C
-C--------------------------------------------------------------
-C     SAVE IMPORTANT VARS
-C     NOTE:  ORMAS-CI IS SET UP AT SAME TIME BELOW.
-C--------------------------------------------------------------
-      CALL DAREAD(IDAF,IODA,X(LVECF15SAV),L3,15,0)
-C     TYP VARS
-      SCFTYP_SAV=SCFTYP
-      CITYP_SAV=CITYP
-C     DET PAR VARS
-      ANALYS_SAV=ANALYS
-      ICLBBR_SAV=ICLBBR
-      IPRTSA_SAV=IPRTSA
-      SAFLG_SAV=SAFLG
-C     DET VARS
-      CRIT_SAV=CRIT
-      PRTTOL_SAV=PRTTOL
-      S_SAV=S
-      SZ_SAV=SZ
-      GRPDET_SAV=GRPDET
-      STSYM_SAV=STSYM
-      GLIST_SAV=GLIST
-      DWPARM_SAV=DWPARM
-      NCORSV_SAV=NCORSV
-      NCOR_SAV=NCOR
-      NACTDT_SAV=NACTDT
-      NORBDT_SAV=NORBDT
-      NADET_SAV=NADET
-      NBDET_SAV=NBDET
-      KDET_SAV=KDET
-      KSTDET_SAV=KSTDET
-      IROOT_SAV=IROOT
-      IPURES_SAV=IPURES
-      MAXW1_SAV=MAXW1
-      NITDET_SAV=NITDET
-      MAXP_SAV=MAXP
-      NCI_SAV=NCI
-      IGPDET_SAV=IGPDET
-      KSTSYM_SAV=KSTSYM
-      NFTGCI_SAV=NFTGCI
-      IDWEIGH_SAV=IDWEIGH
-C     ENGRYS VARS
-      ENUCR_SAV=ENUCR
-      EELCT_SAV=EELCT
-      ETOT_SAV=ETOT
-      STOT_SAV=STOT
-      SZZ_SAV=SZZ
-      ECORE_SAV=ECORE
-      ESCF_SAV=ESCF
-      EERD_SAV=EERD
-      E1_SAV=E1
-      E2_SAV=E2
-      VEN_SAV=VEN
-      VEE_SAV=VEE
-      EPOT_SAV=EPOT
-      EKIN_SAV=EKIN
-      DO I=1,MXRT
-        ESTATE_SAV(I)=ESTATE(I)
-      ENDDO
-      STATN_SAV=STATN
-      DO I=1,ISIZE_EDFT
-        EDFT_SAV(I)=EDFT(I)
-      ENDDO
-      EDISP_SAV=EDISP
-C     DET ARRAY VARS
-      DO I=1,MXRT
-        WSTATE_SAV(I)=WSTATE(I)
-        SPINS_SAV(I)=SPINS(I)
-        NFLGDM_SAV(I)=NFLGDM(I)
-        IWTS_SAV(I)=IWTS(I)
-      ENDDO
-C     ORMAS VARS
-      NSPACE_SAV=NSPACE
-      NREF0_SAV=NREF0
-      C0SQ_SAV=C0SQ
-      FDIRCT_SAV=FDIRCT
-      QCORR_SAV=QCORR
-      BLOCK_SAV=BLOCK
-C     ORMAS ARRAY VARS
-      DO I=1,ISIZE_FCCWFN
-        MSTA_SAV(I)=MSTA(I)
-        MNUM_SAV(I)=MNUM(I)
-        MINI_SAV(I)=MINI(I)
-        MAXI_SAV(I)=MAXI(I)
-        IAMI_SAV(I)=IAMI(I)
-        IAMA_SAV(I)=IAMA(I)
-        IBMI_SAV(I)=IBMI(I)
-        IBMA_SAV(I)=IBMA(I)
-        IDIMFCC_SAV(I)=IDIMFCC(I)
-        LBST_SAV(I)=LBST(I)
-      ENDDO
-C     INFOA VARS NEEDED.
-      ICH_SAV=ICH
-      MUL_SAV=MUL
-      DO I=1,NAT
-        ZAN_SAV(I)=ZAN(I)
-        IAN_SAV(I)=IAN(I)
-      ENDDO
-C--------------------------------------------------------------
-C     END OF SAVE IMPORTANT VARS
-C--------------------------------------------------------------
-C
-C--------------------------------------------------------------
-C     SET UP FOR ORMAS-CI
-C--------------------------------------------------------------
-C
-C     SET UP SOME ORMAS DIMS.
-C     ----USE A SINGLE 2S ORBITAL AS THE OCCUPIED,VALENCE ORBITAL
-      III_OCC_ORB=1
-      IEXCIT=2
-C
-C     TYP VARS
-      SCFTYP=RNONE
-      CITYP=ORMAS
-C
-C     WANT THE NOS TO BE 'BLOCKED'
-C     NOTE:  FOR NOW, BLOCK OPTION IS JUST FOR SHOW.
-      BLOCK=.TRUE.
-C
-C     DET PAR VARS
-      ICLBBR=0
-      ANALYS=.FALSE.
-C
-C     INFOA VARS
-C     NOTE:  ZAN,IAN ARE CONSTANTLY RESET IN THE LOOP OVER ATOMS.
-      MUL=1
-      ICH=0
-C     THE CHANGE IN ZAN,IAN IS NOT SO SIMPLE.  SEE BELOW.
-C
-C     DET VARS
-C     NOTE:  REGARDLESS OF MOLECULAR SPIN, ALWAYS USE THE
-C            THE SINGLET SPIN FOR THESE ATOMIC CI RUNS.
-      SZ = (MUL-1)/TWO
-      S = 0
-      IPURES = 1
-      MCORE = 0
-      NCOR = MCORE
-      NCORSV = MCORE
-C
-C     DET ARRAY VARS
-      CICODE='ORMAS'
-      NHIGH=INT(SZ+SZ+0.0001D+00)
-      NELS=2
-      NBDET=(NELS-NHIGH)/2
-      NADET=NBDET+NHIGH
-C
-C     MOS ON INDIVIDUAL ATOMS NEVER HAVE MOLECULAR SYMMETRY.
-C     NOTE:  INTEGRAL EXPENSE MIGHT BE AVOIDED
-C            FOR STARTING GROUP=C1, BUT THIS IS MINOR.
-      KSTSYM=1
-      GRPDET=FANT
-      IGPDET=LFANT
-      STSYM=GANT
-c
-c     mini-mem #1
-      call gotfm(ngotmx)
-      call valfm(loadfm)
-      lmoirp = loadfm + 1
-      lmolab = lmoirp + L1
-      last   = lmolab + L1
-      need_nos_ext2 = last - loadfm - 1
-      call getfm(need_nos_ext2)
-c
-      CALL C1DET(X(LMOIRP),X(LMOLAB),L0)
-      CALL GAJASW(X(LMOIRP),NUM,GRPDET)
-      CALL DAWRIT(IDAF,IODA,X(LMOIRP),L1,262,1)
-c
-c     end of mini-mem #1
-      call retfm(need_nos_ext2)
-c
-      CALL SYMOFF
-      CALL JANDK
-      CALL SYMON
-      CALL SEQREW(IS)
-C
-C     SET UP CI ROOTS
-      IROOT=1
-      CALL VCLR(WSTATE,1,MXRT)
-      WSTATE(1) = ONE
-      CALL VICLR(NFLGDM,1,MXRT)
-      NFLGDM(1) = 1
-      CALL VICLR(IWTS,1,MXRT)
-      IWTS(1)=1
-C
-C     SET UP CONVERGENCE ITEMS.
-C     --WANT TO CRANK UP INPUTS FOR CONVERGING OUT THE LOWEST STATES.
-C     ...BUT SINGLET DAVIDSON HAS SPIN ISSUES FOR DET. CODE.
-C     ...SO  LEAVE NSTATE=3 FOR NOW.
-      MAXW1  = 300    ! NHGSS
-      CRIT   = 1D-06  ! CVGTOL
-      NITDET = 300    ! ITERMX
-      KDET   = 3      ! NSTATE
-      KSTDET = 1      ! NSTGSS
-      MAXP   = 10     ! MXXPAN
-      PRTTOL = 0.05D+00
-C
-C--------------------------------------------------------------
-C     END OF SET UP FOR ORMAS-CI
-C--------------------------------------------------------------
-C
-C
-C     TASK 1: GET INFO ON ATOM POSITIONS NOW.
-C             GET MAX. # OF ACTIVE ORBITALS FOR LOOPS OVER ATOMS.
-C             CLEAR OUT LVECCOL FOR EASY VIEWING.
-      CALL LOCAL_VVOS_ORB_RANGE(X(LIPOSMBS),X(LILENMBS),NAT)
-      MAX_NACT_ORBS=0
-      CALL LOCAL_READ_FILE528_WITH_CORES(X(LIATSVD),NAT,L0,MASWRK)
-      CALL LOCAL_MAXNACT(X(LIATSVD),X(LIPOSEXT),
-     *                   NAT,L0MBS,L0,MAX_NACT_ORBS,
-     *                   MASWRK,IW)
-      MAX_NACT_ORBS=MAX_NACT_ORBS+III_OCC_ORB
-      ITMP=MAX_NACT_ORBS
-      ITMP2=(ITMP*ITMP+ITMP)/2
-      MAX_NACT_ORBS_TRI=ITMP2
-      CALL VCLR(X(LVECCOL),1,L3)
-C
-C
-C
-C
-C     TASK 2: RESET IDAF FILES IN ORDER TO DO MORE RUNS.
-C             E.G. (2,2)ORMAS + THEN THIS LOCALIZING RUN.
-C
-C     THESE 3 ARE ESSENTIAL.
-      IODA(320)= -1 ! ,320,
-      IODA(68) = -1 ! ,68,
-C     ERASCI IS CALLED BELOW.
-C     THESE 3 ARE SO NO ONE CONFUSES WHAT IS ACTUALLY ON FILE OR NOT...
-      IODA(19) = -1 ! ,19,
-      IODA(20) = -1 ! ,20,
-      IODA(21) = -1 ! ,21,
-C
-C
-C
-C
-C     TASK 3: LOOP OVER ATOMS
-C     --------ACTUALLY SEVERAL TASKS WITH THE LOOP.
-C     --------INTEGRALS HAVE GRADM-SCHMIDT.
-C     --------SO, DON'T NEED TO WORRY ABOUT DSWAPING ORBITALS.
-      DO IATM1=1,NAT
-C
-C       RESET ZAN,IAN FOR NVVOS_NUMCOR STUFF.
-        DO I=1,NAT
-          ZAN(I)=ZAN_SAV(I)
-          IAN(I)=IAN_SAV(I)
-        ENDDO
-
-C
-C
-C
-C
-C       PREPARE DAF FILE 15 FOR THE NEXT ROUND.
-C       NOTE:  2S ORBITAL IS FROM ANOTHER MO SET.
-C              IT IS NOT ORTHOGONAL TO THE EXTERNALS.
-        IF(SOME) WRITE(IW,9050) IATM1
-c
-c       mini-mem #2
-        call gotfm(ngotmx)
-        call valfm(loadfm)
-        lvec2   = loadfm  + 1
-        lvec3   = lvec2   + l3
-        lvec534 = lvec3   + l3
-        lsvmbs  = lvec534 + l3
-        leig    = lsvmbs  + l1*l0mbs
-        last    = leig    + l1
-        need_nos_ext2 = last - loadfm - 1
-        call getfm(need_nos_ext2)
-c
-c
-        CALL DAREAD(IDAF,IODA,X(LVEC534),L3,522,0) !yes 522 right now.
-        CALL DAREAD(IDAF,IODA,X(LSVMBS),L1*L0MBS,533,0)
-        IEXTORB=0
-        IMOPROJ=1
-        CALL LOCAL_NOS__PREP15(
-     *       IEXTORB,X(LVEC),X(LVEC534),X(LSVMBS),
-     *       X(LIPOSMBS),X(LIPOSEXT),
-     *       IATM1,NAT,L0MBS,L0,L1,L3,III_OCC_ORB,
-     *       IMOPROJ,X(LVEC3),X(LEIG),
-     *       IW,MASWRK)
-C
-C       AT THIS POINT, WE DEFINE ITOTOCC RIGHT AWAY.
-        ITOTOCC=III_OCC_ORB+IEXTORB
-C
-C       PRESERVE THE LVEC FOR COMPARISON PURPOSES LATER ON.
-        CALL DCOPY(L3,X(LVEC),1,X(LVEC2),1)
-C
-C       CANNOT USE G.S. IN TRFMCX WITHOUT MORE ARGUMENTS.
-C       --THIS OCCURS B/C DIFFERENT ATOMS HAVE VARYING OCCUPIED MOS.
-C       --WE ALREADY DEAL WITH THIS BY IDAF -1 RESET... ONE TIME DEAL.
-        CALL DAREAD(IDAF,IODA,X(LS),L2,12,0)
-        CALL DAREAD(IDAF,IODA,X(LVEC3),L3,45,0)
-        CALL ORTHO(X(LVEC3),X(LS),X(LVEC2),X(LEIG),ITOTOCC,L0,L1,L2,L1)
-        CALL TFSQB(X(LVEC2),X(LVEC3),X(LEIG),L0,L1,L1)
-C
-C       WRITE OUT VECTORS DAF FILE 15 FOR INTEGRALS.
-        CALL DAWRIT(IDAF,IODA,X(LVEC2),L3,15,0)
-c
-c       end of mini-mem #2
-        call retfm(need_nos_ext2)
-C
-C-------------------------------------------------
-C       SETUP EFFECTIVE NUCLEAR CHARGES.
-C-------------------------------------------------
-C       ZAN,IAN RESET IN NEXT ROUTINE.
-        ITMP=ICH_SAV
-        CALL LOCAL_NOS__NUCLEAR_CHARGES(
-     *       ZAN,IAN,IAN_SAV,IATM1,NAT,ITMP,
-     *       IW,SOME,MASWRK)
-        ENUCR=ENUC(NAT,ZAN,C)
-        EELCT=0.0D+00
-        ETOT=0.0D+00
-        CALL ONEEI
-C-------------------------------------------------
-C       END OF SETUP EFFECTIVE NUCLEAR CHARGES.
-C-------------------------------------------------
-C
-C-------------------------------------------------
-C       PERFORM CI
-C-------------------------------------------------
-C       DET ARRAY VARS
-        NACTDT=MAX_NACT_ORBS
-        NORBDT=MAX_NACT_ORBS
-C       ORMAS AND ORMAS ARRAY VARS
-C       NOTE:  FAKE AN EXTRA SPACE TO AVOID FILE SIZE CONFLICTS.
-C              RE-VISIT THIS POINT FOR MEM. LATER.
-C
-        CALL VICLR(MSTA,1,ISIZE_FCCWFN)
-        CALL VICLR(MNUM,1,ISIZE_FCCWFN)
-        CALL VICLR(MINI,1,ISIZE_FCCWFN)
-        CALL VICLR(MAXI,1,ISIZE_FCCWFN)
-        CALL VICLR(IAMI,1,ISIZE_FCCWFN)
-        CALL VICLR(IAMA,1,ISIZE_FCCWFN)
-        CALL VICLR(IBMI,1,ISIZE_FCCWFN)
-        CALL VICLR(IBMA,1,ISIZE_FCCWFN)
-        CALL VICLR(IDIMFCC,1,ISIZE_FCCWFN)
-        CALL VICLR(LBST,1,ISIZE_FCCWFN)
-C
-        IF(ITOTOCC.EQ.MAX_NACT_ORBS) THEN
-          NSPACE  = 2
-          MSTA(1) = NCORSV+1
-          MSTA(2) = III_OCC_ORB+1
-          MSTA(3) = ITOTOCC+1
-          MSTA(4) = 0
-          MNUM(3) = 0
-        ELSE
-          NSPACE  = 3
-          MSTA(1) = NCORSV+1
-          MSTA(2) = III_OCC_ORB+1
-          MSTA(3) = ITOTOCC+1
-          MSTA(4) = MAX_NACT_ORBS+1
-          MNUM(3) = MAX_NACT_ORBS-IEXTORB-III_OCC_ORB
-        ENDIF
-        MNUM(1) = III_OCC_ORB-NCORSV
-        MNUM(2) = IEXTORB
-        MINI(1) = NELS-IEXCIT
-        MINI(2) = 0
-        MAXI(1) = NELS
-        MAXI(2) = IEXCIT
-        FDIRCT  = .TRUE.
-        QCORR   = .FALSE.
-        CALL FCCHECK(IW,SOME,NSPACE,MNUM,MINI,MAXI,
-     *               IAMI,IAMA,IBMI,IBMA,NADET,NBDET)
-C
-C       PRINT OFF INFO THAT THE CI WILL DO.
-        IF(SOME) WRITE(IW,9060)
-     *             IEXCIT,CICODE,NCORSV,
-     *             III_OCC_ORB+IEXTORB,
-     *             III_OCC_ORB,IEXTORB,NELS
-C
-C       ACTUALLY RUN THE CI
-C       NOTE1:  NEVER READ $CIDET INPUT INSIDE OF ORDET.
-C               THIS ITEM IS NOW CODED IN ORDET.
-C       NOTE2:  BASED ON CURRENT CODE,
-C               SYMOFF INFO SHOULD NOT BE LOST.
-        IF(IATM1.EQ.1) CALL ERASCI
-        CALL SYMOFF
-        CALL ORDET(NRNFG,NPFLG2)
-        CALL SYMON
-        CALL ERASCI
-C
-C       CHECK THAT NELS REMAINED 2 ELECTRONS.
-C       I.E. NO CHANGES TO NELS BY ROUNDING ZAN.
-        IF(NELS.NE.2) THEN
-          IF(MASWRK) WRITE(IW,9061)
-          CALL FLSHBF(IW)
-          CALL ABRT
-          STOP
-        ENDIF
-C
-C-------------------------------------------------
-C       END OF PERFORM CI
-C-------------------------------------------------
-C
-
-C
-C       CHECK INTEGRAL ROUTINES DID NOT CHANGE DAF FILE 15 MOS.
-C       --THE INPUT MOS WERE SYM. ORTHOG. UP TO ITOTOCC.
-C       --TRFMCX WANTS TO DO G.S. ORTHOG. UP TO L0.
-C       --NEED TO GENERATE COMPLEMENT SPACE HERE
-C         RATHER THAN INSIDE OF TRFMCX.... TRUST ME.
-C       --THE FIRST 2S ORBITAL IS NOT NORMALIZED IN THE PROJECTION PREP.
-C         SO, IT'S LCAO COEFF PROBABLY CHANGE.
-c
-c       mini-mem #3
-        call gotfm(ngotmx)
-        call valfm(loadfm)
-        lvec2   = loadfm  + 1
-        lvec3   = lvec2   + l3
-        lwrk    = lvec3   + l3
-        liwrk   = lwrk    + l1*8
-        leig    = liwrk   + l1
-        lden    = leig    + l1
-        last    = lden    + l2
-        need_nos_ext2 = last - loadfm - 1
-        call getfm(need_nos_ext2)
-c
-c
-C
-C       RECOVER DAF FILE 15 MOS.
-C       NOTE:  FOR NOW, BLOCK OPTION IS JUST FOR SHOW.
-        CALL DAREAD(IDAF,IODA,X(LVEC2),L3,15,0)
-CKEEP        IF(MASWRK) THEN
-CKEEP          WRITE(IW,*) 'LOCAL_NOS_EXT ATOM=',IATM1
-CKEEP          WRITE(IW,9900)
-CKEEP          CALL PRSQL(X(LVEC2),L0,L1,L1)
-CKEEP          WRITE(IP,*) 'LOCAL_NOS_EXT ATOM=',IATM1
-CKEEP          WRITE(IP,*) ' $VEC'
-CKEEP          CALL PUSQL(X(LVEC2),L0,L1,L1)
-CKEEP          WRITE(IP,9085)
-CKEEP        ENDIF
-        ICHK=1
-        III_NEXT=III_OCC_ORB+1
-        DO I=III_NEXT,ITOTOCC
-          DO J=1,L1
-            IJ=J+(I-1)*L1
-            IJ=IJ-1
-            TMP=X(LVEC2+IJ)-X(LVEC+IJ)
-            TMP=ABS(TMP)
-            IF(TMP.GT.TOL_NOS_EXT) ICHK=0
-          ENDDO
-        ENDDO
-        CALL DCOPY(L3,X(LVEC2),1,X(LVEC),1)
-C
-C       RECOVER CANONICAL DENSITY MATRIX
-C       CHECK THAT EXTRA DENSITY ELEMENTS (IF ANY) ARE ZEROS.
-        ICHK2=0
-        CALL DAREAD(IDAF,IODA,X(LDEN),MAX_NACT_ORBS_TRI,320,0)
-        IF(NSPACE.EQ.2) ICHK2=1
-        IF(NSPACE.EQ.3) THEN
-          ICHK2=1
-          DO I=ITOTOCC+1,MAX_NACT_ORBS
-            DO J=ITOTOCC+1,I
-              IJ=(I*I-I)/2 + J
-              IJ=IJ-1
-              TMP=X(LDEN+IJ)
-              TMP=ABS(TMP)
-              IF(TMP.GT.1.0D-12) ICHK2=0
-            ENDDO
-          ENDDO
-          IF(MAX_NACT_ORBS.LE.ITOTOCC) ICHK2=0
-        ENDIF
-        IF(ICHK.EQ.0.OR.ICHK2.EQ.0) THEN
-          IF(MASWRK) THEN
-            IF(ICHK.EQ.0) WRITE(IW,9065)
-            IF(ICHK2.EQ.0) WRITE(IW,9066)
-          ENDIF
-          CALL FLSHBF(IW)
-          CALL ABRT
-          STOP
-        ENDIF
-C
-C       DIAGONALIZE DENSITY MATRIX BUT ONLY IN EXTERNAL SPACE
-C       AND
-C       FORM EXTERNAL NOS ON ATOM IATM1
-        CALL VCLR(X(LEIG),1,L1)
-        CALL LOCAL_NOS__PREPDEN(
-     *       X(LDEN),X(LS),
-     *       L2,III_OCC_ORB+1,ITOTOCC,
-     *       L1,X(LWRK),X(LEIG),X(LIWRK),X(LVEC3),X(LVEC2),
-     *       X(LVEC),
-     *       SOME,IW)
-C       NOTE1:  LEIG CONTAINS ONLY EXTERNAL DENSITIES.
-C       NOTE2:  SCALED OCCUPATION NUMBERS
-        TMP=ETOT-EREFATM
-        TMP=ABS(TMP)
-        CALL DSCAL(L1,TMP,X(LEIG),1)
-        IF(IATM1.EQ.1) CALL VCLR(X(LEIGHLD),1,L1*NAT)
-        CALL DCOPY(L1,X(LEIG),1,X(LEIGHLD+L1*(IATM1-1)),1)
-c
-c       end of mini-mem #3
-        call retfm(need_nos_ext2)
-C
-C       SAVE NOS INTO COLLECTIVE SET LVECCOL.
-        III_DIRECT=1
-        CALL LOCAL_NOS__PREP534(
-     *       X(LVEC),X(LVECCOL),X(LIPOSEXT),
-     *       IATM1,NAT,L1,III_OCC_ORB,III_DIRECT)
-
-C
-C
-C
-C
-C     TASK 3:  END THE LOOP OVER ATOMS
-      ENDDO
-C
-      CALL ONEEI
-C
-C     IMMEDIATELY RESET ZAN,IAN FOR OTHER ROUTINES.
-C     THIS RESET IS IMPORTANT.
-      DO I=1,NAT
-        ZAN(I)=ZAN_SAV(I)
-        IAN(I)=IAN_SAV(I)
-      ENDDO
-C
-C
-C
-C
-c
-c       mini-mem #4
-c       note:  re-define l0tri just to be paranoid...
-        l0tri=(l0*l0+l0)/2
-        call gotfm(ngotmx)
-        call valfm(loadfm)
-        lstri         = loadfm   + 1
-        lvec2         = lstri    + l0tri
-        lvec534       = lvec2    + l3
-        leig          = lvec534  + l3
-        liwrk         = leig     + l1
-        lwrk          = liwrk    + l1
-        liwrkp        = lwrk     + l1*8
-        lradwgt       = liwrkp   + (l0+1)
-        lsavwgt       = lradwgt  + l0*nat
-        last          = lsavwgt  + l0
-        need_nos_ext2 = last - loadfm - 1
-        call getfm(need_nos_ext2)
-C
-C     SAVE THE L0MBS MOS INTO COLLECTIVE SET LVECCOL.
-C     NOTE:  KEEP THE ER OR BOYS ORBITALS.
-C            DON'T TAKE THE OCCUPIED FROM SVD OR WHATEVER.
-      CALL DAREAD(IDAF,IODA,X(LVEC534),L3,534,0)
-      CALL DCOPY(L1*L0MBS,X(LVEC534),1,X(LVECCOL),1)
-C
-C
-C
-C------------------------------------------------------------------
-C------------------------------------------------------------------
-C     WEIGHTED SYMMETRIC ORTHOGONALIZATION
-C     FOR COLLECTIVE ORBITAL SET LVECCOL
-C------------------------------------------------------------------
-C------------------------------------------------------------------
-C     --NOTE:  DON'T LET INTEGRAL G.S. DESTROY ORBITALS LATER.
-C     FOR THE WEIGHTS, CALCULATE THE FOLLOWING:
-C     --ATOMIC RADIAL EXPECTATION VALUE
-C       I.E. V_RAD_uv = INTEGRAL OF AO_u*AO_v/|r-R_A| FOR ATOM A.
-C     --FORM MO VERSION V_RAD_ii = C_iu * V_NUC_uv * C_vi
-C     THEN...
-C     BASED ON THE CUT-OFF TOL_CUTDEN,
-C     --REORDER EXTERNAL ORBITALS FROM BIG-TO-SMALL OCCUPATION.
-C     --PUT REORDERING INSTRUCTIONS INTO LIWRKP ARRAY.
-      CALL DCOPY(L3,X(LVECCOL),1,X(LVEC),1)
-      DO IATM1=1,NAT
-        CALL LOCAL_ATOMIC_HSANDT(X(LS),L2,2,IATM1,0)
-        CALL TFTRI(X(LSTRI),X(LS),X(LVEC),X(LEIG),L0,L1,L1)
-        DO I=1,L0
-          II=(I*I-I)/2+I
-          II=II-1
-          ITMP=I+L0*(IATM1-1)
-          ITMP=ITMP-1
-          X(LRADWGT+ITMP)=X(LSTRI+II)
-        ENDDO
-      ENDDO
-C
-C     PREPARE SAVWGT AND IWRKP ARRAYS.
-      ICOUNT_NOS=0
-      ISAV_NOS=0
-      TMP=TOL_CUTDEN
-      IOPTION=0
-      CALL LOCAL_NOS__PREPWGTSANDORDER(
-     *     X(LIPOSEXT),X(LIWRKP),X(LRADWGT),X(LSAVWGT),
-     *     X(LEIGHLD),IOPTION,
-     *     L0,L1,NAT,L0MBS,ISAV_NOS,ICOUNT_NOS,TMP,
-     *     MASWRK,IW)
-C     DO NOT TAKE NON-FINAL REORDERINGS.  DELETE TO BE SURE.
-      CALL VICLR(X(LIWRKP),1,L0+1)
-      CALL VCLR(X(LRADWGT),1,L0*NAT)
-C     BEGIN THE LINES FOR THE ACTUAL OVERLAP AND THEN ORTHOG...
-C     WE ONLY NEED AND EVEN WANT TO ORTHOG. THE EXTERNALS HERE...
-C     SINCE EXTERNALS ARE ALREADY ORTHOGONAL TO THE INTERNALS.
-C
-C
-C     SHIFT OUT EXTERNAL ORBITALS INTO LVEC AT 1ST POSITION.
-      CALL VCLR(X(LVEC),1,L3)
-      II=0
-      DO I=L0MBS+1,L0
-        II=II+1
-        X(LSAVWGT+II-1)=X(LSAVWGT+I-1)
-      ENDDO
-      CALL DCOPY(L1*(L0-L0MBS),
-     *           X(LVECCOL+L1*L0MBS),1,
-     *           X(LVEC),1)
-C
-C     PERFORM THE W.S.O.
-      CALL DAREAD(IDAF,IODA,X(LS),L2,12,0)
-      CALL VCLR(X(LSTRI),1,L0TRI)
-      CALL TFTRI(X(LSTRI),X(LS),X(LVEC),X(LEIG),L0-L0MBS,L1,L1)
-C     WANT S ** -1/2 HERE...
-      IKIND=1
-C     ONLY WANT AND NEED TO ORTHOG. EXTERNALS...
-C     INPUTS VECTORS=LSTRI,LSAVWGT
-C     OUTPUT VECTORS=LVEC
-      CALL LOCAL_WEIGHTED_SYM_ORTHOG(
-     *     IKIND,L0-L0MBS,X(LSTRI),X(LSAVWGT),
-     *     X(LVEC),X(LVEC2),X(LVEC534),X(LEIG),X(LIWRK),X(LWRK),
-     *     L1,L3,L0TRI,
-     *     IW,MASWRK,SOME)
-C
-C     PREPARE MBS+EXTERNAL ORBITAL TRANSFORMATION.
-      CALL VCLR(X(LVEC2),1,L3)
-      DO I=1,L0MBS
-        II=L1*(I-1)+I
-        II=II-1
-        X(LVEC2+II)=1.0D+00
-      ENDDO
-      DO I=1,L0-L0MBS
-        IJ=L1*(I-1)+1
-        IJ=IJ-1
-        CALL DCOPY(L1,
-     *             X(LVEC+IJ),1,
-     *             X(LVEC2+L1*L0MBS+IJ+L0MBS),1)
-      ENDDO
-      CALL DCOPY(L3,X(LVEC2),1,X(LVEC),1)
-C
-C     APPLY ORBITAL TRANSFORMATION AND REPLACE LVECCOL ORBITALS.
-      CALL VCLR(X(LVEC2),1,L3)
-      CALL DCOPY(L3,X(LVECCOL),1,X(LVEC2),1)
-      CALL VCLR(X(LVECCOL),1,L3)
-      CALL MRARBR(X(LVEC2),L1,L1,L0,
-     *            X(LVEC),L1,L0,X(LVECCOL),L1)
-C------------------------------------------------------------------
-C------------------------------------------------------------------
-C     END OF WEIGHTED SYMMETRIC ORTHOGONALIZATION.
-C------------------------------------------------------------------
-C------------------------------------------------------------------
-C
-C     NOW, RE-DO WEIGHTS FOR PURPOSE OF ASSIGNING A LEVEL OF
-C     COMPACTNESS OR DIFFUSENESS TO THE FINAL ORBITALS.
-C     NOTE:  WE COULD HAVE SAVED THESE IF LS IS REPLACED BY VAR
-C            WITH MORE MEMORY IN LOCAL_ATOMIC_HSANDT,
-C            BUT THESE SEEM CHEAP RIGHT NOW.
-      CALL DCOPY(L3,X(LVECCOL),1,X(LVEC),1)
-      DO IATM1=1,NAT
-        CALL LOCAL_ATOMIC_HSANDT(X(LS),L2,2,IATM1,0)
-        CALL TFTRI(X(LSTRI),X(LS),X(LVEC),X(LEIG),L0,L1,L1)
-        DO I=1,L0
-          II=(I*I-I)/2+I
-          II=II-1
-          ITMP=I+L0*(IATM1-1)
-          ITMP=ITMP-1
-          X(LRADWGT+ITMP)=X(LSTRI+II)
-        ENDDO
-      ENDDO
-C
-C     PREPARE SAVWGT AND IWRKP ARRAYS.
-      ICOUNT_NOS=0
-      ISAV_NOS=0
-      TMP=TOL_CUTDEN
-      IOPTION=0
-      CALL LOCAL_NOS__PREPWGTSANDORDER(
-     *     X(LIPOSEXT),X(LIWRKP),X(LRADWGT),X(LSAVWGT),
-     *     X(LEIGHLD),IOPTION,
-     *     L0,L1,NAT,L0MBS,ISAV_NOS,ICOUNT_NOS,TMP,
-     *     MASWRK,IW)
-C
-C     REORDER THE ATOM LABELS AND ORBITALS.
-C     --NOTE1:  NEVER-EVER-EVER OVER-WRITE DAF 528.
-C               528 IS FOR A DIFFERENT PROJECT.
-C     --NOTE2:  FILE 535 WILL CONTAIN ONLY EXTERNAL ATOM LABELS.
-C               WE MUST THROW OUT THE MBS SVD ATOM LABELS.
-C               LATER, WE LEARN THE ATOM LABELS FOR ER,BOYS,ETC...
-C     --NOTE3:  BECAREFUL TO PRESERVE THE L0+1 VALUE FOR FILE 535...
-CSORT_BY_EVALUE
-CSORT_BY_EVALUE   this next line overides all previous sorting
-CSORT_BY_EVALUE   it takes orbital order from diagonalization
-CSORT_BY_EVALUE
-      IF(ISVDOP.EQ.100) GO TO 789
-      CALL VICLR(X(LIWRK),1,L1)
-      CALL ICOPY(L0,X(LIWRKP),1,X(LIWRK),1)
-      CALL REORDR(X(LVECCOL),X(LIWRK),L0,L1)
-      CALL LOCAL_READ_FILE528_WITH_CORES(X(LIATSVD),NAT,L0,MASWRK)
-      CALL ICOPY(L0,X(LIWRKP),1,X(LIWRK),1)
-      CALL IREORDR(X(LIATSVD),X(LIWRK),L0,1)
-      CALL ICOPY(L0,X(LIWRKP),1,X(LIWRK),1)
-      CALL REORDR(X(LSAVWGT),X(LIWRK),L0,1)
-      CALL ICOPY(L0,X(LIATSVD),1,X(LIWRKP),1)
-  789 CONTINUE
-      CALL DAWRIT(IDAF,IODA,X(LVECCOL),L3,534,0)
-      CALL DAWRIT(IDAF,IODA,X(LIWRKP),L0+1,535,1)
-C
-C     FINAL CHECK THAT ORBITALS ARE INDEED ORTHONORMAL
-      CALL DAREAD(IDAF,IODA,X(LS),L2,12,0)
-      CALL VCLR(X(LSTRI),1,L0TRI)
-      CALL TFTRI(X(LSTRI),X(LS),X(LVECCOL),X(LEIG),L0,L1,L1)
-      IERR=0
-      DO I=1,L0
-        DO J=1,I
-          II=(I*I-I)/2+J
-          II=II-1
-ccccccccccc
-          IF(I.EQ.J) THEN
-            TMP=ABS(X(LSTRI+II)-1.0D+00)
-          ELSE
-            TMP=ABS(X(LSTRI+II))
-          ENDIF
-ccccccccccc
-          IF(TMP.GT.TOL_NOS_EXT) IERR=IERR+1
-        ENDDO
-      ENDDO
-      IF(IERR.NE.0) THEN
-        IF(MASWRK) WRITE(IW,9068)
-        CALL PRTRI(X(LSTRI),L0)
-        IF(MASWRK) WRITE(IW,9068)
-        CALL FLSHBF(IW)
-        CALL ABRT
-        STOP
-      ENDIF
-c
-c       end of mini-mem #4
-        call retfm(need_nos_ext2)
-c
-C
-C     WRITE STUFF OUT TO EVERYWHERE.
-      IF(SOME) THEN
-        WRITE(IW,9069) TOL_CUTDEN,L0MBS+ISAV_NOS
-        WRITE(IW,9070)
-        CALL PRSQL(X(LVECCOL),L0MBS+ICOUNT_NOS,L1,L1)
-      ENDIF
-      IF(MASWRK) THEN
-        WRITE(IP,9080)
-        CALL PUSQL(X(LVECCOL),L0MBS+ICOUNT_NOS,L1,L1)
-        WRITE(IP,9085)
-      ENDIF
-C
-C--------------------------------------------------------------
-C     RESTORE IMPORTANT VARS
-C--------------------------------------------------------------
-      CALL DAWRIT(IDAF,IODA,X(LVECF15SAV),L3,15,0)
-      SCFTYP=SCFTYP_SAV
-      CITYP=CITYP_SAV
-C     DET PAR VARS
-      ANALYS=ANALYS_SAV
-      ICLBBR=ICLBBR_SAV
-      IPRTSA=IPRTSA_SAV
-      SAFLG=SAFLG_SAV
-C     DET VARS
-      CRIT=CRIT_SAV
-      PRTTOL=PRTTOL_SAV
-      S=S_SAV
-      SZ=SZ_SAV
-      GRPDET=GRPDET_SAV
-      STSYM=STSYM_SAV
-      GLIST=GLIST_SAV
-      DWPARM=DWPARM_SAV
-      NCORSV=NCORSV_SAV
-      NCOR=NCOR_SAV
-      NACTDT=NACTDT_SAV
-      NORBDT=NORBDT_SAV
-      NADET=NADET_SAV
-      NBDET=NBDET_SAV
-      KDET=KDET_SAV
-      KSTDET=KSTDET_SAV
-      IROOT=IROOT_SAV
-      IPURES=IPURES_SAV
-      MAXW1=MAXW1_SAV
-      NITDET=NITDET_SAV
-      MAXP=MAXP_SAV
-      NCI=NCI_SAV
-      IGPDET=IGPDET_SAV
-      KSTSYM=KSTSYM_SAV
-      NFTGCI=NFTGCI_SAV
-      IDWEIGH=IDWEIGH_SAV
-C     ENGRYS VARS
-      ENUCR=ENUCR_SAV
-      EELCT=EELCT_SAV
-      ETOT=ETOT_SAV
-      STOT=STOT_SAV
-      SZZ=SZZ_SAV
-      ECORE=ECORE_SAV
-      ESCF=ESCF_SAV
-      EERD=EERD_SAV
-      E1=E1_SAV
-      E2=E2_SAV
-      VEN=VEN_SAV
-      VEE=VEE_SAV
-      EPOT=EPOT_SAV
-      EKIN=EKIN_SAV
-      DO I=1,MXRT
-        ESTATE(I)=ESTATE_SAV(I)
-      ENDDO
-      STATN=STATN_SAV
-      DO I=1,ISIZE_EDFT
-        EDFT(I)=EDFT_SAV(I)
-      ENDDO
-      EDISP=EDISP_SAV
-ccccccc put back file 2!!!!
-      CALL DAWRIT(IDAF,IODA,ENUCR,MXRT+15,2,0)
-ccccccc
-C     DET ARRAY VARS
-      DO I=1,MXRT
-        WSTATE(I)=WSTATE_SAV(I)
-        SPINS(I)=SPINS_SAV(I)
-        NFLGDM(I)=NFLGDM_SAV(I)
-        IWTS(I)=IWTS_SAV(I)
-      ENDDO
-C     ORMAS VARS
-      NSPACE=NSPACE_SAV
-      NREF0=NREF0_SAV
-      C0SQ=C0SQ_SAV
-      BLOCK=BLOCK_SAV
-      FDIRCT=FDIRCT_SAV
-      QCORR=QCORR_SAV
-C     ORMAS ARRAY VARS
-      DO I=1,ISIZE_FCCWFN
-        MSTA(I)=MSTA_SAV(I)
-        MNUM(I)=MNUM_SAV(I)
-        MINI(I)=MINI_SAV(I)
-        MAXI(I)=MAXI_SAV(I)
-        IAMI(I)=IAMI_SAV(I)
-        IAMA(I)=IAMA_SAV(I)
-        IBMI(I)=IBMI_SAV(I)
-        IBMA(I)=IBMA_SAV(I)
-        IDIMFCC(I)=IDIMFCC_SAV(I)
-        LBST(I)=LBST_SAV(I)
-      ENDDO
-C     INFOA VARS NEEDED.
-      ICH=ICH_SAV
-      MUL=MUL_SAV
-C     ZAN,IAN,C ARE ALREADY RESET ABOVE
-C     E.G. THIS RESET IS NEEDED FOR NVVOS_NUMCOR.
-C
-C--------------------------------------------------------------
-C     END OF RESTORE IMPORTANT VARS
-C--------------------------------------------------------------
-C
-C     DEALLOCATE MEMORY.
-      CALL RETFM(NEED_NOS_EXT)
-C
-C     FINISH UP.
- 8999 CONTINUE
-      IF(MASWRK) WRITE(IW,9300)
-      CALL TIMIT(1)
-      RETURN
- 9000 FORMAT(/5X,60(1H-)/
-     *   5X,'LOCAL_NOS_EXT NOW FORMS EXTERNAL LOCALIZED NOS.'/
-     *   5X,60(1H-))
- 9002 FORMAT(//1X,'LOCAL_NOS_EXT ERROR:',
-     *        /1X,'EXT=ATMNOS OPTION IS ONLY FOR RHF,ORMAS.')
- 9003 FORMAT(//1X,'LOCAL_NOS_EXT ERROR:',
-     *        /1X,'DID NOT RUN THROUGH VVOS ROUTINE.',
-     *        /1X,'NEED ISVDOP=10 OR IVVOS.NE.0 OR BOTH.')
- 9004 FORMAT(//1X,'LOCAL_NOS_EXT ERROR:',
-     *      /1X,'EXTLOC=ATMNOS REQUIRES EXTERNAL ORBITALS.')
- 9050 FORMAT(/1X,'LOCAL_NOS_EXT PREPARES ORBITALS FOR ORMAS-CI',
-     *        1X,'ON ATOM NUMBER=',I5)
- 9060 FORMAT(/1X,'PERFORMING THE CI CALCULATION AT EXCITATION',
-     *           ' LEVEL',I2,', USING ',A,','/
-     *        1X,'WITH',I5,' CHEMICAL CORE AND',I5,' VALENCE ORBITALS',
-     *           ' (OCC=',I5,', VIRT=',I5,'),'/
-     *        1X,'CORRELATING ALL',I5,' VALENCE ELECTRONS.')
- 9061 FORMAT(//1X,'LOCAL_NOS_EXT ERROR:',
-     *        /1X,'SOMEWHERE OFF IN GAMESS LAND,',
-     *         1X,'NELS WAS WRONGLY CHANGED TO NOT EQUAL 2.',
-     *        /1X,'NELS NO LONGER EQUALS 2.')
- 9065 FORMAT(//1X,'LOCAL_NOS_EXT ERROR:',
-     *        /1X,'INTEGRAL ORTHOG. HAS CHANGED FILE 15 ORBITALS.',
-     *        /1X,'POSSIBLE ISSUES:',
-     *        /1X,'1. IN LOCAL_NOS_EXT ROUTINE SOMEWHERE',
-     *        /1X,'2. IN TRFMCX ROUTINE FOR CALL TO ORTHO',
-     *        /1X,'   DO NOT REMOVE THIS ERROR OUT.')
- 9066 FORMAT(//1X,'LOCAL_NOS_EXT ERROR:',
-     *        /1X,'SOME DENSITY ELEMENTS SHOULD BE ZERO AND ARE NOT.',
-     *        /1X,'     DO NOT REMOVE THIS ERROR OUT.')
- 9068 FORMAT(//1X,'LOCAL_NOS_EXT ERROR:',
-     *        /1X,'FINAL ORBITALS INTO DAF FILE 534 ARE NOT',
-     *         1X,'ORTHONORMAL.  THE CODE HAS BEEN CHANGED.')
- 9069 FORMAT(//1X,'BASED ON SOME CUTOFF=',F20.10,
-     *        /1X, I5,' ORBITALS SHOULD BE KEPT FOR FUTURE CI RUNS.')
- 9070 FORMAT(//10X,'OCCUPIED+EXTERNAL-ATOMIC-NOS LOCALIZED ORBITALS')
- 9080 FORMAT('OCCUPIED+EXTERNAL-ATOMIC-NOS LOCALIZED ORBITALS'/' $VEC')
- 9085 FORMAT(' $END')
- 9300 FORMAT(1X,'... DONE WITH LOCAL_NOS_EXT ...')
-CKEEP 9900 FORMAT(//10X,'ATOM-SET LOCALIZED ORBITALS')
-      END
-C*MODULE LOCAL   *DECK LOCAL_NOS_EXT_RADIAL_VERSION
-C> @brief      Forms atomic external NOs.
-C>
-C> @author     Aaron West
-C>             -March 21, 2013
-C>
-C> @details    Forms atomic external NOs.
-C>             There are three similar NOS_EXT routines.
-C>             Some parts must remain the identical.
-C>             I will add more later.
-C>
-      SUBROUTINE LOCAL_NOS_EXT_RADIAL_VERSION
-C-----------------------------------------------------------------------
-      IMPLICIT NONE
-C     VARS
-      LOGICAL SOME,COMBO
-      DOUBLE PRECISION :: ATMNOS
-      INTEGER L0,L1,L2,L3,L0MBS,L0TRI
-      INTEGER IATM1,ISWMBS,LOCAL_NUMVAL,NVVOS_NUMCOR
-      INTEGER III_DIRECT,ITMP,IEXTORB,MAX_NACT_ORBS
-      INTEGER LOADFM,NGOTMX,NEED_NOS_EXT,LAST,
-     *        LS,LS2,LSTRI,LVEC,LVECSAV,LVECCOL,
-     *        LIPOSMBS,LILENMBS,LIATSVD,LIPOSEXT,LEIG,LEIGHLD,LRADTRI,
-     *        LWRK,LIWRK,LVEC2,LVEC3,LRADWGT,LIWRKP,LSAVWGT
-      INTEGER ICOUNT_NOS,ISAV_NOS,IOPTION
-      DOUBLE PRECISION :: TMP
-      INTEGER I,J,II,IJ,IKIND,NERR,IERR
-C
-      DOUBLE PRECISION :: TOL_CUTDEN,TOL_NOS_EXT
-      PARAMETER (TOL_CUTDEN=1.0D-03)
-      PARAMETER (TOL_NOS_EXT=1.0D-08) ! part. int. gave 1.2d-10 error diff
-C-----------------------------------------------------------------------
-      INTEGER MXAO,MXATM
-      PARAMETER (MXAO=8192, MXATM=2000)
-C-----------------------------------------------------------------------
-C
-      DOUBLE PRECISION :: X
-C
-      DOUBLE PRECISION :: C,ZAN
-      INTEGER ICH,NQMT,NUM,MUL,NA,NAT,NB,NE,IAN
-C
-      INTEGER IR,IW,IP,IS,IPK,IDAF,NAV,IODA
-C
-      INTEGER ME,MASTER,NPROC,IBTYP,IPTIM
-      LOGICAL GOPARR,DSKWRK,MASWRK
-C
-      LOGICAL ORIENT,ORIKIN,ORMFUL
-      INTEGER NATMOR,ISVMOR,ISVDOP
-      DOUBLE PRECISION :: EXTLOC,EREFATM
-C
-      INTEGER NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
-C
-      DOUBLE PRECISION :: RUNTYP,EXETYP,CHECK
-      INTEGER NEVALS,NGLEVL,NHLEVL
-C
-      INTEGER IVVOS,NVVOS
-      DOUBLE PRECISION :: BNDDEN
-C-----------------------------------------------------------------------
-      COMMON /FMCOM / X(1)
-      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
-     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
-      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
-      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
-      COMMON /ORNTMO/ EXTLOC,EREFATM,
-     *                NATMOR(MXAO),ISVMOR(MXATM),ISVDOP,
-     *                ORIENT,ORIKIN,ORMFUL
-      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
-      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
-      COMMON /VVOPAR/ IVVOS,NVVOS,BNDDEN
-C-----------------------------------------------------------------------
-C
-C     DEFINE PRINT STUFF
-      SOME  = NPRINT.NE.-5 .AND. MASWRK
-C
-C     DATA STUFF
-      DATA ATMNOS/8HATMNOS  /
-      DATA CHECK/8HCHECK   /
-C
-C     DETERMINE IF ANALYSIS IS POSSIBLE.
-C     IF NOT, EXIT OUT.
-      COMBO=.FALSE.
-      IF(EXTLOC.EQ.ATMNOS) COMBO=.TRUE.
-      IF(.NOT.COMBO) RETURN
-C
-C     PRINT BANNER
-      IF(SOME) WRITE(IW,9000)
-      CALL FLSHBF(IW)
-C
-C------------------------------------------
-C     SET UP SOME DIMENSIONS
-      L0 = NQMT
-      L1 = NUM
-      L2 = (L1*L1+L1)/2
-      L3 = L1*L1
-      L0TRI = (L0*L0+L0)/2
-C     SET UP L0MBS DIMENSION
-      ISWMBS=1
-      L0MBS=NVVOS_NUMCOR(0,0)
-      DO I=1,NAT
-        L0MBS=L0MBS+LOCAL_NUMVAL(I,ISWMBS)
-      ENDDO
-C------------------------------------------
-C
-C     ERROR OUTS
-      NERR=0
-      IF(IVVOS.EQ.0.AND.ISVDOP.NE.10) THEN
-        IF(MASWRK) WRITE(IW,9003)
-        NERR=NERR+1
-      ENDIF
-      IF(L0.EQ.L0MBS) THEN
-        IF(MASWRK) WRITE(IW,9004)
-        NERR=NERR+1
-      ENDIF
-C
-      IF(NERR.GT.0) THEN
-        CALL FLSHBF(IW)
-        CALL ABRT
-        STOP
-      ENDIF
-C
-C     SKIP FOR EXETYP
-      IF(EXETYP.EQ.CHECK) GO TO 8999
-C
-C     RE-DO INTEGRALS
-      CALL SYMOFF
-      CALL JANDK
-      CALL SYMON
-      CALL SEQREW(IS)
-C
-C     ALLOCATE MEMORY.
-      CALL GOTFM(NGOTMX)
-      CALL VALFM(LOADFM)
-      LS           = LOADFM     + 1
-      LS2          = LS         + L2
-      LSTRI        = LS2        + L2
-      LVEC         = LSTRI      + L0TRI
-      LVECSAV      = LVEC       + L3
-      LVECCOL      = LVECSAV    + L3
-      LIPOSMBS     = LVECCOL    + L3
-      LILENMBS     = LIPOSMBS   + (NAT+1)
-      LIATSVD      = LILENMBS   + NAT
-      LIPOSEXT     = LIATSVD    + L1
-      LEIG         = LIPOSEXT   + (NAT+1)
-      LEIGHLD      = LEIG       + L1
-      LRADTRI      = LEIGHLD    + L1*NAT
-      LWRK         = LRADTRI    + L0TRI*NAT
-      LIWRK        = LWRK       + L1*8
-      LVEC2        = LIWRK      + L1
-      LVEC3        = LVEC2      + L3
-      LRADWGT      = LVEC3      + L3
-      LIWRKP       = LRADWGT    + L0*NAT
-      LSAVWGT      = LIWRKP     + (L0+1)
-      LAST        = LSAVWGT    + L0*NAT
-      NEED_NOS_EXT = LAST - LOADFM - 1
-      CALL GETFM(NEED_NOS_EXT)
-C
-C     SETUP SOME ATOM INTEGER ARRAYS.
-      CALL LOCAL_VVOS_ORB_RANGE(X(LIPOSMBS),X(LILENMBS),NAT)
-      CALL LOCAL_READ_FILE528_WITH_CORES(X(LIATSVD),NAT,L0,MASWRK)
-      CALL LOCAL_MAXNACT(
-     *     X(LIATSVD),X(LIPOSEXT),
-     *     NAT,L0MBS,L0,MAX_NACT_ORBS,
-     *     MASWRK,IW)
-C
-C     READ IN AND SAVE ER+EXTERNAL VECTORS
-C     NOTE:  EXTERNAL VECTORS CAN BE FROM 521 OR 522 AT THIS TIME.
-C     NOTE:  DAF534 COMES FROM ONE OF THE ABOVE... AT THIS POINT...
-      CALL DAREAD(IDAF,IODA,X(LVECSAV),L3,534,0)
-C
-C     CONTRUCT THE <1/R> SYMMETRIC MATRIX FOR LVECSAV VECTORS.
-      CALL DCOPY(L3,X(LVECSAV),1,X(LVEC),1)
-      CALL VCLR(X(LRADTRI),1,L0TRI*NAT)
-      CALL LOCAL_ATOMIC_TOTAL_INVRAD(
-     *     X(LRADTRI),X(LVEC),X(LIPOSEXT),
-     *     X(LSTRI),X(LS),X(LEIG),NAT,L0,L0TRI,L1,L2)
-C
-C     CLEAR OUT ANY ARRAYS TO BE FILLED IN THE LOOP OVER ATOMS
-      CALL VCLR(X(LVECCOL),1,L3)
-C
-C     LOOP OVER ATOMS
-      DO IATM1=1,NAT
-        IF(SOME) WRITE(IW,9050) IATM1
-        CALL LOCAL_GET_IEXTORB(
-     *       IEXTORB,X(LIPOSEXT),IATM1,NAT,L0,MASWRK,IW)
-C
-C       COPY ORBITALS ON IATM1 INTO LVEC IN PREP. FOR NEXT CALL.
-        III_DIRECT=0
-        CALL LOCAL_NOS__PREP534(
-     *       X(LVEC),X(LVECSAV),X(LIPOSEXT),
-     *       IATM1,NAT,L1,0,III_DIRECT)
-C
-C       DIAGONALIZE RADTRI MATRICES ON EACH ATOM.
-C       TRANSFORM THE ORBITALS.
-        CALL VCLR(X(LEIG),1,L1)
-        CALL VCLR(X(LS2),1,L2)
-        ITMP=(IEXTORB*IEXTORB+IEXTORB)/2
-        CALL DCOPY(ITMP,X(LRADTRI+(IATM1-1)*L0TRI),1,X(LS2),1)
-        CALL LOCAL_NOS__PREPDEN(
-     *       X(LS2),X(LS),
-     *       L2,1,IEXTORB,
-     *       L1,X(LWRK),X(LEIG),X(LIWRK),X(LVEC3),X(LVEC2),
-     *       X(LVEC),
-     *       SOME,IW)
-C
-C       SAVE THE NEW WEIGHTINGS FOR LATER.
-        IF(IATM1.EQ.1) CALL VCLR(X(LEIGHLD),1,L1*NAT)
-        CALL DCOPY(L1,X(LEIG),1,X(LEIGHLD+L1*(IATM1-1)),1)
-C
-C       SAVE THE NEW ORBITALS FOR LATER.
-        III_DIRECT=1
-        CALL LOCAL_NOS__PREP534(
-     *       X(LVEC),X(LVECCOL),X(LIPOSEXT),
-     *       IATM1,NAT,L1,0,III_DIRECT)
-C
-C     END OF LOOP OVER ATOMS
-      ENDDO
-C
-C     FINISH MAKING LVECCOL.
-      CALL DAREAD(IDAF,IODA,X(LVEC),L3,534,0)
-      CALL DCOPY(L1*L0MBS,X(LVEC),1,X(LVECCOL),1)
-C
-C------------------------------------------------------------------
-C------------------------------------------------------------------
-C     WEIGHTED SYMMETRIC ORTHOGONALIZATION
-C     FOR COLLECTIVE ORBITAL SET LVECCOL
-C------------------------------------------------------------------
-C------------------------------------------------------------------
-C
-C     PREPARE WEIGHTS
-      CALL DCOPY(L3,X(LVECCOL),1,X(LVEC),1)
-      DO IATM1=1,NAT
-        CALL LOCAL_ATOMIC_HSANDT(X(LS),L2,2,IATM1,0)
-        CALL TFTRI(X(LSTRI),X(LS),X(LVEC),X(LEIG),L0,L1,L1)
-        DO I=1,L0
-          II=(I*I-I)/2+I
-          II=II-1
-          ITMP=I+L0*(IATM1-1)
-          ITMP=ITMP-1
-          X(LRADWGT+ITMP)=X(LSTRI+II)
-        ENDDO
-      ENDDO
-C
-C     PREPARE SAVWGT AND IWRKP ARRAYS.
-      ICOUNT_NOS=0
-      ISAV_NOS=0
-      TMP=TOL_CUTDEN
-      IOPTION=0
-      CALL LOCAL_NOS__PREPWGTSANDORDER(
-     *     X(LIPOSEXT),X(LIWRKP),X(LRADWGT),X(LSAVWGT),
-     *     X(LEIGHLD),IOPTION,
-     *     L0,L1,NAT,L0MBS,ISAV_NOS,ICOUNT_NOS,TMP,
-     *     MASWRK,IW)
-C     DO NOT TAKE NON-FINAL REORDERINGS.  DELETE TO BE SURE.
-      CALL VICLR(X(LIWRKP),1,L0+1)
-      CALL VCLR(X(LRADWGT),1,L0*NAT)
-C
-C     SHIFT OUT EXTERNAL ORBITALS INTO LVEC AT 1ST POSITION.
-      CALL VCLR(X(LVEC),1,L3)
-      II=0
-      DO I=L0MBS+1,L0
-        II=II+1
-        X(LSAVWGT+II-1)=X(LSAVWGT+I-1)
-      ENDDO
-      CALL DCOPY(L1*(L0-L0MBS),
-     *           X(LVECCOL+L1*L0MBS),1,
-     *           X(LVEC),1)
-C
-C     PERFORM THE W.S.O.
-      CALL DAREAD(IDAF,IODA,X(LS),L2,12,0)
-      CALL VCLR(X(LSTRI),1,L0TRI)
-      CALL TFTRI(X(LSTRI),X(LS),X(LVEC),X(LEIG),L0-L0MBS,L1,L1)
-C     WANT S ** -1/2 HERE...
-      IKIND=1
-      CALL LOCAL_WEIGHTED_SYM_ORTHOG(
-     *     IKIND,L0-L0MBS,X(LSTRI),X(LSAVWGT),
-     *     X(LVEC),X(LVEC2),X(LVEC3),X(LEIG),X(LIWRK),X(LWRK),
-     *     L1,L3,L0TRI,
-     *     IW,MASWRK,SOME)
-C
-C     PREPARE MBS+EXTERNAL ORBITAL TRANSFORMATION.
-      CALL VCLR(X(LVEC2),1,L3)
-      DO I=1,L0MBS
-        II=L1*(I-1)+I
-        II=II-1
-        X(LVEC2+II)=1.0D+00
-      ENDDO
-      DO I=1,L0-L0MBS
-        IJ=L1*(I-1)+1
-        IJ=IJ-1
-        CALL DCOPY(L1,
-     *             X(LVEC+IJ),1,
-     *             X(LVEC2+L1*L0MBS+IJ+L0MBS),1)
-      ENDDO
-      CALL DCOPY(L3,X(LVEC2),1,X(LVEC),1)
-C
-C     APPLY ORBITAL TRANSFORMATION AND REPLACE LVECCOL ORBITALS.
-      CALL VCLR(X(LVEC2),1,L3)
-      CALL DCOPY(L3,X(LVECCOL),1,X(LVEC2),1)
-      CALL VCLR(X(LVECCOL),1,L3)
-      CALL MRARBR(X(LVEC2),L1,L1,L0,
-     *            X(LVEC),L1,L0,X(LVECCOL),L1)
-C------------------------------------------------------------------
-C------------------------------------------------------------------
-C     END OF WEIGHTED SYMMETRIC ORTHOGONALIZATION
-C------------------------------------------------------------------
-C------------------------------------------------------------------
-C
-C     NOW, RE-DO WEIGHTS FOR PURPOSE OF ASSIGNING A LEVEL OF
-C     COMPACTNESS OR DIFFUSENESS TO THE FINAL ORBITALS.
-      CALL DCOPY(L3,X(LVECCOL),1,X(LVEC),1)
-      DO IATM1=1,NAT
-        CALL LOCAL_ATOMIC_HSANDT(X(LS),L2,2,IATM1,0)
-        CALL TFTRI(X(LSTRI),X(LS),X(LVEC),X(LEIG),L0,L1,L1)
-        DO I=1,L0
-          II=(I*I-I)/2+I
-          II=II-1
-          ITMP=I+L0*(IATM1-1)
-          ITMP=ITMP-1
-          X(LRADWGT+ITMP)=X(LSTRI+II)
-        ENDDO
-      ENDDO
-C
-C     PREPARE SAVWGT AND IWRKP ARRAYS.
-      ICOUNT_NOS=0
-      ISAV_NOS=0
-      TMP=TOL_CUTDEN
-      IOPTION=0
-      CALL LOCAL_NOS__PREPWGTSANDORDER(
-     *     X(LIPOSEXT),X(LIWRKP),X(LRADWGT),X(LSAVWGT),
-     *     X(LEIGHLD),IOPTION,
-     *     L0,L1,NAT,L0MBS,ISAV_NOS,ICOUNT_NOS,TMP,
-     *     MASWRK,IW)
-C
-C     REORDER THE ATOM LABELS AND ORBITALS.
-C     --NOTE1:  NEVER-EVER-EVER OVER-WRITE DAF 528.
-C               528 IS FOR A DIFFERENT PROJECT.
-C     --NOTE2:  FILE 535 WILL CONTAIN ONLY EXTERNAL ATOM LABELS.
-C               WE MUST THROW OUT THE MBS SVD ATOM LABELS.
-C               LATER, WE LEARN THE ATOM LABELS FOR ER,BOYS,ETC...
-C     --NOTE3:  BECAREFUL TO PRESERVE THE L0+1 VALUE FOR FILE 535...
-CSORT_BY_EVALUE
-CSORT_BY_EVALUE   this next line overides all previous sorting
-CSORT_BY_EVALUE   it takes orbital order from diagonalization
-CSORT_BY_EVALUE
-      IF(ISVDOP.EQ.100) GO TO 789
-      CALL VICLR(X(LIWRK),1,L1)
-      CALL ICOPY(L0,X(LIWRKP),1,X(LIWRK),1)
-      CALL REORDR(X(LVECCOL),X(LIWRK),L0,L1)
-      CALL LOCAL_READ_FILE528_WITH_CORES(X(LIATSVD),NAT,L0,MASWRK)
-      CALL ICOPY(L0,X(LIWRKP),1,X(LIWRK),1)
-      CALL IREORDR(X(LIATSVD),X(LIWRK),L0,1)
-      CALL ICOPY(L0,X(LIWRKP),1,X(LIWRK),1)
-      CALL REORDR(X(LSAVWGT),X(LIWRK),L0,1)
-      CALL ICOPY(L0,X(LIATSVD),1,X(LIWRKP),1)
-  789 CONTINUE
-      CALL DAWRIT(IDAF,IODA,X(LVECCOL),L3,534,0)
-      CALL DAWRIT(IDAF,IODA,X(LIWRKP),L0+1,535,1)
-C
-C     FINAL CHECK THAT ORBITALS ARE INDEED ORTHONORMAL
-      CALL DAREAD(IDAF,IODA,X(LS),L2,12,0)
-      CALL VCLR(X(LSTRI),1,L0TRI)
-      CALL TFTRI(X(LSTRI),X(LS),X(LVECCOL),X(LEIG),L0,L1,L1)
-      IERR=0
-      DO I=1,L0
-        DO J=1,I
-          II=(I*I-I)/2+J
-          II=II-1
-ccccccccccc
-          IF(I.EQ.J) THEN
-            TMP=ABS(X(LSTRI+II)-1.0D+00)
-          ELSE
-            TMP=ABS(X(LSTRI+II))
-          ENDIF
-ccccccccccc
-          IF(TMP.GT.TOL_NOS_EXT) IERR=IERR+1
-        ENDDO
-      ENDDO
-      IF(IERR.NE.0) THEN
-        IF(MASWRK) WRITE(IW,9068)
-        CALL PRTRI(X(LSTRI),L0)
-        IF(MASWRK) WRITE(IW,9068)
-        CALL FLSHBF(IW)
-        CALL ABRT
-        STOP
-      ENDIF
-C
-C     WRITE STUFF OUT TO EVERYWHERE.
-      IF(SOME) THEN
-        WRITE(IW,9069) TOL_CUTDEN,L0MBS+ISAV_NOS
-        WRITE(IW,9070)
-        CALL PRSQL(X(LVECCOL),L0MBS+ICOUNT_NOS,L1,L1)
-      ENDIF
-      IF(MASWRK) THEN
-        WRITE(IP,9080)
-        CALL PUSQL(X(LVECCOL),L0MBS+ICOUNT_NOS,L1,L1)
-        WRITE(IP,9085)
-      ENDIF
-
-
-
-
-C
-C     DEALLOCATE MEMORY.
-      CALL RETFM(NEED_NOS_EXT)
-C
-C     FINISH UP.
- 8999 CONTINUE
-      IF(MASWRK) WRITE(IW,9300)
-      CALL TIMIT(1)
-      RETURN
- 9000 FORMAT(/5X,60(1H-)/
-     *   5X,'LOCAL_NOS_EXT NOW FORMS EXTERNAL LOCALIZED NOS.'/
-     *   5X,60(1H-))
- 9003 FORMAT(//1X,'LOCAL_NOS_EXT ERROR:',
-     *        /1X,'DID NOT RUN THROUGH VVOS ROUTINE.',
-     *        /1X,'NEED ISVDOP=10 OR IVVOS.NE.0 OR BOTH.')
- 9004 FORMAT(//1X,'LOCAL_NOS_EXT ERROR:',
-     *      /1X,'EXTLOC=ATMNOS REQUIRES EXTERNAL ORBITALS.')
- 9050 FORMAT(/1X,'LOCAL_NOS_EXT PREPARES ORBITALS ',
-     *        1X,'ON ATOM NUMBER=',I5)
- 9068 FORMAT(//1X,'LOCAL_NOS_EXT ERROR:',
-     *        /1X,'FINAL ORBITALS INTO DAF FILE 534 ARE NOT',
-     *         1X,'ORTHONORMAL.  THE CODE HAS BEEN CHANGED.')
- 9069 FORMAT(//1X,'BASED ON SOME CUTOFF=',F20.10,
-     *        /1X, I5,' ORBITALS SHOULD BE KEPT FOR FUTURE CI RUNS.')
- 9070 FORMAT(//10X,'OCCUPIED+EXTERNAL-ATOMIC-NOS LOCALIZED ORBITALS')
- 9080 FORMAT('OCCUPIED+EXTERNAL-ATOMIC-NOS LOCALIZED ORBITALS'/' $VEC')
- 9085 FORMAT(' $END')
- 9300 FORMAT(1X,'... DONE WITH LOCAL_NOS_EXT ...')
-      END
 C*MODULE LOCAL   *DECK LOCAL_NOS_EXT_EXCHANGE_VERSION
 C> @brief      Forms atomic external NOs.
 C>
@@ -6841,7 +5593,7 @@ C-----------------------------------------------------------------------
       IMPLICIT NONE
 C     VARS
       LOGICAL SOME,ATWGT,COMBO,SAVDSKWRK
-      DOUBLE PRECISION :: ATMNOS
+      DOUBLE PRECISION :: ATMNOS,SPLITQA,RNONE
       INTEGER L0,L1,L2,L3,L0MBS,NVALORBS,NVALTRI,L0TRI
       INTEGER IATM1,ISWMBS,LOCAL_NUMVAL,NVVOS_NUMCOR
       INTEGER III_DIRECT,III_OCC_ORB,IMOPROJ,IEXTORB,ITOTOCC,
@@ -6888,6 +5640,9 @@ C
 C
       INTEGER NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
 C
+      DOUBLE PRECISION :: ETOLLZ
+      INTEGER ILOCAL,IAHARD
+C
       DOUBLE PRECISION :: RUNTYP,EXETYP,CHECK
       INTEGER NEVALS,NGLEVL,NHLEVL
 C
@@ -6905,6 +5660,7 @@ C-----------------------------------------------------------------------
      *                NATMOR(MXAO),ISVMOR(MXATM),ISVDOP,
      *                ORIENT,ORIKIN,ORMFUL
       COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PRPOPT/ ETOLLZ,ILOCAL,IAHARD
       COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
       COMMON /VVOPAR/ IVVOS,NVVOS,BNDDEN
 C-----------------------------------------------------------------------
@@ -6915,11 +5671,14 @@ C
 C     DATA STUFF
       DATA ATMNOS/8HATMNOS  /
       DATA CHECK/8HCHECK   /
+      DATA RNONE/8HNONE    /
+      DATA SPLITQA/8HSPLITQA /
 C
 C     DETERMINE IF ANALYSIS IS POSSIBLE.
 C     IF NOT, EXIT OUT.
       COMBO=.FALSE.
       IF(EXTLOC.EQ.ATMNOS) COMBO=.TRUE.
+      IF(EXTLOC.EQ.SPLITQA) COMBO=.TRUE.
       IF(.NOT.COMBO) RETURN
 C
 C     PRINT BANNER
@@ -6956,6 +5715,10 @@ C     ERROR OUTS
       ENDIF
       IF(L0.EQ.L0MBS) THEN
         IF(MASWRK) WRITE(IW,9004)
+        NERR=NERR+1
+      ENDIF
+      IF(EXTLOC.NE.RNONE.AND.ILOCAL.EQ.4) THEN
+        IF(MASWRK) WRITE(IW,9005)
         NERR=NERR+1
       ENDIF
 C
@@ -7010,6 +5773,12 @@ C     ALLOCATE MEMORY.
       NEED_NOS_EXT = LAST - LOADFM - 1
       CALL GETFM(NEED_NOS_EXT)
 C
+C     FAKE A CALL TO KEEP THE NEXT ROUTINE...
+      IF(IW.NE.6) THEN
+        IATM1=1
+        CALL LOCAL_ATOMIC_HSANDT(X(LS),L2,2,IATM1,0)
+      ENDIF
+C
 C     SETUP SOME ATOM INTEGER ARRAYS.
       CALL LOCAL_VVOS_ORB_RANGE(X(LIPOSMBS),X(LILENMBS),NAT)
       CALL LOCAL_READ_FILE528_WITH_CORES(X(LIATSVD),NAT,L0,MASWRK)
@@ -7061,7 +5830,7 @@ C              UNLESS WE ARE DEBUGGING.
      *       L1,L3,L2,
      *       IW,MASWRK,.FALSE.)
 C
-C       LOAD UP ALL THE ORIGINAL ORBITALS.        
+C       LOAD UP ALL THE ORIGINAL ORBITALS.
 C       NOTE:  THIS STEP DELAYED TO USE UP LESS MEMORY.
         CALL DAREAD(IDAF,IODA,X(LVEC2),L3,522,0) !yes 522 right now.
 C
@@ -7076,6 +5845,12 @@ C       NOTE:  FOR THIS VERSION, ANY IMOPROJ DOES NOTHING IN PREP15.
      *       IATM1,NAT,L0MBS,L0,L1,L3,III_OCC_ORB,
      *       IMOPROJ,X(LVEC3),X(LEIG),
      *       IW,MASWRK)
+CCCCCCCCC
+        IF(IW.NE.6) THEN
+        CALL LOCAL_GET_IEXTORB(
+     *           IEXTORB,X(LIPOSEXT),IATM1,NAT,L0,MASWRK,IW)
+        ENDIF
+CCCCCCCCC
         ITOTOCC=III_OCC_ORB+IEXTORB
 C--------------------------------------
 C--------------------------------------
@@ -7360,8 +6135,10 @@ C     RESTORE MOLECULAR SYMMETRY NOW.
 C
 C     FINISH UP.
  8999 CONTINUE
-      IF(MASWRK) WRITE(IW,9300)
-      CALL TIMIT(1)
+      IF(SOME) THEN
+        WRITE(IW,9300)
+        CALL TIMIT(1)
+      ENDIF
       RETURN
  9000 FORMAT(/5X,60(1H-)/
      *   5X,'LOCAL_NOS_EXT NOW FORMS EXTERNAL LOCALIZED NOS.'/
@@ -7371,6 +6148,8 @@ C     FINISH UP.
      *        /1X,'NEED ISVDOP=10 OR IVVOS.NE.0 OR BOTH.')
  9004 FORMAT(//1X,'LOCAL_NOS_EXT ERROR:',
      *      /1X,'EXTLOC=ATMNOS REQUIRES EXTERNAL ORBITALS.')
+ 9005 FORMAT(//1X,'LOCAL_NOS_EXT ERROR:',
+     *       /1X,'ANY GIVEN EXTLOC OPTION CANNOT HAVE ILOCAL=4.')
  9050 FORMAT(/1X,'LOCAL_NOS_EXT PREPARES ORBITALS ',
      *        1X,'ON ATOM NUMBER=',I5)
  9055 FORMAT(/1X,'LOCAL_PREP1_FOR_ACAVO',
@@ -7409,8 +6188,9 @@ C>             S**-1/2  --> W * (WSW)**-1/2
 C>             where the weights W cannot be zero.
 C>
 C> @param IKIND  is for inverse or -1/2 power.
-C>               IKIND=1 --> -1/2 power
-C>               IKIND=2 --> inverse
+C>               IKIND=1 --> -1/2 power with possible weightings
+C>               IKIND=2 --> inverse with possible weightings
+C>               IKIND=3 --> -1/2 power with no possible weightings
 C> @param ILTH   is the length of the matrix that is actually diagonaled.
 C> @param VTMP   is a scratch array of L1xL1.
 C> @param WGT    is the array of weights for the symmetric orthogonalization.
@@ -8654,189 +7434,6 @@ C
      *        1X,'HAS ISVD_ATOM NE 0 FOR ISVD_NUCINT.',
      *       /1X,'ISVD_ATOM HAS USE HERE... AND SHOULD BE 0.')
       END
-C*MODULE LOCAL   *DECK LOCAL_NOS__NUCLEAR_CHARGES
-C> @brief      Sets effective nuclear charge for nos_ext runs.
-C>
-C> @author     Aaron West
-C>             -April 20, 2013
-C>
-C> @details    Sets effective nuclear charge for nos_ext runs.
-C>             These values are based off of using Slater's
-C>             rules.  However, these values are for
-C>             2 electrons rather than the usual rules.
-C>
-C> @param ZAN      is nuclear charge for each atom.
-C> @param IAN      is the atomic number for each atom.
-C> @param IAN_SAV  is the atomic number saved.
-C> @param IATM1    is the current atom number in the do loop.
-C> @param NAT      is the total number of atoms.
-C> @param ICH_SAV  is the charge of the molecule.
-C> @param IW       indicates unit for write out to .log file.
-C> @param SOME     is true for master process with nprint not equal -5.
-C> @param MASWRK   indicates the master process.
-C>
-      SUBROUTINE LOCAL_NOS__NUCLEAR_CHARGES(
-     *           ZAN,IAN,IAN_SAV,IATM1,NAT,ICH_SAV,
-     *           IW,SOME,MASWRK)
-      IMPLICIT NONE
-      LOGICAL SOME,MASWRK
-      INTEGER IATM1,NAT,ICH_SAV,IW,NERR
-      DOUBLE PRECISION :: ZNUC,ZAN(NAT)
-      INTEGER INUC,IAN(NAT),IAN_SAV(NAT)
-C
-      DOUBLE PRECISION :: FACT0,FACT1,FACT2
-      INTEGER IELSCT
-      PARAMETER (FACT0=1.0D+00,FACT1=0.85D+00,FACT2=0.35D+00)
-      PARAMETER (IELSCT=2)
-C
-C     INITIALIZE THE NEEDED ARRAYS
-      CALL VCLR(ZAN,1,NAT)
-      CALL VICLR(IAN,1,NAT)
-      IAN(IATM1)=IAN_SAV(IATM1)
-      INUC=IAN_SAV(IATM1)
-C
-C     SETUP THE EFFECTIVE CHARGES TABLE.
-      NERR=0
-      ZNUC=DBLE(INUC)
-      IF(INUC.EQ.1) THEN
-C       ZNUC IS SET TO 1 ALREADY FOR H.
-C       AARON HAS NO INTEREST RIGHT NOW IN HE.
-      ELSEIF(INUC.GE.3.AND.INUC.LE.10   ) THEN
-        ZNUC=ZNUC
-     *      -(2)*FACT1
-     *      -((INUC-3+1)-IELSCT)*FACT2
-      ELSEIF(INUC.GE.11.AND.INUC.LE.18  ) THEN
-        ZNUC=ZNUC
-     *      -(2)*FACT0-(8)*FACT1
-     *      -((INUC-11+1)-IELSCT)*FACT2
-      ELSEIF(INUC.GE.19.AND.INUC.LE.20  ) THEN
-        ZNUC=ZNUC
-     *      -(10)*FACT0-(8)*FACT1
-     *      -((INUC-11+1)-IELSCT)*FACT2
-      ELSEIF(INUC.GE.21.AND.INUC.LE.30  ) THEN
-        ZNUC=ZNUC
-     *      -(18)*FACT0            ! d get all +1.
-     *      -((INUC-21+1)-IELSCT)*FACT2 ! Start at 21. Skip lower s block.
-      ELSEIF(INUC.GE.31.AND.INUC.LE.36  ) THEN
-        ZNUC=ZNUC
-     *      -(10)*FACT0-(8)*FACT1
-     *      -(10)*FACT1            ! the lower d shell counts here.
-     *      -(2)*FACT2             ! count the s shell here
-     *      -((INUC-31+1)-IELSCT)*FACT2
-      ELSE
-        NERR=NERR+1
-        IF(MASWRK) WRITE(IW,9002)
-      ENDIF
-C
-C     SET THE FINAL EFFECTIVE CHARGE
-      IF(SOME) WRITE(IW,9001) ZNUC
-      ZAN(IATM1)=ZNUC
-C
-C     PERFORM ANY MORE ERROR OUTS.
-      IF(ICH_SAV.NE.0) THEN
-        NERR=NERR+1
-        IF(MASWRK) WRITE(IW,9003)
-      ENDIF
-      IF(ZAN(IATM1).LE.0.0D+00) THEN
-        NERR=NERR+1
-        IF(MASWRK) WRITE(IW,9004)
-      ENDIF
-      IF(NERR.GT.0) THEN
-        CALL FLSHBF(IW)
-        CALL ABRT
-      ENDIF
-C
-      RETURN
- 9001 FORMAT(1X,'EFFECTIVE NUCLEAR CHARGE=',F10.3)
- 9002 FORMAT(//1X,'LOCAL_NOS__NUCLEAR_CHARGES ERROR:',
-     *        /1X,'YOU REQUESTED AN EFECTIVE CHARGE',
-     *         1X,'THAT IS NOT PROGRAMMED YET.',
-     *        /1X,'PLEASE ADD IT TO THE ROUTINE.',
-     *        /1X,'THIS TABLE WAS NOT COMPLETED ON PURPOSE',
-     *         1X,'BECAUSE OF TRANSITION METAL ISSUES.')
- 9003 FORMAT(//1X,'LOCAL_NOS__NUCLEAR_CHARGES ERROR:',
-     *        /1X,'WHAT IS THE EFFECTIVE CHARGE FOR A',
-     *         1X,'NON-NEUTRAL MOLECULE?')
- 9004 FORMAT(//1X,'LOCAL_NOS__NUCLEAR_CHARGES ERROR:',
-     *        /1X,'NUCLEAR CHARGES CANNOT BE LESS THAN 0!')
-      END
-C*MODULE LOCAL   *DECK LOCAL_ATOMIC_TOTAL_INVRAD
-C> @brief      Create the atomic <1/r> matrices.
-C>
-C> @author     Aaron West
-C>             -May 07, 2013
-C>
-C> @details    This routine creates the atomic <1/r> matrices
-C>             in the MO basis.
-C>             The MOs should be from file 522.
-C>             This routine pulls out all of the arrays required
-C>             to do this item.
-C>             Sometimes, if already embedded in an atom loop,
-C>             I might avoid this routine and do from scratch
-C>             for other reasons... such as if I wanted
-C>             to conveniently change the definition of the
-C>             <1/r> matrix to <T+1/r> or whatever.
-C>             Remember that if you sub. in this routine to
-C>             other locations, you will need to deal with
-C>             all new reordering issues.
-C>             So, unless you understand what you are doing,
-C>             only use this routine a-new rather than
-C>             fixing up old code.
-C>
-C> @param RADTRI  contains the NON-SHIFTED symmetric <1/r> matrices.
-C>                The matrix is L0TRIxNAT.
-C>                Each symmetric matrix starts at position 1 of the
-C>                given atom.
-C>                Later, we read out the variable by skipping over
-C>                however many atoms have preceeded the current atom.
-C> @param VEC     the MOs that get used to contruct the <1/r> in the
-C>                given MO basis.
-C>                If you have not already figured it out,
-C>                this variable contains internals+externals.
-C>                KEEP TRACK OF THE INDICES... ROUND AND ROUND...
-C> @param IPOSEXT indicates the orbital index for the first external
-C>                orbital on a given atom in the 1st column.
-C>                In the 2nd column, this integer array indicates
-C>                the total number of external orbitals on a given atom.
-C>                The orbitals are contiguous so that a L0*NAT array
-C>                does not have to given at this time...
-C> @param STRI    is a scratch array of L0TRI length.
-C> @param S       is a scratch array of L2 length.
-C> @param EIG     is a scratch array of L1 length.
-C> @param NAT     is the number of atoms.
-C> @param L0      is the length of the MO variational space.
-C> @param L0TRI   is the triangular length of L0.
-C> @param L1      is the length of the AO coefficients.
-C> @param L2      is the triangular length of L1.
-      SUBROUTINE LOCAL_ATOMIC_TOTAL_INVRAD(
-     *           RADTRI,VEC,IPOSEXT,
-     *           STRI,S,EIG,NAT,L0,L0TRI,L1,L2)
-C
-      IMPLICIT NONE
-      INTEGER IATM1,IBEG,IEND,ICT,I,J,IJ
-      INTEGER NAT,L0,L0TRI,L1,L2,IPOSEXT(NAT+1)
-      DOUBLE PRECISION :: RADTRI(L0TRI,NAT),VEC(L1,L1),
-     *                    STRI(L0TRI),S(L2),EIG(L1)
-C
-      DO IATM1=1,NAT
-        CALL LOCAL_ATOMIC_HSANDT(S,L2,2,IATM1,1)
-CKEEP        call daread(idaf,ioda,s2,l2,13,0)
-CKEEP        call daxpy(l2,-1.0d+00,s2,1,s,1)
-        CALL TFTRI(STRI,S,VEC,EIG,L0,L1,L1)
-        IBEG=IPOSEXT(IATM1)
-        IEND=IPOSEXT(IATM1+1)-1
-        ICT=0
-        DO I=IBEG,IEND
-          DO J=IBEG,I
-            IJ=(I*I-I)/2+J
-            ICT=ICT+1
-            RADTRI(ICT,IATM1)=STRI(IJ)
-          ENDDO
-        ENDDO
-      ENDDO
-C
-      RETURN
-      END
 C*MODULE LOCAL   *DECK LOCAL_GET_IEXTORB
 C> @brief      Returns the num. of externals on atom.
 C>
@@ -9113,8 +7710,7 @@ C>
       SUBROUTINE LOCAL_MINI_DEN(DENOLD,DENNEW,IWRK,M1,M2,SOME,IW)
       IMPLICIT NONE
       LOGICAL SOME
-      INTEGER IW,M1,M2,IWRK(M1),
-     *        ISIZ,I,J,IJ,I2,J2,IJ2
+      INTEGER IW,M1,M2,ISIZ,IWRK(M1)
       DOUBLE PRECISION :: DENOLD(M2),DENNEW(M2)
 C
 C     HERE, CHOOSE THE MINI-MATRIX.
@@ -9140,18 +7736,7 @@ C     NOTE:  AN EXAMPLE IS GIVEN.
       IWRK(17)=36
 C
 C     MAKE MINI-DEN MATRIX
-      CALL VCLR(DENNEW,1,M2)
-      DO I2=1,ISIZ
-         DO J2=1,I2
-            IJ2=(I2*I2-I2)/2+J2
-C
-            I=MAX(IWRK(I2),IWRK(J2))
-            J=MIN(IWRK(I2),IWRK(J2))
-            IJ=(I*I-I)/2+J
-C
-            DENNEW(IJ2)=DENOLD(IJ)
-         ENDDO
-      ENDDO
+      CALL LOCAL_RESIZE_DEN(DENOLD,DENNEW,IWRK,M1,M2,ISIZ)
 C
 C     PRINT OFF MINI-DENSITY MATRIX.
       IF(SOME) WRITE(IW,9000)
@@ -9224,7 +7809,7 @@ C
      *       SVMBS(L1,L0MBS),VORBIMO(L1,L1),
      *       VEC3(L1,L1),VEC4(L1,L1),S(L2),EIG(L1)
       INTEGER IDUM,L0LIM,I,II,ICOUNT
-      INTEGER IST,ILAST,ICOR,NERR,IERR,J,III,JJJ,ITMP,IVAL,
+      INTEGER IST,ILAST,ICOR,NERR,IERR,IERR2,J,III,JJJ,ITMP,IVAL,
      *        NVVOS_NUMCOR
 C------------------------------------------------------
       INTEGER IDAF,IODA,IP,IPK,IR,IS,IW,NAV
@@ -9280,11 +7865,19 @@ C       AFTER OVLSEL REORDERING.
 C     --PUT THE OCCUPATIONS IN THE ORDER OF VVOS.
 C     NOTE:  ITMP ALWAYS LAGS BEHIND HERE.
 C     NOTE:  NEVER CHANGE IWRK2.
+C     NOTE:  AFTER THE CHANGE IN THE VVOS TO ORTHOGONALIZE
+C            AFTER WRITING TO DAF533, WE NOW SEE ISSUES HERE
+C            FOR THE OVERLAP.
+C            THE DAF522 ORBITALS ARE PROBABLY BLURRED NOW
+C            AS A RESULT OF THAT ORTHOG.
+C            FOR BIGGER SYSTEMS, ONE NEEDS TO FURTHER RESTRICT
+C            THE ORBITAL REORDER BASED ON ATOM LABELS AS WELL.
       DO I=1,L0MBS
         OCCIMO(I)=-1.0D+00
       ENDDO
       NERR=0
       IERR=0
+      IERR2=0
       ICOUNT=0
       ICOR=NVVOS_NUMCOR(0,0)
 ccccccc
@@ -9295,7 +7888,7 @@ ccccccc
           ITMP=IWRK2(J)
           IF(ITMP.LE.ICOR) IERR=IERR+1
           JJJ=IATSVD(ITMP)
-          IF(JJJ.NE.III) IERR=IERR+1
+          IF(JJJ.NE.III) IERR2=IERR2+1
 ccccccccccc
 ccccccccccc itmp contains cores.  convert itmp to val only.
 ccccccccccc
@@ -9313,9 +7906,13 @@ ccccccc
         NERR=NERR+1
         IF(MASWRK) WRITE(IW,9000)
       ENDIF
-      IF(ICOUNT.NE.NVALORBS) THEN
+      IF(IERR2.GT.0) THEN
         NERR=NERR+1
         IF(MASWRK) WRITE(IW,9001)
+      ENDIF
+      IF(ICOUNT.NE.NVALORBS) THEN
+        NERR=NERR+1
+        IF(MASWRK) WRITE(IW,9002)
       ENDIF
 C
 C     PERFORM ANY ERROR OUTS.
@@ -9330,6 +7927,8 @@ C
      *       /1X,'IWRK ARRAY HAS ORBITAL NUMBERS',
      *        1X,'THAT DO NOT MAKE SENSE...')
  9001 FORMAT(/1X,'LOCAL_PREP1_FOR_ACAVO ERROR:',
+     *       /1X,'ATOM NUMBERS DO NOT MATCH UP.')
+ 9002 FORMAT(/1X,'LOCAL_PREP1_FOR_ACAVO ERROR:',
      *       /1X,'ICOUNT DOES NOT EQUAL NVALORBS.')
       END
 C*MODULE LOCAL   *DECK LOCAL_PREP2_FOR_ACAVO
@@ -9390,7 +7989,7 @@ C
 C     OBTAIN THE ORBITAL TO BE USED IN THE 2 EL. EXCHANGE INTEGRALS.
 C     --PERFORM PROJECTION ONTO IATM1 BASIS FXNS
 C     --NORMALIZE VECTOR.
-C     --COPY OVER THE DESIRED ORBITAL TO THE FIRST COL.
+C     --COPY OVER THE DESIRED ORBITAL TO THE ILOOP COL.
       IF(ILOOP.EQ.1) THEN
         CALL VCLR(VEC3,1,L1*L1)
         CALL VCLR(EIG,1,L1)
@@ -9508,16 +8107,16 @@ C
       END
 C*MODULE LOCAL   *DECK LOCAL_WSO_PREP
 C> @brief      Forms relative weights for weighted sym. orthog.
-C> 
+C>
 C> @author     Aaron West
 C>             -May 24, 2013
-C> 
+C>
 C> @details    This routine forms relative weights
 C>             for weighted symmetric orthogonalization.
 C>             It scales the true weights from 1 to 100.
 C>             This scaling preserves the difference in weightings
 C>             and avoids issues with orbital orthonormality.
-C> 
+C>
 C> @param WGT      array contains the true weights on entry.
 C>                 On exit, this array contains the scaled weights.
 C> @param ILTH     is the number of weights.
@@ -9622,4 +8221,308 @@ C
       RETURN
  9003 FORMAT(//1X,'LOCAL_WSO_PREP OBTAINS THE RELATIVE WEIGHTS.')
  9004 FORMAT(1X,'ORBITAL',I5,' HAS WSO WEIGHT = ',F12.7)
+      END
+C*MODULE LOCAL   *DECK LOCAL_RESIZE_DEN
+C> @brief      Forms any mini-density matrix.
+C>
+C> @author     Aaron West
+C>             -June 15, 2013
+C>
+C> @details    Forms any mini-density matrix.
+C>             Given reordering instructions, the routine
+C>             put any combination of the original density
+C>             matrix into a reduced-size density matrix.
+C>
+C> @param DENOLD  is the original density matrix.
+C> @param DENNEW  is the reduced  density matrix.
+C> @param IWRK    contains the reordering instructions.
+C> @param M1      is the number of active orbitals.
+C> @param M2      is the triangular size of M1 and the dimension
+C>                of the original density matrix.
+C> @param ISIZ    is the size of the reduced density matrix.
+      SUBROUTINE LOCAL_RESIZE_DEN(DENOLD,DENNEW,IWRK,M1,M2,ISIZ)
+      IMPLICIT NONE
+      INTEGER M1,M2,IWRK(M1),
+     *        ISIZ,I,J,IJ,I2,J2,IJ2
+      DOUBLE PRECISION :: DENOLD(M2),DENNEW(M2)
+
+      CALL VCLR(DENNEW,1,M2)
+C
+      DO I2=1,ISIZ
+         DO J2=1,I2
+            IJ2=(I2*I2-I2)/2+J2
+C
+            I=MAX(IWRK(I2),IWRK(J2))
+            J=MIN(IWRK(I2),IWRK(J2))
+            IJ=(I*I-I)/2+J
+C
+            DENNEW(IJ2)=DENOLD(IJ)
+         ENDDO
+      ENDDO
+C
+      RETURN
+      END
+C*MODULE LOCAL   *DECK LOCAL_PRINTDEN
+C> @brief      Corrects phase signs for density matrix.
+C>
+C> @author     Aaron West and Klaus Ruedenberg
+C>             -July 03, 2013
+C>
+C> @details    Corrects phase signs for density matrix.
+C>             This item is only called for orientation right now.
+C>             It might be called for other orbital densities
+C>             in the future.
+C>             As a result,
+C>             plus signs always indicate bonding interactions.
+C>
+C> @param STRI    is the kinetic energy matrix over the MOs
+C>                on entry.
+C> @param DENCP   is a scratch array of M2 length.
+C> @param DEN     is the density matrix of M2 length on entry.
+C> @param CLMO    are the L1xL0 orbitals for this density matrix.
+C> @param WRK     is a scratch array of L1 length.
+C> @param WRKMIN  is a scratch array of M2 length.
+C> @param L1      is the length of the AO coefficients.
+C> @param L2      is the triangular length of the number of
+C>                basis functions, which is typically L1=NUM.
+C> @param M1      denotes the number of orbitals that make up
+C>                the density matrix.
+C> @param M2      is the triangular length of M1.
+C> @param NOUTA   denotes the number of frozen orbitals
+C>                in the localization on entry.
+C> @param SOME    is true for master process with nprint not equal -5.
+C> @param MASWRK  indicates the master process.
+C> @param IW      indicates write out to log file.
+      SUBROUTINE LOCAL_PRINTDEN(
+     *           STRI,DENCP,DEN,CLMO,WRK,WRKMIN,
+     *           L1,L2,M1,M2,NOUTA,SOME,MASWRK,IW)
+      IMPLICIT NONE
+      LOGICAL SOME,MASWRK
+      INTEGER L1,L2,M1,M2,NOUTA,IW
+      DOUBLE PRECISION :: STRI(L2),DENCP(M2),DEN(M2),
+     *                    CLMO(L1,L1),WRK(L1),WRKMIN(M2)
+      INTEGER I,J,IJ,ILOOP
+      DOUBLE PRECISION :: TMP,DUM
+C
+C  PRINT OUT NON-ROUNDED ORIENTED DENSITY TO .LOG FILE
+C  --THIS PRINT OFF IS MODIFIED TO GIVE BOND ORDER SIGNS
+C    REGARDLESS OF ORBITAL PHASES THAT ARE SHOWN IN MACMOLPLOT.
+C    I.E. + SIGNS ALWAYS INDICATE BONDING INTERACTIONS.
+C  --THE ORIGINAL DENSITY ON FILE IS NOT MODIFIED AS THE SIGN
+C    CORRESPONDENCE TO THE ORBITALS ON FILE MATTERS
+C    FOR OTHER PROGRAMS E.G. CHARGE TRANSFER.
+C
+      CALL VCLR(DENCP,1,M2)
+      CALL TFTRI(DENCP,STRI,CLMO(1,NOUTA+1),
+     *           WRK,M1,L1,L1)
+      CALL VCLR(STRI,1,L2)
+      CALL DCOPY(M2,DENCP,1,STRI,1)
+      CALL VCLR(DENCP,1,M2)
+C     FORM DENSITY WITH CORRECT PHASE SIGN.
+      DO I=1,M1
+         DO J=1,I
+            IJ=(I*I-I)/2+J
+            DUM = 1.0D+00
+            IF(I.NE.J) THEN
+               TMP=STRI(IJ)*DEN(IJ)
+               IF(ABS(TMP).GT.1.0D-06) DUM = -TMP/ABS(TMP)
+            ENDIF
+C           EVALUATE FOR ILOOP=1.
+            DENCP(IJ)=ABS(DEN(IJ))*DUM
+C           DONE WITH TRUE STRI=K.E. INTEGRAL FOR IJ ELEMENT.
+C           EVALUATE FOR ILOOP=2.
+            STRI(IJ)=STRI(IJ)*DEN(IJ)
+         ENDDO
+      ENDDO
+C     MAKE THE PRINT OUTS.
+      DO ILOOP=1,2
+         IF(ILOOP.EQ.1.AND.MASWRK) WRITE(IW,9090)
+         IF(ILOOP.EQ.2.AND.MASWRK) WRITE(IW,9091)
+         IF(ILOOP.EQ.2) CALL DCOPY(M2,STRI,1,DENCP,1)
+         CALL PRTRI(DENCP,M1)
+C        PRINT MINI-DENSITY MATRIX IF NEEDED...
+         IF(IW.NE.6) THEN
+            CALL LOCAL_MINI_DEN(
+     *           DENCP,WRKMIN,WRK,
+     *           M1,M2,SOME,IW)
+        ENDIF
+      ENDDO
+C
+      RETURN
+ 9090 FORMAT(///1X,'BOND ORDER SIGNS ARE NOW CORRECTED',
+     *          1X,'FOR PRINT OUT ONLY.',
+     *         /1X,'FULL PRINT OUT OF ORIENTED DENSITY MATRIX'/)
+ 9091 FORMAT(///1X,'MULTIPLY DENSITY ELEMENTS BY',
+     *          1X,'KINETIC ENERGY INTEGRALS FOR NOVEL DENSITY MATRIX.',
+     *         /1X,'FULL PRINT OUT OF NOVEL ORIENTED DENSITY'/)
+      END
+C*MODULE LOCAL   *DECK LOCAL_VVOS_ORB_RANGE_CORE
+C> @brief      Automatically finds atom numbers for VVOS orbitals.
+C>
+C> @author     Aaron West
+C>             -July 11, 2013
+C>
+C> @details    Finds atom numbers for core VVOS orbitals.
+C>             i.e. all chem. cores are not at the beginning...
+C>
+C> @param IPOSCOR denotes the integer array that holds the starting
+C>                position for the 1st CORE AO on a given atom.
+C> @param ILENCOR denotes the integer array that holds the number of
+C>                CORE AOs on a given atom.
+C> @param NAT     is the total number of atoms.
+      SUBROUTINE LOCAL_VVOS_ORB_RANGE_CORE(IPOSCOR,ILENCOR,NAT)
+      IMPLICIT NONE
+C
+      INTEGER IPOSCOR(NAT+1),ILENCOR(NAT),NAT
+      INTEGER I,ITYPE,NCOR_NEVER,ITMP,NVAL,ISWMBS
+      INTEGER LOCAL_NUMVAL,NVVOS_NUMCOR
+C
+C     NOTES:
+C     1.  GO BACK TO THE BASIC NVVOS_NUMCOR INFO HERE
+C         SINCE VVOS IS IN MBS NUMBERS.
+C     2.  GO BACK TO NVVOS_NUMCOR ATOM-BY-ATOM.
+C         THIS PART TOOK ME A BIT TO REALIZE... AND DANCE.
+C
+      ITMP=1
+      DO I=1,NAT
+C
+        ITYPE=1
+        NCOR_NEVER=NVVOS_NUMCOR(I,ITYPE)
+        ISWMBS=1
+        NVAL=LOCAL_NUMVAL(I,ISWMBS)
+C
+        IPOSCOR(I)=ITMP
+        ILENCOR(I)=NCOR_NEVER
+C
+        ITMP=ITMP+NCOR_NEVER
+        ITMP=ITMP+NVAL
+      ENDDO
+C
+      RETURN
+      END
+C*MODULE LOCAL   *DECK LOCAL_CHECK_DENS
+C> @brief      Checks density matrix occupations.
+C>
+C> @author     Aaron West
+C>             -July 18, 2013
+C>
+C> @details    Checks density matrix occupations.
+C>             This item checks the occupations
+C>             against the total number of electrons.
+C>             For ilocal=4 type runs, the NCOROT below
+C>             is probably always the chemical core orbitals.
+C>
+C> @param DEN     equals the density matrix.
+C> @param NACT2   equals the dimension of the density matrix.
+C> @param NACT    equals the number of active orbitals.
+C> @param NCORTOT equals the number of core orbitals.
+C> @param NE      equals the number of electrons.
+C> @param MASWRK  indicates the master process.
+C> @param IW      indicates write out to log file.
+      SUBROUTINE LOCAL_CHECK_DENS(
+     *           DEN,NACT2,NACT,NCORTOT,NE,
+     *           MASWRK,IW)
+      IMPLICIT NONE
+      LOGICAL MASWRK
+      INTEGER NACT,NACT2,NCORTOT,NE,IW
+      DOUBLE PRECISION :: TMP,TOT,TOL,TWO,DEN(NACT2)
+      PARAMETER (TOL=1.0D-06,TWO=2.0D+00)
+      INTEGER I,II
+C
+C     OBTAIN CONTRIBUTIONS FROM DENSITY.
+      TOT=0
+      DO I=1,NACT
+        II=(I*I+I)/2
+        TOT=TOT+DEN(II)
+      ENDDO
+C
+C     OBTAIN CONTRIBUTIONS FROM CHEMICAL CORE ORBITALS.
+      TOT=TOT+TWO*NCORTOT
+C
+C     COMPARE TO THE NUMBER OF ELECTRONS.
+      TMP=TOT-NE
+      IF(TMP.GT.TOL) THEN
+        IF(MASWRK) WRITE(IW,9000)
+        CALL FLSHBF(IW)
+        CALL ABRT
+      ENDIF
+C
+      RETURN
+ 9000 FORMAT(/1X,'LOCAL_CHECK_DENS ERROR:',
+     *       /1X,'THE DENSITY DOES NOT ADD UP',
+     *        1X,'TO THE NUMBER OF ELECTRONS.')
+      END
+C*MODULE LOCAL   *DECK LOCAL_MALMQ_SHIFT
+C> @brief      This routine shifts dmat and frhs elements.
+C>
+C> @author     Aaron West and Klaus Ruedenberg
+C>             -June 15, 2013
+C>
+C> @details    This routine shifts around dmat and frhs
+C>             elements.  It allows for choosing the atom
+C>             with the least amount of charge transfer
+C>             and then shifts around the elements before
+C>             and after solving the small linear equation.
+C>
+C> @param IKIND   indicates to shift before or after solving
+C>                the linear equation.
+C>                A 0 is for before.
+C>                A 1 is for after.
+C> @param IORD    contains the reordering instructions.
+C> @param FRHS    is a vector that will hold the charge transfer
+C>                population for each atom.
+C> @param DMAT    is a charge-transfer-less matrix.
+C>                Please see MALMQ_CHARGE_TRANSFER1.
+C> @param DMAT2   is a scratch array with dim. of NATOMSx(NATOMS+1).
+C> @param NATOMS  denotes the number of atoms.
+C> @param MASWRK  denotes the master process.
+C> @param IW      is the integer variable for printing to log files.
+      SUBROUTINE LOCAL_MALMQ_SHIFT(
+     *           IKIND,IORD,FRHS,DMAT,DMAT2,NATOMS,MASWRK,IW)
+      IMPLICIT NONE
+C     VARS
+      LOGICAL MASWRK
+      INTEGER IKIND,IW,NATOMS
+      INTEGER IORD(NATOMS)
+      DOUBLE PRECISION ::
+     *       DMAT(NATOMS,NATOMS),DMAT2(NATOMS,NATOMS+1),
+     *       FRHS(NATOMS)
+C
+      INTEGER I,J,I2,J2
+C
+        CALL DCOPY(NATOMS,FRHS,1,DMAT2(1,NATOMS+1),1)
+        CALL DCOPY(NATOMS*NATOMS,DMAT,1,DMAT2,1)
+        CALL VCLR(FRHS,1,NATOMS)
+        CALL VCLR(DMAT,1,NATOMS*NATOMS)
+C
+        IF(IKIND.EQ.0) THEN
+C         SHIFT FRHS ELEMENTS AND DMAT COLS
+          DO I=1,NATOMS
+            I2=IORD(I)
+            FRHS(I)=DMAT2(I2,NATOMS+1)
+            DO J=1,NATOMS
+              J2=IORD(J)
+              DMAT(I,J)=DMAT2(I2,J2)
+            ENDDO
+          ENDDO
+        ELSEIF(IKIND.EQ.1) THEN
+C         UNSHIFT FRHS ELEMENTS AND DMAT COLS
+          DO I=1,NATOMS
+            I2=IORD(I)
+            FRHS(I2)=DMAT2(I,NATOMS+1)
+            DO J=1,NATOMS
+              J2=IORD(J)
+              DMAT(I2,J2)=DMAT2(I,J)
+            ENDDO
+          ENDDO
+        ELSE
+          IF(MASWRK) WRITE(IW,9000)
+          CALL FLSHBF(IW)
+          CALL ABRT
+          STOP
+        ENDIF
+C
+      RETURN
+ 9000 FORMAT(/1X,'LOCAL_MALMQ_SHIFT ERROR:',
+     *       /1X,'IKIND MUST BE 0 OR 1.')
       END
