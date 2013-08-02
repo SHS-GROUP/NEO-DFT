@@ -10,7 +10,7 @@
    the memory segment are contained herein.
 
    Author: Ryan M. Olson
-   CVS $Id: ddi_index.c,v 1.4 2007/06/12 03:06:44 andrey Exp $
+    2 Aug 13 - MWS - use correct datatype for 1st arg to 'select'
 \* ------------------------------------------------------------------ */
  # include "ddi_base.h"
 
@@ -341,7 +341,10 @@
             Fatal_error(911);
          }
 
-         if(condition) select((int) NULL,NULL,NULL,NULL,&timer);
+                   /* the original first argument of "(int) NULL" prints
+                      as 0 on all machines tried, but has a gcc warning.
+                      All man pages checked say 1st arg should be integer  */
+         if(condition) select(0,NULL,NULL,NULL,&timer);
 
       } while(condition > 0);
 
