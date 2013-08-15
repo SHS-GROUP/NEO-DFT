@@ -9,6 +9,7 @@
  * 29 Mar 10 - SS  - add missing 3rd argument to ddi-send-request
  * 18 Aug 10 - MWS - use 64 bit integer for printing of DM total size
  * 18 Feb 13 - MWS - trap for >2 Gword MEMDDI slice size
+ *  2 Aug 13 - MWS - fix slice size check for TCP/IP runs
 \* -------------------------------------------------------------------- */
  # include "ddi_base.h"
 
@@ -132,10 +133,15 @@
       totwrds   = longrows*longcols;
    /*     Total distributed array over 2 Gwords is OK, but each  */
    /*     slice (MEMDDI per data server) must be under 2 GWords. */
-   /*     TCP/IP on one node has gv(nd)=-1 since no d.s. exists, */
+   /*     TCP/IP has gv(nd)=-1 (uninitialized)                   */
    /*     Cray on one node has gv(nd)=0 since no d.s. exists.    */
-      longnd    = gv(nd);
-      if (longnd <= 0) longnd=1;
+      # if defined DDI_MPI
+         longnd    = gv(nd);
+         if (longnd <= 0) longnd=1;
+      # endif
+      # if defined DDI_SOC
+         longnd = np;
+      # endif
       longslice = totwrds/longnd;
    /*  next is largest signed 32 bit integer, stored as 64 bit quantity  */
       long2g   = 2147483643;

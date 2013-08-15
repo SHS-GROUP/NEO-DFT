@@ -1,15 +1,18 @@
 /* ------------------------------------------------------------------------ *\
  *    GENERALIZED DISTRIBUTED DATA INTERFACE - 'MPMD' DATA SERVER MODEL     *
  *           Kickoff Program Prototypes and Data Structures                 *
+ *     2 Aug 13 - DGF - increase number of TCP/IP connection attempts.
 \* ------------------------------------------------------------------------ */
  # include "mysystem.h"
  # include "common.h"
 
  # include "debug.h"
 
- 
+/*   increased from 2 to 100 by DGF for large scale job kickoff (8/2013). */
+/*   JAB could launch onto 50 nodes iff this was 100, but not if 10.      */
+/*   The value's usage is as the number of attempts, not a time value.    */
  # ifndef DDIKICK_TIMEOUT
- # define DDIKICK_TIMEOUT 2
+ # define DDIKICK_TIMEOUT 100
  # endif
  
  # ifdef USE_PBS

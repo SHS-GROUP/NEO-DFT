@@ -11,6 +11,7 @@
  *  4 May 10 - RMO - change to sanity check on myds value
  * 13 May 10 - SS  - accomodate Windows startup
  * 14 May 10 - MWS - protect against unset DDI_DS_PER_NODE by using 1.
+ *  2 Aug 13 - DGF - allow partition of fat MPI nodes into logical nodes.
 \* ------------------------------------------------------------------ */
  # include "ddi_base.h"
 
@@ -154,6 +155,7 @@
       int icp,ids,cpus,myds,ext;
       int *ranks,*disp,*world;
       int *ranks_local;
+      int np_l,np_li,lnsize;
 
       int me_mpi,me_ddi,rbn;
 
@@ -300,6 +302,40 @@
       for(i=0,np_local=0,c=hostnames; i<np; i++,c+=HOSTNAME_LEN) {
          if(strcmp(hostname,c) == 0) ranks[np_local++] = i;
       }
+
+   /* ------------------------------------ *\
+      Divide MPI nodes into logical nodes,
+      if DDI_LOGICAL_NODE_SIZE requests.
+   \* ------------------------------------ */
+      if(me == 0) {
+         if(getenv("DDI_LOGICAL_NODE_SIZE")) {
+           lnsize = atoi(getenv("DDI_LOGICAL_NODE_SIZE"));
+           fprintf(stdout,"DDI running over MPI found environment variable DDI_LOGICAL_NODE_SIZE, so\n");
+           fprintf(stdout,"physical nodes will be partitioned into logical nodes containing %i core(s).\n",lnsize);
+         } else {
+           lnsize = 0;
+         }
+       }
+       MPI_Bcast(&lnsize,1,MPI_INT,0,MPI_COMM_WORLD);
+
+      /* We only know how to handle either no d.s. or 1 d.s. per c.p. */
+
+      if(lnsize>0 && 
+        (np_local>lnsize && nd==0 || np_local>lnsize*2 && nd==nc)) {
+         for(i=0;i<np_local;i++) {
+            if(ranks[i]==me) {
+               np_l=lnsize; if(nd==nc) np_l*=2;
+               np_li=np_local; j=i/np_l; j*=np_l;
+               for(np_local=0; np_local<np_l && j<np_li; np_local++) {
+                  /* Find other fellow node dwellers to be grouped.
+                     Note that this always takes the closest in MPI rank. */
+                  ranks[np_local]=ranks[j++];
+               }
+               break;
+            }
+         }
+      }
+
       DEBUG_OUT(LVL4,(stdout," MPI Process %i: %i local MPI processes.\n",me,np_local))
 
       ranks_local = (int *) Malloc(np_local*sizeof(int));
@@ -1319,4 +1355,3 @@
       if((scrdir=getenv("DDI_SCRATCH")) != NULL)  Chdir(scrdir);
 
    }
-
