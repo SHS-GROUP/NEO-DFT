@@ -1,3 +1,4 @@
+C 21 May 13 - DGF,HN,TN - changes for FMO 5.0
 C 19 Oct 12 - MWS - synchronize FRGINF common
 C 24 Jul 12 - HN,DGF - code update to finish FMO 4.3
 C 23 MAR 12 - DGF,CHC - code update to finish FMO 4.2
@@ -108,7 +109,7 @@ C*MODULE fmogrd  *DECK optfmox
      *                lstonep,lmapsu,lfrgmul,lclmo,lialmo,lindlmo,
      *                latclmo,llmobdf,lfgflmo,lnfglmo,llfglmo,lpfglmo,
      *                LPOPDMAT,lidmpnt,liddpnt,livmpnt,liactfg,lcrfrg,
-     *                lzlmfrgv
+     *                lzlmfrgv,lYlmfrgv
       COMMON /SCZVEC/ IDFZVEC,LIPTZVEC,LIPTLG
       dimension KQNAM(nnam),QNAM(nnam),dum3(3)
       DATA KQNAM /3,3,1,5,1, 5,5,1,3,3, 3,1,1/
@@ -777,7 +778,7 @@ C*MODULE fmogrd  *DECK readmond
      *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
      *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
      *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
-     *                iddcur,nddleft,ivmfmo
+     *                iddcur,nddleft,ivmfmo,nzmtfmo
 c
 c     read monomer density, based on 3 ways of storing:
 c     1. density
@@ -819,7 +820,7 @@ C*MODULE fmogrd  *DECK readumond
      *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
      *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
      *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
-     *                iddcur,nddleft,ivmfmo
+     *                iddcur,nddleft,ivmfmo,nzmtfmo
 c
 c     read monomer density, based on 3 ways of storing:
 c     1. density (RHF)
@@ -1000,6 +1001,13 @@ C
       RETURN
       END
 C*MODULE fmogrd  *DECK esdgrd
+C>
+C>     @brief Gradient of ES dimers
+C>
+C>     @details Calculate the gradient of ES dimers. 
+C>
+C>     @author Dmitri Fedorov
+C>
       SUBROUTINE esdgrd(ilay,loadhf,jobgrp,loadm,layfrg,numfrg,iodfmo,
      *                  maxl30,iaglob,scffrg,ngrfmo,mannod,mastid,da,fa,
      *                  fb,wrk,fmode,fmopg,isdrec,orbxch,irec0,irec1,
@@ -1031,7 +1039,7 @@ C*MODULE fmogrd  *DECK esdgrd
      *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
      *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
      *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
-     *                iddcur,nddleft,ivmfmo
+     *                iddcur,nddleft,ivmfmo,nzmtfmo
       DIMENSION IPTLG(1),NQMTFG(1),ZVLAG(1),ZVWRK(1)
       dimension jobgrp(*),loadm(*),layfrg(*),numfrg(*),iodfmo(*),
      *          maxl30(*),iaglob(*),scffrg(*),ngrfmo(maxpst,*),mannod(*)
@@ -1128,6 +1136,7 @@ c
 c
 c     write(6,*) 'jobgrp=',(jobgrp(i),i=1,nfg)
       uhfcal=.false.
+      if(uhfcal) write(*,*) "uhfcal"
       do 120 ifg=1,nfg
         if(layfrg(ifg).lt.ilay.and.modfd.eq.0 .or.jobgrp(ifg).eq.0) 
      *    goto 120
@@ -1236,13 +1245,15 @@ c         -2 * 1/4 * D * V * D, D is total density
           call CPYTSQ(da,da(1+l2),l1,1)
           call TFTRI(fb,fa,da(1+l2),WRK,l1,l1,l1)
           call dscal(l2,-half,fb,1)
-          IF (IAND(MODGRD,42).EQ.42.and..not.uhfcal) THEN
-            CALL RAREADS(IDAFMO,IODFMO,DA(L2+1),L3,IREC+IFG,0)
-            call getcnt2ubar(1,L1,L3,IFG,IPTLG,NQMTFG,DA(L2+1),
-     *                       FA,ZVWRK,ZVLAG)
-          END IF
         endif
 cnb     It seems probable that FMO-MCSCF gradient is incorrect with RESDIM>0.
+        IF (IAND(MODGRD,42).EQ.42) THEN
+          if(scffrg(ifg).ne.uhf) lnum=l3
+          if(scffrg(ifg).eq.uhf) lnum=l3+l3
+          CALL RAREADS(IDAFMO,IODFMO,DA(L2+1),lnum,IREC+IFG,0)
+          call getcnt2ubar(1,L1,L3,IFG,IPTLG,NQMTFG,DA(L2+1),
+     *                     FA,ZVWRK,ZVLAG,scffrg(ifg).eq.uhf)
+        END IF
 C
 c       IF(OUT) THEN
 c         WRITE(IW,*) 'THE LAGRANGIAN MATRIX IS'
@@ -1330,7 +1341,7 @@ C*MODULE fmogrd  *DECK esdderz
      *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
      *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
      *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
-     *                iddcur,nddleft,ivmfmo
+     *                iddcur,nddleft,ivmfmo,nzmtfmo
       dimension layfrg(*),indat(*),iabdfg(*),jabdfg(*),indbd(maxabd,*),
      *          fmozan(*),fmoc(3,*),fzcor(*),iactfg(*),t(3)
 c
@@ -1543,9 +1554,16 @@ C
   980 format(10x,i5,3f20.8)
       END
 C*MODULE fmogrd  *DECK gmsxyz
-      subroutine gmsxyz(modef,nfthes,nc1,natfmo,layfrg,indat,fmozan,fmoc
-     *                 ,izbas,nfcrec,nevsav,grandmas,nactfg,fmosym,
-     *                  nfmosym,quit)
+C>
+C>     @brief GAMESS <-> FMO coordinate exchange 
+C>
+C>     @details Interface for GAMESS <-> FMO coordinate exchange. 
+C>
+C>     @author Dmitri Fedorov
+C>
+      subroutine gmsxyz(modef,nfthes,nc1,natfmo,layfrg,indat,fmozan,
+     *                  fmoc,izbas,iactfg,nfcrec,nevsav,grandmas,nactfg,
+     *                  fmosym,nfmosym,quit)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       logical quit,GOPARR,DSKWRK,MASWRK,LINEAR,gopsav,grandmas,MCMIN
       integer ddi_world,ddi_group
@@ -1583,7 +1601,13 @@ C*MODULE fmogrd  *DECK gmsxyz
      *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
      *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
      *                modlmo,nopden,mofock,modfd,modfmm,ncentm
-      dimension layfrg(*),indat(*),fmozan(*),fmoc(3,*),izbas(*)
+      common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
+     *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
+     *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
+     *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
+     *                iddcur,nddleft,ivmfmo,nzmtfmo
+      dimension layfrg(*),indat(*),fmozan(*),fmoc(3,*),izbas(*),
+     *          iactfg(*)
       equivalence (dum,cdum),(dnill,nill)
       data OPTMIZ /8HOPTIMIZE/, SADPT  /8HSADPOINT/,GLOBOP /8HGLOBOP  /,
      *     dnill/8H        /,cdum/' '/,HSSIAN/8HHESSIAN /
@@ -1601,6 +1625,10 @@ c       return
 c     endif   
 c
       natfmof=(natfmo-1)/nwdvar+1
+c
+      modeAB=0
+      if(modfd.ne.0.and.runtyp.eq.HSSIAN) modeAB=1
+c
       if(modef.eq.0) then
 c       natbl=nat
         if(runtyp.eq.OPTMIZ.or.runtyp.eq.SADPT.or.runtyp.eq.HSSIAN.or.
@@ -1617,11 +1645,11 @@ c         copy FMO -> GAMESS
             call dcopy(3*nat,fmoc,1,C,1)
             call dcopy(nat,fmozan,1,ZAN,1)
           else
-            call packat(layfrg,indat,fmozan,fmoc)
+            call packat(modeAB,layfrg,indat,fmozan,fmoc,iactfg)
 c           packat sets NAT, C and ZAN.
           endif
           CALL DAWRIT(IDAF,IODA,izbas,natfmof,495,1)
-          call gddi_scope(ddi_group)
+c         call gddi_scope(ddi_group)
 c
           IF (IMCPFMO.EQ.1) call viclr(iZCORe,1,NATFMO)
 c         For MCP, the nuclear charge is not split between ZAN and IZCORE.
@@ -1637,11 +1665,12 @@ c           write(UNIT=cdum,FMT='(A4,I4)') ATM(i),i
             BNAM(i)=dnill
           enddo 
 c         Generate or read Z-matrix.
-          IF(NZVAR.GT.0) THEN
+          IF(NZVAR.GT.0.and.nzmtfmo.eq.0) THEN
             CALL ZMATIN(NZVAR.EQ.0)
             CALL BANDBI
             if(nevsav.eq.0) CALL PZANDG(egdum,0)
           END IF
+c         call gddi_scope(ddi_group)
 c
 c         Now comes the mean part. We rewrite BNAM for our evil purposes.
 c         (namely, storing basis set ID for each atom).
@@ -1668,7 +1697,7 @@ c       make sure the coordinates are exactly the same
           call dcopy(nat,zan,1,fmoZAN,1)
           call dcopy(3*nat,c,1,fmoC,1)
         else
-          call unpackat(layfrg,indat,fmozan,fmoc)
+          call unpackat(modeAB,layfrg,indat,fmozan,fmoc,iactfg)
           nc1=nat*3
 c         overwrite nc1...
 c     if(nevsav.eq.1) fmoC(2,37)=fmoC(2,37)-0.005D+00/0.52917724924D+00
@@ -1704,6 +1733,30 @@ C
           lfcm=LOADFM+1
           lddm=lfcm+max(nc3,nc1sch)
           last=lddm+nc13 
+          IF(NZVAR.GT.0) THEN
+            NTEMP     = NZMAT
+            NZMAT     = nzmtfmo
+            NCOORD    = natfmo * 3
+            LFMOZMTIN = LAST
+C  FOR  RECORD 39
+            NDIM      = NZVAR
+C  FOR  RECORD 40 
+            NDIM      = NDIM  + NZMAT
+C  FOR  RECORD 41 
+            NDIM      = NDIM  + 3 * NAT * NZVAR
+C  FOR  RECORD 46 
+            NDIM      = NDIM  + NZVAR * NZVAR
+C  FOR  RECORD 47 
+            NDIM      = NDIM  + NVAR
+C  FOR  RECORD 48 
+            NDIM      = NDIM  + NZMAT
+C  FOR  RECORD 49 
+            NDIM      = NDIM  + NCOORD * NVAR
+C  FOR  RECORD 50
+            NDIM      = NDIM  + NCOORD * NVAR
+            LAST      = LFMOZMTIN + NDIM
+            NDIMSAV   = NDIM
+          END IF
           NEEDH = LAST- LOADFM -1
           CALL GETFM(NEEDH)
           CALL daread(IDAF,IODA,x(lFCM),NC3,nfcrec,0)
@@ -1726,11 +1779,41 @@ c           DO NOT overwrite nfthes
   604       continue
           endif 
           if(igothes.eq.0) then
+            IF(NZVAR.GT.0) THEN
+              LPNT = LFMOZMTIN
+              NDIM = NZVAR
+              CALL DAREAD(IDAF,IODA,x(LPNT),NDIM,39,0)
+              LPNT = LPNT + NDIM
+              NDIM = NZMAT
+              CALL DAREAD(IDAF,IODA,x(LPNT),NDIM,40,1)
+              LPNT = LPNT + NDIM
+              NDIM = 3 * NATFMO * NZVAR
+              CALL DAREAD(IDAF,IODA,x(LPNT),NDIM,41,0)
+              LPNT = LPNT + NDIM
+              NDIM = NZVAR * NZVAR
+              CALL DAREAD(IDAF,IODA,x(LPNT),NDIM,46,0)
+              LPNT = LPNT + NDIM
+              NDIM = NVAR
+              CALL DAREAD(IDAF,IODA,x(LPNT),NDIM,47,0)
+              LPNT = LPNT + NDIM
+              NDIM = NZMAT
+              CALL DAREAD(IDAF,IODA,x(LPNT),NDIM,48,1)
+              LPNT = LPNT + NDIM
+              NDIM = NCOORD * NVAR
+              CALL DAREAD(IDAF,IODA,x(LPNT),NDIM,49,0)
+              LPNT = LPNT + NDIM
+              NDIM = NCOORD * NVAR
+              CALL DAREAD(IDAF,IODA,x(LPNT),NDIM,50,0)
+              LPNT = LPNT + NDIM
+c             write(*,*) "finish rading ZMAT file"
+              NZMAT = NTEMP     
+            END IF
 c           write(6,*) 'No Hessian found, using the initial one'
             call seqrew(nfthes)
             write(nfthes) nserch,nc1 
             write(nfthes) (x(lFCM+i),i=0,nc3-1)
             if(runtyp.eq.hssian) write(nfthes) (x(lddm+i),i=0,nc13-1)
+            IF(NZVAR.GT.0) write(nfthes) (x(LFMOZMTIN+i),i=0,NDIMSAV-1)
           endif
           if(NPMAX.ne.0.and.nserch.gt.0) then
             write(6,*) 'Saving Schlegel...'
@@ -1758,12 +1841,19 @@ c       enddo
      *           '. Recompile with a larger MXATM.',/)
       END
 C*MODULE fmogrd  *DECK gmsprop
+C>
+C>     @brief GAMESS <-> FMO property exchange 
+C>
+C>     @details Interface for GAMESS <-> FMO property exchange. 
+C>
+C>     @author Dmitri Fedorov
+C>
       subroutine gmsprop(modef,nfthes,nc1,layfrg,indat,fmode,fmomas,
-     *                   nfcrec,grandmas,LGLOE)
+     *                   iactfg,nfcrec,grandmas,LGLOE)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       integer ddi_world,ddi_group
-      logical grandmas,LGLOE
-      dimension layfrg(*),indat(*),fmode(3,*),fmomas(*)
+      logical grandmas,LGLOE,LINEAR
+      dimension layfrg(*),indat(*),fmode(3,*),fmomas(*),iactfg(*)
       parameter (MXATM=2000,mxrt=100)
       Parameter(ddi_world=0,ddi_group=1)
       COMMON /EFPFMO/ RUNEFP,REFFMO,REPNUCEFP,IEFPFMO,ISWENUC,EFPEFP
@@ -1779,6 +1869,7 @@ C*MODULE fmogrd  *DECK gmsprop
      *                IC(20),NSTEP,NSERCH,NPMAX,NP,IFOLOW,
      *                NNEG,IUPHSS,IEXIT,ITRUPD,IPAD,kdiagf
       COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+      COMMON /ZMAT  / NZMAT,NZVAR,NVAR,NSYMC,LINEAR
       Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
       common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
      *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
@@ -1786,6 +1877,11 @@ C*MODULE fmogrd  *DECK gmsprop
      *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
      *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
      *                modlmo,nopden,mofock,modfd,modfmm,ncentm
+      common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
+     *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
+     *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
+     *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
+     *                iddcur,nddleft,ivmfmo,nzmtfmo
       data HSSIAN/8HHESSIAN /,  FMOMD   /8HMD      /
 c     data OPTMIZ /8HOPTIMIZE/, SADPT  /8HSADPOINT/
 c 
@@ -1801,6 +1897,9 @@ c
 c     if(maswrk) CLOSE(UNIT=IDAF,STATUS='DELETE')
       call CLOSDA('DELETE')
 c
+      modeAB=0
+      if(modfd.ne.0.and.runtyp.eq.HSSIAN) modeAB=1
+c
 c     Write this in the world scope for OPTIMIZE to read
 c
       call gddi_scope(ddi_world)
@@ -1813,7 +1912,7 @@ c
           call dcopy(natfmo,fmomas,1,zmass,1)
 c         write(6,*) 'gradient Copied',natfmo
         else
-          call packprp(layfrg,indat,fmode,fmomas,nat0)
+          call packprp(modeAB,layfrg,indat,fmode,fmomas,iactfg,nat0)
           nc1=nat0*3
 c         overwrite nc1...
         endif
@@ -1828,6 +1927,30 @@ c       It is important, because otherwise indexing of F10 will be broken.
         lfcm=LOADFM+1
         lddm=lfcm+max(nc3,nc1sch)
         last=lddm+nc13 
+        IF(NZVAR.GT.0.and.nzmtfmo.ne.0) then
+          NTEMP     = NZMAT
+          NZMAT     = nzmtfmo
+          NCOORD    = natfmo * 3
+          LFMOZMTIN = LAST
+C  FOR  RECORD 39
+          NDIM      = NZVAR
+C  FOR  RECORD 40 
+          NDIM      = NDIM  + NZMAT
+C  FOR  RECORD 41 
+          NDIM      = NDIM  + 3 * NATFMO * NZVAR
+C  FOR  RECORD 46 
+          NDIM      = NDIM  + NZVAR * NZVAR
+C  FOR  RECORD 47 
+          NDIM      = NDIM  + NVAR
+C  FOR  RECORD 48 
+          NDIM      = NDIM  + NZMAT
+C  FOR  RECORD 49 
+          NDIM      = NDIM  + NCOORD * NVAR
+C  FOR  RECORD 50
+          NDIM      = NDIM  + NCOORD * NVAR
+          LAST      = LFMOZMTIN + NDIM
+          NDIMSAV   = NDIM
+        END IF
         NEEDH = LAST- LOADFM -1
         CALL GETFM(NEEDH)
 c       The way of reading below can possibly raise portability issues:
@@ -1841,6 +1964,8 @@ c          dummy
 c          read(nfthes) (x(lFCM+i),i=0,nc3-1)
 c          if(runtyp.eq.hssian) read(nfthes) (x(lddm+i),i=0,nc13-1)
            call readfcm(nfthes,nc3,nc13,x(lFCM),x(lddm))
+           if(NZVAR.GT.0.and.nzmtfmo.ne.0) 
+     *      read(nfthes) (x(LFMOZMTIN+i),i=0,NDIMSAV-1)
         else
            call vclr(x(lFCM),1,nc3) 
            if(nc13.ne.0) call vclr(x(lddm),1,nc13) 
@@ -1856,6 +1981,34 @@ c          if(runtyp.eq.hssian) read(nfthes) (x(lddm+i),i=0,nc13-1)
           CALL dawrit(IDAF,IODA,x(lFCM),nc1sch,99,0)
         endif
 c       
+        if(NZVAR.GT.0.and.nzmtfmo.ne.0) THEN
+            LPNT = LFMOZMTIN
+            NDIM = NZVAR
+            CALL DAWRIT(IDAF,IODA,x(LPNT),NDIM,39,0)
+            LPNT = LPNT + NDIM
+            NDIM = NZMAT
+            CALL DAWRIT(IDAF,IODA,x(LPNT),NDIM,40,1)
+            LPNT = LPNT + NDIM
+            NDIM = 3 * NATFMO * NZVAR
+            CALL DAWRIT(IDAF,IODA,x(LPNT),NDIM,41,0)
+            LPNT = LPNT + NDIM
+            NDIM = NZVAR * NZVAR
+            CALL DAWRIT(IDAF,IODA,x(LPNT),NDIM,46,0)
+            LPNT = LPNT + NDIM
+            NDIM = NVAR
+            CALL DAWRIT(IDAF,IODA,x(LPNT),NDIM,47,0)
+            LPNT = LPNT + NDIM
+            NDIM = NZMAT
+            CALL DAWRIT(IDAF,IODA,x(LPNT),NDIM,48,1)
+            LPNT = LPNT + NDIM
+            NDIM = NCOORD * NVAR
+            CALL DAWRIT(IDAF,IODA,x(LPNT),NDIM,49,0)
+            LPNT = LPNT + NDIM
+            NDIM = NCOORD * NVAR
+            CALL DAWRIT(IDAF,IODA,x(LPNT),NDIM,50,0)
+            NZMAT = NTEMP
+        END IF
+C
         CALL RETFM(NEEDH)
       endif
       CALL DAWRIT(IDAF,IODA,ENUCR,MXRT+15,2,0)
@@ -1887,7 +2040,7 @@ C*MODULE fmogrd  *DECK fmorst
      *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
      *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
      *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
-     *                iddcur,nddleft,ivmfmo
+     *                iddcur,nddleft,ivmfmo,nzmtfmo
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
       COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
       DATA CHECK/8HCHECK    /
@@ -2312,17 +2465,24 @@ c
       end
 C
 C*MODULE FMOGRD  *DECK HOPDER 
-      SUBROUTINE HOPDER(MODE,IDAM,IDAD,IDAT,L1,L2,DENS,WRK1,WRK2)
+C>
+C>     @brief HOP derivative
+C>
+C>     @details Calculate HOP derivative. 
+C>
+C>     @author Takeshi Nagata
+C>
+      SUBROUTINE HOPDER(MODE,IDAM,IDAD,IDAT,L1,L2,DENS,WRK1,WRK2,FCM)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 
       PARAMETER (MXGTOT=20000, MXSH=5000, MXATM=2000)
-      PARAMETER (ZERO=0.0D+00,ONE=1.0D+00)
+      PARAMETER (ZERO=0.0D+00,ONE=1.0D+00,thrush=1.0D+04)
 
       LOGICAL GOPARR,DSKWRK,MASWRK
-      LOGICAL LGRAD
+      LOGICAL LGRAD,CPHF
 C
-      DIMENSION DENS(1) 
+      DIMENSION DENS(1),FCM(*)
       DIMENSION WRK1(1),WRK2(1)
 
       COMMON /FMCOM / X(1)
@@ -2347,8 +2507,9 @@ C
      *                LSTONEP,LMAPSU,LFRGMUL,LCLMO,LIALMO,LINDLMO,
      *                LATCLMO,LLMOBDF,LFGFLMO,LNFGLMO,LLFGLMO,LPFGLMO,
      *                LPOPDMAT,lidmpnt,liddpnt,livmpnt,liactfg,lcrfrg,
-     *                lzlmfrgv
+     *                lzlmfrgv,lYlmfrgv
       COMMON /GRAD  / DE(3,MXATM)
+      Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
      *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
@@ -2364,7 +2525,11 @@ C     Hereafter calculate HOPDER terms
 C
 C     MODE = 0: GRADIENT
 C     MODE = 1: CPHF 
+C     MODE = 2: CPHF and nder=2
+C     MODE = 3: Hessian
 C
+      CALL DERCHK(NDER)
+      valtmp = IDAD
 C 
 C     Call to this routine is made in grd1.src and FMOCHF calculation
 C     note 1: when this routine is called in fmo.src, dscal must be 
@@ -2391,24 +2556,30 @@ C
       LPS  = LOADFM + 1
 C     LS   = LPS    + L2NAT3 
       LS   = LPS    + L2NAT3 + 3
+      if(NDER.eq.2) LS = LS + natfmo * natfmo * 9
       LSS  = LS     + L2
       LDD  = LSS    + L3
       LROT = LDD    + (MAXCBS*MAXCBS+MAXCBS)/2
       LQ   = LROT   + MAXCBS*MAXCAO
       LSCR = LQ     + L3
+      if(nder.eq.2) LSCR = LQ     + L3 * 4
       LAST = LSCR   + L1*8
 C 
+      LFCMWRK = LPS + L2NAT3 + 3
 C     ltest= last
 C     last = ltest +  nat*3
 C 
       NEED = LAST- LOADFM -1
       CALL GETFM(NEED)
+C
+      if(nder.eq.2) CALL DAREAD(IDAF,IODA,X(LQ+l3*3),L3,15,0)
+      if(nder.eq.2) CALL VCLR(X(LFCMWRK),1,natfmo*natfmo*9)
 
 C     call dcopy(nat*3,de,1,x(ltest),1)
 C 
 C     CALCULATE OVERLAP MATRIX, X(LS) 
 C 
-      IF (MODE.EQ.0) THEN
+      IF (MODE.EQ.0.or.MODE.eq.2) THEN
         CALL DAREAD(IDAF,IODA,X(LS),L2,12,0)
       ELSEIF (MODE.EQ.1) THEN
         DUMMY  = ZERO 
@@ -2428,8 +2599,12 @@ C     DSSS=DSSS/NA
 C     if (maswrk) write(iw,*) 'TOT DS', DSSS 
       ! first arg is dummy 
       ! supposed that ncursh is 0
-      CALL EXTSDER(WRK1,X(LPS),L1,L2,.TRUE.,.TRUE.,0)
-      IF(GOPARR) CALL DDI_GSUMF(1666,X(LPS),L2*3*NAT)
+      if(mode.ne.2) then
+        CALL EXTSDER(WRK1,X(LPS),L1,L2,.TRUE.,.TRUE.,0)
+        IF(GOPARR) CALL DDI_GSUMF(1666,X(LPS),L2*3*NAT)
+      else if(mode.eq.2) then
+        call dcopy(L2*3*NAT,FCM,1,x(lps),1) 
+      end if
 C     IF (MASWRK) THEN
 C       WRITE(6,*) 'DSINT in HOPDER', ICURFG
 C       WRITE(6,'(8F12.8)') (X(LPS+I-1),I=L2+1,L2*2)
@@ -2446,17 +2621,33 @@ C
       X(LPS+L2NAT3+2) = IDAT
 C 
       LGRAD = .TRUE.
+      CPHF  = .false.
+      if(mode.eq.2) then
+         if(nder.ne.2) call abrt
+         CPHF  = .true.
+         CALL DAREAD(IDAF,IODA,x(LQ),L1,17,0)
+         ncount = 0
+         do iii = 1, NQMT
+           if(x(LQ+iii-1) .gt. thrush) ncount = ncount + 1
+         end do
+         X(LPS+L2NAT3  ) = ncount
+      end if
+C
       CALL FMOHOP(L1,L2,X(LPS),DENS,X(LSS),X(LQ),X(LDD),
      *            X(LSCR),WRK1,WRK2,X(LIABDFG),X(LJABDFG),X(LIDXCAO)
      *           ,X(LIAGLOB),X(LNCBS),X(LNCAO),X(LIAPRJO),X(LJAPRJO),
      *            X(LSHIFTB),X(LCOREAO),X(LFMOC),X(LROT),X(LLOCFMO),
-     *            NSHELL,KATOM,KTYPE,KLOC,KMIN,.TRUE.,LGRAD)
+     *            NSHELL,KATOM,KTYPE,KLOC,KMIN,.TRUE.,LGRAD,CPHF)
 C 
 C     CALL DAREAD(IDAF,IODA,X(LQ),L3,15,0)
 C     CALL TFSQU(WRK2,X(LSS),X(LQ),WRK1,L1,L1)
 C     CALL PRSQ(WRK2,L1,L1,L1)
 C 
 
+      if(nder.eq.2.and.mode.eq.0) then
+        neh = natfmo * natfmo * 9
+        if(MASWRK) call daxpy(neh,valtmp,x(LFCMWRK),1,FCM,1)
+      end if
 C     CALL DAXPY(3*nat,-one,de,1,x(ltest),1)
 C     IF(GOPARR) CALL DDI_GSUMF(1667,x(ltest),3*NAT)
 C     if (maswrk) then
@@ -2566,7 +2757,7 @@ C
      *                lstonep,lmapsu,lfrgmul,lclmo,lialmo,lindlmo,
      *                latclmo,llmobdf,lfgflmo,lnfglmo,llfglmo,lpfglmo,
      *                LPOPDMAT,lidmpnt,liddpnt,livmpnt,liactfg,lcrfrg,
-     *                lzlmfrgv
+     *                lzlmfrgv,lYlmfrgv
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
       COMMON /SYMTRY/ MAPSHL(MXSH,48),MAPCTR(MXATM,48),
      *                TT(432),INVT(48),NT
@@ -3420,7 +3611,14 @@ c
       RETURN
       END
 *MODULE FMOGRD  *DECK packat
-      SUBROUTINE packat(layfrg,indat,fmozan,fmoc)
+C>
+C>     @brief store atom for FMO/FD 
+C>
+C>     @details Store atom for FMO/FD. 
+C>
+C>     @author Dmitri Fedorov 
+C>
+      SUBROUTINE packat(mode,layfrg,indat,fmozan,fmoc,iactfg)
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
       LOGICAL GOPARR,DSKWRK,MASWRK
       PARAMETER (MXATM=2000)
@@ -3429,14 +3627,18 @@ c
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
       COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
-      dimension layfrg(*),indat(*),fmozan(*),fmoc(3,*)
+      dimension layfrg(*),indat(*),fmozan(*),fmoc(3,*),iactfg(*)
+c
+c     mode=0 use B
+c     mode=1 use A
 c
       CALL DAWRIT(IDAF,IODA,fmozan,natfmo,493,0)
       CALL DAWRIT(IDAF,IODA,fmoc,3*natfmo,494,0)
       nat=0
       do iat=1,natfmo
 c       if(iactat(iat).ne.0) then
-        if(layfrg(indat(iat)).gt.1) then 
+        if(mode.eq.0.and.layfrg(indat(iat)).gt.1 .or.
+     *     mode.eq.1.and.iactfg(indat(iat)).gt.0) then
           nat=nat+1
           if(nat.gt.MXATM) then
             if(maswrk) write(iw,9000) MXATM
@@ -3454,14 +3656,24 @@ c
      *           '. Recompile with a larger MXATM.',/)
       END
 *MODULE FMOGRD  *DECK unpackat
-      SUBROUTINE unpackat(layfrg,indat,fmozan,fmoc)
+      SUBROUTINE unpackat(mode,layfrg,indat,fmozan,fmoc,iactfg)
+C>
+C>     @brief restore atom for FMO/FD 
+C>
+C>     @details Restore atom for FMO/FD. 
+C>
+C>     @author Dmitri Fedorov 
+C>
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
       PARAMETER (MXATM=2000)
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
      *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
       COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
-      dimension layfrg(*),indat(*),fmozan(*),fmoc(3,*)
+      dimension layfrg(*),indat(*),fmozan(*),fmoc(3,*),iactfg(*)
+c
+c     mode=0 use B
+c     mode=1 use A
 c
       CALL daread(IDAF,IODA,fmozan,natfmo,493,0)
       CALL daread(IDAF,IODA,fmoc,3*natfmo,494,0)
@@ -3469,7 +3681,8 @@ c
       nat=0
       do iat=1,natfmo
 c       if(iactat(iat).ne.0) then
-        if(layfrg(indat(iat)).gt.1) then
+        if(mode.eq.0.and.layfrg(indat(iat)).gt.1 .or.
+     *     mode.eq.1.and.iactfg(indat(iat)).gt.0) then
           nat=nat+1
           do j=1,3
             fmoc(j,iat)=c(j,nat)
@@ -3481,7 +3694,14 @@ c
       RETURN
       END
 *MODULE FMOGRD  *DECK packprp
-      SUBROUTINE packprp(layfrg,indat,fmode,fmomas,nat)
+C>
+C>     @brief Store properties for FMO/FD 
+C>
+C>     @details Store properties for FMO/FD. 
+C>
+C>     @author Dmitri Fedorov 
+C>
+      SUBROUTINE packprp(mode,layfrg,indat,fmode,fmomas,iactfg,nat)
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
       LOGICAL GOPARR,DSKWRK,MASWRK
       PARAMETER (MXATM=2000)
@@ -3490,11 +3710,15 @@ c
       COMMON /MASSES/ ZMASS(MXATM)
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
       COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
-      dimension layfrg(*),indat(*),fmode(3,*),fmomas(*)
+      dimension layfrg(*),indat(*),fmode(3,*),fmomas(*),iactfg(*)
+c
+c     mode=0 use B
+c     mode=1 use A
 c
       nat=0
       do iat=1,natfmo
-        if(layfrg(indat(iat)).gt.1) then
+        if(mode.eq.0.and.layfrg(indat(iat)).gt.1 .or.
+     *     mode.eq.1.and.iactfg(indat(iat)).gt.0) then
           nat=nat+1
           if(nat.gt.MXATM) then
             if(maswrk) write(iw,9000) MXATM
@@ -3621,7 +3845,6 @@ C>
       integer ddi_world,ddi_group,direction
       Parameter(ddi_world=0,ddi_group=1)
       parameter (MXATM=2000)
-      COMMON /FMCOM / X(1)
       COMMON /FMOAPI/ FMOID(MXATM),FMOAPI_COORD,LAP,LKEEPER
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
      *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)

@@ -1,0 +1,1615 @@
+c 21 May 13 - HN  - one-electron contributions to FMO Hessian 
+c
+C*MODULE FMOH1A    *DECK ESDDV1D
+C>
+C>    @brief Second derivative for one-electron integral
+C>
+C>    @details Calculate second order derivative of one-electron integral
+C>              for the electrostatic potential used in FMO.
+C>
+C>    @author Hiroya Nakata
+C>
+C>    @param DA :
+C>    @param LEG :
+C>    @param LEH :
+C>    @param LFD :
+C>
+      subroutine ESDDV1D(DA,LEG,LEH,LFD)
+c
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+C
+      PARAMETER (MXATM=2000,HALF=0.5D+00,TWO=2.0D+00)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+
+      COMMON /FMCOM / X(1)
+      COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
+c
+      DIMENSION DA(1)
+C
+C     MAIN Driver for one-electron Second Derivaive in Electrostatic potential
+C     ----- SET UP MEMORY -----
+C
+      L1 =  NUM
+      L2 = (NUM*NUM+NUM)/2
+C
+C     ----- INITIALIZE -FD- TO ZERO -----
+C
+      NFD=3*NATFMO*L2
+
+C     ----- INTEGRAL FORCE (1E-CONTRIBUTION) ----- 
+C
+C     HELMANN-FEYNMAN TERMS
+      call HLFFMODER(x(LEG),x(LEH),DA,x(LFD))
+C
+C     Coupling terms
+      call HFDFMODER(x(LEH),DA)
+C
+C     Nuclear atraction
+      call TVDFMODER(X(LEG),X(LEH),DA,x(LFD))
+C
+      CALL DSCAL(NFD,two,x(LFD),1)
+      do i = 1,natfmo*3
+         II=0
+         DO JJ=1,L1
+           II = II+JJ
+           x(LFD+II-1+l2*(i-1)) = x(LFD+II-1+l2*(i-1)) * half
+         ENDDO
+      end do
+c     IF (GOPARR) THEN
+c         CALL DSCAL(NFD,one/nproc,x(LFD),1)
+c     END IF
+      return
+      end
+c
+C*MODULE FMOH1A    *DECK TVDFMODER
+C>
+C>    @brief  Contributions from NUCLEAR ATTRACTION 
+C>
+C>    @details Calculate second order derivative of 
+C>              NUCLEAR ATTRACTION terms for ESP in FMO.
+C>
+C>    @author Hiroya Nakata
+C>
+C>    @param EG :
+C>    @param EH :
+C>    @param DAB :
+C>    @param FD :
+C>
+      subroutine TVDFMODER(EG,EH,DAB,FD)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      DOUBLE PRECISION FOE(36,9)
+C
+      LOGICAL GOPARR,DSKWRK,MASWRK,NXT
+      LOGICAL FIRST,SECND,CPHF,BOTH,MFIRST,MSECND,MCPHF
+      LOGICAL fastvesp
+C
+      DIMENSION EG(3,*),EH(9,*),DAB(*),FD(*)
+      DIMENSION DIJ10( 78),DIJ11(169),DIJ20(132),
+     1          FFT10( 78),FFT11(169),FFT20(132),
+     2          GIJ10( 78),GIJ11(169),GIJ20(132),
+     3          XIN(   80),YIN(   80),ZIN(   80) 
+      DIMENSION DF(3),DS(9,2),DOE(108)
+C
+      PARAMETER (MXGTOT=20000, MXSH=5000, MXGSH=30, MXATM=2000)
+C
+      COMMON /FMCOM / X(1)
+      COMMON /HSSPAR/ FIRST,SECND,CPHF,BOTH,MFIRST,MSECND,MCPHF
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /ROOT  / XX,U(13),W(13),NROOTS
+      COMMON /SHLOED/ LIT,LJT,LKT,LLT,LOCI,LOCJ,LOCK,LOCL,
+     *                MINI,MINJ,MINK,MINL,MAXI,MAXJ,MAXK,MAXL,
+     *                NIJ,IJD,KLD,IJ,KL
+      COMMON /XYZDER/ XINT,YINT,ZINT,T,X0,Y0,Z0,XI,YI,ZI,XJ,YJ,ZJ,
+     *                NI,NJ,CX,CY,CZ
+      COMMON /INFOED/ GA(MXGSH),CSA(MXGSH),CPA(MXGSH),CDA(MXGSH),
+     *                GB(MXGSH),CSB(MXGSH),CPB(MXGSH),CDB(MXGSH),
+     *                GC(MXGSH),CSC(MXGSH),CPC(MXGSH),CDC(MXGSH),
+     *                GD(MXGSH),CSD(MXGSH),CPD(MXGSH),CDD(MXGSH),
+     *                XA,YA,ZA,XB,YB,ZB,RR,XC,YC,ZC,XD,YD,ZD,RRC,
+     *                NGA,NGB,NGC,NGD
+      COMMON /DIJOED/ NADIJ1( 78),NADIJ2(169),NADIJ3(132)
+      COMMON /IJXOED/ NPIJX1( 78),NPIJX2(169),NPIJX3(132)
+      COMMON /IJYOED/ NPIJY1( 78),NPIJY2(169),NPIJY3(132)
+      COMMON /IJZOED/ NPIJZ1( 78),NPIJZ2(169),NPIJZ3(132)
+      COMMON /FMOPNT/ LICHFG,LMULFG,LIDMREC,LFRGNAM,LLAYFRG,LINDAT,
+     *                LNCBS,LFMOZAN,LFMOC,LFMOMAS,LIZBAS,LIAGLOB,LIBDGH,
+     *                LIABDFG,LJABDFG,LNCAO,LIDXCAO,LIAPRJO,LJAPRJO,
+     *                LCOREAO,LOCCCOR,LSHIFTB,LIODFMO,LFMODA,LFMODB,
+     *                LFMOESPA,LFMOESPB,LLOCFMO,LSCFFRG,LFMOSCF,LRIJ,
+     *                LPOPMUL,LPOPMAT,LIALOC,LINDBD,LIATFRG,LINDFRG,
+     *                LINDGFRG,LNATFRG,LNAT0FRG,LIANFRG,LZANFRG,LCFRG,
+     *                LLIBISH,LLIBNSH,LLIBNG,LINDATG,LFMOBUF(3),LFMODE,
+     *                LNUMFRG,LLOCTAT,LIAOGLOB,LLOADM,LFMOGE,LDGRID,
+     *                LIODCFMO,LJOB2GRP,LFMOPG,LEMOCDR,LUNTXYZ,LUNTROT,
+     *                LSTONEP,LMAPSU,LFRGMUL,LCLMO,LIALMO,LINDLMO,
+     *                LATCLMO,LLMOBDF,LFGFLMO,LNFGLMO,LLFGLMO,LPFGLMO,
+     *                LPOPDMAT,LIDMPNT,LIDDPNT,LIVMPNT,liactfg,lcrfrg,
+     *                lzlmfrgv,lYlmfrgv
+C
+C
+      DATA PI212 /1.1283791670955D+00/
+      DATA ZERO,ONE,TWO /0.0D+00,1.0D+00,2.0D+00/
+      DATA RLN10 /2.30258D+00/
+      DATA NFDIJ1,NFDIJ2,NFDIJ3,NW / 78,169,132, 80/
+c
+C     ----- INTEGRAL FORCE (1E-CONTRIBUTION) ----- 
+C
+c     write(*,*) "MFIRST MSECND in fmo =",MFIRST,MSECND,MCPHF
+c
+      TOL = RLN10*ITOL
+      NRD=0
+      IF(MFIRST) NRD = 1
+      IF(MSECND) NRD = 2
+      L2=(NUM*(NUM+1))/2
+      MAXIC = NATFMO
+      call setatz(1,MAXIC,fastvesp,lfvesp,needfv)
+C
+      CALL STVJDD
+C
+C INITIALIZE PARALLEL
+C
+      NXT = IBTYP.EQ.1
+      IPCOUNT = ME - 1
+      NEXT = -1
+      MINE = -1
+C
+C     ----- I SHELL -----
+C
+      DO 1060 II = 1,NSHELL
+C
+C     ----- GO PARALLEL! -----
+C
+      IF (NXT .AND. GOPARR) THEN
+         MINE = MINE + 1
+         IF (MINE.GT.NEXT) CALL DDI_DLBNEXT(NEXT)
+         IF (NEXT.NE.MINE) GO TO 1060
+      END IF
+C
+      IAT = KATOM(II)
+C
+      IZAT= IXFTCH(X(LIAGLOB),IAT)
+C
+c     IFDX  = 3*L2*(IAT-1)
+      IFDX  = 3 * L2 * (IZAT-1)
+      IFDY  = IFDX + L2
+      IFDZ  = IFDY + L2
+      XI = C(1,IAT)
+      YI = C(2,IAT)
+      ZI = C(3,IAT)
+      XA = XI
+      YA = YI
+      ZA = ZI
+      I1 = KSTART(II)
+      I2 = I1+KNG(II)-1
+      LIT = KTYPE(II) + NRD
+      MINI = KMIN(II)
+      MAXI = KMAX(II)
+      LOCI = KLOC(II)-MINI
+      NGA = 0
+      DO 10 I = I1,I2
+      NGA = NGA + 1
+      GA( NGA) = EX(I)
+      CSA(NGA) = CS(I)
+      CPA(NGA) = CP(I)
+      CDA(NGA) = CD(I)
+   10 CONTINUE
+C
+C     ----- J SHELL -----
+C
+      DO 1040 JJ = 1,NSHELL
+C
+C           GO PARALLEL!
+C
+      IF ((.NOT.NXT) .AND. GOPARR) THEN
+         IPCOUNT = IPCOUNT + 1
+         IF (MOD(IPCOUNT,NPROC).NE.0) GO TO 1040
+      END IF
+C
+      JAT = KATOM(JJ)
+      JZAT= IXFTCH(X(LIAGLOB),JAT)
+      XJ = C(1,JAT)
+      YJ = C(2,JAT)
+      ZJ = C(3,JAT)
+      XB = XJ
+      YB = YJ
+      ZB = ZJ
+      J1 = KSTART(JJ)
+      J2 = J1+KNG(JJ)-1
+      LJT = KTYPE(JJ)
+      IF(MSECND) LJT = LJT + 1
+      MINJ = KMIN(JJ)
+      MAXJ = KMAX(JJ)
+      LOCJ = KLOC(JJ)-MINJ
+      NGB = 0
+      DO 20 J = J1,J2
+      NGB = NGB + 1
+      GB( NGB) = EX(J)
+      CSB(NGB) = CS(J)
+      CPB(NGB) = CP(J)
+      CDB(NGB) = CD(J)
+   20 CONTINUE
+      IF(MFIRST) NROOTS = (LIT+LJT-2  )/2 + 1
+      IF(MSECND) NROOTS = (LIT+LJT-2  )/2 + 1
+      RR = (XI-XJ)**2+(YI-YJ)**2+(ZI-ZJ)**2
+C
+C     ----- PREPARE INDICES FOR PAIRS OF (I,J) FUNCTIONS
+C
+      CALL STVIDX(0)
+C
+      CALL VCLR(GIJ10,1,NFDIJ1)
+      CALL VCLR(GIJ11,1,NFDIJ2)
+      CALL VCLR(GIJ20,1,NFDIJ3)
+C
+C     ----- I PRIMITIVE
+C
+      IIG = 0
+      DO 840 IG = I1,I2
+      IIG = IIG + 1
+      AI = EX(IG)
+      ARRI = AI*RR
+      AXI = AI*XI
+      AYI = AI*YI
+      AZI = AI*ZI
+      DUM = AI+AI
+C
+C     ----- J PRIMITIVE
+C
+      JJG = 0
+      DO 820 JG = J1,J2
+      JJG = JJG + 1
+      AJ = EX(JG)
+      AA = AI+AJ
+      AA1 = ONE/AA
+      DUM = AJ*ARRI*AA1
+      IF (DUM .GT. TOL) GO TO 820
+C
+      AX = (AXI+AJ*XJ)*AA1
+      AY = (AYI+AJ*YJ)*AA1
+      AZ = (AZI+AJ*ZJ)*AA1
+C
+C     ----- DENSITY FACTOR
+C
+      CALL STVDIJ(0,IIG,JJG,NIJ10,NIJ11,NIJ20,
+     1            DIJ10,DIJ11,DIJ20,FFT10,FFT11,FFT20,
+     2            NFDIJ1,NFDIJ2,NFDIJ3)
+C
+C     ----- NUCLEAR ATTRACTION -----
+C
+      DUM = PI212*AA1
+      IF(MFIRST) THEN
+         DO 50 I = 1,NIJ10
+   50    DIJ10(I) = DIJ10(I) * DUM
+      END IF
+      IF(MSECND) THEN
+         DO 51 I = 1,NIJ11
+   51    DIJ11(I) = DIJ11(I) * DUM
+         DO 52 I = 1,NIJ20
+   52    DIJ20(I) = DIJ20(I) * DUM
+      END IF
+C
+      AAX = AA*AX
+      AAY = AA*AY
+      AAZ = AA*AZ
+C
+C
+c     DO 800 IC = 1,ICMAX
+      DO 800 IC = 1,MAXIC
+      if(fastvesp) then
+        icind=lfvesp+(ic-1)*6
+        FRACV=x(icind)
+        FRACESP=x(icind+1)
+        ZNUC=x(icind+2)
+        CX=x(icind+3)
+        CY=x(icind+4)
+        CZ=x(icind+5)
+      else
+      CALL FMOATFRG(IC,X(LINDAT),X(LINDATG),X(LIAGLOB),
+     *              X(LIALOC),X(LIABDFG),X(LJABDFG),
+     *              X(LINDBD),X(LFMOZAN),X(LFMOC),
+     *              NATFMO+NBDFG,X(LUNTXYZ),X(LPOPMAT),
+     *              KATOM(II),KATOM(JJ),FRACV,FRACESP,
+     *              KFG,ZNUC,CX,CY,CZ)
+      endif
+      if(fracesp .eq. zero) go to 800
+      ZNUC =  ZNUC * FRACESP
+C
+      XX = AA*((AX-CX)**2+(AY-CY)**2+(AZ-CZ)**2)
+      IF(NROOTS .LE. 3) CALL RT123
+      IF(NROOTS .EQ. 4) CALL ROOT4
+      MM = 0
+      DO 740 K = 1,NROOTS
+      UU = AA*U(K)
+      WW = W(K)*ZNUC
+      TT = ONE/(AA+UU)
+      T  = SQRT(TT)
+      X0 = (AAX+UU*CX)*TT
+      Y0 = (AAY+UU*CY)*TT
+      Z0 = (AAZ+UU*CZ)*TT
+      IN = -4+MM
+      DO 720 I = 1,LIT
+      IN = IN+4
+      NI = I
+      DO 720 J = 1,LJT
+      JN = IN+J
+      NJ = J
+      CALL DERXYZ(0)
+      XIN(JN) = XINT
+      YIN(JN) = YINT
+      ZIN(JN) = ZINT*WW
+  720 CONTINUE
+  740 MM = MM+20
+C
+      IF(MFIRST) THEN
+         DO 60 I = 1,NIJ10
+            N  = NADIJ1(I)
+            NX = NPIJX1(I)
+            NY = NPIJY1(I)
+            NZ = NPIJZ1(I)
+            DUM = ZERO
+            MM  = 0
+            DO 61 K = 1,NROOTS
+               DUM = DUM+XIN(NX+MM)*YIN(NY+MM)*ZIN(NZ+MM)
+               MM = MM+20
+   61       CONTINUE
+            GIJ10(N) = GIJ10(N) + DUM*DIJ10(I)
+   60    CONTINUE
+      END IF
+C
+      IF(MSECND) THEN
+         IF(JJ .GT. II ) GO TO 790
+         DO 62 I =1,NIJ11
+            N  = NADIJ2(I)
+            NX = NPIJX2(I)
+            NY = NPIJY2(I)
+            NZ = NPIJZ2(I)
+            DUM = ZERO
+            MM  = 0
+            DO K = 1,NROOTS
+               DUM = DUM+XIN(NX+MM)*YIN(NY+MM)*ZIN(NZ+MM)
+               MM = MM+20
+            ENDDO
+            GIJ11(N) = GIJ11(N) + DUM*DIJ11(I)
+   62    CONTINUE
+  790    CONTINUE
+         DO 64 I =1,NIJ20
+            N  = NADIJ3(I)
+            NX = NPIJX3(I)
+            NY = NPIJY3(I)
+            NZ = NPIJZ3(I)
+            DUM = ZERO
+            MM  = 0
+            DO 65 K = 1,NROOTS
+               DUM = DUM+XIN(NX+MM)*YIN(NY+MM)*ZIN(NZ+MM)
+               MM = MM+20
+   65       CONTINUE
+            GIJ20(N) = GIJ20(N) + DUM*DIJ20(I)
+   64    CONTINUE
+      END IF
+  800 CONTINUE
+C
+C     ----- END OF PRIMITIVE LOOPS -----
+C
+  820 CONTINUE
+  840 CONTINUE
+C
+C     ----- FORM INTEGRALS OVER DERIVATIVES -----
+C
+      DO 70 I = 1,9
+   70 DS(I,2) = ZERO
+      CALL TVFSIJ(GIJ10,GIJ20,DF,DS(1,1),DOE,NFDIJ1,NFDIJ3,DAB,FOE)
+      IF(.NOT.MCPHF) GO TO 846
+      N = -3
+      DO 75 J = MINJ,MAXJ
+      NJ = LOCJ + J
+      DO 75 I = MINI,MAXI
+      NI = LOCI + I
+      IF(NI .GE. NJ) GO TO 842
+      NIJ = NJ * (NJ-1)/2 + NI
+      GO TO 844
+  842 NIJ = NI * (NI-1)/2 + NJ
+  844 N = N + 3
+      FAC = ONE
+      IF(NI .EQ. NJ) FAC = TWO
+      FD(IFDX+NIJ) = FD(IFDX+NIJ) + FAC * DOE(N+1)
+      FD(IFDY+NIJ) = FD(IFDY+NIJ) + FAC * DOE(N+2)
+      FD(IFDZ+NIJ) = FD(IFDZ+NIJ) + FAC * DOE(N+3)
+   75 CONTINUE
+  846 CONTINUE
+      IAT = KATOM(II)
+      JAT = KATOM(JJ)
+      FAC = ONE
+      IF(IAT .EQ. JAT .AND. II .NE. JJ) FAC = TWO
+C
+      IF(.NOT.MSECND .OR. JJ .GT. II) GO TO 850
+         CALL TVFIFJ(GIJ11,DS(1,2),XIN,YIN,ZIN,NW,NFDIJ2,DAB,FOE)
+  850 CONTINUE
+C
+C     ----- CALCULATE CONTRIBUTION TO GRADIENT AND FORCE CONSTANTS -----
+C
+C
+      IAT = KATOM(II)
+      JAT = KATOM(JJ)
+      IZAT= IXFTCH(X(LIAGLOB),IAT)
+      JZAT= IXFTCH(X(LIAGLOB),JAT)
+      FAC = ONE
+      IF(IAT .EQ. JAT .AND. II .NE. JJ) FAC = TWO
+C
+      iomit=0
+      icind=lfvesp+(izat-1)*6
+      TEMP =x(icind+1)
+      icind=lfvesp+(jzat-1)*6
+      TEMP2=x(icind+1)
+      if(temp .ne.zero.and.temp .ne.one) iomit = 1
+C
+      IIAT = IZAT*(IZAT-1)/2 + IZAT
+      DO 80 I = 1,3
+   80 EG(I, IZAT) = EG(I, IZAT) + DF(I) 
+      DO 81 I = 1,9
+         if(iomit.eq.0) EH(I,IIAT) = EH(I,IIAT) + DS(I,1)
+   81 CONTINUE
+      if(temp2.ne.zero.and.temp2.ne.one) iomit = 2
+      IF(izat .ge. jzat .and. iomit.eq.0) then
+        IJAT = izat*(izat-1)/2 + jzat 
+        EH(1, IJAT) = EH(1, IJAT) + DS(1,2) * FAC 
+        EH(2, IJAT) = EH(2, IJAT) + DS(2,2) * FAC 
+        EH(3, IJAT) = EH(3, IJAT) + DS(3,2) * FAC 
+        EH(4, IJAT) = EH(4, IJAT) + DS(4,2) * FAC 
+        EH(5, IJAT) = EH(5, IJAT) + DS(5,2) * FAC 
+        EH(6, IJAT) = EH(6, IJAT) + DS(6,2) * FAC 
+        EH(7, IJAT) = EH(7, IJAT) + DS(7,2) * FAC 
+        EH(8, IJAT) = EH(8, IJAT) + DS(8,2) * FAC 
+        EH(9, IJAT) = EH(9, IJAT) + DS(9,2) * FAC 
+      ELSE IF(jzat .gt. izat .and. iomit.eq.0) then 
+        IJAT = jzat*(jzat-1)/2 + izat 
+        EH(1, IJAT) = EH(1, IJAT) + DS(1,2) * FAC   
+        EH(2, IJAT) = EH(2, IJAT) + DS(4,2) * FAC 
+        EH(3, IJAT) = EH(3, IJAT) + DS(7,2) * FAC 
+        EH(4, IJAT) = EH(4, IJAT) + DS(2,2) * FAC 
+        EH(5, IJAT) = EH(5, IJAT) + DS(5,2) * FAC 
+        EH(6, IJAT) = EH(6, IJAT) + DS(8,2) * FAC 
+        EH(7, IJAT) = EH(7, IJAT) + DS(3,2) * FAC 
+        EH(8, IJAT) = EH(8, IJAT) + DS(6,2) * FAC 
+        EH(9, IJAT) = EH(9, IJAT) + DS(9,2) * FAC  
+      END IF
+ 1040 CONTINUE
+ 1060 CONTINUE
+C
+C     ----- END OF SHELL LOOPS -----
+C
+      IF (GOPARR) THEN
+          IF(NXT) CALL DDI_DLBRESET
+c         CALL DDI_GSUMF(1605,FD,3*NATFMO*L2)
+      END IF
+C
+      IF(MSECND) THEN
+         DO 1080 IAT = 1,NATFMO
+            IIAT = ( IAT * (IAT-1) ) / 2 + IAT
+            FAC  = ( EH(2,IIAT) + EH(4,IIAT) ) / TWO
+            EH(2,IIAT) = FAC
+            EH(4,IIAT) = FAC
+            FAC  = ( EH(3,IIAT) + EH(7,IIAT) ) / TWO
+            EH(3,IIAT) = FAC
+            EH(7,IIAT) = FAC
+            FAC  = ( EH(6,IIAT) + EH(8,IIAT) ) / TWO
+            EH(6,IIAT) = FAC
+            EH(8,IIAT) = FAC
+ 1080    CONTINUE
+      END IF
+C
+C     ----- PRINTING SECTION -----
+c        NEGH = 3*NATFMO+9*(NATFMO*(NATFMO+1))/2
+c        IF(GOPARR) CALL DDI_GSUMF(1624,EG,NEGH)
+c        IF(MASWRK) THEN
+c           WRITE(*,9058)
+c           CALL HSSPRT(NATFMO,EG,EH)
+c        END IF
+c        IF(GOPARR) CALL DSCAL(NEGH,ONE/NPROC,EG,1)
+
+C
+      if(fastvesp) call retfm(needfv)
+C
+      RETURN
+C
+c9028 FORMAT(' SHELLS II,JJ = ',2I5)
+c9058 FORMAT(/1X,'GRADIENT AND HESSIAN AFTER -TVDSPD- in FMO')
+      END
+c
+C*MODULE FMOH1A    *DECK HFDFMODER
+C>
+C>    @brief Contributions from Coupling term
+C>
+C>    @details Calculate Coupling term for the electro static potential
+C>              in FMO.
+C>
+C>    @author Hiroya Nakata
+C>
+C>    @param EH :
+C>    @param DAB :
+C>
+      subroutine HFDFMODER(EH,DAB)
+
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      DIMENSION EH(9,*),DAB(*)
+      DIMENSION DIJ10(78),GIJ10X(78),GIJ10Y(78),GIJ10Z(78),
+     *          XIN(128),YIN(128),ZIN(128),DF(3),W2(4),FOE(36,9)
+C
+      LOGICAL GOPARR,DSKWRK,MASWRK,NXT
+      LOGICAL fastvesp
+C
+      PARAMETER (MXGTOT=20000, MXSH=5000, MXGSH=30, MXATM=2000)
+C
+      COMMON /FMCOM / X(1)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /INFOED/ GA(MXGSH),CSA(MXGSH),CPA(MXGSH),CDA(MXGSH),
+     1                GB(MXGSH),CSB(MXGSH),CPB(MXGSH),CDB(MXGSH),
+     2                GC(MXGSH),CSC(MXGSH),CPC(MXGSH),CDC(MXGSH),
+     3                GD(MXGSH),CSD(MXGSH),CPD(MXGSH),CDD(MXGSH),
+     4                XA,YA,ZA,XB,YB,ZB,RR,XC,YC,ZC,XD,YD,ZD,RRC,
+     5                NGA,NGB,NGC,NGD
+      COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /ROOT  / XX,U(13),W(13),NROOTS
+      COMMON /SHLOED/ LIT,LJT,LKT,LLT,LOCI,LOCJ,LOCK,LOCL,
+     1                MINI,MINJ,MINK,MINL,MAXI,MAXJ,MAXK,MAXL,
+     2                NIJ,IJD,KLD,IJ,KL
+      COMMON /XYZDER/ XINT,YINT,ZINT,T,X0,Y0,Z0,XI,YI,ZI,XJ,YJ,ZJ,
+     *                NI,NJ,CX,CY,CZ
+      COMMON /DIJOED/ NADIJ1( 78),NADIJ2(169),NADIJ3(132)
+      COMMON /IJXOED/ NPIJX1( 78),NPIJX2(169),NPIJX3(132)
+      COMMON /IJYOED/ NPIJY1( 78),NPIJY2(169),NPIJY3(132)
+      COMMON /IJZOED/ NPIJZ1( 78),NPIJZ2(169),NPIJZ3(132)
+      COMMON /FMOPNT/ LICHFG,LMULFG,LIDMREC,LFRGNAM,LLAYFRG,LINDAT,
+     *                LNCBS,LFMOZAN,LFMOC,LFMOMAS,LIZBAS,LIAGLOB,LIBDGH,
+     *                LIABDFG,LJABDFG,LNCAO,LIDXCAO,LIAPRJO,LJAPRJO,
+     *                LCOREAO,LOCCCOR,LSHIFTB,LIODFMO,LFMODA,LFMODB,
+     *                LFMOESPA,LFMOESPB,LLOCFMO,LSCFFRG,LFMOSCF,LRIJ,
+     *                LPOPMUL,LPOPMAT,LIALOC,LINDBD,LIATFRG,LINDFRG,
+     *                LINDGFRG,LNATFRG,LNAT0FRG,LIANFRG,LZANFRG,LCFRG,
+     *                LLIBISH,LLIBNSH,LLIBNG,LINDATG,LFMOBUF(3),LFMODE,
+     *                LNUMFRG,LLOCTAT,LIAOGLOB,LLOADM,LFMOGE,LDGRID,
+     *                LIODCFMO,LJOB2GRP,LFMOPG,LEMOCDR,LUNTXYZ,LUNTROT,
+     *                LSTONEP,LMAPSU,LFRGMUL,LCLMO,LIALMO,LINDLMO,
+     *                LATCLMO,LLMOBDF,LFGFLMO,LNFGLMO,LLFGLMO,LPFGLMO,
+     *                LPOPDMAT,LIDMPNT,LIDDPNT,LIVMPNT,liactfg,lcrfrg,
+     *                lzlmfrgv,lYlmfrgv
+C
+      DATA PI212 /1.1283791670955D+00/
+      DATA ZERO,ONE,TWO/0.0D+00,1.0D+00,2.0D+00/
+      DATA RLN10 /2.30258D+00/
+      DATA NFDIJ1 / 78/
+c
+C     Coupling terms
+C
+      NRD = 1
+      TOL = RLN10*ITOL
+      MAXIC = NATFMO
+      call setatz(1,MAXIC,fastvesp,lfvesp,needfv)
+C
+      CALL STVJDD
+C
+C   INITIALIZATION FOR PARALLEL
+C
+      NXT = IBTYP.EQ.1
+      IPCOUNT = ME - 1
+      NEXT = -1
+      MINE = -1
+C
+C     ----- I SHELL -----
+C
+      DO 600 II = 1,NSHELL
+C
+C           GO PARALLEL!
+C
+      IF (NXT .AND. GOPARR) THEN
+         MINE = MINE + 1
+         IF (MINE.GT.NEXT) CALL DDI_DLBNEXT(NEXT)
+         IF (NEXT.NE.MINE) GO TO 600
+      END IF
+C
+      IAT= KATOM(II)
+      IZAT= IXFTCH(X(LIAGLOB),IAT)
+      XI = C(1,IAT)
+      YI = C(2,IAT)
+      ZI = C(3,IAT)
+      XA = XI
+      YA = YI
+      ZA = ZI
+      I1 = KSTART(II)
+      I2 = I1+KNG(II)-1
+      LIT = KTYPE(II) + NRD
+      MINI = KMIN(II)
+      MAXI = KMAX(II)
+      LOCI = KLOC(II)-MINI
+      NGA = 0
+      DO 10 I = I1,I2
+      NGA = NGA + 1
+      GA( NGA) = EX(I)
+      CSA(NGA) = CS(I)
+      CPA(NGA) = CP(I)
+      CDA(NGA) = CD(I)
+   10 CONTINUE
+C
+C     ----- J SHELL -----
+C
+      DO 580 JJ = 1,NSHELL
+C
+C         GO PARALLEL!
+C
+      IF ((.NOT.NXT) .AND. GOPARR) THEN
+         IPCOUNT = IPCOUNT + 1
+         IF (MOD(IPCOUNT,NPROC).NE.0) GO TO 580
+      END IF
+C
+      JAT= KATOM(JJ)
+      XJ = C(1,JAT)
+      YJ = C(2,JAT)
+      ZJ = C(3,JAT)
+      XB = XJ
+      YB = YJ
+      ZB = ZJ
+      J1 = KSTART(JJ)
+      J2 = J1+KNG(JJ)-1
+      LJT = KTYPE(JJ)
+      MINJ = KMIN(JJ)
+      MAXJ = KMAX(JJ)
+      LOCJ = KLOC(JJ)-MINJ
+      NGB = 0
+      DO 20 J = J1,J2
+      NGB = NGB + 1
+      GB( NGB) = EX(J)
+      CSB(NGB) = CS(J)
+      CPB(NGB) = CP(J)
+      CDB(NGB) = CD(J)
+   20 CONTINUE
+      NROOTS = (LIT+LJT+1-2)/2 + 1
+      RR = (XI-XJ)**2+(YI-YJ)**2+(ZI-ZJ)**2
+C
+C     ----- PREPARE INDICES FOR PAIRS OF (I,J) FUNCTIONS
+C
+      CALL STVIDX(1)
+C
+C     ----- DO LOOP OF NATOM -----
+C
+      DO 540 IC = 1, MAXIC
+      if(fastvesp) then
+        icind=lfvesp+(ic-1)*6
+        FRACV=x(icind)
+        FRACESP=x(icind+1)
+        ZNUC=x(icind+2)
+        CX=x(icind+3)
+        CY=x(icind+4)
+        CZ=x(icind+5)
+      else
+        CALL FMOATFRG(IC,X(LINDAT),X(LINDATG),X(LIAGLOB),
+     *              X(LIALOC),X(LIABDFG),X(LJABDFG),
+     *              X(LINDBD),X(LFMOZAN),X(LFMOC),
+     *              NATFMO+NBDFG,X(LUNTXYZ),X(LPOPMAT),
+     *              KATOM(II),KATOM(JJ),FRACV,FRACESP,
+     *              KFG,ZNUC,CX,CY,CZ)
+      endif
+      if(fracesp .ne. one) go to 540
+      ZNUC =  ZNUC * FRACESP
+      DO 25 I = 1,NFDIJ1
+      GIJ10X(I) = ZERO
+      GIJ10Y(I) = ZERO
+   25 GIJ10Z(I) = ZERO
+C
+C     ----- I PRIMITIVE
+C
+      IIG = 0
+      DO 520 IG = I1,I2
+      IIG  = IIG + 1
+      AI   = EX(IG)
+      ARRI = AI*RR
+      AXI  = AI*XI
+      AYI  = AI*YI
+      AZI  = AI*ZI
+C
+C     ----- J PRIMITIVE
+C
+      JJG = 0
+      DO 500 JG = J1,J2
+      JJG = JJG + 1
+      AJ = EX(JG)
+      AA = AI+AJ
+      AA1 = ONE/AA
+      DUM = AJ*ARRI*AA1
+      IF (DUM .GT. TOL) GO TO 500
+      AX = (AXI+AJ*XJ)*AA1
+      AY = (AYI+AJ*YJ)*AA1
+      AZ = (AZI+AJ*ZJ)*AA1
+C
+C     ----- DENSITY FACTOR
+C
+      CALL STVDIJ(1,IIG,JJG,NIJ10,NIJ11,NIJ20,
+     1            DIJ10,XIN,XIN,XIN,XIN,XIN,
+     2            NFDIJ1,NFDIJ1,NFDIJ1)
+C
+C     ----- COUPLING TERM OF DERIVATIVES OF SHELL AND HAMILTONIAN ----
+C
+      DUM = PI212*AA1
+      DO 30 I = 1,NIJ10
+   30 DIJ10(I) = DIJ10(I) * DUM
+      AAX = AA*AX
+      AAY = AA*AY
+      AAZ = AA*AZ
+      XX = AA*((AX-CX)**2+(AY-CY)**2+(AZ-CZ)**2)
+      IF(NROOTS .LE. 3) CALL RT123
+      IF(NROOTS .EQ. 4) CALL ROOT4
+      MM = 0
+      DO 420 K = 1,NROOTS
+      U2 = AA*U(K)
+      WW = W(K)*ZNUC
+      W2(K) = TWO*WW*U2
+      TT = ONE/(AA+U2)
+      T  =  SQRT(TT)
+      X0 = (AAX+U2*CX)*TT
+      Y0 = (AAY+U2*CY)*TT
+      Z0 = (AAZ+U2*CZ)*TT
+      IN = -4+MM
+      DO 400 I = 1,LIT
+      IN = IN+4
+      NI = I
+      DO 400 J = 1,LJT
+      JN = IN+J
+      NJ = J
+      CALL DERXYZ(0)
+      XIN(JN) = XINT
+      YIN(JN) = YINT
+      ZIN(JN) = ZINT
+      CALL DERXYZ(1)
+      XIN(JN+64) = XINT
+      YIN(JN+64) = YINT
+      ZIN(JN+64) = ZINT
+  400 CONTINUE
+  420 MM = MM+16
+      DO  40 I = 1,NIJ10
+      N     = NADIJ1(I)
+      NX    = NPIJX1(I)
+      NY    = NPIJY1(I)
+      NZ    = NPIJZ1(I)
+      DUM   = DIJ10 (I)
+      DUMX  = ZERO
+      DUMY  = ZERO
+      DUMZ  = ZERO
+      MM    = 0
+      DO 41 K = 1,NROOTS
+      DUMX  = DUMX +XIN(NX+MM+64)*YIN(NY+MM   )*ZIN(NZ+MM   )*W2(K)
+      DUMY  = DUMY +XIN(NX+MM   )*YIN(NY+MM+64)*ZIN(NZ+MM   )*W2(K)
+      DUMZ  = DUMZ +XIN(NX+MM   )*YIN(NY+MM   )*ZIN(NZ+MM+64)*W2(K)
+   41 MM  = MM+16
+      GIJ10X(N) = GIJ10X(N) + DUM * DUMX
+      GIJ10Y(N) = GIJ10Y(N) + DUM * DUMY
+      GIJ10Z(N) = GIJ10Z(N) + DUM * DUMZ
+   40 CONTINUE
+  500 CONTINUE
+  520 CONTINUE
+C
+C     ----- END OF *PRIMITIVE* LOOPS -----
+C
+      IF(IZAT-IC) 700,710,720
+  700 FAC = ONE
+      NN  = IC *(IC -1)/2 + IZAT
+      GO TO 730
+  710 FAC = two
+      NN  = IC *(IC -1)/2 + IZAT
+      GO TO 730
+  720 FAC = ONE
+      NN  = IZAT*(IZAT-1)/2 + IC
+  730 icind=lfvesp+(izat-1)*6
+      TEMP =x(icind+1)
+      IF(temp.ne.zero.and.temp.ne.one)   go to 539
+      IF(IC .LT. IZAT  ) GO TO 740
+      IF(IC .EQ. IZAT  ) GO TO 539
+      
+C
+C     ----- TRANSFORMATION OF INTEGRALS TO ATOMIC ORBITALS -----
+C
+      CALL HFDFIJ(GIJ10X,DF,NFDIJ1,DAB,FOE(1,1),FOE(1,2),FOE(1,3))
+      EH(1,NN) = EH(1,NN) + FAC * DF(1) 
+      EH(2,NN) = EH(2,NN) + FAC * DF(2) 
+      EH(3,NN) = EH(3,NN) + FAC * DF(3) 
+      CALL HFDFIJ(GIJ10Y,DF,NFDIJ1,DAB,FOE(1,4),FOE(1,5),FOE(1,6))
+      EH(4,NN) = EH(4,NN) + FAC * DF(1) 
+      EH(5,NN) = EH(5,NN) + FAC * DF(2) 
+      EH(6,NN) = EH(6,NN) + FAC * DF(3) 
+      CALL HFDFIJ(GIJ10Z,DF,NFDIJ1,DAB,FOE(1,7),FOE(1,8),FOE(1,9))
+      EH(7,NN) = EH(7,NN) + FAC * DF(1) 
+      EH(8,NN) = EH(8,NN) + FAC * DF(2) 
+      EH(9,NN) = EH(9,NN) + FAC * DF(3) 
+c     IF(IZAT.ne.IC) GO TO 539
+      GO TO 539
+  740 CALL HFDFIJ(GIJ10X,DF,NFDIJ1,DAB,FOE(1,1),FOE(1,4),FOE(1,7))
+      EH(1,NN) = EH(1,NN) + FAC * DF(1)  
+      EH(4,NN) = EH(4,NN) + FAC * DF(2) 
+      EH(7,NN) = EH(7,NN) + FAC * DF(3) 
+      CALL HFDFIJ(GIJ10Y,DF,NFDIJ1,DAB,FOE(1,2),FOE(1,5),FOE(1,8))
+      EH(2,NN) = EH(2,NN) + FAC * DF(1)   
+      EH(5,NN) = EH(5,NN) + FAC * DF(2) 
+      EH(8,NN) = EH(8,NN) + FAC * DF(3) 
+      CALL HFDFIJ(GIJ10Z,DF,NFDIJ1,DAB,FOE(1,3),FOE(1,6),FOE(1,9))
+      EH(3,NN) = EH(3,NN) + FAC * DF(1) 
+      EH(6,NN) = EH(6,NN) + FAC * DF(2) 
+      EH(9,NN) = EH(9,NN) + FAC * DF(3)  
+  539 CONTINUE
+  540 CONTINUE
+C     ----- END OF *SHELL* LOOPS -----
+  580 CONTINUE
+  600 CONTINUE
+C
+      IF (GOPARR.AND.NXT) CALL DDI_DLBRESET
+C
+c        NEGH=3*NATFMO+9*(NATFMO*(NATFMO+1))/2
+c        IF(GOPARR) CALL DDI_GSUMF(1623,EG,NEGH)
+c        IF(MASWRK) THEN
+c           WRITE(IW,9048)
+c           CALL HSSPRT(NATFMO,EG,EH)
+c        END IF
+c        IF(GOPARR) CALL DSCAL(NEGH,ONE/NPROC,EG,1)
+C
+      if(fastvesp) call retfm(needfv)
+
+      return
+c9048 FORMAT(/1X,'GRADIENT AND HESSIAN AFTER -LFDSPD-')
+      end 
+c
+C*MODULE FMOH1A    *DECK HLFFMODER
+C>
+C>    @brief Contribution from HELLMANN-FEYNMAN FORCE 
+C>
+C>    @details Calculate  HELLMANN-FEYNMAN FORCE for electrostatic potential
+C>                         used in FMO Hessian.
+C>
+C>    @author Hiroya Nakata
+C> 
+C>    @param EG :
+C>    @param EH :
+C>    @param DAB :
+C>    @param FD :
+C>
+      subroutine HLFFMODER(EG,EH,DAB,FD)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+c     DOUBLE PRECISION MCSCF
+
+      DIMENSION EG(3,*),EH(9,*),DAB(*),FD(*)
+      DIMENSION IJN(36),DFAC(36),DIJ(36),XIN(108),YIN(108),ZIN(108),
+     *          IX(10),IY(10),IZ(10),JX(10),JY(10),JZ(10),
+     *          PIJ(36),IJX(36),IJY(36),IJZ(36),W2(5),W4(5)
+
+      LOGICAL IANDJ,NORM,DOUBLE,GOPARR,DSKWRK,MASWRK,NXT,
+     *        FIRST,SECND,CPHF,BOTH,MFIRST,MSECND,MCPHF
+      LOGICAL fastvesp
+
+      PARAMETER (MXGTOT=20000, MXSH=5000, MXATM=2000)
+
+      COMMON /HSSPAR/ FIRST,SECND,CPHF,BOTH,MFIRST,MSECND,MCPHF
+      COMMON /FMCOM / X(1)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /ROOT  / XX,U(13),W(13),NROOTS
+      COMMON /XYZDER/ XINT,YINT,ZINT,T,X0,Y0,Z0,XI,YI,ZI,XJ,YJ,ZJ,
+     *                NI,NJ,CX,CY,CZ
+      COMMON /FMOPNT/ LICHFG,LMULFG,LIDMREC,LFRGNAM,LLAYFRG,LINDAT,
+     *                LNCBS,LFMOZAN,LFMOC,LFMOMAS,LIZBAS,LIAGLOB,LIBDGH,
+     *                LIABDFG,LJABDFG,LNCAO,LIDXCAO,LIAPRJO,LJAPRJO,
+     *                LCOREAO,LOCCCOR,LSHIFTB,LIODFMO,LFMODA,LFMODB,
+     *                LFMOESPA,LFMOESPB,LLOCFMO,LSCFFRG,LFMOSCF,LRIJ,
+     *                LPOPMUL,LPOPMAT,LIALOC,LINDBD,LIATFRG,LINDFRG,
+     *                LINDGFRG,LNATFRG,LNAT0FRG,LIANFRG,LZANFRG,LCFRG,
+     *                LLIBISH,LLIBNSH,LLIBNG,LINDATG,LFMOBUF(3),LFMODE,
+     *                LNUMFRG,LLOCTAT,LIAOGLOB,LLOADM,LFMOGE,LDGRID,
+     *                LIODCFMO,LJOB2GRP,LFMOPG,LEMOCDR,LUNTXYZ,LUNTROT,
+     *                LSTONEP,LMAPSU,LFRGMUL,LCLMO,LIALMO,LINDLMO,
+     *                LATCLMO,LLMOBDF,LFGFLMO,LNFGLMO,LLFGLMO,LPFGLMO,
+     *                LPOPDMAT,LIDMPNT,LIDDPNT,LIVMPNT,liactfg,lcrfrg,
+     *                lzlmfrgv,lYlmfrgv
+C
+      DATA PI212 /1.1283791670955D+00/
+      DATA SQRT3 /1.73205080756888D+00/
+      DATA RLN10 /2.30258D+00/
+      DATA JX / 0, 1, 0, 0, 2, 0, 0, 1, 1, 0/
+      DATA IX / 1, 4, 1, 1, 7, 1, 1, 4, 4, 1/
+      DATA JY / 0, 0, 1, 0, 0, 2, 0, 1, 0, 1/
+      DATA IY / 1, 1, 4, 1, 1, 7, 1, 4, 1, 4/
+      DATA JZ / 0, 0, 0, 1, 0, 0, 2, 0, 1, 1/
+      DATA IZ / 1, 1, 1, 4, 1, 1, 7, 1, 4, 4/
+      DATA ZERO,ONE,TWO,FOUR /0.0D+00,1.0D+00,2.0D+00,4.0D+00/
+c     DATA MCSCF/8HMCSCF   /
+c
+C     HELLMANN-FEYNMAN TERMS
+C
+      TOL = RLN10*ITOL
+      NORM = NORMF .NE. 1 .OR. NORMP .NE. 1
+      L2 = (NUM*NUM+NUM)/2
+C
+C   INITIALIZATION FOR PARALLEL
+C
+      NXT = IBTYP.EQ.1
+      IPCOUNT = ME - 1
+      NEXT = -1
+      MINE = -1
+C
+      MAXIC = NATFMO
+      call setatz(1,MAXIC,fastvesp,lfvesp,needfv)
+C     ----- I SHELL -----
+
+      DO 600 II = 1,NSHELL
+C
+C           GO PARALLEL!
+C
+      IF (NXT .AND. GOPARR) THEN
+         MINE = MINE + 1
+         IF (MINE.GT.NEXT) CALL DDI_DLBNEXT(NEXT)
+         IF (NEXT.NE.MINE) GO TO 600
+      END IF
+C
+      IAT= KATOM(II)
+      XI = C(1,IAT)
+      YI = C(2,IAT)
+      ZI = C(3,IAT)
+      I1 = KSTART(II)
+      I2 = I1+KNG(II)-1
+      LIT = KTYPE(II)
+      MINI = KMIN(II)
+      MAXI = KMAX(II)
+      LOCI = KLOC(II)-MINI
+C
+C     ----- J SHELL -----
+C
+      DO 580 JJ = 1,II
+C
+C           GO PARALLEL!
+C
+      IF((.NOT.NXT) .AND. GOPARR) THEN
+         IPCOUNT = IPCOUNT + 1
+         IF(MOD(IPCOUNT,NPROC).NE.0) GO TO 580
+      END IF
+C
+      JAT = KATOM(JJ)
+      XJ  = C(1,JAT)
+      YJ  = C(2,JAT)
+      ZJ  = C(3,JAT)
+      J1  = KSTART(JJ)
+      J2  = J1+KNG(JJ)-1
+      LJT = KTYPE(JJ)
+      MINJ= KMIN(JJ)
+      MAXJ= KMAX(JJ)
+      LOCJ= KLOC(JJ)-MINJ
+      IF(MFIRST) NROOTS = (LIT+LJT+1-2)/2 + 1
+      IF(MSECND) NROOTS = (LIT+LJT+2-2)/2 + 1
+      RR = (XI-XJ)**2+(YI-YJ)**2+(ZI-ZJ)**2
+      IANDJ = II .EQ. JJ
+C
+C     ----- PREPARE INDICES FOR PAIRS OF (I,J) FUNCTIONS
+C
+      IJ = 0
+      MAX = MAXJ
+      DO 120 I = MINI,MAXI
+      NX = IX(I)
+      NY = IY(I)
+      NZ = IZ(I)
+      IF (IANDJ) MAX = I
+      DO 120 J = MINJ,MAX
+      IJ = IJ+1
+      IJX(IJ) = NX+JX(J)
+      IJY(IJ) = NY+JY(J)
+      IJZ(IJ) = NZ+JZ(J)
+      IDUM = LOCI+I
+      IJN(IJ) = (IDUM*(IDUM-1))/2 + LOCJ+J
+      DFAC(IJ) = TWO
+      IF (IANDJ .AND. I .EQ. J) DFAC(IJ) = ONE
+  120 CONTINUE
+C
+C     ----- I PRIMITIVE
+C
+      JGMAX = J2
+      DO 520 IG = I1,I2
+      AI = EX(IG)
+      ARRI = AI*RR
+      AXI = AI*XI
+      AYI = AI*YI
+      AZI = AI*ZI
+      CSI = CS(IG)
+      CPI = CP(IG)
+      CDI = CD(IG)
+C
+C     ----- J PRIMITIVE
+C
+      IF (IANDJ) JGMAX = IG
+      DO 500 JG = J1,JGMAX
+      AJ = EX(JG)
+      AA = AI+AJ
+      AA1 = ONE/AA
+      DUM = AJ*ARRI*AA1
+      IF (DUM .GT. TOL) GO TO 500
+C
+      FAC = EXP(-DUM)
+      CSJ = CS(JG)
+      CPJ = CP(JG)
+      CDJ = CD(JG)
+      AX = (AXI+AJ*XJ)*AA1
+      AY = (AYI+AJ*YJ)*AA1
+      AZ = (AZI+AJ*ZJ)*AA1
+C
+C     ----- DENSITY FACTOR
+C
+      DOUBLE=IANDJ.AND.IG.NE.JG
+      MAX = MAXJ
+      NN = 0
+      DO 360 I = MINI,MAXI
+      GO TO (140,160,220,220,180,220,220,200,220,220),I
+  140 DUM1 = CSI*FAC
+      GO TO 220
+  160 DUM1 = CPI*FAC
+      GO TO 220
+  180 DUM1 = CDI*FAC
+      GO TO 220
+  200 IF (NORM) DUM1 = DUM1*SQRT3
+  220 IF (IANDJ) MAX = I
+      DO 360 J = MINJ,MAX
+      GO TO (240,280,340,340,300,340,340,320,340,340),J
+  240 DUM2 = DUM1*CSJ
+      IF ( .NOT. DOUBLE) GO TO 340
+      IF (I .GT. 1) GO TO 260
+      DUM2 = DUM2+DUM2
+      GO TO 340
+  260 DUM2 = DUM2+CSI*CPJ*FAC
+      GO TO 340
+  280 DUM2 = DUM1*CPJ
+      IF (DOUBLE) DUM2 = DUM2+DUM2
+      GO TO 340
+  300 DUM2 = DUM1*CDJ
+      IF (DOUBLE) DUM2 = DUM2+DUM2
+      GO TO 340
+  320 IF (NORM) DUM2 = DUM2*SQRT3
+  340 NN = NN+1
+      NDUM = IJN(NN)
+      PIJ(NN) = DUM2
+      DIJ(NN) = DUM2*DFAC(NN)*DAB(NDUM)
+  360 CONTINUE
+C
+C     ..... HELLMANN-FEYNMAN TERM .....
+C
+      DUM = PI212*AA1
+      DO 380 I = 1,IJ
+      PIJ(I) = PIJ(I)*DUM
+      DIJ(I) = DIJ(I)*DUM
+  380 CONTINUE
+      AAX = AA*AX
+      AAY = AA*AY
+      AAZ = AA*AZ
+      DO 480 IC = 1, MAXIC
+CZCZ    HELFEY TERMS FOR FMO ESP USED TO BE CALCULATED IN ES1DER 
+CZCZ    IN THE NEW VERSION, HOWEVER, HELFEY TERMS ARE CALCULATED HERE
+CZCZ    BESIDES, ESD FRACTION IS CALCULATED HERE UTILIZING FMOATFRG 
+      if(fastvesp) then
+        icind=lfvesp+(ic-1)*6
+        FRACV=x(icind)
+        FRACESP=x(icind+1)
+        ZNUC=x(icind+2)
+        CX=x(icind+3)
+        CY=x(icind+4)
+        CZ=x(icind+5)
+      else
+      CALL FMOATFRG(IC,X(LINDAT),X(LINDATG),X(LIAGLOB),
+     *              X(LIALOC),X(LIABDFG),X(LJABDFG),
+     *              X(LINDBD),X(LFMOZAN),X(LFMOC),
+     *              NATFMO+NBDFG,X(LUNTXYZ),X(LPOPMAT),
+     *              KATOM(II),KATOM(JJ),FRACV,FRACESP,
+     *              KFG,ZNUC,CX,CY,CZ)
+      endif
+      if(fracesp .eq. zero) go to 480
+      iomit = 0
+      if(fracesp .ne. one ) iomit = 1
+      ZNUC =  ZNUC * FRACESP
+      MX   = 3 * L2 * (IC-1)
+      MY   = MX + L2
+      MZ   = MY + L2
+      MC   = IC*(IC+1)/2
+      XX   = AA*((AX-CX)**2+(AY-CY)**2+(AZ-CZ)**2)
+      IF(NROOTS .LE. 3) CALL RT123
+      IF(NROOTS .EQ. 4) CALL ROOT4
+      MM = 0
+      DO 420 K = 1,NROOTS
+         U2 = AA*U(K)
+         U4 = U2*U2
+         WW = W(K)*ZNUC
+         W2(K) = TWO *WW*U2
+         W4(K) = FOUR*WW*U4
+         TT = ONE/(AA+U2)
+         T  =  SQRT(TT)
+         X0 = (AAX+U2*CX)*TT
+         Y0 = (AAY+U2*CY)*TT
+         Z0 = (AAZ+U2*CZ)*TT
+         IN = -3+MM
+         DO 400 I = 1,LIT
+         IN = IN+3
+         NI = I
+         DO 400 J = 1,LJT
+         JN = IN+J
+         NJ = J
+         CALL DERXYZ(0)
+         XIN(JN   ) = XINT
+         YIN(JN   ) = YINT
+         ZIN(JN   ) = ZINT
+         CALL DERXYZ(1)
+         XIN(JN+36) = XINT
+         YIN(JN+36) = YINT
+         ZIN(JN+36) = ZINT
+         IF(MSECND) THEN
+            CALL DERXYZ(2)
+            XIN(JN+72) = XINT
+            YIN(JN+72) = YINT
+            ZIN(JN+72) = ZINT
+         END IF
+  400    CONTINUE
+         MM = MM+9
+  420 CONTINUE
+C
+      DO 460 I = 1,IJ
+      NN    = IJN(I)
+      NX    = IJX(I)
+      NY    = IJY(I)
+      NZ    = IJZ(I)
+      DUMX  = ZERO
+      DUMY  = ZERO
+      DUMZ  = ZERO
+      DUMXX = ZERO
+      DUMYY = ZERO
+      DUMZZ = ZERO
+      DUMXY = ZERO
+      DUMXZ = ZERO
+      DUMYZ = ZERO
+      MM    = 0
+      DO 440 K = 1,NROOTS
+      DUMX  = DUMX +XIN(NX+MM+36)*YIN(NY+MM   )*ZIN(NZ+MM   )*W2(K)
+      DUMY  = DUMY +XIN(NX+MM   )*YIN(NY+MM+36)*ZIN(NZ+MM   )*W2(K)
+      DUMZ  = DUMZ +XIN(NX+MM   )*YIN(NY+MM   )*ZIN(NZ+MM+36)*W2(K)
+      IF(MSECND) THEN
+      DUMXX = DUMXX-XIN(NX+MM   )*YIN(NY+MM   )*ZIN(NZ+MM   )*W2(K)
+     1             +XIN(NX+MM+72)*YIN(NY+MM   )*ZIN(NZ+MM   )*W4(K)
+      DUMYY = DUMYY-XIN(NX+MM   )*YIN(NY+MM   )*ZIN(NZ+MM   )*W2(K)
+     1             +XIN(NX+MM   )*YIN(NY+MM+72)*ZIN(NZ+MM   )*W4(K)
+      DUMZZ = DUMZZ-XIN(NX+MM   )*YIN(NY+MM   )*ZIN(NZ+MM   )*W2(K)
+     1             +XIN(NX+MM   )*YIN(NY+MM   )*ZIN(NZ+MM+72)*W4(K)
+      DUMXY = DUMXY+XIN(NX+MM+36)*YIN(NY+MM+36)*ZIN(NZ+MM   )*W4(K)
+      DUMXZ = DUMXZ+XIN(NX+MM+36)*YIN(NY+MM   )*ZIN(NZ+MM+36)*W4(K)
+      DUMYZ = DUMYZ+XIN(NX+MM   )*YIN(NY+MM+36)*ZIN(NZ+MM+36)*W4(K)
+      END IF
+      MM  = MM+9
+  440 CONTINUE
+      DUM = DIJ(I)
+      PUM = PIJ(I)
+      IF(MFIRST) THEN
+         EG(1,IC) = EG(1,IC) + DUM * DUMX 
+         EG(2,IC) = EG(2,IC) + DUM * DUMY 
+         EG(3,IC) = EG(3,IC) + DUM * DUMZ 
+      END IF
+      IF(MSECND.and.iomit.eq.0) THEN
+         EH(1,MC) = EH(1,MC) + DUM * DUMXX
+         EH(2,MC) = EH(2,MC) + DUM * DUMXY
+         EH(3,MC) = EH(3,MC) + DUM * DUMXZ
+         EH(4,MC) = EH(4,MC) + DUM * DUMXY
+         EH(5,MC) = EH(5,MC) + DUM * DUMYY
+         EH(6,MC) = EH(6,MC) + DUM * DUMYZ
+         EH(7,MC) = EH(7,MC) + DUM * DUMXZ
+         EH(8,MC) = EH(8,MC) + DUM * DUMYZ
+         EH(9,MC) = EH(9,MC) + DUM * DUMZZ
+      END IF
+      FD(MX+NN) = FD(MX+NN) + PUM * DUMX 
+      FD(MY+NN) = FD(MY+NN) + PUM * DUMY 
+      FD(MZ+NN) = FD(MZ+NN) + PUM * DUMZ 
+c     write(*,*) "FD(MX+NN) in FMO =",II,JJ,FD(MX+NN)
+  460 CONTINUE
+  480 CONTINUE
+  500 CONTINUE
+  520 CONTINUE
+  580 CONTINUE
+  600 CONTINUE
+C
+C     ----- END OF *SHELL* LOOPS -----
+C
+      IF (GOPARR.AND.NXT) CALL DDI_DLBRESET
+C
+      if(fastvesp) call retfm(needfv)
+C     DBG
+c        NEGH=3*NATFMO + 9*(NATFMO*NATFMO+NATFMO)/2
+c        IF(GOPARR) CALL DDI_GSUMF(1621,EG,NEGH)
+c        IF(MASWRK) THEN
+c           WRITE(*,9048)
+c           CALL HSSPRT(NATFMO,EG,EH)
+c        END IF
+c        IF(GOPARR) CALL DSCAL(NEGH,ONE/NPROC,EG,1)
+c9048 FORMAT(/1X,'GRADIENT AND HESSIAN AFTER -HLFSPD-')
+c
+      RETURN
+      END
+C
+C*MODULE FMOH1A    *DECK ESPSDXVD
+C>
+C>    @brief Contribution from V^a * S^b
+C>
+C>    @details Calculate V^a S^b and V^a U^b terms for electrostatic potential
+C>      of FMO second order derivatives.
+C>
+C>    @author Hiroya Nakata
+C>
+C>    @param l1 :
+C>    @param l2 :
+C>    @param DB :
+C>    @param wrk :
+C>    @param WRK1 :
+C>    @param NUMFRG :
+C>    @param MAPI :
+C>    @param MAPJ :
+C>    @param MAP3 :
+C>    @param iaglob :
+C>    @param MAXL1D :
+C>    @param IREC00 :
+C>    @param ORBXCH1 :
+C>    @param KODEXCH :
+C>    @param JODEXCH :
+C>    @param IODEXCH :
+C>    @param NQMTFG :
+C>    @param scffrg :
+C>    @param imode :
+C>    @param DSI :
+C>    @param l1i :
+C>    @param l2i :
+C>    @param DSJ :
+C>    @param l1j :
+C>    @param l2j :
+C>    @param DSIJ :
+C>    @param l2ij :
+C>    @param FD :
+C>    @param NQMT0 :
+C>    @param FCM :
+C>    @param YALAG :
+C>    @param IPTYA :
+C>    @param YAWRK :
+C>
+      subroutine ESPSDXVD(l1,l2,DB,wrk,WRK1,
+     *     NUMFRG,MAPI,MAPJ,MAP3,iaglob,MAXL1D,IREC00,ORBXCH1,
+     *     KODEXCH,JODEXCH,IODEXCH,NQMTFG, scffrg,imode,
+     *     DSI,l1i,l2i,DSJ,l1j,l2j,DSIJ,l2ij,FD,NQMT0,FCM,
+     *     YALAG,IPTYA,YAWRK)
+      
+C
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      PARAMETER (MXATM=2000,ONE=1.0D+00,thrush=1.0D+04)
+C
+      DIMENSION DB(*),wrk(*),wrk1(*)
+      DIMENSION numfrg(1)
+      DIMENSION MAPI(*),MAPJ(*),MAP3(*),NQMTFG(*),scffrg(*)
+      DIMENSION DSI(l2i,3,*),DSJ(l2j,3,*),DSIJ(l2ij,3,*)
+      DIMENSION FD(l2ij,*),iaglob(*),FCM(*)
+      DIMENSION YALAG(*),IPTYA(*),YAWRK(*)
+      LOGICAL   ORBXCH1,KODEXCH,JODEXCH,IODEXCH,isini
+      LOGICAL   GOPARR,DSKWRK,MASWRK
+
+   
+      COMMON /FMCOM / X(1)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
+      COMMON /FMOPNT/ LICHFG,LMULFG,LIDMREC,LFRGNAM,LLAYFRG,LINDAT,
+     *                LNCBS,LFMOZAN,LFMOC,LFMOMAS,LIZBAS,LIAGLOB,LIBDGH,
+     *                LIABDFG,LJABDFG,LNCAO,LIDXCAO,LIAPRJO,LJAPRJO,
+     *                LCOREAO,LOCCCOR,LSHIFTB,LIODFMO,LFMODA,LFMODB,
+     *                LFMOESPA,LFMOESPB,LLOCFMO,LSCFFRG,LFMOSCF,LRIJ,
+     *                LPOPMUL,LPOPMAT,LIALOC,LINDBD,LIATFRG,LINDFRG,
+     *                LINDGFRG,LNATFRG,LNAT0FRG,LIANFRG,LZANFRG,LCFRG,
+     *                LLIBISH,LLIBNSH,LLIBNG,LINDATG,LFMOBUF(3),LFMODE,
+     *                LNUMFRG,LLOCTAT,LIAOGLOB,LLOADM,LFMOGE,LDGRID,
+     *                LIODCFMO,LJOB2GRP,LFMOPG,LEMOCDR,LUNTXYZ,LUNTROT,
+     *                LSTONEP,LMAPSU,LFRGMUL,LCLMO,LIALMO,LINDLMO,
+     *                LATCLMO,LLMOBDF,LFGFLMO,LNFGLMO,LLFGLMO,LPFGLMO,
+     *                LPOPDMAT,LIDMPNT,LIDDPNT,LIVMPNT,liactfg,lcrfrg,
+     *                lzlmfrgv,lYlmfrgv
+      COMMON /FMORUN/ ESPSCF,E0SCF(2),EMP2S,IDAFMO,ICURFG,JCURFG,KCURFG,
+     *                ICURLAY,ICURUNT,NAT1E,NCURSH,NGAU,ICURPOP,IFMOSTP,
+     *                MONCOR,NEEDR,MODRST,NORBPROJ,NUNESP,ISKIPESP,
+     *                IESDPPC,IDOPROP,MP2RUN,ICURIT,IDMFMO,IDDFMO,
+     *                IDDCUR,NDDLEFT,IVMFMO,nzmtfmo
+      COMMON /IOFILE/ IR,IW,IP,IJK,IPK,IDAF,NAV,IODA(950)
+CZ
+CC    DA  maxm2d
+CC    DB  maxm2d
+CC    DC  =   DA
+CC   WRK  l1 + L2 + l3
+CC  WRK1  l1 * 8  + l2 + l3*2
+CZ    DENSITY DERIVATIVES OF EXTERNAL ELECTROSTATIC POTENTIALS
+C     dummy argument
+      if(imode.ne.0) write(*,*) "imode =",kodexch,map3(1),maxl1d,
+     *  SCFFRG(1),IODEXCH,JODEXCH,ORBXCH1
+CZ
+      
+      L1A = L1
+      IFG=ICURFG
+      JFG=JCURFG
+      ILAY=ICURLAY
+      l3 = l1 * l1
+      nxyz=natfmo*3
+      neh =nxyz * nxyz
+
+      CALL VALFM(LOADFM)
+      LFCMWRK = LOADFM  + 1
+      LC      = LFCMWRK + NATFMO * NATFMO * 9
+      LAST    = LC + l3
+      NEED    = LAST - LOADFM - 1
+      call getfm(need)
+      call vclr(x(lfcmwrk),1,neh)
+      
+
+      L1I  = IAND(NUMFRG(IFG),65535)
+      IF (JFG.NE.0) THEN
+        L1J  = IAND(NUMFRG(JFG),65535)
+      END IF
+        
+      NCURS  = NCURSH
+      NCURSH = 0
+C
+      CALL MAKEMOL(IFG,0,0,ILAY,0,0,0,0,0,0,0,.FALSE.)
+c
+      call vclr(DSI,1,l2i*nat*3)
+      CALL EXTSDER(WRK,DSI,L1I,L2I,.TRUE.,.TRUE.,0)
+      IF(GOPARR) CALL DDI_GSUMF(1501,DSI,L2I*3*NAT)
+c
+
+      IDMREC0I=IFG+IREC00
+      l3i=l1i*l1i
+      lenrec = l3i + l1i
+      CALL RAREADS(IDAFMO,X(LIODFMO),wrk(l2i+1),lenrec,IDMREC0I,0)
+      CALL DCOPY(L3i,WRK(L2I+1),1,X(LC),1)
+      NQI    = IAND(NQMTFG(IFG),65535)
+      ncount = 0
+      do iii = 1, NQI
+        eval = wrk(l2i+l3i+iii)
+        if(eval .ge. thrush) ncount = ncount + 1
+      end do
+      NOCC  = na 
+      NVIR  = NQI  -   na - ncount
+      NROT  = NOCC * NVIR 
+     
+C
+C    ++++++++++++++++++++++++++++++++++++++++++++++++
+C
+C      V^a * ( S^b + U^b)
+      do ixyz = 1,nxyz
+         LOOP=0
+C        EXTRACT V^a
+         DO II = 1, L1A
+           DO JJ = 1, II
+             LOOP = LOOP + 1
+             II1=MAPI(II)
+             IJ1=MAPI(JJ)
+             II2=MAX(II1,IJ1)
+             IJ2=MIN(II1,IJ1)
+             ISINI=II1.NE.0.AND.IJ1.NE.0
+             if(isini) 
+     *         WRK1((II2*II2-II2)/2+IJ2) = FD(LOOP,ixyz)
+           END DO
+         END DO
+C        C^T  V^a  C  ---->  V^a  MO basis 
+         CALL TFTRI(WRK,WRK1,x(LC),WRK1(l2i+1),NQI,l1i,l1i)
+         call cpytsq(WRK,DB,nqi,1) 
+         do jat=1,nat
+            jzat = iaglob(jat) 
+            do jj =1,3
+               jxyz  = (jat - 1) * 3 + jj
+               jzxyz = (jzat- 1) * 3 + jj
+               ij    = LFCMWRK+ (ixyz  -1) * nxyz  + jzxyz - 1
+               ji    = LFCMWRK+ (jzxyz -1) * nxyz  + ixyz  - 1
+               CALL TFTRI(wrk,DSI(1,jj,jat),x(LC),wrk1(l2i+1),
+     *                    NQI,l1i,l1i)
+               call cpytsq(wrk,wrk(l2i+1),nqi,1) 
+               DUM = 0.0D+00
+               do kk = 1 , nocc
+                 do ll = 1 , nocc
+                    klX = (kk -1) * nqi + ll 
+                    klS = l2i + (kk -1) * nqi + ll 
+                    DUM = DUM + DB(klX) * wrk(klS) 
+                 end do
+               end do
+               DUM = DUM + DUM 
+c              write(*,*) "DUMDUM01 =",DUM,ixyz,jzxyz
+C           U^b V^a
+               IPNT = IPTYA(IFG) + NROT * (jxyz - 1) 
+               CALL DCOPY(NROT,YALAG(IPNT),1,WRK,1)
+               irot = 0
+               do kk = 1 , nvir
+                  do ll = 1, nocc
+                     irot = irot + 1
+                     korb = kk   + nocc
+                     klX  = (korb - 1) * nqi + ll 
+                     DUM  = DUM  - WRK(irot) * DB(klX) *2.0D+00
+                  end do
+               end do
+               X(ij) = X(ij) + DUM
+               X(ji) = X(ji) + DUM
+            end do  
+         end do
+      end do
+C     JFG
+      CALL MAKEMOL(JFG,0,0,ILAY,0,0,0,0,0,0,0,.FALSE.)
+      call vclr(DSJ,1,l2j*nat*3)
+      CALL EXTSDER(WRK,DSJ,L1J,L2J,.TRUE.,.TRUE.,0)
+      IF(GOPARR) CALL DDI_GSUMF(1501,DSJ,L2J*3*NAT)
+C
+
+      IDMREC0I=JFG+IREC00
+c     CALL READMOND(WRK,ORBXCH1,JODEXCH,NAJ,NBJ,L1J,X(LIODFMO),
+c    *              IDMREC0I,scffrg(jfg).eq.uhf)
+      l3j=l1j*l1j
+      lenrec = l3j + l1j
+      CALL RAREADS(IDAFMO,X(LIODFMO),wrk(l2j+1),lenrec,IDMREC0I,0)
+C
+      NQI   = IAND(NQMTFG(JFG),65535)
+      ncount = 0
+      do iii = 1,NQI
+        eval = wrk(l2j+l3j+iii)
+        if(eval .ge. thrush) ncount = ncount + 1
+      end do
+c     NQI3  = NQI * NQI
+      NOCC  = na 
+      NVIR  = NQI - na - ncount 
+      NROT  = NOCC * NVIR 
+c
+c
+      CALL DCOPY(L3J,WRK(L2J+1),1,X(LC),1)
+C      V^a * ( S^b + U^b)
+      do ixyz = 1,nxyz
+         LOOP=0
+C        EXTRACT V^a
+         DO II = 1, L1A
+           DO JJ = 1, II
+             LOOP = LOOP + 1
+             II1=MAPJ(II)
+             IJ1=MAPJ(JJ)
+             II2=MAX(II1,IJ1)
+             IJ2=MIN(II1,IJ1)
+             ISINI=II1.NE.0.AND.IJ1.NE.0
+             if(isini) 
+     *         WRK1((II2*II2-II2)/2+IJ2) = FD(LOOP,ixyz)
+           END DO
+         END DO
+C        C^T  V^a  C  ---->  V^a  MO basis 
+         CALL TFTRI(WRK,WRK1,x(LC),WRK1(l2j+1),NQI,l1j,l1j)
+         call cpytsq(WRK,DB,nqi,1) 
+         do jat=1,nat
+            jzat = iaglob(jat) 
+            do jj =1,3
+               jxyz  = (jat - 1) * 3 + jj
+               jzxyz = (jzat- 1) * 3 + jj
+               ij    = LFCMWRK+ (ixyz  -1) * nxyz  + jzxyz - 1
+               ji    = LFCMWRK+ (jzxyz -1) * nxyz  + ixyz  - 1
+               CALL TFTRI(wrk,DSJ(1,jj,jat),x(LC),wrk1(l2j+1),
+     *                    NQI,l1j,l1j)
+               call cpytsq(wrk,wrk(l2j+1),nqi,1) 
+               DUM = 0.0D+00
+               do kk = 1 , nocc
+                 do ll = 1 , nocc
+                    klX = (kk -1) * nqi + ll 
+                    klS = l2j + (kk -1) * nqi + ll 
+                    DUM = DUM + DB(klX) * wrk(klS) 
+                 end do
+               end do
+               DUM = DUM + DUM 
+C           U^b V^a
+               IPNT = IPTYA(JFG) + NROT * (jxyz - 1) 
+               CALL DCOPY(NROT,YALAG(IPNT),1,WRK,1)
+               irot = 0
+               do kk = 1 , nvir
+                  do ll = 1, nocc
+                     irot = irot + 1
+                     korb = kk   + nocc
+                     klX  = (korb - 1) * nqi + ll 
+                     DUM  = DUM  - WRK(irot) * DB(klX) *2.0D+00
+                  end do
+               end do
+               X(ij) = X(ij) + DUM
+               X(ji) = X(ji) + DUM
+c              write(*,*) "DUMDUM02 =",DUM,ixyz,jzxyz
+            end do  
+         end do
+      end do
+C    IFG JFG 
+      CALL MAKEMOL(IFG,JFG,0,ILAY,0,0,0,0,0,0,0,.TRUE.)
+c     restore l1
+c     CALL DAREAD(IDAF,IODA,wrk,L1,17,0)
+C
+      L1   = NUM
+      L2   = (NUM*NUM+NUM)/2
+      L3   = NUM*NUM
+      NQI  = NQMT0
+      NOCC = na 
+      NVIR = NQI - na - NORBPROJ
+      NROT = NOCC * NVIR 
+C
+      call vclr(DSIJ,1,l2*nat*3)
+      CALL EXTSDER(WRK,DSIJ,L1,L2,.TRUE.,.TRUE.,0)
+      IF(GOPARR) CALL DDI_GSUMF(1501,DSIJ,L2*nat*3)
+C
+      CALL DAREAD(IDAF,IODA,x(LC),L3,15,0)
+C
+C
+      DO ixyz = 1,nxyz
+        CALL DCOPY(L2,FD(1,ixyz),1,WRK1,1)
+C       C^T  V^a  C  ---->  V^a  MO basis 
+        CALL TFTRI(WRK,WRK1,x(LC),WRK1(l2+1),NQI,l1,l1)
+        call cpytsq(WRK,DB,nqi,1) 
+        do jat = 1,nat
+           jzat = iaglob(jat) 
+           do jj = 1, 3
+             jxyz  = (jat -1) * 3 + jj
+             jzxyz = (jzat-1) * 3 + jj
+             ij    = LFCMWRK+ (ixyz  -1)  * nxyz  + jzxyz - 1
+             ji    = LFCMWRK+ (jzxyz -1)  * nxyz  + ixyz  - 1
+             CALL TFTRI(wrk,DSIJ(1,jj,jat),x(LC),wrk1(l2+1),NQI,l1,l1)
+             call cpytsq(wrk,wrk(l2+1),nqi,1) 
+C            XU  --->  V^a ( MO basis)
+C            wrk --->  S^b ( MO basis)
+             DUM = 0.0D+00
+             do kk = 1 , nocc
+               do ll = 1 , nocc
+                  klX = (kk -1) * nqi + ll 
+                  klS = l2   + (kk -1) * nqi + ll 
+                  DUM = DUM  + DB(klX) * wrk(klS) 
+               end do
+             end do
+             DUM = DUM + DUM 
+c            write(*,*) "DUMDUM03 =",DUM,ixyz,jzxyz
+C           U^b V^a
+             IPNT = NROT * (jxyz - 1) + 1
+             CALL DCOPY(NROT,YAWRK(IPNT),1,WRK,1)
+             irot = 0
+             do kk = 1 , nvir
+                do ll = 1, nocc
+                   irot = irot + 1
+                   korb = kk   + nocc
+                   klX  = (korb - 1) * nqi + ll 
+                   DUM  = DUM  - WRK(irot) * DB(klX) *2.0D+00
+                end do
+             end do
+c            write(*,*) "DUMDUM03 =",DUM,ixyz,jzxyz
+             X(ij) = X(ij) - DUM
+             X(ji) = X(ji) - DUM
+          end do
+        end do
+      END DO
+C
+C
+      if(goparr) call dscal(neh,one/nproc,x(LFCMWRK),1)  
+      call daxpy(neh,one,x(LFCMWRK),1,FCM,1)
+c
+      CALL RETFM(NEED)
+c
+      NCURSH = NCURS  
+      return
+      END

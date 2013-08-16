@@ -1,3 +1,4 @@
+C 21 May 13 - DGF,HN - option for Kurt's trick modify and SHLDEN for FMO
 C 20 Feb 13 - JAM - SCFIN: read option for Constrained UHF (CUHF)
 C 19 DEC 12 - JI  - Add h/i functionality to RHR,SYMH
 C 19 Oct 12 - MWS - synchronize FRGINF common
@@ -3491,7 +3492,7 @@ C
       LOGICAL DIIS,DAMPH,EXTRAP,RSTRCT,VSHIFT,COUPLE,UHFNOS,DEM,
      *        DIRSCF,FDIFF,GOPARR,DSKWRK,MASWRK,VTSCAL,VIROK,
      *        LVCLN,SOSCF,NOCONV,ABEL,ABELPT,ACAVO,VVOS,SG1,MOM,LOCOPT,
-     *        UHFCHK,CUHF,OKVVOS
+     *        UHFCHK,CUHF,OKVVOS,reset
 C
       PARAMETER (MXSH=5000, MXGTOT=20000, MXAO=8192)
       PARAMETER (MXATM=2000, MXGRID=10)
@@ -3551,7 +3552,7 @@ C     REPLACED BY THE FLOATING POINT VALUE -CONV- CARRIED AS -CONVHF-.
 C     IN A YEAR OR TWO, THIS FIRST ELEMENT CAN BE RECYLED IF A NEW
 C     INPUT VARIABLE IS NEEDED IN THIS GROUP.
 C
-      PARAMETER (NNAM=46)
+      PARAMETER (NNAM=47)
       DIMENSION QNAM(NNAM),KQNAM(NNAM)
       DATA SCF/8HSCF     /
       DATA QNAM/8HNCONV   ,8HNPUNCH  ,8HNCO     ,
@@ -3566,11 +3567,11 @@ C
      *          8HACAVO   ,8HPACAVO  ,8HVVOS    ,8HNOCONV  ,
      *          8HDIRTHR  ,8HSWDIIS  ,8HNPREO   ,8HMOM     ,
      *          8HKPROJ   ,8HLOCOPT  ,8HUHFCHK  ,8HNHOMO   ,
-     *          8HNLUMO   ,8HCUHF    /
+     *          8HNLUMO   ,8HCUHF    ,8HRESET   /
       DATA KQNAM/1,1,1,   1,3,1,101,   253,253,3253,3253,
      *           0,3,       1,0,0,     0,0,0,0,    1,0,3,0,
      *           0,0,3,1,   3,0,3,3,   0,63,0,0,   3,3,41,0,
-     *           1,0,0,41,  1,0/
+     *           1,0,0,41,  1,0,3/
 C
       DATA RHF,UHF /8HRHF     ,8HUHF     /
       DATA GVB,ROHF/8HGVB     ,8HROHF    /
@@ -3681,6 +3682,8 @@ C     THIS VALUE WILL BE SUBCEDED BY L0 INSIDE PRSELMO
 c     Lock SCF options during switches (e.g., RHF->DFT).
       locopt=.false.
       CUHF=.FALSE.
+      reset=scftyp.eq.uhf
+c     If true, use Kurt's trick to reset DIIS/SOSCF.
 C
 C     ----- READ IN $SCF NAMELIST -----
 C
@@ -3692,8 +3695,8 @@ C
      *            DEM,DEMCUT,DIRSCF,FDIFF,VTSCAL,VTCONV,MAXVT,
      *            SCALF,SOSCF,SOGTOL,CONVHF,ACAVO,PACAVO,VVOS,
      *            NOCONV,DIRTHR,SWDIIS,NPREO,MOM,KPROJ,LOCOPT,
-     *            UHFCHK,NHOMO,NLUMO,CUHF,
-     *            0,0,0,    0,0,0,0,0,    0,0,0,0,0,    0,0,0,0,0)
+     *            UHFCHK,NHOMO,NLUMO,CUHF,reset,
+     *            0,0,    0,0,0,0,0,    0,0,0,0,0,    0,0,0,0,0)
       IF (JRET .EQ. 2) THEN
          IF (MASWRK) WRITE (IW,9008)
          CALL ABRT
@@ -3847,6 +3850,7 @@ C
       IF(DEM)    MCDEF=MCDEF+32
       IF(SOSCF)  MCDEF=MCDEF+64
       IF(LOCOPT) MCDEF=MCDEF+128
+      IF(reset)  MCDEF=MCDEF+256
       MCONV = MCDEF
 C
       IF(.NOT.DIIS.AND.NFG.EQ.0) SWDIIS=0.0D+00
@@ -3885,6 +3889,8 @@ C
          IF(RSTRCT) WRITE(IW,9408)
          IF(DIIS)   WRITE(IW,9410)
          IF(SOSCF)  WRITE(IW,9412)
+         IF(locopt) WRITE(IW,9413)
+         IF(reset)  WRITE(IW,9414)
          IF(VTSCAL) WRITE(IW,9415) MAXVT,VTCONV
       END IF
 C
@@ -4276,6 +4282,9 @@ C
  9408 FORMAT(10X,'RESTRICTION OF ORBITAL MIXING IN EFFECT')
  9410 FORMAT(10X,'DIIS IN EFFECT')
  9412 FORMAT(10X,'SOSCF IN EFFECT')
+ 9413 FORMAT(10X,'SCF OPTIONS such as shift are locked during ',
+     *           'converger and grid switches')
+ 9414 FORMAT(10X,'DIIS or SOSCF will be reset if energy rises')
  9415 FORMAT(10X,'VIRIAL SCALING IN EFFECT, MAXVT=',I4,' VTCONV=',F13.9)
  9416 FORMAT(10X,'INITIAL ORBITAL EXPONENTS WILL BE SCALED BY ',F13.9)
  9510 FORMAT(1X,'ONLY FULLY ITERATED CCSD/EOM-CCSD CAN BE USED W/O',
@@ -4299,10 +4308,17 @@ C
       END
 C*MODULE SCFLIB  *DECK SHLDEN
       SUBROUTINE SHLDEN(SCFTYP,DA,DB,DGVB,DSH,IA,L1,L2,NSH2,NFO)
+C>
+C>     @brief  density over shells 
+C>
+C>     @details Compress density over aos to density over shells.
+C>
+C>     @author Unknown
+C>
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
 C
-      LOGICAL ALPHA,BETA,FMOESP
+      LOGICAL ALPHA,BETA,FMOESP,CPHF
 C
       DIMENSION DA(L2),DB(L2),DGVB(L2,NFO),DSH(NSH2),IA(L1)
 C
@@ -4313,7 +4329,7 @@ C
      *                ICURLAY,ICURUNT,NAT1E,NCURSH,NGAU,ICURPOP,IFMOSTP,
      *                MONCOR,NEEDR,MODRST,NORBPROJ,NUNESP,ISKIPESP,
      *                IESDPPC,IDOPROP,MP2RUN,ICURIT,IDMFMO,IDDFMO,
-     *                IDDCUR,NDDLEFT,IVMFMO
+     *                IDDCUR,NDDLEFT,IVMFMO,nzmtfmo
       COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
      *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
      *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
@@ -4333,10 +4349,13 @@ C
       ISH0=1
       JSH0=1
       NEAO=0
+      CPHF=.false.
       IF(FMOESP) THEN
          ISH0=NCURSH+1
          JSH0=NCURSH+1
          NEAO=L1
+         if(NFO.gt.1) CPHF  = .true.
+         if(NFO.gt.1) ALPHA = .false.
       ENDIF
       IJSH=0
       DO 240 ISH=ISH0,NSHELL
@@ -4363,6 +4382,13 @@ C
      *                               DMAX=ABS(DGVB(IJ,IHAM))
   110                CONTINUE
                   END IF
+c                 This code for FMO Hessian will conflict with FMO-GVB.
+                  IF(CPHF) then
+                     DO 100 IHAM=1,NFO
+                        IF(ABS(DA(IJ+l2*(IHAM-1))).GT.DMAX)
+     *                               DMAX=ABS(DA(IJ+l2*(IHAM-1)))
+  100                CONTINUE
+                  end if
   120          CONTINUE
   130       CONTINUE
             DSH(IJSH) = DMAX
@@ -5542,7 +5568,7 @@ C
      *                ICURLAY,ICURUNT,NAT1E,NCURSH,NGAU,ICURPOP,IFMOSTP,
      *                MONCOR,NEEDR,MODRST,NORBPROJ,NUNESP,ISKIPESP,
      *                IESDPPC,IDOPROP,MP2RUN,ICURIT,IDMFMO,IDDFMO,
-     *                IDDCUR,NDDLEFT,IVMFMO
+     *                IDDCUR,NDDLEFT,IVMFMO,nzmtfmo
       COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
      *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
      *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),

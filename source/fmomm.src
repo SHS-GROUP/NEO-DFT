@@ -1,9 +1,17 @@
+C 21 May 13 - CHC,DGF - changes for FMO 5.0 
 C 13 Aug 12 - DGF - change REAL/IMAG and DREAL/DIMAG 
 C 31 Jul 12 - CHC,DGF - last changes for FMO 4.3
 C 24 Jul 12 - DGF,CHC - code update to finish FMO 4.3
 C 23 Mar 12 - CHC,DGF - new multipole code for FMO 
 c
-C*MODULE fmoprp  *DECK mmdist
+C*MODULE fmomm  *DECK mmdist
+C>
+C>     @brief Check if X-mer should be computed with multipoles 
+C>
+C>     @details Check if X-mer should be computed with multipoles.
+C>
+C>     @author Cheol Ho Choi
+C>
       subroutine mmdist(ifg,jfg,kfg,lfg,t,radius,ty2z,ratio,mmdim)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       parameter(one=1.0D+00,two=2.0d+00)
@@ -23,7 +31,7 @@ c     parameter(UNITS=0.52917724924D+00)
      *                lstonep,lmapsu,lfrgmul,lclmo,lialmo,lindlmo,
      *                latclmo,llmobdf,lfgflmo,lnfglmo,llfglmo,lpfglmo,
      *                LPOPDMAT,lidmpnt,liddpnt,livmpnt,liactfg,lcrfrg,
-     *                lzlmfrgv
+     *                lzlmfrgv,lYlmfrgv
       common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
      *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
      *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
@@ -32,56 +40,59 @@ c     parameter(UNITS=0.52917724924D+00)
      *                modlmo,nopden,mofock,modfd,modfmm,ncentm  
       COMMON /QMFM  / SIZE,EPSLN,DPGD,QFMM,NP,NS,IWS,NPGP,MPMTHD,NUMRD,
      *                ITERMS,QOPS,ISCUT
-      dimension t(3),cijk(3),cij(3)
+      dimension t(3),cij(3)
 c
 c     Check if dimer IJ should be computed with multipoles.
 c
-c     return 0: do not use multipoles
+c     Return
+c     MMDIM  0: do not use multipoles
 c            1: use multipoles for (I,J,K)...L 
 c
       if(kfg.eq.0.and.jfg.eq.0) then
-C       We should change the index for ncentm
-        if (ncentm.gt.1) then
-           do i=1,3
-              cijk(i)=x(lcrfrg+(ifg-1)*4*ncentm+i-1)
-           enddo
-           rijk=x(lcrfrg+3+(ifg-1)*4*ncentm) 
-        else
-           do i=1,3
-              cijk(i)=x(lcrfrg+(ifg-1)*4+i-1)
-           enddo
-           rijk=x(lcrfrg+3+(ifg-1)*4) 
-        endif
+c        do i=1,3
+c          cijk(i)=x(lcrfrg+(ifg-1)*4*ncentm+i-1)
+c        enddo
+        call vsub(x(lcrfrg+(lfg-1)*4*ncentm),1,
+     *            x(lcrfrg+(ifg-1)*4*ncentm),1,t,1,3)
+        radius=max(x(lcrfrg+3+(ifg-1)*4*ncentm), 
+     *             x(lcrfrg+3+(lfg-1)*4*ncentm))
+        TY2Z=SQRT(T(1)*T(1)+T(2)*T(2)+T(3)*T(3))
+        ratio=radius/ty2z
       else
-c    we also have to change this part later!
+c       For IJ dimer case, you should use the shorter distance between
+c       IJ dimer and L.
+        call vsub(x(lcrfrg+(lfg-1)*4*ncentm),1,
+     *            x(lcrfrg+(ifg-1)*4*ncentm),1,t,1,3)
+        TY2Za=SQRT(T(1)*T(1)+T(2)*T(2)+T(3)*T(3))
+        call vsub(x(lcrfrg+(lfg-1)*4*ncentm),1,
+     *            x(lcrfrg+(jfg-1)*4*ncentm),1,t,1,3)
+        TY2Zb=SQRT(T(1)*T(1)+T(2)*T(2)+T(3)*T(3))
+        TY2Z=min(TY2Za,TY2Zb)
         do 200 i=1,3
-          cijk(i)=(x(lcrfrg+(ifg-1)*4+i-1)+x(lcrfrg+(jfg-1)*4+i-1))/2
   200     cij(i)=x(lcrfrg+(ifg-1)*4+i-1)-x(lcrfrg+(jfg-1)*4+i-1)
         cija=sqrt(cij(1)*cij(1)+cij(2)*cij(2)+cij(3)*cij(3))/2
-        rijk=cija+max(x(lcrfrg+3+(ifg-1)*4),x(lcrfrg+3+(jfg-1)*4))
+        if(ncentm.gt.1) cija=0
+c       This is because for multiple centers we ignore the distances
+c       between the centers of fragments, and only look at their radii. 
+        rijk=cija+max(x(lcrfrg+3+(ifg-1)*4*ncentm),
+     *                x(lcrfrg+3+(jfg-1)*4*ncentm))
         if(kfg.ne.0) call abrt
 c       Trimer not supported yet.
 c       write(6,9010) ifg,jfg,(cijk(i)*units,i=1,3),rijk*units
-      endif
-      if (ncentm.gt.1) then
-         call vsub(x(lcrfrg+(lfg-1)*4*ncentm),1,cijk,1,t,1,3)
-      else
-         call vsub(x(lcrfrg+(lfg-1)*4),1,cijk,1,t,1,3)
+        radius=max(rijk,x(lcrfrg+3+(lfg-1)*4*ncentm))
+        ratio=radius/ty2z
       endif
 c
-c     Find out the maximum radius
+c     Now we got the radius and center of n0mer I, IJ or IJK.
+c     We look at how it is separated from the external fragment L. 
 c
-      if (ncentm.gt.1) then
-         radius=max(rijk,x(lcrfrg+3+(lfg-1)*4*ncentm))
-      else
-         radius=max(rijk,x(lcrfrg+3+(lfg-1)*4))
-      endif
+c      call vsub(x(lcrfrg+(lfg-1)*4*ncentm),1,cijk,1,t,1,3)
+c      radius=max(rijk,x(lcrfrg+3+(lfg-1)*4*ncentm))
 c
 c     Calculate the norm of translational vector.
 c
-      TY2Z=SQRT(T(1)*T(1)+T(2)*T(2)+T(3)*T(3))
+c      TY2Z=SQRT(T(1)*T(1)+T(2)*T(2)+T(3)*T(3))
       criterion=one/(two*(iws+one))
-      ratio=radius/ty2z
 c
       mmdim=0
       if(ratio.lt.criterion) mmdim=1
@@ -91,30 +102,44 @@ c9010 format(1x,'IFG=',I5,' JFG=',I5,' C=',3F13.6,' R=',F10.6)
       END
 c
 C*MODULE fmomm  *DECK fmmfrg
+C>
+C>     @brief ES dimer energy with multipoles 
+C>
+C>     @details Calculates ES dimer energy with multipoles.
+C>
+C>     @author Cheol Ho Choi
+C>
       subroutine fmmfrg(ilay,nder,loadhf,loadm,layfrg,scffrg,iactfg,
      *                  iodfmo,maxl30,orbxch,da,vtilda,nZi,irec0,
      *                  clm,flm,crfrg,Ylmfrg,Zlmfrg,
      *                  Ylmfrgq,popmat,fmode,fmopg,iaglob,isdrec,esdi,
      *                  dodistr,savgrd)
 c
-c     This routine calculates:
+c     Now it works both wth single and multicenter models.
+c     This routine calculates 
+c      1) Ylmfrg, Zlmfrg of monomer
+c      2) Then ES dimer energy and monomer gradients(when nder.gt.0) are obtained
+c         using them.
+c      3) YlmfrgQ of I for mmESPg (ESP gradients of IJ pair)
+c
 c     1) Ylmfrg: Ylm of monomer I containing all nuclei and electrons of I.
 c        Ylm is contracted with density of monomer I.
 c     2) Zlmfrg: Zlm of monomer I 
 c        Using Ylmfrg and Zlmfrg, E(I) can be calculated.
 c        Using Zlmfrg, gradient of I can be calculated in which derivative of
 c        Ylmfrg are regenerated.
-c     3) Ylmfrgq: Ylmq of monomer I
-c        Ylmq is the multipole moment of a given fragment using Atomic
-c        population. Ylmq will be used in mmespg
+c     3) YlmfrgQ: YlmQ of monomer I
+c        YlmQ is the multipole moment of a given fragment using Atomic
+c        population. YlmQ will be used in mmESPg, which calculates the one
+c        electron ESP gradients for IJ pair only.
+c        Potential carries mu-nu indices. 
 c
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       LOGICAL isgddi,parout,INITGDDI,QOPS,QFMM,GOPARR,DSKWRK,MASWRK,
      *        dodistr,myjob,orbxch,savgrd,mixdim,doesp1,wasgddi
       Integer ddi_world,ddi_group
       Parameter(ddi_world=0,ddi_group=1)
-      parameter(MXATM=2000,maxnp=45,ZERO=0.0D+00,ONE=1.0D+00,
-     *        two=2.0d+00)
+      parameter(MXATM=2000,maxnp=45,ZERO=0.0D+00,ONE=1.0D+00)
       PARAMETER (MAXCOF=23821)
       COMMON /GDDI/   ISCOPE,NGROUPS,MYGROUP,MEGLOB,npglob,nnglob,JBTYP,
      *                ISGDDI,PAROUT,INITGDDI,wasgddi
@@ -132,7 +157,7 @@ c
      *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
      *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
      *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
-     *                iddcur,nddleft,ivmfmo
+     *                iddcur,nddleft,ivmfmo,nzmtfmo
       common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
      *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
      *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
@@ -170,15 +195,8 @@ C
 c     the number of real*8 is twice this value. 
 c
 c     Finding out the largest l for generaring YlmI.
-c     Dmitri, this npst can also be in common.
 c
-      Nps=0
-      criterion=log10(one/(two*(iws+one)))
-      do i=1,nfg
-         npst=int((log10((two*iws+one)*EPS*crfrg(4,1,i))/criterion)-one)
-         if (npst.gt.nps) nps=npst
-      enddo
-      nps=npst
+      call MxNPs(crfrg,nps,npst)
 c
       if(nps.gt.np) then
         if(maswrk) write(iw,9000) np,nps
@@ -207,7 +225,7 @@ c
           if(isgddi) then
             call GDDICOUNT(0,lgroup,myjob)
             if(.not.myjob) then
-              if(ncentm.gt.1) call vclr(crfrg(1,1,ifg),1,ncentm*4)
+c             if(ncentm.gt.1) call vclr(crfrg(1,1,ifg),1,ncentm*4)
               goto 200
             endif
           endif
@@ -224,9 +242,10 @@ c         generate multipole of fragment ifg
           if (ncentm.eq.1) then
              call fmo_Y(clm,flm,crfrg(1,1,ifg),da,Ylmfrg(1,1,ifg),nps)
           else
-c            write(6,*) 'wwwbbb',ifg
-             call fmo_Ym(clm,flm,crfrg(1,1,ifg),da,Ylmfrg(1,1,ifg),nps)
+c         If ncentm.gt.1, we should generate Ylm for multiple centers.
+             call fmo_Y_M(clm,flm,crfrg(1,1,ifg),da,Ylmfrg(1,1,ifg),nps)
           endif
+c
           if(doesp1) then
             if(resppc(1).eq.0) then
               dum=0
@@ -237,9 +256,6 @@ c            write(6,*) 'wwwbbb',ifg
      *                    Ylmfrgq(1,ifg),nps,.true.)
             endif
           endif
-          if(ncentm.gt.1.and..not.maswrk)
-     *      call vclr(crfrg(1,1,ifg),1,ncentm*4)
-c         to avoid double counting in GSUM of crfrg below
         else
           if(meglob.ne.0) then
             call vclr(Ylmfrg(1,1,ifg),1,LNP*2*ncentm)
@@ -252,25 +268,14 @@ c           to avoid double counting in DDI_GSUMF
       if(isgddi) call gddi_scope(ddi_world)
       call ddi_gsumf(2416,Ylmfrg,LNP*2*ncentm*nfg)
       if(doesp1) call ddi_gsumf(2416,Ylmfrgq,LNP*2*nfg)
-      if(ncentm.gt.1) call ddi_gsumf(2416,crfrg,4*ncentm*nfg)
       if(isgddi) call gddi_scope(ddi_group)
-      if (ncentm.gt.1) then
-c        NOTE: The centers and the corresponding radii will be set during
-c        the call fmo_Ym. However, we should find out max(radii) and put it
-c        to crfrg(4,1,*).
-         do i=1,nfg
-c           write(6,*) i,'wwwcrfrg',((crfrg(k,j,i),k=1,4),j=1,ncentm)
-            rfrg=0.0d+00
-            do j=2,ncentm-1
-               if (crfrg(4,j,i).gt.rfrg) rfrg=crfrg(4,j,i)
-            enddo
-            crfrg(4,1,i)=rfrg
-         enddo
-      endif 
       call timit(1)
 c
       if(nder.gt.0) then
 c
+c.....................................................................c
+c     Computation of Zlmfrg
+c.....................................................................c
 c     Generating the Zlmfrg of each fragment on the basis of distance criteria.
 c     We do Y2Z translations for the fragment pairs of I and J,
 c     whose Rij.gt.Resdim.
@@ -431,10 +436,11 @@ c     Ok now Zlmfrg contains all the long-range potentials.
 C     Note that you still have to do short-range ones separately.
 c     In the future, we'll use FMM for this.
 c    
+c.....................................................................c
+c     MM gradient part.
+c.....................................................................c
 c     Using Zlmfrg as obtained above, now we can calculate E(I) and
 c     also gradient of monomer I.
-c
-c     MM gradient part.
 c     By shifting Zlm to the UNIQUE center of Ylm, 
 c     Nps can be Npgp*2, which saves a lot of time.
 c     However, we should use maximum Np=Npst for 
@@ -476,35 +482,22 @@ c
             enddo
             Ei=Ei/2
          endif
-c         SUM=zero
-c         SUB=zero
-c         DO II=1,LNpst
-c            SUM=SUM + DREAL(Ylmfrg(II,ifg)*Zlmfrg(II,ifg))
-c         ENDDO
-c         IK=1
-c         DO II=0,Npst
-c            IK=IK+II
-c            SUB=SUB + DREAL(YLMfrg(IK,ifg)*Zlmfrg(IK,ifg))
-c         ENDDO
-c         Ei=sum-sub/2
 c        if(maswrk) write(IW,*) 'in fmmfrg Ei',ifg,ei
          if(maswrk) esdi(ifg)=Ei
 c
-c        Do the gradient
+c        Doing the gradient
 c
-c         call readumond(da,Vtilda,orbxch,scffrg(ifg).eq.rmc,na,nb,l1,0,
-c    *                       iodfmo,ifg+irec0)
           call readmond(da,orbxch,scffrg(ifg).eq.rmc,na,nb,l1,
      *                  iodfmo,ifg+irec0,scffrg(ifg).eq.uhf)
           call vclr(de,1,3*nat)
           nreci=1+ifg+nfg
-c         if(isdrec(nreci).eq.0.or.dodistr) then
-c           call vclr(Vtilda,1,l2)
-c         else
-c           CALL rareads(IDAFMO,iodfmo,Vtilda,l2,nreci,0)
-c         endif
-          call fmo_mmder(l2,clm,flm,npst,crfrg(1,1,ifg),da,
+          if (ncentm.eq.1) then
+           call fmo_mmder(l2,clm,flm,npst,crfrg(1,1,ifg),da,
      *                   Zlmfrg(1,1,ifg),de,Vtilda)
+          else
+            call fmo_mmder_M(l2,clm,flm,npst,crfrg(1,1,ifg),da,
+     *         Zlmfrg(1,1,ifg),de,Vtilda)
+          endif
 c         Add the total gradient contribution, sum over J for IJ dimers. 
           call fmodeg(1,fmode,fmopg,iaglob)
 c         Write out the Lagrangian of IFG1.
@@ -529,9 +522,17 @@ c
  9005 FORMAT(/1X,'Multipole generation: NP,NPS=',2I8)
  9010 FORMAT(/1X,'Internal failure in setting NPST,NPS=',2I8)
       end
-C*MODULE fmomm  *DECK fmo_Ym
-      SUBROUTINE fmo_ym(clm,flm,Ctr,da,Ylm,nps)
+C*MODULE fmomm  *DECK fmo_Y_M
+C>
+C>     @brief Calculate Ylm. 
+C>
+C>     @details Calculate the multipole function Ylm.
+C>
+C>     @author Cheol Ho Choi
+C>
+      SUBROUTINE fmo_y_M(clm,flm,Ctr,da,Ylm,nps)
 C
+c     The multicenter version of fmo_Y.
 c     np : The highest angluar momentum, l, which needs to be set 
 c     before calling this routine. It is defined in QMFM common block.
 C     ctr : the geometric center of a given fragment should be given. 
@@ -549,12 +550,11 @@ C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
       PARAMETER (MXSH=5000,MXGTOT=20000,MXATM=2000)
 c      PARAMETER (RLN10=2.30258D+00)
-      PARAMETER (ZERO=0.00D+00,ONE=1.0D+00,TWO=2.0D+00,MAXNP=45)
+      PARAMETER (ZERO=0.00D+00,TWO=2.0D+00,MAXNP=45)
       PARAMETER (MAXCOF=23821,MAXMC=MXATM+2)
       PARAMETER (SQRT3=1.73205080756888D+00,SQRT5=2.23606797749979D+00)
       COMPLEX*16 Ylm, yp, PYP, YTP,YTP2  
       LOGICAL GOPARR,DSKWRK,MASWRK,QOPS,QFMM,IANDJ,DOUBLE,NORM,nxt
-      COMMON /FMCOM / XX(1)
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
      *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
       COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
@@ -583,20 +583,20 @@ c      PARAMETER (RLN10=2.30258D+00)
      *          YP(((MAXNP+1)*(MAXNP+2))/2),
      *          DA(*),RT(3,3),PNT(4),pctr(3),EZ(3)
       DIMENSION PA(3),PB(3),DIJ(255)
-      DIMENSION rMMS(MAXMC),p_counter(MAXMC),rDISTS(MAXMC),
-     *          rMAX(MAXMC)
+c     DIMENSION rMMS(MAXMC),p_counter(MAXMC),rDISTS(MAXMC),
+c    *          rMAX(MAXMC)
 c     DATA UHF,ROHF/8HUHF     ,8HROHF     /
 C     
       NORM=NORMF.NE.1.OR.NORMP.NE.1
 C
 c      TOL=RLN10*ITOL
 c     For better definition of radius of centers
-      BEX=SQRT(2.0D+00)*DERFINV(ONE-DPGD)
+c     BEX=SQRT(2.0D+00)*DERFINV(ONE-DPGD)
       do i=1,MAXMC
-         p_counter(i)=zero
-         rMMS(i)=zero
-         rMAX(i)=zero
-         rDISTS(i)=zero
+c        p_counter(i)=zero
+c        rMMS(i)=zero
+c        rMAX(i)=zero
+c        rDISTS(i)=zero
       enddo
 c     rMM_MAX=zero
 C     
@@ -761,22 +761,22 @@ c                 Gaussian.
 c
 c                 Note that we will put the generated multipole to the closest center!
 c                 We also collect information for optimum radius of centers.
-                  call getnear(pctr,ctr(1,1),ncentm,idx,rDIST)
-                  p_counter(idx)=p_counter(idx)+one
-                  rDISTS(idx)=rDISTS(idx)+rDIST
-                  rMM=BEX/SQRT(AA)
-                  rMMS(idx)=rMMS(idx)+rMM
-                  if (rMM.gt.rMAX(idx)) rMAX(idx)=rMM
+                  call getnear(0,pctr,ctr(1,1),ncentm,idx,rDIST)
+c                  p_counter(idx)=p_counter(idx)+one
+c                  rDISTS(idx)=rDISTS(idx)+rDIST
+c                  rMM=BEX/SQRT(AA)
+c                  rMMS(idx)=rMMS(idx)+rMM
+c                  if (rMM.gt.rMAX(idx)) rMAX(idx)=rMM
 c
-                  DO Ip=1,3
-                     PNT(Ip)=pctr(Ip)-CTR(Ip,idx)
+                  DO Iip=1,3
+                     PNT(Iip)=pctr(Iip)-CTR(Iip,idx)
                   ENDDO
 c
 C                 OBTAIN PA AND PB: the relative vector w.r.t. unique center P.
 c
-                  DO Ip=1,3
-                     PA(Ip)=pctr(Ip)-C(Ip,IATOM)
-                     PB(Ip)=pctr(Ip)-C(Ip,JATOM)
+                  DO Iip=1,3
+                     PA(Iip)=pctr(Iip)-C(Iip,IATOM)
+                     PB(Iip)=pctr(Iip)-C(Iip,JATOM)
                   ENDDO
 c
 c                 Translational distance of y2y translation
@@ -857,9 +857,9 @@ c          static load balancing
 c
 c        The translational vector w.r.t. center of fragment
 c
-         call getnear(c(1,ii),ctr(1,1),ncentm,idx,rDIST)
-         DO Ip=1,3
-            PNT(Ip)=c(Ip,ii)-CTR(Ip,idx)
+         call getnear(0,c(1,ii),ctr(1,1),ncentm,idx,rDIST)
+         DO Iii=1,3
+            PNT(Iii)=c(Iii,ii)-CTR(Iii,idx)
          ENDDO
 c
 c        Translational distance of y2y translation
@@ -897,42 +897,49 @@ c     Summation of Ylm over nodes is done elsewhere (in fmmfrg).
 c
 c     now comes the clumsy part of finding the max radius values across all nodes.
 c
-      if(goparr) then
-        CALL DDI_GSUMF(2414,p_counter,ncentm)
-        CALL DDI_GSUMF(2414,rMMS,ncentm)
-        CALL DDI_GSUMF(2414,rDISTS,ncentm)
-        CALL VALFM(LOADFM)
-        lrad=LOADFM+1
-        last=lrad+nproc*2
-        NEED = LAST- LOADFM -1
-        CALL GETFM(NEED)
-        do i=2,int(ctr(1,ncentm))+1
-          call vclr(xx(lrad),1,nproc*2)
-          xx(lrad+me)=ctr(4,i)
-          xx(lrad+nproc+me)=rMAX(i)
-          CALL DDI_GSUMF(2414,xx(lrad),nproc*2)
-          ctr(4,i)=xx(lrad+idamax(nproc,xx(lrad),1)-1)
-          rMAX(i)=xx(lrad+nproc+idamax(nproc,xx(lrad+nproc),1)-1)
-        enddo
-        CALL RETFM(NEED)
-      endif 
+c      if(goparr) then
+c        CALL DDI_GSUMF(2414,p_counter,ncentm)
+c        CALL DDI_GSUMF(2414,rMMS,ncentm)
+c        CALL DDI_GSUMF(2414,rDISTS,ncentm)
+c        CALL VALFM(LOADFM)
+c        lrad=LOADFM+1
+c        last=lrad+nproc*2
+c        NEED = LAST- LOADFM -1
+c        CALL GETFM(NEED)
+c        do i=2,int(ctr(1,ncentm))+1
+c          call vclr(xx(lrad),1,nproc*2)
+c          xx(lrad+me)=ctr(4,i)
+c          xx(lrad+nproc+me)=rMAX(i)
+c          CALL DDI_GSUMF(2414,xx(lrad),nproc*2)
+c          ctr(4,i)=xx(lrad+idamax(nproc,xx(lrad),1)-1)
+c          rMAX(i)=xx(lrad+nproc+idamax(nproc,xx(lrad+nproc),1)-1)
+c        enddo
+c        CALL RETFM(NEED)
+c      endif 
 c
 c     Before returning we should set optimum radius of centers.
 c     We only change radius on the basis of averaged rDIST and rMM.
 c
 c     Factor : the weight factor for diffuse functions.
-      Factor = 0
-      do i=2,int(ctr(1,ncentm))+1
+c      Factor = 0
+c      do i=2,int(ctr(1,ncentm))+1
 c        write(6,*) 'wwwaaa',ctr(4,i),p_counter(i),rMMS(i),rMAX(i),
 c    *                       rDISTS(i)
-         rMM=(one-factor)*rMMS(i)/p_counter(i)+Factor*rMAX(i)
-         rDIST=rDISTS(i)/p_counter(i)
-         if ((rMM+rDIST).gt.ctr(4,i)) ctr(4,i)=(ctr(4,i)+rMM+rdist)/two   
-      enddo
+c         rMM=(one-factor)*rMMS(i)/p_counter(i)+Factor*rMAX(i)
+c         rDIST=rDISTS(i)/p_counter(i)
+c         if ((rMM+rDIST).gt.ctr(4,i)) ctr(4,i)=(ctr(4,i)+rMM+rdist)/two   
+c      enddo
 C
       RETURN
       END
 C*MODULE fmomm  *DECK fmo_Y
+C>
+C>     @brief Y function for multipoles 
+C>
+C>     @details Calculates Y function for multipoles. 
+C>
+C>     @author Cheol Ho Choi
+C>
       SUBROUTINE fmo_y(clm,flm,Ctr,da,Ylm,nps)
 C
 c     np : The highest angluar momentum, l, which needs to be set 
@@ -1143,15 +1150,15 @@ c                 Note: CTR -> center of fragment.
 c                 pctr -> the unique center of product of primitive 
 c                 Gaussian.
 c
-                  DO Ip=1,3
-                     PNT(Ip)=pctr(Ip)-CTR(Ip)
+                  DO Iip=1,3
+                     PNT(Iip)=pctr(Iip)-CTR(Iip)
                   ENDDO
 c
 C                 OBTAIN PA AND PB: the relative vector w.r.t. unique center P.
 c
-                  DO Ip=1,3
-                     PA(Ip)=pctr(Ip)-C(Ip,IATOM)
-                     PB(Ip)=pctr(Ip)-C(Ip,JATOM)
+                  DO Iip=1,3
+                     PA(Iip)=pctr(Iip)-C(Iip,IATOM)
+                     PB(Iip)=pctr(Iip)-C(Iip,JATOM)
                   ENDDO
 c
 c                 Translational distance of y2y translation
@@ -1232,8 +1239,8 @@ c          static load balancing
 c
 c        The translational vector w.r.t. center of fragment
 c
-         DO Ip=1,3
-            PNT(Ip)=c(Ip,ii)-CTR(Ip)
+         DO Iii=1,3
+            PNT(Iii)=c(Iii,ii)-CTR(Iii)
          ENDDO
 c
 c        Translational distance of y2y translation
@@ -1485,15 +1492,15 @@ c                 Note: CTR -> center of fragment.
 c                 pctr -> the unique center of product of primitive 
 c                 Gaussian.
 c
-                  DO Ip=1,3
-                     PNT(Ip)=pctr(Ip)-CTR(Ip)
+                  DO Iip=1,3
+                     PNT(Iip)=pctr(Iip)-CTR(Iip)
                   ENDDO
 c
 C                 OBTAIN PA AND PB: the relative vector w.r.t. unique center P.
 c
-                  DO Ip=1,3
-                     PA(Ip)=pctr(Ip)-C(Ip,IATOM)
-                     PB(Ip)=pctr(Ip)-C(Ip,JATOM)
+                  DO Iip=1,3
+                     PA(Iip)=pctr(Iip)-C(Iip,IATOM)
+                     PB(Iip)=pctr(Iip)-C(Iip,JATOM)
                   ENDDO
 c
 c                 Translational distance of y2y translation
@@ -1637,8 +1644,8 @@ c          static load balancing
 c
 c        The translational vector w.r.t. center of fragment
 c
-         DO Ip=1,3
-            PNT(Ip)=c(Ip,ii)-CTR(Ip)
+         DO Iii=1,3
+            PNT(Iii)=c(Iii,ii)-CTR(Iii)
          ENDDO
 c
 c        Translational distance of y2y translation
@@ -1680,43 +1687,67 @@ c     Summation of Ylm over nodes is done elsewhere (in fmmfrg).
 C
       RETURN
       END
-C*MODULE fmomm  *DECK esdimfmmm
-      SUBROUTINE esdimfmmm(ifg,jfg,ilay,jlay,irec0i,irec0j,odexchi,
-     *                    odexchj,iodfmo,maxl30,isdrec,dodistr,nder,
-     *                    ctri,ctrj,da,clm,flm,nps,t,ty2z,ylmi,ylmj,Eij,
-     *                    Vtilda,Vtildai,fmode,fmopg,iaglob)
-c     
-c     This rountine calculates Eij using density contracted regular
-c     Spherical Harmonics of Ylmi and Ylmj.
-c     Note the Ylmi and Ylmj are represented w.r.t. their own geometric
-c     center of fragments. In order to obtain Eij, the center of expasion
-c     of Ylmj should be converted irrgular Spherical Harmonics represented
-c     w.r.t. that of Ylmi, or vice versa.
-c
+C*MODULE fmomm  *DECK esdimfmm_m
+C>
+C>     @brief ES dimer energy with multipoles. 
+C>
+C>     @details Calculate ES dimer energy with multipoles.
+c>     The multicenter version of esdimFMM.
+c>     This rountine calculates Eij dimer energy using density contracted regular
+c>     Spherical Harmonics of Ylmi and Ylmj.
+c>     Note the Ylmi and Ylmj are represented w.r.t. their own geometric
+c>     center of fragments. In order to obtain Eij, the center of expasion
+c>     of Ylmj should be converted irrgular Spherical Harmonics represented
+c>     w.r.t. that of Ylmi, or vice versa.
+c>
+c>     It does nearly the same calculation of fmmfrg, except that it does
+c>     it with each i and j pair energy.
+c>
+C>     @author Cheol Ho Choi
+C>     
+C>     @param ifg : fragment I
+C>
+C>     @param jfg : fragment J
+C>
+C>     @param ilay : layer I
+C>
+C>     @param ctri : center of fragment I
+C>
+C>     @param ctrj : center of fragment J
+C>
+C>     @param clm : C(LM)
+C>
+C>     @param flm : F(LM)
+C>
+C>     @param nps : The number of angular momentum
+C>
+C>     @param t : Difference vector
+C>
+C>     @param ty2z : distance of y2z transfer
+C>
+C>     @param ylmi : Ylm of fragment I
+C>
+C>     @param ylmj : Ylm of fragment J
+C>
+C>     @param Eij : Interaction energy between I and J fragments
+C>
+      SUBROUTINE esdimfmm_m(ifg,jfg,ilay,
+     *                    ctri,ctrj,clm,flm,nps,t,ty2z,ylmi,ylmj,Eij)
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
       PARAMETER (MXATM=2000,MAXNP=45,MAXCOF=23821,MXRT=100)
       PARAMETER (one=1.0d+00,zero=0.0d+00)
-      complex*16 Ylmi,Ylmj,czp,Zlmi,Zlmj
-      logical GOPARR,DSKWRK,MASWRK,odexchi,odexchj,dodistr
+      complex*16 Ylmi,Ylmj,czp,Zlmi
       LOGICAL QOPS,QFMM
       COMMON /ENRGYS/ ENUCR,EELCT,ETOT,SZ,SZZ,ECORE,ESCF,EERD,E1,E2,
      *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2),EDISP
-      COMMON /GRAD  / DE(3,MXATM)
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
      *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
-      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
-      common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
       common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
      *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
      *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
      *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
      *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
      *                modlmo,nopden,mofock,modfd,modfmm,ncentm
-      common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
-     *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
-     *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
-     *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
-     *                iddcur,nddleft,ivmfmo
       COMMON /QMFM  / SIZE,EPS,DPGD,QFMM,NP,NS,IWS,NPGP,MPMTHD,NUMRD,
      *                ITERMS,QOPS,ISCUT
       DIMENSION F((maxNP*(maxNP+1)*(maxNP+2)*4)/3+(maxNP+1),8),
@@ -1724,15 +1755,10 @@ c
      *          CLM(-maxNP:maxNP),FLM(-maxNP:maxNP),
      *          COEFF(MAXCOF,2),ZLL(0:2*maxNP+1,2),
      *          CZP(((MAXNP+1)*(MAXNP+2))/2),
-     *          Zlmi(((MAXNP+1)*(MAXNP+2))/2),
-     *          Zlmj(((MAXNP+1)*(MAXNP+2))/2),
-     *          Ylmi(((NP+1)*(NP+2))/2,ncentm),
-     *          Ylmj(((NP+1)*(NP+2))/2,ncentm),
-     *          ctri(4,ncentm),ctrj(4,ncentm),
-     *          da(*),Vtilda(*),
-     *          vtildai(*),iodfmo(*),maxl30(*),isdrec(*),fmode(3,*),
-     *          fmopg(3,*),iaglob(*)
-c     *          Ylmi(*),Ylmj(*),ctri(*),ctrj(*)
+     *          ZlmI(((MAXNP+1)*(MAXNP+2))/2),
+     *          YlmI(((NP+1)*(NP+2))/2,ncentm),
+     *          YlmJ(((NP+1)*(NP+2))/2,ncentm),
+     *          ctrI(4,ncentm),ctrJ(4,ncentm)
       dimension t(3),ez(3),rt(3,3)
 c
 c     Ylm are defined elsewhere (as Ylmfrg) with NP used to compute its 
@@ -1742,130 +1768,49 @@ c     although one can use a different one for calculations (NPs).
 c
       if(iand(modfmm,2).eq.0) then 
 c
-c     Translational vector
+c      Translational vector
 c     
-c     z-axis
+c      z-axis
 c
-      EZ(1)=zero
-      EZ(2)=zero
-      EZ(3)=one
+       EZ(1)=zero
+       EZ(2)=zero
+       EZ(3)=one
 c
-c     Some pre-computable values for rotation based translation.
+c      Some pre-computable values for rotation based translation.
 c
-      LNPS=((NPS+1)*(NPS+2))/2
-      LFGS=((NPS*(NPS+1)*(NPS+2)*4)/3)+(NPS+1)
-      DO IIi=1,LNPs
-         Zlmi(IIi)=dcmplx(zero,zero)
-         Zlmj(IIi)=dcmplx(zero,zero)
-      ENDDO   
-      Eij=zero
-c     write(6,*) 'ESDIMFMMM: Fragment pair=(',ifg,jfg,')'
-      do i=2,int(ctri(1,ncentm))+1
-         do j=2,int(ctrj(1,ncentm))+1
-            do k=1,3
-               t(k)=ctri(k,i)-ctrj(k,j)
-            enddo
-            TY2Z=SQRT(T(1)*T(1)+T(2)*T(2)+T(3)*T(3))
-            CALL GETZLL(ZLL,TY2Z,2*NPS+1)
-            CALL GETCOF(NPS,FLM,ZLL,COEFF)
-            CALL ROTR(T,EZ,RT)
-            CALL GETROT(F,G,RT,NPS,CLM)
+       LNPS=((NPS+1)*(NPS+2))/2
+       LFGS=((NPS*(NPS+1)*(NPS+2)*4)/3)+(NPS+1)
+       DO IIi=1,LNPs
+        ZlmI(IIi)=dcmplx(zero,zero)
+       ENDDO   
+       Eij=zero
 c
-           CALL RY2ZIR(LNPS,Ylmj(1,j),Zlmj,CZP,LFGS,F,G,NPS,COEFF(1,1))
-            DO IIi=1,LNPs
-               Zlmi(IIi)=Zlmi(iii)+Zlmj(iii)
-            ENDDO
-c
-c          The return value contains the Zlmj.
-c
-         call fmo0p(NPS,LNPS,YlmI(1,i),Zlmj(1),Eijm)
-         Eij=Eij+Eijm
-c        write(6,*) 'Between centers(',i,j,')=,',Eijm
+       write(6,*) 'ESDIMFMMM: Fragment pair=(',ifg,jfg,')'
+c      The main loop for multicenter multipole calculation.
+       do i=2,int(ctri(1,ncentm))+1
+        do j=2,int(ctrj(1,ncentm))+1
+         do k=1,3
+          t(k)=ctri(k,i)-ctrj(k,j)
          enddo
-c         call fmo0p(NPS,LNPS,YlmI(1,i),ZlmI(1),Eijm)
-c         Eij=Eij+Eijm
-      enddo
-c     write(6,*) 'Total Energy of fragment  pair=(',ifg,jfg,')',Eij
+         TY2Z=SQRT(T(1)*T(1)+T(2)*T(2)+T(3)*T(3))
+         CALL GETZLL(ZLL,TY2Z,2*NPS+1)
+         CALL GETCOF(NPS,FLM,ZLL,COEFF)
+         CALL ROTR(T,EZ,RT)
+         CALL GETROT(F,G,RT,NPS,CLM)
 c
-c     Now, compute the gradient if needed.
-c     write(6,*) 'Skipping all gradients in esdimfmm',nder
-      if(nder.gt.10) then
+c        YlmJ of monomer J is converted to ZlmI of monomer I, which
+c        will be accumulated in ZlmIn for multicenter of monomer I.
+c        Likewise, ZlmJn will contain ZlmJ of monomer J.
 c
-c     The derivatives of fragment I
+         CALL RY2ZIR(LNPS,Ylmj(1,j),ZlmI,CZP,LFGS,F,G,NPS,COEFF(1,1))
 c
-        call CLOSDA('DELETE')
-        CALL OPENDA(0)
-        call makemol(ifg,0,0,ilay,0,0,0,0,0,0,0,.false.)
-        l1=num
-        l2=(l1*l1+l1)/2
-c      nati=nat
-c      write(6,*) 'l1i=',l1,nat
-        call readmond(da,odexchi,.false.,na,nb,l1,iodfmo,ifg+irec0i,
-     *                .false.)
-        call vclr(de,1,3*nat)
+c        The return value contains the Zlmj.
 c
-        nreci=1+ifg+nfg
-        if(isdrec(nreci).eq.0.or.dodistr) then
-          call vclr(Vtilda,1,l2)
-        else
-          CALL rareads(IDAFMO,iodfmo,Vtilda,l2,nreci,0)
-        endif
-        call fmo_mmder(l2,clm,flm,nps,ctri,da,Zlmj,de,Vtildai)
-        call daxpy(l2,one,Vtildai,1,Vtilda,1)
+         call fmo0p(NPS,LNPS,YlmI(1,i),ZlmI(1),Eijm)
+         Eij=Eij+Eijm
+         enddo
+        enddo
 c
-        if(.not.dodistr.or.maswrk) then
-          imxl30=maxl30(ifg)
-          CALL rawrites(IDAFMO,iodfmo,Vtilda,imxl30,l2,nreci,0)
-          isdrec(nreci)=1
-        endif
-c
-c       write(6,*) 'Final ESD grad for atoms in frg',ifg
-c       do i=1,nat
-c         write(6,'(3f15.10)') de(1,i), de(2,i), de(3,i)
-c       enddo
-        call fmodeg(1,fmode,fmopg,iaglob)
-c
-c     The derivatives of fragment J
-c
-c     We need to obtain Zlmi from Ylmi
-c     
-        CALL RY2ZIR(LNPS,Ylmi,Zlmi,CZP,LFGS,F,G,NPS,COEFF(1,2))
-
-        call CLOSDA('DELETE')
-        CALL OPENDA(0)
-        call makemol(jfg,0,0,jlay,0,0,0,0,0,0,0,.false.)
-        l1=num
-        l2=(l1*l1+l1)/2
-c      write(6,*) 'l1j=',l1,nat
-        call readmond(da,odexchj,.false.,na,nb,l1,iodfmo,jfg+irec0j,
-     *       .false.)
-        call vclr(de,1,3*nat)
-c
-        nrecj=1+jfg+nfg
-        if(isdrec(nrecj).eq.0.or.dodistr) then
-          call vclr(Vtilda,1,l2)
-        else
-          CALL rareads(IDAFMO,iodfmo,Vtilda,l2,nrecj,0)
-        endif
-        call fmo_mmder(l2,clm,flm,nps,ctrj,da,Zlmi,de,Vtildai)
-        call daxpy(l2,one,Vtildai,1,Vtilda,1)
-c
-        if(.not.dodistr.or.maswrk) then
-          imxl30=maxl30(jfg)
-          CALL rawrites(IDAFMO,iodfmo,Vtilda,imxl30,l2,nrecj,0)
-          isdrec(nrecj)=1
-        endif
-c
-c       write(6,*) 'Final ESD grad for atoms in frg',jfg
-c       do i=1,nat
-c         write(6,'(3f15.10)') de(1,i), de(2,i), de(3,i)
-c       enddo
-        call fmodeg(1,fmode,fmopg,iaglob)
-c      call makemol(ifg,jfg,0,ilay,1,0,0,0,0,0,0,.false.)
-c      just to set up iaglob
-c      call fmodeg(1,fmode,fmopg,iaglob)
-c      accumulate the gradient
-      endif
       else
         Eij=0
       endif
@@ -1876,10 +1821,14 @@ c
       RETURN
       END
 C*MODULE fmomm  *DECK esdimfmm
-      SUBROUTINE esdimfmm(ifg,jfg,ilay,jlay,irec0i,irec0j,odexchi,
-     *                    odexchj,iodfmo,maxl30,isdrec,dodistr,nder,
-     *                    ctri,ctrj,da,clm,flm,nps,t,ty2z,ylmi,ylmj,Eij,
-     *                    Vtilda,Vtildai,fmode,fmopg,iaglob)
+C>
+C>     @brief ES dimer energy with multipoles 
+C>
+C>     @details Calculate ES dimer energy with multipoles. 
+C>
+C>     @author Cheol Ho Choi
+C>
+      SUBROUTINE esdimfmm(ifg,jfg,ilay,clm,flm,nps,t,ty2z,ylmi,ylmj,Eij)
 c     
 c     This rountine calculates Eij using density contracted regular
 c     Spherical Harmonics of Ylmi and Ylmj.
@@ -1891,36 +1840,24 @@ c
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
       PARAMETER (MXATM=2000,MAXNP=45,MAXCOF=23821,MXRT=100)
       PARAMETER (one=1.0d+00,zero=0.0d+00)
-      complex*16 Ylmi,Ylmj,czp,Zlmi,Zlmj
-      logical GOPARR,DSKWRK,MASWRK,odexchi,odexchj,dodistr
+      complex*16 Ylmi,Ylmj,czp,Zlmi
       COMMON /ENRGYS/ ENUCR,EELCT,ETOT,SZ,SZZ,ECORE,ESCF,EERD,E1,E2,
      *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2),EDISP
-      COMMON /GRAD  / DE(3,MXATM)
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
      *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
-      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
-      common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
       common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
      *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
      *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
      *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
      *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
      *                modlmo,nopden,mofock,modfd,modfmm,ncentm
-      common /fmorun/ espscf,e0scf(2),emp2s,IDAFMO,icurfg,jcurfg,kcurfg,
-     *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
-     *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
-     *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
-     *                iddcur,nddleft,ivmfmo
       DIMENSION F((maxNP*(maxNP+1)*(maxNP+2)*4)/3+(maxNP+1),8),
      *          G((maxNP*(maxNP+1)*(maxNP+2)*4)/3+(maxNP+1),8),
      *          CLM(-maxNP:maxNP),FLM(-maxNP:maxNP),
      *          COEFF(MAXCOF,2),ZLL(0:2*maxNP+1,2),
      *          CZP(((MAXNP+1)*(MAXNP+2))/2),
      *          Zlmi(((MAXNP+1)*(MAXNP+2))/2),
-     *          Zlmj(((MAXNP+1)*(MAXNP+2))/2),
-     *          Ylmi(*),Ylmj(*),ctri(*),ctrj(*),da(*),Vtilda(*),
-     *          vtildai(*),iodfmo(*),maxl30(*),isdrec(*),fmode(3,*),
-     *          fmopg(3,*),iaglob(*)
+     *          Ylmi(*),Ylmj(*)
       dimension t(3),ez(3),rt(3,3)
 c
 c     Ylm are defined elsewhere (as Ylmfrg) with NP used to compute its 
@@ -1947,103 +1884,11 @@ c
       CALL ROTR(T,EZ,RT)
       CALL GETROT(F,G,RT,NPS,CLM)
 c
-      CALL RY2ZIR(LNPS,Ylmj,Zlmj,CZP,LFGS,F,G,NPS,COEFF(1,1))
+      CALL RY2ZIR(LNPS,YlmJ,ZlmI,CZP,LFGS,F,G,NPS,COEFF(1,1))
 c
 c     The return value contains the Zlmj.
 c
-      call fmo0p(NPS,LNPS,YlmI,ZlmJ,Eij)
-c      SUM=zero
-c      SUB=zero
-c      DO II=1,LNps
-c         SUM=SUM + DREAL(YLMi(II)*Zlmj(II))
-c      ENDDO
-c      IK=1
-c      DO II=0,Nps
-c         IK=IK+II
-c         SUB=SUB + DREAL(YLMi(IK)*Zlmj(IK))
-c      ENDDO
-c
-c      Eij=2*sum-sub
-c
-c     Now, compute the gradient if needed.
-c     write(6,*) 'Skipping all gradients in esdimfmm',nder
-      if(nder.gt.10) then
-c
-c     The derivatives of fragment I
-c
-        call CLOSDA('DELETE')
-        CALL OPENDA(0)
-        call makemol(ifg,0,0,ilay,0,0,0,0,0,0,0,.false.)
-        l1=num
-        l2=(l1*l1+l1)/2
-c      nati=nat
-c      write(6,*) 'l1i=',l1,nat
-        call readmond(da,odexchi,.false.,na,nb,l1,iodfmo,ifg+irec0i,
-     *                .false.)
-        call vclr(de,1,3*nat)
-c
-        nreci=1+ifg+nfg
-        if(isdrec(nreci).eq.0.or.dodistr) then
-          call vclr(Vtilda,1,l2)
-        else
-          CALL rareads(IDAFMO,iodfmo,Vtilda,l2,nreci,0)
-        endif
-        call fmo_mmder(l2,clm,flm,nps,ctri,da,Zlmj,de,Vtildai)
-        call daxpy(l2,one,Vtildai,1,Vtilda,1)
-c
-        if(.not.dodistr.or.maswrk) then
-          imxl30=maxl30(ifg)
-          CALL rawrites(IDAFMO,iodfmo,Vtilda,imxl30,l2,nreci,0)
-          isdrec(nreci)=1
-        endif
-c
-c       write(6,*) 'Final ESD grad for atoms in frg',ifg
-c       do i=1,nat
-c         write(6,'(3f15.10)') de(1,i), de(2,i), de(3,i)
-c       enddo
-        call fmodeg(1,fmode,fmopg,iaglob)
-c
-c     The derivatives of fragment J
-c
-c     We need to obtain Zlmi from Ylmi
-c     
-        CALL RY2ZIR(LNPS,Ylmi,Zlmi,CZP,LFGS,F,G,NPS,COEFF(1,2))
-
-        call CLOSDA('DELETE')
-        CALL OPENDA(0)
-        call makemol(jfg,0,0,jlay,0,0,0,0,0,0,0,.false.)
-        l1=num
-        l2=(l1*l1+l1)/2
-c      write(6,*) 'l1j=',l1,nat
-        call readmond(da,odexchj,.false.,na,nb,l1,iodfmo,jfg+irec0j,
-     *       .false.)
-        call vclr(de,1,3*nat)
-c
-        nrecj=1+jfg+nfg
-        if(isdrec(nrecj).eq.0.or.dodistr) then
-          call vclr(Vtilda,1,l2)
-        else
-          CALL rareads(IDAFMO,iodfmo,Vtilda,l2,nrecj,0)
-        endif
-        call fmo_mmder(l2,clm,flm,nps,ctrj,da,Zlmi,de,Vtildai)
-        call daxpy(l2,one,Vtildai,1,Vtilda,1)
-c
-        if(.not.dodistr.or.maswrk) then
-          imxl30=maxl30(jfg)
-          CALL rawrites(IDAFMO,iodfmo,Vtilda,imxl30,l2,nrecj,0)
-          isdrec(nrecj)=1
-        endif
-c
-c       write(6,*) 'Final ESD grad for atoms in frg',jfg
-c       do i=1,nat
-c         write(6,'(3f15.10)') de(1,i), de(2,i), de(3,i)
-c       enddo
-        call fmodeg(1,fmode,fmopg,iaglob)
-c      call makemol(ifg,jfg,0,ilay,1,0,0,0,0,0,0,.false.)
-c      just to set up iaglob
-c      call fmodeg(1,fmode,fmopg,iaglob)
-c      accumulate the gradient
-      endif
+      call fmo0p(NPS,LNPS,YlmI,ZlmI,Eij)
       else
         Eij=0
       endif
@@ -2263,15 +2108,15 @@ c                 Note: CTRi -> center of fragment i.
 c                 pctr -> the unique center of product of primitive
 c                 Gaussian.
 c
-                  DO Ip=1,3
-                     PNT(Ip)=pctr(Ip)-CTRi(Ip)
+                  DO Iip=1,3
+                     PNT(Iip)=pctr(Iip)-CTRi(Iip)
                   ENDDO
 c
 C                 OBTAIN PA AND PB: the relative vector w.r.t. unique center P.
 c
-                  DO Ip=1,3
-                     PA(Ip)=pctr(Ip)-C(Ip,IATOM)
-                     PB(Ip)=pctr(Ip)-C(Ip,JATOM)
+                  DO Iip=1,3
+                     PA(Iip)=pctr(Iip)-C(Iip,IATOM)
+                     PB(Iip)=pctr(Iip)-C(Iip,JATOM)
                   ENDDO
 c
 c                 Translational distance of z2z translation
@@ -2360,8 +2205,8 @@ c          static load balancing
 c
 c        The translational vector w.r.t. center of fragment i
 c
-         DO Ip=1,3
-            PNT(Ip)=c(Ip,ii)-CTRi(Ip)
+         DO Iii=1,3
+            PNT(Iii)=c(Iii,ii)-CTRi(Iii)
          ENDDO
 c
 c        Translational distance of z2z translation
@@ -2402,7 +2247,394 @@ c     Summation of Tilda over nodes has to be done here.
 c
       RETURN
       END
-C*MODULE FMOMM    *DECK Fmo0p
+C*MODULE fmomm  *DECK fmo_mmder_M
+C>
+C>     @brief Derivative of ES dimer energy with multipoles. 
+C>
+C>     @details This routine calculates derivative of monomer 
+C>     I due to the monomer J
+C>     of dimer calculations with multiple expansion centers.
+C>     Therefor it does the same calculation of fmo_mmder.
+C>     Therefore, ZlmI should be ZlmI(*,ncentm). Likewise ctrI=ctrI(4,ncentm)
+C>     The multipole of monomer I should be recalculated on the fly, since
+C>     the YlmI is the sum of all multipoles, from which we can not obtain
+C>     the indivisual primitive Gaussian product terms.
+C>
+C>     Note that this routine assumes you already computed ZlmI for fragment I
+C>     due to the long-range potentials of all J, that are Rij.gt.Resdim.
+C>     So this routine assumes that contractions on J are already done.
+C>
+C>     Now this routine also returns the V tilda over mu-nu for Lagrangian.
+C>
+C>     @author Cheol Ho Choi
+C>
+C>     @param l2 : matrix size
+C>
+C>     @param clm : C(LM)
+C>
+C>     @param flm : F(LM)
+C>
+C>     @param nps : angular momentum number
+C>
+C>     @param ctrI : center of fragment I
+C>
+C>     @param dai : density matrix
+C>
+C>     @param ZlmI : Z(LM) of fragment I
+C>
+C>     @param de : derivative matrix
+C>
+C>     @param Vtilda : V tilda
+C>
+      SUBROUTINE fmo_mmder_M(l2,clm,flm,nps,ctrI,dai,ZlmI,de,Vtilda)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      LOGICAL GOPARR,DSKWRK,MASWRK,IANDJ,DOUBLE,NORM,nxt
+      PARAMETER (MXSH=5000, MXGTOT=20000, MXATM=2000)
+      PARAMETER (MAXNP=45,MAXCOF=23821)
+      PARAMETER (SQRT2=1.414213562373095D+00,
+     *        TWO=2.0d+00,one=1.0d+00,zero=0.0d+00,
+     *        SQRT3=1.73205080756888D+00,SQRT5=2.23606797749979D+00)
+      complex*16 ZlmI,Zlm,Ylm,Ylm2,Tlm
+      LOGICAL QOPS,QFMM
+      COMMON /QMFM  / SIZE,EPS,DPGD,QFMM,NP,NS,IWS,NPGP,MPMTHD,NUMRD,
+     *                ITERMS,QOPS,ISCUT
+c     COMMON /GRAD  / DE(3,MXATM)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
+     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
+     *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
+     *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
+     *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
+     *                modlmo,nopden,mofock,modfd,modfmm,ncentm
+      DIMENSION F((maxNP*(maxNP+1)*(maxNP+2)*4)/3+(maxNP+1),8),
+     *          G((maxNP*(maxNP+1)*(maxNP+2)*4)/3+(maxNP+1),8),
+     *          CLM(-maxNP:maxNP),FLM(-maxNP:maxNP),
+     *          COEFF(MAXCOF,2),ZLL(0:2*maxNP+1,2),
+     *          ZlmI(((NP+1)*(NP+2))/2,ncentm),
+     *          ctrI(4,ncentm),dai(*),
+     *          Ylm(((MAXNP+1)*(MAXNP+2))/2),
+     *          Ylm2(((MAXNP+1)*(MAXNP+2))/2),
+     *          Tlm(((MAXNP+1)*(MAXNP+2))/2),
+     *          Zlm(((MAXNP+1)*(MAXNP+2))/2),de(3,*),Vtilda(*)
+      dimension DIJ(255),pa(3),pb(3),pctr(3),pnt(3),ez(3),rt(3,3)
+c
+c
+c     Translational vector
+c
+c     z-axis
+c
+c     write(IW,*) 'in FMO_MMDERS'
+      call vclr(Vtilda,1,l2)
+      EZ(1)=zero
+      EZ(2)=zero
+      EZ(3)=one
+c
+      LNPs=((NPs+1)*(NPs+2))/2
+      LFGs=((NPs*(NPs+1)*(NPs+2)*4)/3)+(NPs+1)
+      LNPGP=((NPGP+1)*(NPGP+2))/2
+c     Note that derivative of Ylm requires one more term in Y'*Z
+c     calculations.
+      npgG=npgp+1
+      NORM=NORMF.NE.1.OR.NORMP.NE.1
+c
+c     Now we go through every products of primitive Gaussians and
+c     compute their derivative contributions.
+c
+      NXT = IBTYP.EQ.1
+      NEXT  = -1
+      kount = -1
+c
+c     We first calculate the electron contributions.
+C
+c     First shell loop.
+c
+      DO II=1,NSHELL
+         Iatom=KATOM(II)
+         XI=C(1,iatom)
+         YI=C(2,iatom)
+         ZI=C(3,iatom)
+         I1=KSTART(II)
+         I2=I1+KNG(II)-1
+         MINI=KMIN(II)
+         MAXI=KMAX(II)
+         LIT=KTYPE(II)
+         ILOC=KLOC(II)
+C
+C        SECOND SHELL LOOP.
+C
+         DO JJ=1,II
+           if(goparr) then
+              kount=kount+1
+              if(nxt) then
+                 IF(kount.GT.NEXT) CALL DDI_DLBNEXT(NEXT)
+                 if(NEXT.ne.kount) goto 700
+              else
+                 if(MOD(kount,NPROC).NE.me) goto 700
+              endif
+            endif
+            Jatom=KATOM(JJ)
+            XJ=C(1,Jatom)
+            YJ=C(2,Jatom)
+            ZJ=C(3,Jatom)
+            J1=KSTART(JJ)
+            J2=J1+KNG(JJ)-1
+            MINJ=KMIN(JJ)
+            MAXJ=KMAX(JJ)
+            LJT=KTYPE(JJ)
+            JLOC=KLOC(JJ)
+c
+            DFX=XI-XJ
+            DFY=YI-YJ
+            DFZ=ZI-ZJ
+            RR=(XI-XJ)**2+(YI-YJ)**2+(ZI-ZJ)**2
+            IANDJ=II.EQ.JJ
+c
+C           Loop over primitive Gaussians
+C
+C           I PRIMITIVE.
+C
+            JGMAX=J2
+            DO IG=I1,I2
+               AI=EX(IG)
+               ARRI=AI*RR
+               AXI=AI*XI
+               AYI=AI*YI
+               AZI=AI*ZI
+               CSI=CS(IG)
+               CPI=CP(IG)
+               CDI=CD(IG)
+               CFI=CF(IG)
+c
+C              J PRIMITIVE
+c
+               IF(IANDJ) JGMAX=IG
+               DO JG=J1,JGMAX
+c
+                  AJ=EX(JG)
+                  AA=AI+AJ
+                  DUM=AJ*ARRI/AA
+c                  IF(DUM.GT.TOL) GO TO 6000
+c
+c                 The unique center of the primitive Gaussian product
+c
+                  pctr(1)=(AXI+AJ*XJ)/AA
+                  pctr(2)=(AYI+AJ*YJ)/AA
+                  pctr(3)=(AZI+AJ*ZJ)/AA
+c
+                  CSJ=CS(JG)
+                  CPJ=CP(JG)
+                  CDJ=CD(JG)
+                  CFJ=CF(JG)
+C
+                  FAC= EXP(-DUM)
+C
+                  DOUBLE=IANDJ.AND.IG.NE.JG
+                  MAX=MAXJ
+                  NN=0
+                  DO 310 I=MINI,MAXI
+                  GO TO ( 70, 80,180,180, 90,180,180,101,180,180,
+     *            110,180,180,120,180,180,180,180,180,130),I
+   70             DUM1=CSI*FAC
+                  GO TO 180
+   80             DUM1=CPI*FAC
+                  GO TO 180
+   90             DUM1=CDI*FAC
+                  GO TO 180
+  101             IF(NORM) DUM1=DUM1*SQRT3
+                  GO TO 180
+  110             DUM1=CFI*FAC
+                  GO TO 180
+  120             IF(NORM) DUM1=DUM1*SQRT5
+                  GO TO 180
+  130             iF(NORM) DUM1=DUM1*SQRT3
+  180             IF(IANDJ) MAX=I
+                  DO 310 J=MINJ,MAX
+                  GO TO (190,200,300,300,210,300,300,220,300,300,
+     *            230,300,300,240,300,300,300,300,300,250),J
+  190             DUM2=DUM1*CSJ
+                  IF(.NOT.DOUBLE) GO TO 300
+                  IF(I.GT.1) GO TO 195
+                  DUM2=DUM2+DUM2
+                  GO TO 300
+  195             DUM2=DUM2+CSI*CPJ*FAC
+                  GO TO 300
+  200             DUM2=DUM1*CPJ
+                  IF(DOUBLE) DUM2=DUM2+DUM2
+                  GO TO 300
+  210             DUM2=DUM1*CDJ
+                  IF(DOUBLE) DUM2=DUM2+DUM2
+                  GO TO 300
+  220             IF(NORM) DUM2=DUM2*SQRT3
+                  GO TO 300
+  230             DUM2=DUM1*CFJ
+                  IF(DOUBLE) DUM2=DUM2+DUM2
+                  GO TO 300
+  240             IF(NORM) DUM2=DUM2*SQRT5
+                  GO TO 300
+  250             IF(NORM) DUM2=DUM2*SQRT3
+  300             NN=NN+1
+  310             DIJ(NN)=DUM2
+c
+c
+C                 The input argument ctr should contain the center of
+c                 fragment I.
+c
+C                 Calcualte the translational vector, Pnt.
+c                 Note: CTRi -> center of fragment i.
+c                 pctr -> the unique center of product of primitive
+c                 Gaussian.
+c
+                  call getnear(0,pctr,ctrI(1,1),ncentm,idx,rDIST)
+c        write(IW,*) 'fmo_mmders, idx',idx
+                  DO Iip=1,3
+                     PNT(Iip)=pctr(Iip)-ctrI(Iip,idx)
+                  ENDDO
+c
+C                 OBTAIN PA AND PB: the relative vector w.r.t. unique center P.
+c
+                  DO Iip=1,3
+                     PA(Iip)=pctr(Iip)-C(Iip,IATOM)
+                     PB(Iip)=pctr(Iip)-C(Iip,JATOM)
+                  ENDDO
+c
+c                 Translational distance of z2z translation
+c
+                  Tz2z=SQRT(PNT(1)*PNT(1)+PNT(2)*PNT(2)+PNT(3)*PNT(3))
+c
+c                 Calculate pre-computable quantities for rotation based
+c                 multipole operation.
+c
+                  CALL GETZLL(ZLL,Tz2z,2*NPs+1)
+                  CALL GETCOF2(NPs,FLM,ZLL,COEFF)
+                  CALL ROTR(PNT,EZ,RT)
+                  CALL GETROT(F,G,RT,NPs,CLM)
+C
+c                 We shift the center of ZlmI from the one of the centers of fragment
+c                 to the unique center of primitive Gaussian product.
+c
+                  CALL RZ2ZIR(LNPs,ZlmI(1,idx),Zlm,Tlm,LFGs,F,G,NPs,
+     *                 FLM,ZLL)
+C
+c                 Loop over basis set pair IJ
+c
+                  jp=0
+                  DO IB=iloc,iloc+maxi-mini
+                     LIN=IB*(IB-1)/2
+                     DO JB=jloc,jloc+maxj-minj
+                        LJN=JB+LIN
+                        IF (IB.GE.JB) THEN
+                          JP=JP+1
+c     Get Fragment I's Ylm of mu-nu without Density of mu-nu.
+                          CALL MOMSPC(LIT,LJT,IB-ILOC+MINI,JB-JLOC+MINJ,
+     *                         Ylm,PA,PB,AA,dij(jp))
+                          call fmo0p(npgp,lnpgp,Ylm,Zlm,sum2)
+c     V tilda
+                          Vtilda(LJN)=Vtilda(LJN)+sum2
+                          SUM=SUM2
+                          IF (IB.NE.JB) SUM=SUM2*TWO
+c     z direction
+                          CALL MOMAB(LIT,LJT,IB-ILOC+MINI,JB-JLOC+MINJ,
+     *                         YLM2,PA,PB,AI,AJ,AA,DIJ(JP),0,0,1)
+                          CALL FPDER(IB,JB,NPGP,LNPGP,YLM2,Zlm,SUMPZ)
+                          CALL FZDER(IB,JB,npgG,Ylm,Zlm,CLM,DAi(LJN),AI,
+     *                         AJ,DFZ,SUM,SUMPZ,DZA,DZB)
+c     x direction
+                          CALL MOMAB(LIT,LJT,IB-ILOC+MINI,JB-JLOC+MINJ,
+     *                         YLM2,PA,PB,AI,AJ,AA,DIJ(JP),1,0,0)
+                          CALL FPDER(IB,JB,NPGP,LNPGP,YLM2,Zlm,SUMPX)
+                          CALL FXDER(IB,JB,npgG,Ylm,Zlm,CLM,DAi(LJN),AI,
+     *                         AJ,DFX,SUM,SUMPX,DXA,DXB)
+c     y direction
+                          CALL MOMAB(LIT,LJT,IB-ILOC+MINI,JB-JLOC+MINJ,
+     *                    YLM2,PA,PB,AI,AJ,AA,DIJ(JP),0,1,0)
+                          CALL FPDER(IB,JB,NPGP,LNPGP,YLM2,Zlm,SUMPY)
+                          CALL FYDER(IB,JB,npgG,Ylm,Zlm,CLM,DAi(LJN),AI,
+     *                         AJ,DFY,SUM,SUMPY,DYA,DYB)
+C
+                          DE(1,IATOM)=DE(1,IATOM)+DXA
+                          DE(1,JATOM)=DE(1,JATOM)+DXB
+                          DE(2,IATOM)=DE(2,IATOM)+DYA
+                          DE(2,JATOM)=DE(2,JATOM)+DYB
+                          DE(3,IATOM)=DE(3,IATOM)+DZA
+                          DE(3,JATOM)=DE(3,JATOM)+DZB
+c
+                        ENDIF
+                     ENDDO
+                  ENDDO
+c              J primitive
+               ENDDO
+c           I primitive
+            enddo
+  700    continue
+c        J shell
+         enddo
+c     I shell
+      enddo
+      IF (GOPARR.and.nxt) CALL DDI_DLBRESET
+c
+c     The nuclei contributions
+c
+      kount = -1
+      do ii=1,nat
+        if(goparr) then
+           kount=kount+1
+           if(MOD(kount,NPROC).NE.me) goto 800
+c          static load balancing
+        endif
+c
+c        The translational vector w.r.t. center of fragment i
+c
+         call getnear(0,c(1,ii),ctrI(1,1),ncentm,idx,rDIST)
+         DO Iii=1,3
+            PNT(Iii)=c(Iii,ii)-CTRi(Iii,idx)
+         ENDDO
+c
+c        Translational distance of z2z translation
+c
+         Tz2z=SQRT(PNT(1)*PNT(1)+PNT(2)*PNT(2)+PNT(3)*PNT(3))
+c
+c
+c        Calculate pre-computable quantities for rotation based
+c        multipole operation.
+c
+         CALL GETZLL(ZLL,Tz2z,2*NPs+1)
+         CALL GETCOF2(NPs,FLM,ZLL,COEFF)
+         CALL ROTR(PNT,EZ,RT)
+         CALL GETROT(F,G,RT,NPs,CLM)
+C
+c        We shift the center of ZlmI from the center of fragment
+c        to the unique center of nuclei.
+c
+         CALL RZ2ZIR(LNPs,ZlmI(1,idx),Zlm,Tlm,LFGs,F,G,NPs,FLM,ZLL)
+C
+c        Derivative of nucei contribution is very simple,
+c        since nuclei have point charges.
+c
+         Ylm(1)=zan(ii)
+C        z direction
+         de(3,ii)=de(3,ii)+dreal(Ylm(1)*Zlm(2))
+c        x direction
+         de(1,ii)=de(1,ii)-sqrt2*dreal(Ylm(1))*dreal(Zlm(3))
+c        y direction
+         de(2,ii)=de(2,ii)-sqrt2*dreal(Ylm(1))*dimag(Zlm(3))
+C
+  800    continue
+      enddo
+C
+c     Summation of DE over nodes is done elsewhere (in FMOX as FMODE via DE).
+c     Summation of Tilda over nodes has to be done here.
+      if(goparr) call ddi_gsumf(2416,Vtilda,l2)
+c
+      RETURN
+      END
+C*MODULE FMOMM  *DECK Fmo0p
       SUBROUTINE Fmo0p(NP,LNP,YP,ZP,SUM)
 C   
 c     It calculates the basic multipole multiplications.
@@ -2632,15 +2864,15 @@ c                 Note: CTRIJ -> center of dimer IJ.
 c                 pctr -> the unique center of product of primitive
 c                 Gaussian.
 c
-                  DO Ip=1,3
-                     PNT(Ip)=pctr(Ip)-CTRij(Ip)
+                  DO Iip=1,3
+                     PNT(Iip)=pctr(Iip)-CTRij(Iip)
                   ENDDO
 c
 C                 OBTAIN PA AND PB: the relative vector w.r.t. unique center P.
 c
-                  DO Ip=1,3
-                     PA(Ip)=pctr(Ip)-C(Ip,IATOM)
-                     PB(Ip)=pctr(Ip)-C(Ip,JATOM)
+                  DO Iip=1,3
+                     PA(Iip)=pctr(Iip)-C(Iip,IATOM)
+                     PB(Iip)=pctr(Iip)-C(Iip,JATOM)
                   ENDDO
 c
 c                 Translational distance of z2z translation
@@ -2715,7 +2947,7 @@ c     I shell
 c
       RETURN
       END
-C*MODULE FMOmm    *DECK BASEXT
+C*MODULE FMOmm  *DECK BASEXT
       SUBROUTINE BASEXT(Center,radius)
 C
 C     THIS ROUTINE checks all products of basis sets of each monomer
@@ -2868,6 +3100,13 @@ c
       RETURN
       END
 C*MODULE fmomm  *DECK fmmfrag
+C>
+C>     @brief Fock matrix with multipoles 
+C>
+C>     @details Calculates Fock matrix with multipoles.
+C>
+C>     @author Cheol Ho Choi
+C>
       subroutine fmmfrag(ilay,loadhf,loadm,layfrg,scffrg,
      *                  iodfmo,orbxch,da,nZi,irec0,
      *                  ncentm,clm,flm,crfrg,Ylmfrg,Zlmfrg)
@@ -2876,8 +3115,7 @@ C*MODULE fmomm  *DECK fmmfrag
      *        myjob,orbxch,wasgddi
       Integer ddi_world,ddi_group
       Parameter(ddi_world=0,ddi_group=1)
-      parameter(MXATM=2000,maxnp=45,ZERO=0.0D+00,ONE=1.0D+00,
-     *        two=2.0d+00)
+      parameter(MXATM=2000,maxnp=45,ZERO=0.0D+00,ONE=1.0D+00)
       PARAMETER (MAXCOF=23821)
       COMMON /GDDI/   ISCOPE,NGROUPS,MYGROUP,MEGLOB,npglob,nnglob,JBTYP,
      *                ISGDDI,PAROUT,INITGDDI,wasgddi
@@ -2905,8 +3143,7 @@ c
 c     This is the main driver to construct Fock Matrix of Monomer of FMO
 c
 C     Things need to obtain before doing any multipole operation.     
-c 
-      if(maswrk) write(iw,*) 'Multipole generation begins.'
+      if(maswrk) write(iw,*) 'Multipole generation for ESP begins.'
 c     ifmostp=6
 c     This is needed for the gradient addition.
 c     It may be better to assign a unique number but for now just this.
@@ -2919,13 +3156,15 @@ c     the number of real*8 is twice this value.
 c
 c     Finding out the largest l for generaring YlmI.
 c
-      Nps=0
-      criterion=log10(one/(two*(iws+one)))
-      do i=1,nfg
-         npst=int((log10((two*iws+one)*EPS*crfrg(4,1,i))/criterion)-one)
-         if (npst.gt.nps) nps=npst
-      enddo
-      npst=nps
+      call MxNPs(crfrg,nps,npst)
+c      Nps=0
+c      criterion=log10(one/(two*(iws+one)))
+c      do i=1,nfg
+c         npst=int((log10((two*iws+one)*EPS*crfrg(4,1,i))/criterion)-one)
+c         if (npst.gt.nps) nps=npst
+c      enddo
+c     NPST should contain the max(nps) of all fragments.
+c      npst=nps
 chc
 c     write(Iw,*) 'in fmmfrag npst',npst
 chc
@@ -2965,7 +3204,13 @@ c    *                     iodfmo,ifg+irec0)
           call readmond(da,orbxch,scffrg(ifg).eq.rmc,na,nb,l1,
      *                     iodfmo,ifg+irec0,scffrg(ifg).eq.uhf)
 c         generate multipole of fragment ifg
-          call fmo_Y(clm,flm,crfrg(1,1,ifg),da,Ylmfrg(1,1,ifg),nps)
+          if (ncentm.eq.1) then
+             call fmo_Y(clm,flm,crfrg(1,1,ifg),da,Ylmfrg(1,1,ifg),nps)
+          else
+c            If ncentm.gt.1, we should generate Ylm for multiple centers.
+             call fmo_Y_M(clm,flm,crfrg(1,1,ifg),da,Ylmfrg(1,1,ifg),nps)
+          endif
+c            call fmo_Y(clm,flm,crfrg(1,1,ifg),da,Ylmfrg(1,1,ifg),nps)
         else
           if(meglob.ne.0) call vclr(Ylmfrg(1,1,ifg),1,LNP*2*ncentm)
 c         to avoid double counting in DDI_GSUMF 
@@ -3020,7 +3265,10 @@ c         if(irststp.ge.4.and.irststp.ne.5.and.edim(ijfg,1).ne.zero)
 c    *       goto 450
 c         No gradient restart for now.
 c
+c         Note that mmdist should understands ncentm option so that
+c         the proper radius will be returned.
           call mmdist(ifg,0,0,jfg,t,radius,ty2z,ratio,mmdim)
+c
           if(mmdim.ne.0) then
             kount=kount+1
             if(goparr.and.mod(kount,NPROC).NE.me) goto 450 
@@ -3043,29 +3291,65 @@ c           Some pre-computable values for rotation based translation.
 c           Again very fast idea uses Nps rather than Np.
 c           We'll use Nps later. But for the moment let's use Np.
 c           
-            CALL GETZLL(ZLL,TY2Z,2*NPS+1)
-            CALL GETCOF(NPS,FLM,ZLL,COEFF)
-            CALL ROTR(T,EZ,RT)
-            CALL GETROT(F,G,RT,NPS,CLM)
+            if (ncentm.eq.1) then
+               CALL GETZLL(ZLL,TY2Z,2*NPS+1)
+               CALL GETCOF(NPS,FLM,ZLL,COEFF)
+               CALL ROTR(T,EZ,RT)
+               CALL GETROT(F,G,RT,NPS,CLM)
+c           
+c              First Potential of J on I
+c           
+               CALL RY2ZIR(LNPS,Ylmfrg(1,1,jfg),Zlmj,CZP,LFGS,F,G,NPS,
+     *           COEFF(1,1))
+c              The return value contains the Zlmj due to fragment J.
+c              Now we just sum over all Zlmj to get ZlmI.
+               call daxpy(LNps*2,one,Zlmj,1,Zlmfrg(1,1,ifg),1)
+               nZi(ifg)=nZi(ifg)+1
+c           
+c              Second Potential of I on J
+c           
+               CALL RY2ZIR(LNPS,Ylmfrg(1,1,ifg),Zlmj,CZP,LFGS,F,G,NPS,
+     *           COEFF(1,2))
+               call daxpy(LNps*2,one,Zlmj,1,Zlmfrg(1,1,jfg),1)
+c              Nota bene: this daxpy should probably be changed into?
+c              call daxpy(LNp*2*ncentm,one,Zlmj,1,Zlmfrg(1,1,jfg),1)
+c
+               nZi(jfg)=nZi(jfg)+1
+            else
+               do i=2,int(crfrg(1,ncentm,ifg))+1
+                  do j=2,int(crfrg(1,ncentm,jfg))+1
+                     do k=1,3
+                        t(k)=crfrg(k,i,ifg)-crfrg(k,j,jfg)
+                     enddo
+                     ty2z=sqrt(t(1)*t(1)+t(2)*t(2)+t(3)*t(3))
+                     CALL GETZLL(ZLL,TY2Z,2*NPS+1)
+                     CALL GETCOF(NPS,FLM,ZLL,COEFF)
+                     CALL ROTR(T,EZ,RT)
+                     CALL GETROT(F,G,RT,NPS,CLM)
 c           
 c           First Potential of J on I
 c           
-            CALL RY2ZIR(LNPS,Ylmfrg(1,1,jfg),Zlmj,CZP,LFGS,F,G,NPS,
-     *           COEFF(1,1))
+                     CALL RY2ZIR(LNPS,Ylmfrg(1,j,jfg),Zlmj,CZP,LFGS,
+     *                    F,G,NPS,COEFF(1,1))
 c           The return value contains the Zlmj due to fragment J.
 c           Now we just sum over all Zlmj to get ZlmI.
-            call daxpy(LNps*2,one,Zlmj,1,Zlmfrg(1,1,ifg),1)
-            nZi(ifg)=nZi(ifg)+1
+                     call daxpy(LNps*2,one,Zlmj,1,Zlmfrg(1,i,ifg),1)
 c           
 c           Second Potential of I on J
 c           
-            CALL RY2ZIR(LNPS,Ylmfrg(1,1,ifg),Zlmj,CZP,LFGS,F,G,NPS,
-     *           COEFF(1,2))
-            call daxpy(LNps*2,one,Zlmj,1,Zlmfrg(1,1,jfg),1)
+                     CALL RY2ZIR(LNPS,Ylmfrg(1,i,ifg),Zlmj,CZP,LFGS,
+     *                    F,G,NPS,COEFF(1,2))
+                     call daxpy(LNps*2,one,Zlmj,1,Zlmfrg(1,j,jfg),1)
 c           Nota bene: this daxpy should probably be changed into?
 c           call daxpy(LNp*2*ncentm,one,Zlmj,1,Zlmfrg(1,1,jfg),1)
+c           No, Zlmj only contains values of the particular center. 
+c           So each center of a given fragment should have it own Zlm.
 c
-            nZi(jfg)=nZi(jfg)+1
+                  enddo
+               enddo
+               nZi(ifg)=nZi(ifg)+1
+               nZi(jfg)=nZi(jfg)+1 
+            endif
           endif
   450   continue
   460 continue
@@ -3096,17 +3380,24 @@ cc          call fmo_mmFock(l2,clm,flm,nps,crfrg(1,1,ifg),Zlmfrg(1,1,ifg),
 c    *                   Vtilda)
       call timit(1)
 c
-      if(maswrk) write(iw,*) 'Multipole generation is done.'
+      if(maswrk) write(iw,*) 'Multipole generation for ESP is done.'
       return
  9000 FORMAT(/1X,'Increase NP or decrease IEPS in $FMM: NP,NPS=',2I8)
  9005 FORMAT(/1X,'Multipole generation: NP,NPS=',2I8)
  9010 FORMAT(/1X,'Internal failure in setting NPST,NPS=',2I8)
       end
-C*MODULE fmomm  *DECK fmo_mmesp
-      SUBROUTINE fmo_mmesp(l2,clm,flm,nps,ctri,ZlmI,Vtilda)
+C*MODULE fmomm  *DECK fmo_mmESP
+C>
+C>     @brief ESP with multipoles. 
+C>
+C>     @details Calculates ESP with multipoles. 
+C>
+C>     @author Cheol Ho Choi
+C>
+      SUBROUTINE fmo_mmESP(l2,clm,flm,nps,ctri,ZlmI,Vtilda)
 c
 c     This rountine calculates Coulomb potential due to all other monomers on
-c     current monomer I.
+c     current monomer I, which will be used for monomer Fock matrix construction.
 c
 c     Ylm,munu, the multipole of monomer i over mu-nu should be recalculated
 c     on the fly, since the Ylmi is the sum of all multipoles, from which we
@@ -3115,6 +3406,16 @@ c
 c     Note that this routine assumes you already computed ZlmI for fragment I
 c     due to the long-range potentials of all J, that are Rij.gt.Resdim.
 c     So this routine assumes that contractions on J are already done.
+c
+c     Input arguments: 
+c     l2: size of return matrix Vtilda
+c     clm, flm: used for MM
+c     nps : npgp *2 , npgp=the highest angular momentum of basis set.
+c     We can set nps=npgp*2, since we shift ZlmI to the unique center of Ylm, mu-nu.
+c     It saves a lot of time.
+c     CTRi : The center of monomer I and ZlmI.
+c     Return arguments:
+c     Vtilda : Coulomb potential for Fock matrix construction. It has mu-nu indices.
 c
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
       LOGICAL GOPARR,DSKWRK,MASWRK,IANDJ,DOUBLE,NORM,nxt
@@ -3306,15 +3607,15 @@ c                 Note: CTRi -> center of fragment i.
 c                 pctr -> the unique center of product of primitive
 c                 Gaussian.
 c
-                  DO Ip=1,3
-                     PNT(Ip)=pctr(Ip)-CTRi(Ip)
+                  DO Iip=1,3
+                     PNT(Iip)=pctr(Iip)-CTRi(Iip)
                   ENDDO
 c
 C                 OBTAIN PA AND PB: the relative vector w.r.t. unique center P.
 c
-                  DO Ip=1,3
-                     PA(Ip)=pctr(Ip)-C(Ip,IATOM)
-                     PB(Ip)=pctr(Ip)-C(Ip,JATOM)
+                  DO Iip=1,3
+                     PA(Iip)=pctr(Iip)-C(Iip,IATOM)
+                     PB(Iip)=pctr(Iip)-C(Iip,JATOM)
                   ENDDO
 c
 c                 Translational distance of z2z translation
@@ -3348,17 +3649,6 @@ c     Get Fragment I's Ylm of mu-nu without Density of mu-nu.
      *                         Ylm,PA,PB,AA,dij(jp))
 c
                           call fmo0p(npgp,lnpgp,Ylm,Zlm,sum2)
-c                          SUM2=zero
-c                          SUB2=zero
-c                          DO Idx=1,lnpgp
-c                             SUM2=SUM2 + DREAL(Ylm(Idx)*Zlm(Idx))
-c                          ENDDO
-c                          IK=1
-c                          DO Idx=0,NPGP
-c                             IK=IK+Idx
-c                             SUB2=SUB2 + DREAL(Ylm(IK)*Zlm(IK))
-c                          ENDDO
-c                          SUM2=(two*SUM2-SUB2)
                           Vtilda(LJN)=Vtilda(LJN)+sum2
 c
 c     Done with V tilda. That's it!
@@ -3377,53 +3667,7 @@ c     I shell
       enddo
       IF (GOPARR.and.nxt) CALL DDI_DLBRESET
 c
-c     The nuclei contributions
-c
       kount = -1
-c      do ii=1,nat
-c        if(goparr) then
-c           kount=kount+1
-c           if(MOD(kount,NPROC).NE.me) goto 800
-c          static load balancing
-c        endif
-c
-c        The translational vector w.r.t. center of fragment i
-c
-c         DO Ip=1,3
-c            PNT(Ip)=c(Ip,ii)-CTRi(Ip)
-c         ENDDO
-c
-c        Translational distance of z2z translation
-c
-c         Tz2z=SQRT(PNT(1)*PNT(1)+PNT(2)*PNT(2)+PNT(3)*PNT(3))
-c
-c
-c        Calculate pre-computable quantities for rotation based
-c        multipole operation.
-c
-c         CALL GETZLL(ZLL,Tz2z,2*NPs+1)
-c         CALL GETCOF2(NPs,FLM,ZLL,COEFF)
-c         CALL ROTR(PNT,EZ,RT)
-c         CALL GETROT(F,G,RT,NPs,CLM)
-C
-c        We shift the center of ZlmI from the center of fragment
-c        to the unique center of nuclei.
-c
-cc         CALL RZ2ZIR(LNPs,ZlmI,Zlm,Tlm,LFGs,F,G,NPs,FLM,ZLL)
-C
-c        Derivative of nucei contribution is very simple,
-c        since nuclei have point charges.
-c
-cc         Ylm(1)=zan(ii)
-C        z direction
-cc         de(3,ii)=de(3,ii)+dreal(Ylm(1)*Zlm(2))
-c        x direction
-cc         de(1,ii)=de(1,ii)-sqrt2*dreal(Ylm(1))*dreal(Zlm(3))
-c        y direction
-cc         de(2,ii)=de(2,ii)-sqrt2*dreal(Ylm(1))*dimag(Zlm(3))
-C
-c 800    continue
-c     enddo
 C
 c     Summation of DE over nodes is done elsewhere (in FMOX as FMODE via DE).
 c     Summation of Tilda over nodes has to be done here.
@@ -3431,8 +3675,317 @@ c     Summation of Tilda over nodes has to be done here.
 c
       RETURN
       END
-C*MODULE fmomm  *DECK mmespg
-      subroutine mmespg(ilay,ifg,jfg,loadhf,loadm,layfrg,
+C*MODULE fmomm  *DECK fmo_mmESP_M
+C>
+C>     @brief Derivative of ESP with multipoles. 
+C>
+C>     @details The multicenter version of fmo_mmESP.
+C>     This rountine calculates Coulomb potential due to all other monomers on
+C>     current monomer I.
+C>
+C>     Ylm,munu, the multipole of monomer i over mu-nu should be recalculated
+C>     on the fly, since the Ylmi is the sum of all multipoles, from which we
+C>     can not obtain the indivisual primitive Gaussian product terms.
+C>
+C>     Note that this routine assumes you already computed ZlmI for fragment I
+C>     due to the long-range potentials of all J, that are Rij.gt.Resdim.
+C>     So this routine assumes that contractions on J are already done.
+C>
+C>     @author Cheol Ho Choi
+C>
+C>     @param l2: size of return matrix Vtilda
+C>
+C>     @param clm : used for MM
+C>
+C>     @param flm: used for MM
+C>
+C>     @param nps : npgp *2 , npgp=the highest angular momentum of basis set.
+C>     We can set nps=npgp*2, since we shift ZlmI to the unique center of Ylm, 
+C>     mu-nu. It saves a lot of time.
+C>
+C>     @param CTRi : The center of monomer I and ZlmI.
+C>
+C>     @param ZlmI : Z(LM) of fragment I
+C>
+C>     @param Vtilda : Coulomb potential for Fock matrix construction. 
+C>     It has mu-nu indices.
+C>
+      SUBROUTINE fmo_mmESP_M(l2,clm,flm,nps,ctri,nctr,ZlmI,Vtilda)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      LOGICAL GOPARR,DSKWRK,MASWRK,IANDJ,DOUBLE,NORM,nxt
+      PARAMETER (MXSH=5000, MXGTOT=20000, MXATM=2000)
+      PARAMETER (MAXNP=45,MAXCOF=23821)
+      PARAMETER (one=1.0d+00,zero=0.0d+00,
+     *        SQRT3=1.73205080756888D+00,SQRT5=2.23606797749979D+00)
+      complex*16 ZlmI,Zlm,Ylm,Tlm
+      LOGICAL QOPS,QFMM
+      COMMON /QMFM  / SIZE,EPS,DPGD,QFMM,NP,NS,IWS,NPGP,MPMTHD,NUMRD,
+     *                ITERMS,QOPS,ISCUT
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
+     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
+     *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
+     *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
+     *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
+     *                modlmo,nopden,mofock,modfd,modfmm,ncentm
+      DIMENSION F((maxNP*(maxNP+1)*(maxNP+2)*4)/3+(maxNP+1),8),
+     *          G((maxNP*(maxNP+1)*(maxNP+2)*4)/3+(maxNP+1),8),
+     *          CLM(-maxNP:maxNP),FLM(-maxNP:maxNP),
+     *          COEFF(MAXCOF,2),ZLL(0:2*maxNP+1,2),
+     *          ZlmI(((NP+1)*(NP+2))/2,ncentm),
+     *          ctrI(4,nctr),Vtilda(*),
+     *          Ylm(((MAXNP+1)*(MAXNP+2))/2),
+     *          Tlm(((MAXNP+1)*(MAXNP+2))/2),
+     *          Zlm(((MAXNP+1)*(MAXNP+2))/2)
+c     *          ZlmI(*),ctri(3),Vtilda(*),
+      dimension DIJ(255),pa(3),pb(3),pctr(3),pnt(3),ez(3),rt(3,3)
+c
+c
+c     Translational vector
+c
+c     z-axis
+c
+      call vclr(Vtilda,1,l2)
+      EZ(1)=zero
+      EZ(2)=zero
+      EZ(3)=one
+c
+      LNPs=((NPs+1)*(NPs+2))/2
+      LFGs=((NPs*(NPs+1)*(NPs+2)*4)/3)+(NPs+1)
+      LNPGP=((NPGP+1)*(NPGP+2))/2
+      NORM=NORMF.NE.1.OR.NORMP.NE.1
+cc
+c     Now we go through every products of primitive Gaussians and
+c     compute their derivative contributions.
+c
+      NXT = IBTYP.EQ.1
+      NEXT  = -1
+      kount = -1
+c
+c     We first calculate the electron contributions.
+C
+c     First shell loop.
+c
+      DO II=1,NSHELL
+         Iatom=KATOM(II)
+         XI=C(1,iatom)
+         YI=C(2,iatom)
+         ZI=C(3,iatom)
+         I1=KSTART(II)
+         I2=I1+KNG(II)-1
+         MINI=KMIN(II)
+         MAXI=KMAX(II)
+         LIT=KTYPE(II)
+         ILOC=KLOC(II)
+C
+C        SECOND SHELL LOOP.
+C
+         DO JJ=1,II
+           if(goparr) then
+              kount=kount+1
+              if(nxt) then
+                 IF(kount.GT.NEXT) CALL DDI_DLBNEXT(NEXT)
+                 if(NEXT.ne.kount) goto 700
+              else
+                 if(MOD(kount,NPROC).NE.me) goto 700
+              endif
+            endif
+            Jatom=KATOM(JJ)
+            XJ=C(1,Jatom)
+            YJ=C(2,Jatom)
+            ZJ=C(3,Jatom)
+            J1=KSTART(JJ)
+            J2=J1+KNG(JJ)-1
+            MINJ=KMIN(JJ)
+            MAXJ=KMAX(JJ)
+            LJT=KTYPE(JJ)
+            JLOC=KLOC(JJ)
+c
+c           DFX=XI-XJ
+c           DFY=YI-YJ
+c           DFZ=ZI-ZJ
+            RR=(XI-XJ)**2+(YI-YJ)**2+(ZI-ZJ)**2
+            IANDJ=II.EQ.JJ
+c
+C           Loop over primitive Gaussians
+C
+C           I PRIMITIVE.
+C
+            JGMAX=J2
+            DO IG=I1,I2
+               AI=EX(IG)
+               ARRI=AI*RR
+               AXI=AI*XI
+               AYI=AI*YI
+               AZI=AI*ZI
+               CSI=CS(IG)
+               CPI=CP(IG)
+               CDI=CD(IG)
+               CFI=CF(IG)
+c
+C              J PRIMITIVE
+c
+               IF(IANDJ) JGMAX=IG
+               DO JG=J1,JGMAX
+c
+                  AJ=EX(JG)
+                  AA=AI+AJ
+                  DUM=AJ*ARRI/AA
+c                  IF(DUM.GT.TOL) GO TO 6000
+c
+c                 The unique center of the primitive Gaussian product
+c
+                  pctr(1)=(AXI+AJ*XJ)/AA
+                  pctr(2)=(AYI+AJ*YJ)/AA
+                  pctr(3)=(AZI+AJ*ZJ)/AA
+c
+                  CSJ=CS(JG)
+                  CPJ=CP(JG)
+                  CDJ=CD(JG)
+                  CFJ=CF(JG)
+C
+                  FAC= EXP(-DUM)
+C
+                  DOUBLE=IANDJ.AND.IG.NE.JG
+                  MAX=MAXJ
+                  NN=0
+                  DO 310 I=MINI,MAXI
+                  GO TO ( 70, 80,180,180, 90,180,180,101,180,180,
+     *            110,180,180,120,180,180,180,180,180,130),I
+   70             DUM1=CSI*FAC
+                  GO TO 180
+   80             DUM1=CPI*FAC
+                  GO TO 180
+   90             DUM1=CDI*FAC
+                  GO TO 180
+  101             IF(NORM) DUM1=DUM1*SQRT3
+                  GO TO 180
+  110             DUM1=CFI*FAC
+                  GO TO 180
+  120             IF(NORM) DUM1=DUM1*SQRT5
+                  GO TO 180
+  130             iF(NORM) DUM1=DUM1*SQRT3
+  180             IF(IANDJ) MAX=I
+                  DO 310 J=MINJ,MAX
+                  GO TO (190,200,300,300,210,300,300,220,300,300,
+     *            230,300,300,240,300,300,300,300,300,250),J
+  190             DUM2=DUM1*CSJ
+                  IF(.NOT.DOUBLE) GO TO 300
+                  IF(I.GT.1) GO TO 195
+                  DUM2=DUM2+DUM2
+                  GO TO 300
+  195             DUM2=DUM2+CSI*CPJ*FAC
+                  GO TO 300
+  200             DUM2=DUM1*CPJ
+                  IF(DOUBLE) DUM2=DUM2+DUM2
+                  GO TO 300
+  210             DUM2=DUM1*CDJ
+                  IF(DOUBLE) DUM2=DUM2+DUM2
+                  GO TO 300
+  220             IF(NORM) DUM2=DUM2*SQRT3
+                  GO TO 300
+  230             DUM2=DUM1*CFJ
+                  IF(DOUBLE) DUM2=DUM2+DUM2
+                  GO TO 300
+  240             IF(NORM) DUM2=DUM2*SQRT5
+                  GO TO 300
+  250             IF(NORM) DUM2=DUM2*SQRT3
+  300             NN=NN+1
+  310             DIJ(NN)=DUM2
+c
+c
+C                 The input argument ctr should contain the center of
+c                 fragment.
+c
+C                 Calcualte the translational vector, Pnt.
+c                 Note: CTRi -> center of fragment i.
+c                 pctr -> the unique center of product of primitive
+c                 Gaussian.
+c
+c                 But before, we should get the center of ZlmI.
+                  call getnear(0,pctr,ctrI(1,1),nctr,idx,rDIST)
+c                 call getnear(0,pctr,ctrI(1,1),ncentm,idx,rDIST)
+c
+                  DO Iip=1,3
+                     PNT(Iip)=pctr(Iip)-CTRi(Iip,idx)
+c                     PNT(Iip)=pctr(Iip)-CTRi(Iip)
+                  ENDDO
+c
+C                 OBTAIN PA AND PB: the relative vector w.r.t. unique center P.
+c
+                  DO Iip=1,3
+                     PA(Iip)=pctr(Iip)-C(Iip,IATOM)
+                     PB(Iip)=pctr(Iip)-C(Iip,JATOM)
+                  ENDDO
+c
+c                 Translational distance of z2z translation
+c
+                  Tz2z=SQRT(PNT(1)*PNT(1)+PNT(2)*PNT(2)+PNT(3)*PNT(3))
+c
+c                 Calculate pre-computable quantities for rotation based
+c                 multipole operation.
+c
+                  CALL GETZLL(ZLL,Tz2z,2*NPs+1)
+                  CALL GETCOF2(NPs,FLM,ZLL,COEFF)
+                  CALL ROTR(PNT,EZ,RT)
+                  CALL GETROT(F,G,RT,NPs,CLM)
+C
+c                 We shift the center of ZlmI from the center of fragment
+c                 to the unique center of primitive Gaussian product.
+c
+c                  CALL RZ2ZIR(LNPs,ZlmI,Zlm,Tlm,LFGs,F,G,NPs,FLM,ZLL)
+                  CALL RZ2ZIR(LNPs,ZlmI(1,idx),Zlm,Tlm,LFGs,F,G,NPs,
+     *                 FLM,ZLL)
+C
+c                 Loop over basis set pair IJ
+c
+                  jp=0
+                  DO IB=iloc,iloc+maxi-mini
+                     LIN=IB*(IB-1)/2
+                     DO JB=jloc,jloc+maxj-minj
+                        LJN=JB+LIN
+                        IF (IB.GE.JB) THEN
+                          JP=JP+1
+c     Get Fragment I's Ylm of mu-nu without Density of mu-nu.
+                          CALL MOMSPC(LIT,LJT,IB-ILOC+MINI,JB-JLOC+MINJ,
+     *                         Ylm,PA,PB,AA,dij(jp))
+c
+                          call fmo0p(npgp,lnpgp,Ylm,Zlm,sum2)
+                          Vtilda(LJN)=Vtilda(LJN)+sum2
+c
+c     Done with V tilda. That's it!
+c
+                        ENDIF
+                     ENDDO
+                  ENDDO
+c              J primitive
+               ENDDO
+c           I primitive
+            enddo
+  700    continue
+c        J shell
+         enddo
+c     I shell
+      enddo
+      IF (GOPARR.and.nxt) CALL DDI_DLBRESET
+c
+      kount = -1
+C
+c     Summation of DE over nodes is done elsewhere (in FMOX as FMODE via DE).
+c     Summation of Tilda over nodes has to be done here.
+      if(goparr) call ddi_gsumf(2416,Vtilda,l2)
+c
+      RETURN
+      END
+C*MODULE fmomm  *DECK mmESPg
+      subroutine mmESPg(ilay,ifg,jfg,loadhf,loadm,layfrg,
      *                  da,ncentm,clm,flm,crfrg,Ylmfrgq,ZlmfrgIJ)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       LOGICAL QOPS,QFMM,GOPARR,DSKWRK,MASWRK,nxt
@@ -3615,6 +4168,149 @@ c
 c9005 FORMAT(/1X,'Multipole generation: NP,NPS=',2I8)
 c9010 FORMAT(/1X,'Internal failure in setting NPST,NPS=',2I8)
       end
+C*MODULE fmomm  *DECK mmZlmIJK
+C>
+C>     @brief Zlm for IJK 
+C>
+C>     @details Calculate the multipole Zlm function of IJK.
+C>     We denote I=ifg, J=jfg, and K=kfg.
+C>     This routine calculates ZlmIJK for IJ and IJK ESP calculations.
+C>     For IJ and IJK ESP, we cannot use ZlmI, since it contains J and/or J, K 
+C>     contributions, which should not be added in ZlmIJK.
+C>     Furthermore, ZlmIJK is different from ZlmI, since its center and
+C>     radius need to be recalculated for the particular combination of 
+C>     IJ or IJK.
+C>     This routine assumes you already have multi-center Ylmfrg, all 
+C>     multi centers of IJ or IJK (ctrijk) and the multi centers of I (crfrg).
+C>     So the crfrg and ctrijk represent the multi centers of I and IJ/IJK.
+C>
+C>     This routines accumulates Zlm of all monomer fragments for IJ dimer and
+C>     IJK trimers.
+C>
+C>     @author Cheol Ho Choi
+C>     
+C>     @param ifg : fragment I
+C>
+C>     @param jfg : fragment J
+C>
+C>     @param kfg : fragment K
+C>
+C>     @param ncentm : centers of multiple points
+C>
+C>     @param clm : C(LM)
+C>
+C>     @param flm : F(LM)
+C>
+C>     @param crfrg : center of fragment
+C>
+C>     @param Ylmfrg : Ylm of fragment
+C>
+C>     @param ZlmIJK : Zlm of fragment
+C>
+C>     @param ctrijk : center of IJK fragment
+C>
+C>     @param ijkctr : counter of IJK fragment
+C>
+      subroutine mmZlmIJK(ifg,jfg,kfg,
+     *   ncentm,clm,flm,crfrg,Ylmfrg,ZlmIJK,ctrijk,ijkctr)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      LOGICAL QOPS,QFMM
+      parameter(maxnp=45,ONE=1.0D+00,two=2.0D+00,MAXCOF=23821)
+      COMMON /QMFM  / SIZE,EPS,DPGD,QFMM,NP,NS,IWS,NPGP,MPMTHD,NUMRD,
+     *                ITERMS,QOPS,ISCUT
+      common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
+      complex*16 Ylmfrg(((NP+1)*(NP+2))/2,ncentm,nfg),
+     *           ZlmIJK(((NP+1)*(NP+2))/2,ijkctr),
+     *           CZP((MAXNP+1)*(MAXNP+2)/2),
+     *           ZlmL(((MAXNP+1)*(MAXNP+2))/2)
+      dimension crfrg(4,ncentm,nfg),ctrijk(4,ijkctr),
+     *          CLM(-maxNP:maxNP),FLM(-maxNP:maxNP)
+      DIMENSION F((maxNP*(maxNP+1)*(maxNP+2)*4)/3+(maxNP+1),8),
+     *          G((maxNP*(maxNP+1)*(maxNP+2)*4)/3+(maxNP+1),8),
+     *          COEFF(MAXCOF,2),ZLL(0:2*maxNP+1,2)
+      dimension t(3),ez(3),rt(3,3)
+c
+C     GET TABLE FOR 1-ELECTRON INTEGRAL
+      CALL GXYZLM
+C     
+c     This is the highest angular momentum.
+      lnp=((NP+1)*(NP+2))/2
+      npst=0
+c
+      EZ(1)=0
+      EZ(2)=0
+      EZ(3)=1
+c
+c     The maximum NPs
+c
+      criterion=log10(one/(two*(iws+one)))
+      npst=int((log10((two*iws+one)*EPS*ctrijk(4,1))/criterion)-one)
+      nps=npst
+c
+      call vclr(ZlmIJK,1,LNP*2*ijkctr)
+c
+c     The main loop over monomer L 
+c     The Ylmfrg will be converted to Zlm and accumulated to ZlmIJK
+c
+      nZij=0
+c
+c     If IJ ESP, I and J should not be zero, while K MUST be zero.
+c
+      do 200 lfg=1,nfg
+        if (lfg.ne.ifg.and.lfg.ne.jfg.and.lfg.ne.kfg) then
+c         mmcond_m should work with I, IJ and IJK.
+c         mmdim=mmcond_m(ifg,jfg,kfg,lfg,t,radius,ty2z,ratio,crfrg)
+          call mmdist(ifg,jfg,kfg,lfg,t,radius,ty2z,ratio,mmdim)
+c
+          if(mmdim.ne.0) then
+            do i=2,int(ctrijk(1,ijkctr))+1
+              do j=2,int(crfrg(1,ncentm,lfg))+1
+                call vsub(crfrg(1,j,lfg),1,ctrijk(1,i),1,t,1,3)
+                ty2z=sqrt(t(1)*t(1)+t(2)*t(2)+t(3)*t(3))
+c                do k=1,3
+c                  t(k)=ctrijk(k,i)-crfrg(k,j,lfg)
+c                enddo
+                nZij=nZij+1
+c
+C               We will get ZlmIJK, the sum over L.
+c
+c               Using very fast multipole idea.
+                nps=int(log10(EPS*abs(ty2z-radius))/log10(ratio)-one)
+                if (nps.gt.npst) npst=nps
+                if(nps.gt.np) then
+c                if(maswrk) write(iw,9000) np,nps
+                  call abrt
+                endif
+                LNPS=((NPS+1)*(NPS+2))/2
+                LFGS=((NPS*(NPS+1)*(NPS+2)*4)/3)+(NPS+1)
+c
+c               Some pre-computable values for rotation based translation.
+c               Again very fast idea uses Nps rather than Np.
+c
+                CALL GETZLL(ZLL,TY2Z,2*NPS+1)
+                CALL GETCOF(NPS,FLM,ZLL,COEFF)
+                CALL ROTR(T,EZ,RT)
+                CALL GETROT(F,G,RT,NPS,CLM)
+c               Now Ylmfrg of monomer L is converted to ZlmL
+                CALL RY2ZIR(LNPS,Ylmfrg(1,j,lfg),ZlmL,CZP,LFGS,F,G,NPS,
+     *           COEFF(1,1))
+c               The return value contains the ZlmL due to fragment L.
+c               Now we just sum over all ZlmL to get ZlmIJK.
+                call daxpy(LNps*2,one,ZlmL,1,ZlmIJK(1,i),1)
+c
+              enddo
+            enddo
+          endif
+       endif
+  200 continue
+c
+c     We now have ZlmIJK containing all long-range potential of L for IJ/IJK.
+c
+      return
+c 9000 FORMAT(/1X,'Increase NP or decrease IEPS in $FMM: NP,NPS=',2I8)
+c9005 FORMAT(/1X,'Multipole generation: NP,NPS=',2I8)
+c9010 FORMAT(/1X,'Internal failure in setting NPST,NPS=',2I8)
+      end
 C*MODULE fmomm  *DECK esp1gmm
       SUBROUTINE esp1gmm(ilay,ncentm,clm,flm,crfrg,popmat,ZlmfrgIJ,
      *                   fmode,fmopg,iaglob,layfrg,loadhf,loadm)
@@ -3646,7 +4342,7 @@ c
      *                icurlay,icurunt,nat1e,ncursh,ngau,icurpop,ifmostp,
      *                moncor,needr,modrst,norbproj,nunesp,iskipesp,
      *                IESDPPC,idoprop,mp2run,icurit,idmfmo,iddfmo,
-     *                iddcur,nddleft,ivmfmo
+     *                iddcur,nddleft,ivmfmo,nzmtfmo
       DIMENSION CLM(-maxNP:maxNP),FLM(-maxNP:maxNP),
      *          crfrg(4,ncentm,nfg),popmat(maxnat,nfg,2),
      *          fmode(3,*),fmopg(3,*),iaglob(*),layfrg(*),loadm(*)
@@ -3792,6 +4488,13 @@ c
       END
 c
 C*MODULE fmomm  *DECK setmcent 
+C>
+C>     @brief multipole centers. 
+C>
+C>     @details Set multipole centers. 
+C>
+C>     @author Cheol Ho Choi
+C>
       SUBROUTINE setmcent(ncentm,crfrg,layfrg,units)
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
       logical GOPARR,DSKWRK,MASWRK
@@ -3799,6 +4502,14 @@ C*MODULE fmomm  *DECK setmcent
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
       common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
       dimension crfrg(4,ncentm,nfg),layfrg(*)
+c     This routine will set the centers of fragments in fmox routine.
+c     ncentm is the pre-determined before calling this routine.
+c     If ncentm=1 : one center
+c        ncentm>1 : multi-center method for MM calculations.
+c        ncentm = maxnath + 2, when modfmm=16
+c        ncentm = maxnat  + 2, when modfmm=32
+c     Maxnath : the maximum number of heavy atoms among all fragments
+c     Maxnat  : the maximum number of all atoms among all fragments
 c
       if(maswrk) write(iw,9000)
       do ifg=1,nfg
@@ -3806,11 +4517,28 @@ c
         ilay=layfrg(ifg)
         call setcent(ilay,iifg,crfrg,units)
       enddo
+c
+      if (ncentm.gt.1) then
+c        NOTE: The centers and the corresponding radii will be set during
+c        the call setcent. However, we should find out max(radii) and put it
+c        to crfrg(4,1,*).
+         do i=1,nfg
+            rfrg=0.0d+00
+c           afrg=0.0d+00
+            do j=2,int(crfrg(1,ncentm,i))+1
+c               afrg=afrg+crfrg(4,j,i)
+               if (crfrg(4,j,i).gt.rfrg) rfrg=crfrg(4,j,i)
+            enddo
+            crfrg(4,1,i)=rfrg
+c            crfrg(4,1,i)=afrg/crfrg(1,ncentm,i)
+         enddo
+      endif
+c
       RETURN
  9000 format(/1x,'Fragment radii R and centers C.')
       END
 c
-C*MODULE FMOmm   *DECK setcent
+C*MODULE FMOmm  *DECK setcent
       subroutine setcent(ilay,ifg,crfrg,units)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       dimension crfrg(4,ncentm,nfg)
@@ -3828,11 +4556,18 @@ C*MODULE FMOmm   *DECK setcent
      *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
      *                modlmo,nopden,mofock,modfd,modfmm,ncentm
 c
+c     The dimension of crfrg is crfrg(4,ncentm,nfg)
+c     crfrg(1~3,1,ifg) = the center of ifg fragment.
+c     crfrg(4,1,ifg) = the radius of ifg fragment.
+c     crfrg(1,ncentm,ifg) = the total number of multiple centers of ifg fragment
+c
       call makemol(ifg,0,0,ilay,0,0,0,0,0,0,0,.false.)
       do i=1,3
         crfrg(i,1,ifg)=ddot(nat,C(i,1),3,one,0)/nat
       enddo
       rad=0
+c     crfrg(4,1,ifg) = the radius of ifg fragment on the basis of simple nuclei's
+c     geometric distances.
       do i=1,nat
         radi=sqrt((c(1,i)-crfrg(1,1,ifg))**2
      *           +(c(2,i)-crfrg(2,1,ifg))**2+
@@ -3840,19 +4575,36 @@ c
         if(radi.gt.rad) rad=radi
       enddo
       crfrg(4,1,ifg)=rad
+c     The radius of ifg fragment, crfrg(4,1,ifg) will be changed to account 
+c     for basis set distribution. There are three values we should take into accouts.
+c     1) The nuclei's geometric radius: max(nuclei-crfrg)
+c     2) The primitive center: max(center of primitive Gaussian product - crfrg)
+c     3) The basis set distribution : max(basis set distribution)
+c     The final radius of fragment i = 1) + 2) + 3)  / 2
+c
       call BASEXT(crfrg(1,1,ifg),crfrg(4,1,ifg))
 c
 c       For better performance, multiple centers for multipole calculations
 c       are introduced, if NCENTM > 1.We assumed that crfrg = crfrg(4,NCENTM,nfg).
 c       Our first trial will adopt the heavy atom positions as additional
 c       points.
-c       Note that NCENTM = the number of heavy atoms + 1.
+c       Note that
+c        ncentm = maxnath + 2, when modfmm=16
+c        ncentm = maxnat  + 2, when modfmm=32
+c        Maxnath : the maximum number of heavy atoms among all fragments
+c        Maxnat  : the maximum number of all atoms among all fragments
 c       crfrg(*,1,ifg) should contain the overall center of fragment ifg.
-c       crfrg(*,2~NCENTM,ifg) will contain the centers of heavy atoms.
+c       crfrg(*,2~nat+1,ifg) will contain the centers of heavy atoms.
+c
+c     In the case of multicenter, the nuclei's geometric distance, rad becomes
+c     irrelevant. 
+c     Therefore the multicenter should only be based on the the primitive center 
+c     and basis set distribution.
 c
       if (ncentm.gt.1) then
         icnt=1
         do i=1,nat
+c
           if (ian(i).ne.1.or.iand(modfmm,32).ne.0) then  
              icnt=icnt+1
              if(icnt.ge.ncentm) call abrt
@@ -3863,13 +4615,22 @@ c            icnt cannot be equal to ncentm (reserved).
              crfrg(4,icnt,ifg)=0.0d+00
           endif
         enddo
-c       The total number of centers of a fragments will be saved in
+c       The total number of multiple centers of a fragments will be saved in
 c       crfrg(1,ncentm,*)
         crfrg(1,ncentm,ifg)=icnt-1
-      if(maswrk) write(iw,9020) ifg,(crfrg(i,1,ifg)*units,i=1,3),
+c
+c       Now we set all coordinates and radii of all multiple centers of ifg.
+        call setmulcent(crfrg(1,1,ifg))
+c
+        if(maswrk) write(iw,9020) ifg,(crfrg(i,1,ifg)*units,i=1,3),
      *                             rad*units,crfrg(4,1,ifg)*units,icnt-1
+c        For multicenter points
+         do j=1,icnt-1
+         if(maswrk) write(iw,9030) j,(crfrg(i,j+1,ifg)*units,i=1,3),
+     *                       crfrg(4,j+1,ifg)*units
+        enddo
       else
-      if(maswrk) write(iw,9010) ifg,(crfrg(i,1,ifg)*units,i=1,3),
+        if(maswrk) write(iw,9010) ifg,(crfrg(i,1,ifg)*units,i=1,3),
      *                               rad*units,crfrg(4,1,ifg)*units
       endif
 c
@@ -3877,27 +4638,219 @@ c
  9010 format(1x,'IFG=',I5,' C=',3F13.6,' R0=',F10.6,' R=',F10.6)
  9020 format(1x,'IFG=',I5,' C=',3F13.6,' R0=',F10.6,' R=',F10.6,
      *          ' NMC=',I6)
+ 9030 format(1x,'MC= ',I5,' C=',3F13.6,' R=',F10.6)
       end
 c
-C*MODULE FMOmm   *DECK getnear
-      subroutine getnear(vref,crfrg,ncentm,idx,rdiff)
+C*MODULE fmomm  *DECK setmulcent
+C>
+C>     @brief Multipole centers and their radii. 
+C>
+C>     @details Calculate multipole centers and their radii.
+c>      This routine will set all centers and their max_radii of multicenters
+c>      of fragment.
+C>
+C>     @author Cheol Ho Choi
+C>
+C>     @ param ctr : the geometric center of a given fragment should 
+C>     be given. 
+C
+      SUBROUTINE setmulcent(Ctr)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      PARAMETER (MXSH=5000,MXGTOT=20000,MXATM=2000)
+      PARAMETER (ZERO=0.00D+00,ONE=1.0D+00,TWO=2.0D+00)
+      PARAMETER (MAXMC=MXATM+2)
+c     PARAMETER (SQRT3=1.73205080756888D+00,SQRT5=2.23606797749979D+00)
+      LOGICAL GOPARR,DSKWRK,MASWRK,QOPS,QFMM,IANDJ,nxt
+      COMMON /FMCOM / XX(1)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /QMFM  / SIZE,EPS,DPGD,QFMM,NP,NS,IWS,NPGP,MPMTHD,NUMRD,
+     *                ITERMS,QOPS,ISCUT
+      common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
+     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
+     *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
+     *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
+     *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
+     *                modlmo,nopden,mofock,modfd,modfmm,ncentm
+c
+      DIMENSION ctr(4,ncentm),pctr(3)
+      DIMENSION rMMS(MAXMC),p_counter(MAXMC),rDISTS(MAXMC),
+     *          rMAX(MAXMC)
+C     
+c      TOL=RLN10*ITOL
+c     For better definition of radius of centers
+      BEX=SQRT(2.0D+00)*DERFINV(ONE-DPGD)
+      do i=1,MAXMC
+         p_counter(i)=zero
+         rMMS(i)=zero
+         rMAX(i)=zero
+         rDISTS(i)=zero
+      enddo
+c     rMM_MAX=zero
+C     
+      NXT = IBTYP.EQ.1
+      NEXT  = -1
+      kount = -1
+c
+c     We first calculate the electron contributions.
+C
+c     First shell loop.
+c
+      DO II=1,NSHELL
+         Iatom=KATOM(II)
+         XI=C(1,iatom)
+         YI=C(2,iatom)
+         ZI=C(3,iatom)
+         I1=KSTART(II)
+         I2=I1+KNG(II)-1
+c        MINI=KMIN(II)
+c        MAXI=KMAX(II)
+c        LIT=KTYPE(II)
+c        ILOC=KLOC(II)
+C
+C        SECOND SHELL LOOP.
+C
+         DO JJ=1,II
+           if(goparr) then
+              kount=kount+1
+              if(nxt) then
+                 IF(kount.GT.NEXT) CALL DDI_DLBNEXT(NEXT)
+                 if(NEXT.ne.kount) goto 700
+              else
+                 if(MOD(kount,NPROC).NE.me) goto 700
+              endif
+            endif
+            Jatom=KATOM(JJ)
+            XJ=C(1,Jatom)
+            YJ=C(2,Jatom)
+            ZJ=C(3,Jatom)
+            J1=KSTART(JJ)
+            J2=J1+KNG(JJ)-1
+c           MINJ=KMIN(JJ)
+c           MAXJ=KMAX(JJ)
+c           LJT=KTYPE(JJ)
+c           JLOC=KLOC(JJ)
+c           RR=(XI-XJ)**2+(YI-YJ)**2+(ZI-ZJ)**2
+            IANDJ=II.EQ.JJ
+c
+C           Loop over primitive Gaussians
+C
+C           I PRIMITIVE.
+C
+            JGMAX=J2
+            DO IG=I1,I2
+               AI=EX(IG)
+c              ARRI=AI*RR
+               AXI=AI*XI
+               AYI=AI*YI
+               AZI=AI*ZI
+c              CSI=CS(IG)
+c              CPI=CP(IG)
+c              CDI=CD(IG)
+c              CFI=CF(IG)
+c
+C              J PRIMITIVE
+c
+               IF(IANDJ) JGMAX=IG
+               DO JG=J1,JGMAX
+c
+                  AJ=EX(JG)
+                  AA=AI+AJ
+c                 DUM=AJ*ARRI/AA
+c                  IF(DUM.GT.TOL) GO TO 6000
+c
+c                 The unique center of the primitive Gaussian product
+c
+                  pctr(1)=(AXI+AJ*XJ)/AA
+                  pctr(2)=(AYI+AJ*YJ)/AA
+                  pctr(3)=(AZI+AJ*ZJ)/AA
+c
+C                 The input argument ctr should contain the center of 
+c                 fragment.
+c
+C                 Calcualte the translational vector, Pnt.
+c                 Note: CTR -> center of fragment.
+c                 pctr -> the unique center of product of primitive 
+c                 Gaussian.
+c
+c                 Note that we will put the generated multipole to the closest center!
+c                 We also collect information for optimum radius of centers.
+                  call getnear(1,pctr,ctr(1,1),ncentm,idx,rDIST)
+                  p_counter(idx)=p_counter(idx)+one
+c                 rDIST : The distance between the center(idx) and 
+c                         primitive center(pctr).
+c                 rMM : basis set distribution width
+                  rDISTS(idx)=rDISTS(idx)+rDIST
+                  rMM=BEX/SQRT(AA)
+                  rMMS(idx)=rMMS(idx)+rMM
+                  if (rMM.gt.rMAX(idx)) rMAX(idx)=rMM
+c              J primitive
+               ENDDO
+c           I primitive
+            enddo
+  700    continue 
+c        J shell
+         enddo
+c     I shell
+      enddo
+      IF (GOPARR.and.nxt) CALL DDI_DLBRESET
+c
+c     now comes the clumsy part of finding the max radius values across all nodes.
+c
+      if(goparr) then
+        CALL DDI_GSUMF(2414,p_counter,ncentm)
+        CALL DDI_GSUMF(2414,rMMS,ncentm)
+        CALL DDI_GSUMF(2414,rDISTS,ncentm)
+        CALL VALFM(LOADFM)
+        lrad=LOADFM+1
+        last=lrad+nproc*2
+        NEED = LAST- LOADFM -1
+        CALL GETFM(NEED)
+c       We may not use rMAX and ctr for the moment.
+        do i=2,int(ctr(1,ncentm))+1
+          call vclr(xx(lrad),1,nproc*2)
+          xx(lrad+me)=ctr(4,i)
+          xx(lrad+nproc+me)=rMAX(i)
+          CALL DDI_GSUMF(2414,xx(lrad),nproc*2)
+          ctr(4,i)=xx(lrad+idamax(nproc,xx(lrad),1)-1)
+          rMAX(i)=xx(lrad+nproc+idamax(nproc,xx(lrad+nproc),1)-1)
+        enddo
+        CALL RETFM(NEED)
+      endif 
+c
+c     Before returning we should set optimum radius of multi-centers.
+c     We only change radius on the basis of averaged rDIST and rMM.
+c
+c     Factor : the weight factor for diffuse functions.
+      Factor = 0
+      do i=2,int(ctr(1,ncentm))+1
+c        By dividing p_counter(i), we assume that we are using the average
+c        radius.
+         rMM=(one-factor)*rMMS(i)/p_counter(i)+Factor*rMAX(i)
+         rDIST=rDISTS(i)/p_counter(i)
+c         if ((rMM+rDIST).gt.ctr(4,i)) ctr(4,i)=(ctr(4,i)+rMM+rdist)/two   
+          ctr(4,i)=(rMM+rDIST)/two
+      enddo
+C
+      RETURN
+      END
+C*MODULE FMOmm  *DECK getnear
+      subroutine getnear(imode,vref,crfrg,ncentm,idx,rdiff)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       dimension vref(3),crfrg(4,ncentm)
 c     This routine finds the closest center from current position within a 
 c     fragment.
-c     This also sets the geometric radius of centers of fragments.
-c      idx=0
-c      do j=1,3
-c         rdiff=rdiff+(vref(j)-crfrg(j,idx))**2
-c      enddo   
-c      write(6,*) '1 GETNEAR: idx, rdiff',idx,sqrt(rdiff)
+c     If imode=1, this also sets the geometric radius of centers of fragments.
+c     Otherwise, it will return idx and rdiff.
+c     idx : the index of the closest center from vref.
+c     rdiff : square distance between vref and crfrg
+c
       rdiff=1.0d+99
- 
-chc      write(6,*) 'GETNEAR: rdiff',idx,rdiff
-c      write(6,*) 'GETNEAR: crfrg'
-c      do i=1,4
-c      write(6,*) 'i, crfrg',i,crfrg(i,1)
-c      enddo
       do i=2,int(crfrg(1,ncentm))+1
          diff=0.0d+00
          do j=1,3
@@ -3906,14 +4859,280 @@ c      enddo
          if (diff.lt.rdiff) then
             idx=i
             rdiff=diff
-c      write(6,*) '2 GETNEAR: -->  idx, rdiff',idx,sqrt(rdiff)
+c           write(6,*) '2 GETNEAR: -->  idx, rdiff',idx,sqrt(rdiff)
          endif
       enddo
 c     This the place we set the geometric radius of centers of fragments.
+      if (imode.eq.1) then
       rdiff=sqrt(rdiff)
 cc      write(6,*) '3 GETNEAR: idx, rdiff, crfrg(4,idx)',idx,rdiff,
 cc     *crfrg(4,idx)
       if (rdiff.gt.crfrg(4,idx)) crfrg(4,idx)=rdiff
+      endif
 c
       return
-      end
+      END
+C*MODULE FMOMM  *DECK MxNPs
+C>
+C>     @brief the largest angluar momentum 
+C>
+C>     @details Calculate the largest angluar momentum for multipoles. 
+c>     This routine determines the largest l (NPs)  for generaring YlmI.
+c>     NPst also contains the same NPs.
+c>     Currently it is implemented only for single center.
+C>
+C>     @author Cheol Ho Choi
+C>
+C>     @param crfrg : center of fragment
+C>
+C>     @param nps : angular momentum number
+C>
+C>     @param npst : current angular momentum number
+C>
+      subroutine MxNPs(crfrg,nps,npst)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      LOGICAL QOPS,QFMM
+      parameter(ONE=1.0D+00,two=2.0d+00)
+      COMMON /QMFM  / SIZE,EPS,DPGD,QFMM,NP,NS,IWS,NPGP,MPMTHD,NUMRD,  
+     *                ITERMS,QOPS,ISCUT
+      common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody   
+      common /fmoopt/ espsca(9),RESPAP(2),rESPPC(2),rESDIM,restri(4),
+     *                rcorsd,respct,convfg,cnvdmp,coroff,rflmo(4),
+     *                orshft,orshft2,cnvafo,ascreen(4),IXESP,mxitfg,
+     *                nguess,NBSSE,modorb,modpar,irststp,irstlay,nprfmo,
+     *                nfmopal,modprp,maxl1c,ipieda,modgrd,modesp,ivmul,
+     *                modlmo,nopden,mofock,modfd,modfmm,ncentm   
+      dimension crfrg(4,ncentm,nfg)
+c
+      Nps=0
+      criterion=log10(one/(two*(iws+one)))
+      do i=1,nfg
+         npst=int((log10((two*iws+one)*EPS*crfrg(4,1,i))/criterion)-one)
+         if (npst.gt.nps) nps=npst   
+      enddo
+      npst=nps
+c
+      return
+      END
+C*MODULE fmomm  *DECK combcent
+C>
+C>     @brief combine centers 
+C>
+C>     @details Combine multipole centers. 
+c>     This routine combines the multi-centers of I and J or I, J and K fragments.
+c>     At least, I and J should not be zero.
+c>     This subroutine returns the combined and expended centers in ctrijk and 
+c>     their number in ijkctr. It is noted that additional points will be added
+c>     for the inter-fragment regions.
+C>
+C>     @author Cheol Ho Choi
+C>
+C>     @param ncentm : number of points of a given fragment
+C>
+C>     @param crfrg : center of fragment
+C>
+C>     @param i : fragment I
+C>
+C>     @param J : fragment J
+C>
+C>     @param k : fragment K
+C>
+C>     @param ctrijk : center of IJK
+C>
+C>     @param ijkctr : number of IJK center
+C>
+      SUBROUTINE combcent(ncentm,crfrg,i,j,k,ctrijk,ijkctr)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      Parameter (MXATM=2000,two=2.0D+00,Three=3.0D+00)
+      Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody   
+c     COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      dimension crfrg(4,ncentm,nfg),ctrijk(4,mxatm)
+c
+      Li=0
+      Lj=0
+      Lk=0
+      call vclr(ctrijk,1,4*mxatm)
+      if (i.eq.0) call abrt
+      Li=int(crfrg(1,ncentm,i))
+      if (j.eq.0) call abrt
+      if (j.ne.0) Lj=int(crfrg(1,ncentm,j))
+      if (k.ne.0) Lk=int(crfrg(1,ncentm,k))
+c
+      do ii=1,Li
+         do jj=1,4
+            ctrijk(jj,ii+1)=crfrg(jj,ii+1,i)
+         enddo
+      enddo
+c     We add 1 to ijkctr for the first element.
+      ijkctr=1+Li
+c
+c     dimer IJ or trimer IJK.
+      if (j.ne.0) then
+         do ii=1,Lj
+            do jj=1,4
+               ctrijk(jj,ii+ijkctr)=crfrg(jj,ii+1,j)
+            enddo
+         enddo
+         ijkctr=ijkctr+Lj
+c        We add centers between the I and J fragments.
+c        Note that the radius of added centers is set to
+c        max(crfrg(4,1,i),crfrg(4,1,j)).
+         call addcent(ncentm,crfrg,i,j,ctrijk,ijkctr)
+      endif
+chc
+c      write(IW,*) 'combcenter',i,j,k
+c      write(IW,*) 'ijkctr =',ijkctr
+c      do ii=1,ijkctr
+c         write(IW,1000) ctrijk(1,ii),ctrijk(2,ii),ctrijk(3,ii)
+c      enddo  
+c      stop
+chc
+c
+c     trimer IJK.
+      if (k.ne.0) then
+         do ii=1,Lk
+            do jj=1,4
+               ctrijk(jj,ii+ijkctr)=crfrg(jj,ii+1,k)
+            enddo
+         enddo
+         ijkctr=ijkctr+Lk
+c        Centers between the I and J fragments are already added.
+c
+c        We add centers between the I and K fragments.
+         call addcent(ncentm,crfrg,i,k,ctrijk,ijkctr)
+c        We add centers between the J and K fragments.
+         call addcent(ncentm,crfrg,j,k,ctrijk,ijkctr)
+      endif
+c     We add 1 to ijkctr for the last element.
+      ijkctr=ijkctr+1
+      ctrijk(1,ijkctr)=ijkctr-2
+c     We should set the overall center and radius.
+      if (k.eq.0) then
+         do ii=1,3
+            ctrijk(ii,1)=(crfrg(ii,1,i)+crfrg(ii,1,j))/two
+         enddo
+         ctrijk(4,1)=max(crfrg(4,1,i),crfrg(4,1,j))
+      else
+         do ii=1,3
+            ctrijk(ii,1)=(crfrg(ii,1,i)+crfrg(ii,1,j)
+     *                  +crfrg(ii,1,k))/three
+         enddo
+         ctrijk(4,1)=max(crfrg(4,1,i),crfrg(4,1,j))
+         ctrijk(4,1)=max(crfrg(4,1,k),ctrijk(4,1))
+      endif
+c
+      RETURN
+c1000 format(1x,3F10.5)
+      END
+C*MODULE fmomm  *DECK addcent
+C>
+C>     @brief add centers 
+C>
+C>     @details Add multipole centers. 
+c>     This routine add the multi-centers of I and J fragments.
+c>     It is assumed that ctrIJK already contains the indivisual multi-centers
+c>     of I, J and K fragments. Therefore this routine only adds the multi-
+c>     centers between the I and J.
+c>     In the case of IJK trimer ESP runs, this routine should be called 
+c>     three times with the arguments of (I,J), (I,K) and (J,K) for the
+c>     input arguments of i and j.
+C>
+C>     @author Cheol Ho Choi
+C>
+C>     @param ncentm : number of center of a given fragment:
+C>
+C>     @param crfrg : center of fragment
+C>
+C>     @param i : fragment I
+C>
+C>     @param j : fragment J
+C>
+C>     @param ctrijk : IJK center
+C>
+C>     @param ijkctr : ijk center idx
+C>
+      SUBROUTINE addcent(ncentm,crfrg,i,j,ctrijk,ijkctr)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      Parameter (MXATM=2000,MXPLATE=10,zero=0.0d+00,two=2.0D+00)
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody   
+      dimension crfrg(4,ncentm,nfg),ctrijk(4,mxatm),t(3),rCnt(3),
+     *          rPnt(3),rPPnt(3)
+c
+c     The shortest distance between I and J 
+c      rIJ=fmodist(i,0,0,j)
+c     The max(r) of multicenter I and J
+      rMax=max(crfrg(4,1,i),crfrg(4,1,j))
+c     The center to center distance between I and J
+c     t=crfrg(j)-crfrg(i)
+      call vsub(crfrg(1,1,i),1,crfrg(1,1,j),1,t,1,3)
+      rCC=sqrt(t(1)*t(1)+t(2)*t(2)+t(3)*t(3))
+      do II=1,3
+         t(II)=t(II)/rCC
+      enddo
+c     R : The single center radius of max(I,J)
+c      R=abs(rCC-two*rMax)/two
+c     Iratio : The number of planes inserted between I and J.
+c      Iratio=int(floor(rIJ/rMax))
+      Iratio=int(floor((rCC-two*rMax)/rMax))
+      If (Iratio.eq.0) Iratio=1
+      if(Iratio.gt.mxplate) then
+        if(maswrk) write(iw,*) 'Increase mxplate in the code.'
+        call abrt
+      endif
+c
+c     From now on, we'll generate additional 4 centers for each
+c     planes between I and J.
+c
+      do II=1,Iratio
+c        Generate center position vector (rCnt) of plane.
+c        call vadd(crfrg(1,1,II),1,t*(R+rMax*II),1,rCnt,1,3)
+         do 100 m=1,3
+  100      rCnt(m)=crfrg(m,1,I)+t(m)*(rMax+rMax*II)
+c  100      rCnt(m)=crfrg(m,1,II)+t(m)*(R+rMax*II)
+c        The perpendicular directional vector (rPnt) to rCnt         
+         rPnt(1)=-rCnt(2)
+         rPnt(2)=rCnt(1)
+         rPnt(3)=zero
+         rPntN=sqrt(rPnt(1)*rPnt(1)+rPnt(2)*rPnt(2))
+         do KK=1,3
+            rPnt(KK)=rPnt(KK)/rPntN
+         enddo
+c        The perpendicular directional vector (rPPnt) to rCnt and t
+         rPPnt(1)=rPnt(2)*t(3)-rPnt(3)*t(2)
+         rPPnt(2)=rPnt(3)*t(1)-rPnt(1)*t(3)
+         rPPnt(3)=rPnt(1)*t(2)-rPnt(2)*t(1)
+         rPPntN=sqrt(rPPnt(1)*rPPnt(1)+rPPnt(2)*rPPnt(2)+
+     *               rPPnt(3)*rPPnt(3))
+         do KK=1,3
+            rPPnt(KK)=rPPnt(KK)/rPPntN
+         enddo
+c        Using rPnt and rPPnt, now we generate 4 centers.
+         ijkctr=ijkctr+1
+c        call vadd(rCnt,1,rPnt*rMax*2,1,ctrIJK(1,ijkctr),1,3)
+         do 200 m=1,3
+  200      ctrIJK(m,ijkctr)=rCnt(m)+rPnt(m)*rMax
+         ctrIJK(4,ijkctr)=rMax
+         ijkctr=ijkctr+1
+c        call vadd(rCnt,1,-rPnt*rMax*2,1,ctrIJK(1,ijkctr),1,3)
+         do 300 m=1,3
+  300      ctrIJK(m,ijkctr)=rCnt(m)-rPnt(m)*rMax
+         ctrIJK(4,ijkctr)=rMax
+         ijkctr=ijkctr+1
+c        call vadd(rCnt,1,rPPnt*rMax*2,1,ctrIJK(1,ijkctr),1,3)
+         do 400 m=1,3
+  400      ctrIJK(m,ijkctr)=rCnt(m)+rPPnt(m)*rMax
+         ctrIJK(4,ijkctr)=rMax
+         ijkctr=ijkctr+1
+c        call vadd(rCnt,1,-rPPnt*rMax*2,1,ctrIJK(1,ijkctr),1,3)
+         do 500 m=1,3
+  500      ctrIJK(m,ijkctr)=rCnt(m)-rPPnt(m)*rMax
+         ctrIJK(4,ijkctr)=rMax
+      enddo
+c
+c     Note that the radius of newly added centers were set to rMax
+c
+      RETURN
+      END

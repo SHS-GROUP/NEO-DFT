@@ -1,5 +1,17 @@
+C 15 Aug 13 - CHC - Add RESTART file for MD
+C 12 Aug 13 - THC - Add the QM boundary, DROFF(2) cf) DROFF(1) is the 
+C                   total boundary
 C  6 Aug 13 - MWS - avoid divisions by zero box lengths
+c 21 May 13 - TN  - minor changes for SSBP without EFP
+C 28 Dec 12 - CHC - Inter center of mass coordinate
+C 14 Dec 12 - CHC,DGF - CCMS option added, parallel umbrella samping and
+C                   other minor fixes
 C 19 Oct 12 - MWS - synchronize FRGINF common
+C 05 Sep 12 - THC - Add the flexible atomic pair umbrella sampling to the 
+C                   asymmetric coord
+C 04 Sep 12 - THC - Add the flexible atomic pair umbrella sampling to the 
+C                   normal constrain
+C 22 Aug 12 - CHC - Bug of torsion fixed
 C 27 Jul 12 - CHC - Asymmetric umbrella sampling error and others fixed
 C  3 Jul 12 - CHC - Fixed REMD(F44) file open for non REMD run
 C 16 Jun 12 - JJ  - Added missing potential energy in cstssbp
@@ -31,6 +43,13 @@ C 19 Sep 05 - HMN,IA - implement EFP minimum image convention MD
 C
 C*MODULE MDEFP   *DECK MDX
       SUBROUTINE MDX
+C>
+C>     @brief Main MD driver
+C>
+C>     @details Setup and perform MD calculations
+C>
+C>     @author unknown 
+C>
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
@@ -45,7 +64,7 @@ C
       LOGICAL READ,NVT,MBT,MBR,QRAND,RSRAND,RSTEMP,PBCOUT,PROD,
      *        PBCWRI,IWATER,LVELSET,AXEQ,NVTP,OK,
      *        PRESSR,DIFUSN,DIPOLEP,HTVAP,COORDN,RRELAX,HBLFE,
-     *        GOPARR,DSKWRK,MASWRK,ssbp,usamp
+     *        GOPARR,DSKWRK,MASWRK,ssbp,usamp,ccms
       LOGICAL LSCZVFLG
       logical ISGDDI,PAROUT,INITGDDI,wasgddi
 C
@@ -66,11 +85,12 @@ C
      *                QX2(MXFRG),QY2(MXFRG),QZ2(MXFRG),
      *                VXQM(MXATM), VYQM(MXATM), VZQM(MXATM)
       COMMON /CONVMD/ AU2KCAL, EK2KCAL, AU2ANG, AU2SEC, AU2AMU, EK2BAR
-      common /cstpot/ DROFF,SFORCE,uforce(10),rzero(10),dtemp,
+      common /cstpot/ DROFF(2),SFORCE,uforce(10),rzero(10),dtemp,
      *                rzeroC(3,MXATM),Tmin,uV,batht(NRepca),mdint,
      *                ipair(50),iustyp,ncst,nrand,nvtoff,
      *                jevery,kevery,levery,mremd,
-     *                rstemp,rsrand,prod,SSBP,Usamp
+     *                rstemp,rsrand,prod,SSBP,ccms,Usamp,IndexOH(50),
+     *                movemm(200),nefpmv,cforce,tmass(3)
       COMMON /EFPPBC/ XBOX,YBOX,ZBOX,XCUT,YCUT,ZCUT,RCUT,
      *                SWR1,SWR2,ISWF
       COMMON /FMCOM / XX(1)
@@ -94,7 +114,7 @@ C
      *                LSTONEP,LMAPSU,LFRGMUL,LCLMO,LIALMO,LINDLMO,
      *                LATCLMO,LLMOBDF,LFGFLMO,LNFGLMO,LLFGLMO,LPFGLMO,
      *                LPOPDMAT,LIDMPNT,LIDDPNT,LIVMPNT,LIACTFG,lcrfrg,
-     *                lzlmfrgv
+     *                lzlmfrgv,lYlmfrgv
       COMMON /FRAGMT/ XCRD(50,MXFRG),YCRD(50,MXFRG),ZCRD(50,MXFRG),
      *                PTNAM(50,MXFRG),FRGNAM(MXFRG)
       COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
@@ -130,16 +150,17 @@ C
      *                AXEQ, INFO_AXEQ(2),NFRG_RDF(MAXRDF,2)
       COMMON /NOSEHO/ GNH(2),VNH(2),XNH(2),QNH(2),EKT0,GFREE0,NVTNH
       COMMON /SCZVEC/ IDFZVEC,LIPTZVEC,LIPTLG
+      COMMON /MASSES/ ZMASS(MXATM)
 c
       dimension Repca_E(NRepca), Repca_T(NRepca),MyAccept(NRepca),
      *          MyTPos(NRepca)
-CHC
+CHC   For REMD
       Integer ddi_world,ddi_group
       Parameter(ddi_world=0,ddi_group=1)
-CHC
+C
 C
 C         set up $MD namelist simulation
-      PARAMETER (NNAM=39)
+      PARAMETER (NNAM=43)
       DIMENSION QNAM(NNAM),KQNAM(NNAM)
       DATA MD/8HMD      /
       DATA QNAM /8HMDINT   ,8HNSTEPS  ,8HTTOTAL  ,8HBATHT   ,
@@ -151,7 +172,8 @@ C         set up $MD namelist simulation
      *           8HQUAT    ,8HQUAT1D  ,8HQUAT2D  ,8HNPROP   ,
      *           8HNVTP    ,8HSSBP    ,8HDROFF   ,8HSFORCE  ,
      *           8HUSAMP   ,8HIPAIR   ,8HUFORCE  ,8HRZERO   ,
-     *           8HIUSTYP  ,8HLEVERY  ,8HMREMD   /
+     *           8HIUSTYP  ,8HLEVERY  ,8HMREMD   ,8HINDEXOH ,
+     *           8HMOVEMM  ,8HCCMS    ,8HCFORCE  /
       DATA KQNAM/5, 1, 3, 1003,
      *           3, 3, 1, 1,
      *           0, 3, 0, 1,
@@ -159,9 +181,10 @@ C         set up $MD namelist simulation
      *           0, 0, 1, 1,
      *           -3, -3, -3, -3,
      *           -3, -3, -3,  1,
-     *           0, 0, 3, 3,
+     *           0, 0, 103, 3,
      *           0, 501, 103, 103,
-     *           1, 1, 1/
+     *           1, 1, 1, 501,
+     *           2001, 0, 3/
 C
       DATA EFP,ABINIT /8HEFP     ,8HABINIT  /
       DATA FROG,VVERL,VVERLET /8HFROG    ,8HVVERL   ,8HVVERLET /
@@ -173,8 +196,12 @@ C         Heather Netzloff, up to 2005 when included in GAMESS
 C             Soohaeng Yoo, 2007-2008
 C    (DRIVER CODE BORROWED HEAVILY FROM GRANT MERRILL)
 C   property calculations due to Lyuda Slipchenko and Jon Mullin
-C         REMD Extention by Cheol Ho Choi, 2012
+C   REMD Extension by Cheol Ho Choi and Dmitri Fedorov, 2012
 C**********************************************************************
+      if(isgddi.and.nfg.eq.0) call gddi_scope(ddi_group)
+c     For FMO, parallelisation is done elsewhere.
+      CALL DDI_OUTPUT(0) 
+c     Stop voluminous DDI messages.
 C
 c     Initial REMD setup
 c
@@ -219,12 +246,6 @@ C         initialize some conversion factors
 C
       CALL MDCONV
 C
-C     open the trajectory file, this contains the md trajectory basics:
-C        coordinates, velocities, energies
-C
-      IPTRAJ = 4
-      CALL SEQOPN( IPTRAJ, 'TRAJECT', 'NEW', .FALSE., 'FORMATTED')
-C
 C  Insert another parameter into input: septol = separation
 C  tolerance between atoms of different molecules--used in
 C  polarization and exchange repulsion calculations.
@@ -247,7 +268,7 @@ C       bath temperature, for possible NVT (also used by MBR/MBT flag)
 c       Now for REMD, we should have multiple temperatures.
 c
 chc
-      do i=1,100
+      do i=1,NRepca
          batht(i)=300.00d+00
       enddo
 c      BATHT = 300.00D+00
@@ -277,13 +298,21 @@ C       these two relate to RDF data collection
       PROD    = .FALSE.
       DELR = 0.02D+00
 c
-c     SSBP Option
+c     SSBP and CCMS Option
 c     SSBP stands for Spherical Solvent Boundary Potential and the SSBP
 c     potential corresponds to a constant temperature and constant pressure
 c     system.
+c     CCMS stands for constraint of center of mass (QM). It is used to keep
+c     QM atoms near the center of Spherical Solvent Boundary Potential
       ssbp=.false.
-      droff=1.0D+10
-      sforce=0
+      ccms=.false.
+      droff(1)=1.0D+10
+      droff(2)=1.0D+10
+      sforce=zero
+      cforce=zero
+      tmass(1)=zero
+      tmass(2)=zero
+      tmass(3)=zero
 c     Umbrella sampling options.
       usamp=.false.
       iustyp=0
@@ -296,6 +325,11 @@ c     Umbrella sampling options.
          ipair(5*i)=0
          rzero(i)=0
       enddo
+c     Note that we only allow upto 50 movemm EFP/MM
+      do i=1,50
+         INDEXOH(i)=0
+         movemm(i)=0
+      enddo     
 C
 C       zero out initial velocity data items, set their dimensions
       IBASE=20
@@ -328,7 +362,8 @@ C
      *            READ,MBT,MBR,QRAND,  PROD,PBCOUT,NVTOFF,NVTNH,
      *            TVELQM,TVEL,RMOM,RVEL,QUAT,QUAT1D,QUAT2D,
      *            NPROP,NVTP,SSBP,DROFF,sforce,usamp,ipair,uforce,
-     *            rzero,iustyp,LEVERY,mremd, 0,0,0,0,0,
+     *            rzero,iustyp,LEVERY,mremd, indexOH,movemm,CCMS,
+     *            cforce,0, 
      *            0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0)
       IF ( IRET .EQ. 1 .OR. IRET .EQ. 2 ) THEN
          IF(MASWRK) WRITE(IW,*) 'ERROR READING $MD GROUP'
@@ -344,18 +379,36 @@ C
             NVTNH=0
          END IF
       END IF
+C
+C     open the trajectory file, this contains the md trajectory basics:
+C        coordinates, velocities, energies
+C
+      if (MREMD.EQ.0) then
+         IPTRAJ = 4
+         CALL SEQOPN( IPTRAJ, 'TRAJECT', 'NEW', .FALSE., 'FORMATTED')
+         IPRST=35
+         CALL SEQOPN( IPRST, 'RESTART', 'NEW', .FALSE., 'FORMATTED')
+      ENDIF
+C
 c
-c     For REMD
+c     For REMD, open files in the group scope.
 c     We use GDDI for REMD. Therefore, if ngroups.le.1, we do
 c     regular MD.
 c     Also current REMD is only for NVT runs,
 c     so IF NVTNH is not 2, abort.
 c     Also we override JEVERY, if JEVERY.gt.LEVERY.
 c
-      if(isgddi.and.mremd.ne.0) call gddi_scope(ddi_group)
+      if(mremd.ne.0.and.nfg.ne.0) call abrt
+c
+c     if(isgddi.and.(mremd.ne.0.or.usamp)) call gddi_scope(ddi_group)
       Tmin=batht(1)
       if(isgddi.and.mremd.ne.0) then
 c
+         IPTRAJ = 4
+         CALL SEQOPN( IPTRAJ, 'TRAJECT', 'NEW', .FALSE., 'FORMATTED')
+c        RESTART FILE
+         IPRST=35
+         CALL SEQOPN( IPRST, 'RESTART', 'NEW', .FALSE., 'FORMATTED')
 c        REMD FILE
          IPREMD=44
          CALL SEQOPN( IPREMD, 'REMD', 'NEW', .FALSE., 'FORMATTED')
@@ -431,12 +484,13 @@ C
 C        *** output $md variable values ***
 C
       IF (MASWRK) THEN
+         if (isgddi.and.usamp) WRITE(IW,6005) mygroup
          if (isgddi.and.mremd.ne.0) then
          WRITE(IW,6100) MDINT, NVTNH, DT, NSTEPS, TTOTAL,
      *                  JEVERY, KEVERY,LEVERY,
      *                  READ, MBT, MBR, QRAND, PROD, DELR, PBCOUT,
-     *                  NVTOFF, NPROP,ssbp,sforce,droff,usamp,
-     *                  uforce(1),uforce(2),uforce(3),uforce(4),
+     *         NVTOFF, NPROP,ssbp,sforce,droff(1),droff(2),ccms,cforce,
+     *                  usamp,uforce(1),uforce(2),uforce(3),uforce(4),
      *                  iustyp,rzero(1),rzero(2),rzero(3),rzero(4)
          WRITE(IW,6101)
          do i=1,ngroups
@@ -449,8 +503,8 @@ C
          WRITE(IW,6000) MDINT, NVTNH, DT, NSTEPS, TTOTAL, BATHTmp,
      *                  JEVERY, KEVERY,
      *                  READ, MBT, MBR, QRAND, PROD, DELR, PBCOUT,
-     *                  NVTOFF, NPROP,ssbp,sforce,droff,usamp,
-     *                  uforce(1),uforce(2),uforce(3),uforce(4),
+     *         NVTOFF, NPROP,ssbp,sforce,droff(1),droff(2),ccms,cforce,
+     *                  usamp,uforce(1),uforce(2),uforce(3),uforce(4),
      *                  iustyp,rzero(1),rzero(2),rzero(3),rzero(4)
          endif
          IF(RSTEMP) WRITE(IW,6001) RSTEMP, DTEMP
@@ -458,13 +512,9 @@ C
          IF(.NOT.RSTEMP .AND. .NOT.RSRAND) WRITE(IW,6003)
          WRITE(IW,6010) NAT, NFRG
       ENDIF
-c
-      if (ssbp) then
-c        force constant : kcal/mol-A^2 to Eh/Bohr^2, distance : Angstrom to Bohr
-         droff=droff/au2ang
-         sforce=sforce*au2ang**2/au2kcal
-      endif
-      if (usamp) call initusmp
+c     
+c     Initializations for umbrella sampling, SSBP or CCMS.
+      if (usamp.or.ssbp.or.ccms) call initconstmd
 C
       CALL MDNOSEINIT
 C
@@ -630,16 +680,18 @@ C
       IF(MASWRK) THEN
          WRITE(IW,7010) E
          WRITE(IW,7020) E*AU2KCAL
-         if ((isgddi.and.mremd.ne.0).and.(bathtmp.eq.tmin))
-     *       CALL MDPRTCORVEL(0,TTOTAL,INTMD,ipremd)
-         CALL MDPRTCORVEL(0,TTOTAL,INTMD,iptraj)
-         IF(TYPMD.EQ.1) THEN
-            CALL MDRPREF(0,TTOTAL,JEVERY)
-         ELSE
-            CALL MDRPRAB(0,TTOTAL,JEVERY)
-         ENDIF
-         CALL TIMIT(1)
       ENDIF
+      if ((isgddi.and.mremd.ne.0).and.(bathtmp.eq.tmin))
+     *       CALL MDPRTCORVEL(0,TTOTAL,INTMD,ipremd)
+      CALL MDPRTCORVEL(0,TTOTAL,INTMD,iptraj)
+      if (maswrk) CALL SEQREW(IPRST)
+      CALL MDPRTCORVEL(0,TTOTAL,INTMD,iprst)
+      IF(TYPMD.EQ.1) THEN
+            CALL MDRPREF(0,TTOTAL,JEVERY)
+      ELSE
+            CALL MDRPRAB(0,TTOTAL,JEVERY)
+      ENDIF
+      CALL TIMIT(1)
 C
       LT = 1
       JT = 1
@@ -706,7 +758,7 @@ c----------------------------------------------------------------------
 c                  QM/EFP-REMD(Replica-Exchange MD)
 c                        by Choi and Fedorov
 c----------------------------------------------------------------------
-c     If (ngroups.gt.1) we are doing REMD.
+c     If (ngroups.gt.1.and.mremd.ne.0) we are doing REMD.
 c     If it is not, we set LEVERY=NSTEPS.
 c     If (LEVERY.eq.NSTEPS), we don't do REMD.
 c     So if you want to turn on the REMD, you should have at least two groups
@@ -781,19 +833,21 @@ c
 c
 c        Print out the exchange results.
 c
-         write(iw,8000) IexchCnt
-         NExch=0
-         do i=1,ngroups
-           if (MyAccept(i).ne.0) then
-              Write(iw,8100) i,Repca_E(i),Repca_T(i),
-     *          Repca_T(MyAccept(i))
-           elseif (MyAccept(i).eq.0) then
-              Write(iw,8100) i,Repca_E(i),Repca_T(i),
-     *          Repca_T(i)
-           endif
-           if (Myaccept(i).ne.0) NExch=NExch+1
-         enddo
-         write(IW,8110) real(NExch)/real(ngroups)*100
+         if(maswrk) then
+           write(iw,8000) IexchCnt
+           NExch=0
+           do i=1,ngroups
+             if (MyAccept(i).ne.0) then 
+               Write(iw,8100) i,Repca_E(i),Repca_T(i),
+     *                        Repca_T(MyAccept(i))
+             else if (MyAccept(i).eq.0) then 
+               Write(iw,8100) i,Repca_E(i),Repca_T(i),
+     *                        Repca_T(i)
+             endif
+             if (Myaccept(i).ne.0) NExch=NExch+1
+           enddo
+           write(IW,8110) real(NExch)/real(ngroups)*100
+         endif
 c
 c        Now MyAccept has the exchange information!
 c        We go back to group now.
@@ -866,16 +920,18 @@ C        ***    output g(r)s         ***
 C
 c
         IF (KT.EQ.KEVERY) THEN
-C        output md configurations, velocities, grad, torq, com
+C          output md configurations, velocities, grad, torq, com
            if ((isgddi.and.mremd.ne.0).and.(bathtmp.eq.tmin))
      *         CALL MDPRTCORVEL(ISTEP,TTOTAL,INTMD,ipremd)
            CALL MDPRTCORVEL(ISTEP,TTOTAL,INTMD,iptraj)
+           if (maswrk) CALL SEQREW(IPRST)
+           CALL MDPRTCORVEL(0,TTOTAL,INTMD,iprst)
            IF(PROD) THEN
               IF (IWATER) CALL WRIGR
               IF (NRDF.GT.0) CALL WRIG2GR
               CALL WRICOMGR
-           END IF
-           KT = 0
+            END IF
+            KT = 0
         ENDIF
         KT = KT + 1
 C
@@ -934,7 +990,8 @@ C
 C
       IF(MASWRK) WRITE(IW,9010)
       CALL TIMIT(1)
-      if(isgddi.and.mremd.ne.0) call gddi_scope(ddi_world)
+c     if(isgddi.and.(mremd.ne.0.or.usamp)) call gddi_scope(ddi_world)
+      if(isgddi.and.nfg.eq.0) call gddi_scope(ddi_world)
       RETURN
 C
 C          error messages for input variables
@@ -963,7 +1020,8 @@ C          printing of options selected
      *        5X,'MBT   = ',L8,9X,'MBR   =',L8,9X,'QRAND =',L8/
      *        5X,'PROD  = ',L8,9X,'DELR  =',F8.2,9X,'PBCOUT=',L8/
      *        5X,'NVTOFF= ',I8,9X,'NPROP =',I8/
-     *        5X,'SSBP  = ',L8,9X,'SForce=',F8.2,9X,'DROFF =',F8.2/
+     *        5X,'SSBP  = ',L8,9X,'SForce=',F8.2,9X,'DROFF =',2F8.2/
+     *        5X,'CCMS  = ',L8,9X,'CForce=',F8.2,9X/
      *        5X,'USAMP = ',L8,9X,'UForce=',4F8.2/
      *        5X,'IUSTYP= ',I8,9X,'Rzero =',4F8.2)
  6001 FORMAT(5X,'TEMPERATURE RANGE NVT ENSEMBLE CHOSEN: RSTEMP=',L2,
@@ -971,6 +1029,8 @@ C          printing of options selected
  6002 FORMAT(5X,'RANDOM NVT ENSEMBLE CHOSEN: RSRAND=',L2,
      *          ' EVERY NRAND=',I8,' STEPS')
  6003 FORMAT(5X,'NVE ENSEMBLE CHOSEN')
+ 6005 FORMAT(/5X,'Using GDDI parallelisation of umbrella sampling.',
+     *       /5x,'This simulation is done on group',I8/)
  6010 FORMAT(5X,'THIS MD SIMULATION HAS ',I5,' QM ATOMS, AND',
      *       I5,' EFFECTIVE FRAGMENTS')
  6100 FORMAT(/10X,'$MD INPUT OPTIONS'/10X,17('-')/
@@ -982,7 +1042,8 @@ C          printing of options selected
      *        5X,'MBT   = ',L8,9X,'MBR   =',L8,9X,'QRAND =',L8/
      *        5X,'PROD  = ',L8,9X,'DELR  =',F8.2,9X,'PBCOUT=',L8/
      *        5X,'NVTOFF= ',I8,9X,'NPROP =',I8/
-     *        5X,'SSBP  = ',L8,9X,'SForce=',F8.2,9X,'DROFF =',F8.2/
+     *        5X,'SSBP  = ',L8,9X,'SForce=',F8.2,9X,'DROFF =',2F8.2/
+     *        5X,'CCMS  = ',L8,9X,'CForce=',F8.2,9X/
      *        5X,'USAMP = ',L8,9X,'UForce=',4F8.2/
      *        5X,'IUSTYP= ',I8,9X,'Rzero =',4F8.2/)
  6101 FORMAT(10X,'*** Replica-Exchange MD Stats ***'/
@@ -1033,6 +1094,13 @@ C
       END
 C
 C*MODULE MDEFP   *DECK ENEDAB
+C>
+C>     @brief energy and forces for MD 
+C>
+C>     @details Calculate energy and forces for one step during MD. 
+C>
+C>     @author unknown 
+C>
       SUBROUTINE ENEDAB
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
@@ -1042,7 +1110,7 @@ C
      *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
       PARAMETER (NRepca=100)
       double precision mdint
-      logical ssbp,usamp,rstemp,rsrand,prod
+      logical ccms,ssbp,usamp,rstemp,rsrand,prod
       LOGICAL GOPARR, DSKWRK, MASWRK
       logical ISGDDI,PAROUT,INITGDDI, ISGDDIs,wasgddi,wasgddis
 C
@@ -1063,11 +1131,12 @@ C
      *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
       COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
       COMMON /VIRPR / VIR(3), PRXX, PRYY, PRZZ
-      common /cstpot/ DROFF,SFORCE,uforce(10),rzero(10),dtemp,
+      common /cstpot/ DROFF(2),SFORCE,uforce(10),rzero(10),dtemp,
      *                rzeroC(3,MXATM),Tmin,uV,batht(NRepca),mdint,
      *                ipair(50),iustyp,ncst,nrand,nvtoff,
      *                jevery,kevery,levery,mremd,
-     *                rstemp,rsrand,prod,SSBP,Usamp
+     *                rstemp,rsrand,prod,SSBP,ccms,Usamp,IndexOH(50),
+     *                movemm(200),nefpmv,cforce,tmass(3)
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
       COMMON /EFPOTD/ METHPOL,INABIO,MOVE,nfrag
@@ -1108,6 +1177,17 @@ c     iustyp = 1 : Asymmetric coordinate requires three values in ipair
 c     iustyp = 2 : Angle constrain.
 c     iustyp = 3 : Torsional constrain.
 c     iustyp = 4 : Asymmetric + bond coordinates
+c     iustyp = 5 : Asymmtric coordinate + Restraint
+c          Restraint coordinate for asymmetric coordinates of umbrella 
+c          sampling technique. IPAIR contains three atoms, where atom 1
+c          is moving from atom 2 to 3. Current restraint coordinate forces 
+c          atom 1 to stay in between atom 2 and 3.     
+c     iustyp = 6 : Normal constraining for upto 2 bonds 
+c                  based on the minimal energy atomic pair(OH)
+c     iustyp = 7 : Asymmtric coordinate  
+c                  based on the minimal energy atomic pair(OH)
+c     iustyp = 8 : The center of mass coordinates of two parts
+c     iustyp = 9 : The center of mass coordinates w.r.t. center of sphere(0,0,0)
 c
 c     uV is the harmonic potential energy that should be added to total
 c     potential energy
@@ -1160,59 +1240,94 @@ c          atom 1 is moving from atom 2 to 3.
            uV=uV+uVt
            call rccor(ipair(1),uforce(2),f2f,uVt)
            uV=uV+uVt
+        elseif (iustyp.eq.6) then
+c          Flexible atomic pair + Bond constraints
+           call rearrangeIPAIR
+           do icst=1,ncst
+              call cstbond(ipair(icst*2-1),uforce(icst),
+     *            rzero(icst),f2f,uVt)
+           enddo
+        elseif (iustyp.eq.7) then
+c          Flexible atomic pair + Asymmtric coordinate + Restraint
+c          atom 1 is moving from atom 2 to 3.
+           call rearrangeIPAIR
+           do i=1,ncst
+              call asymcor(ipair(i*3-2),uforce(i),f2f,rzero(i),uVt)
+              uV=uV+uVt 
+           enddo
+        elseif (iustyp.eq.8) then
+           call cstcms(f2f,uVt)
+           uV=uV+uVt
+        elseif (iustyp.eq.9) then
+c          Center of Mass Position
+           call cstpos(f2f,uVt)
+           uV=uV+uVt
         endif
-c     Constraint Potential Energy in kcal/mol
-      uV=uV*au2kcal
-c
+c       Adding Constraint Potential Energy to the total energy
+        E=E+uV
+c       uV=uV*au2kcal
       endif
 C     a.u. ---> K
       VIR(1) = F2F*VIR(1)
       VIR(2) = F2F*VIR(2)
       VIR(3) = F2F*VIR(3)
-      IF(NFRG.EQ.0) RETURN
-C                   ******
-C
-      if (move.ne.0) then
-       DO I = 1, NFRG
-         DEFT(1,I) = F2F * DEFT(1,I)
-         DEFT(2,I) = F2F * DEFT(2,I)
-         DEFT(3,I) = F2F * DEFT(3,I)
-         TORQ(1,I) = F2F * TORQ(1,I)
-         TORQ(2,I) = F2F * TORQ(2,I)
-         TORQ(3,I) = F2F * TORQ(3,I)
-       ENDDO
-      else
-       DO I = 1, NFRG
-         DEFT(1,I) = 0
-         DEFT(2,I) = 0
-         DEFT(3,I) = 0
-         TORQ(1,I) = 0
-         TORQ(2,I) = 0
-         TORQ(3,I) = 0
-       ENDDO
+c
+      IF(NFRG.NE.0) THEN 
+        if (move.ne.0) then
+          DO I = 1, NFRG
+            DEFT(1,I) = F2F * DEFT(1,I)
+            DEFT(2,I) = F2F * DEFT(2,I)
+            DEFT(3,I) = F2F * DEFT(3,I)
+            TORQ(1,I) = F2F * TORQ(1,I)
+            TORQ(2,I) = F2F * TORQ(2,I)
+            TORQ(3,I) = F2F * TORQ(3,I)
+          ENDDO
+        else
+          DO I = 1, NFRG
+            DEFT(1,I) = 0
+            DEFT(2,I) = 0
+            DEFT(3,I) = 0
+            TORQ(1,I) = 0
+            TORQ(2,I) = 0
+            TORQ(3,I) = 0
+          ENDDO
+        endif
       endif
 c
       if (ssbp) call cstssbp(f2f)
+      if (ccms) call cstccms(f2f)
 C
       RETURN
  1500 format(/5x,'Applying Umbrella Sampling Constraints ...')
       END
-C*MODULE MDEFP   *DECK initusmp
-      SUBROUTINE initusmp
+C*MODULE MDEFP   *DECK initconstmd
+C>
+C>     @brief umbrella sampling 
+C>
+C>     @details Initialise umbrella sampling.  
+C>
+C>     @author Cheol Ho Choi 
+C>
+      SUBROUTINE initconstmd
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       parameter(NRepca=100, MXATM=2000)
-      PARAMETER (PI=3.14159265358979323D+00)
-      logical SSBP,usamp,prod,rstemp,rsrand
+      PARAMETER (PI=3.14159265358979323D+00,zero=0.0d+00)
+      logical ccms,ssbp,usamp,rstemp,rsrand,prod
       double precision mdint
 C
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
       COMMON /CONVMD/ AU2KCAL, EK2KCAL, AU2ANG, AU2SEC, AU2AMU, EK2BAR
-      common /cstpot/ DROFF,SFORCE,uforce(10),rzero(10),dtemp,
+      common /cstpot/ DROFF(2),SFORCE,uforce(10),rzero(10),dtemp,
      *                rzeroC(3,MXATM),Tmin,uV,batht(NRepca),mdint,
      *                ipair(50),iustyp,ncst,nrand,nvtoff,
      *                jevery,kevery,levery,mremd,
-     *                rstemp,rsrand,prod,SSBP,Usamp
+     *                rstemp,rsrand,prod,SSBP,ccms,Usamp,IndexOH(50),
+     *                movemm(200),nefpmv,cforce,tmass(3)
+      COMMON /MASSES/ ZMASS(MXATM)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
 c
+      if (usamp) then
       ncst=0
       if (iustyp.eq.0) then
          do while (uforce(ncst+1).gt.0)
@@ -1277,6 +1392,74 @@ c
             rzero(ncst)=rzero(ncst)/au2ang
             uforce(ncst+1)=uforce(ncst+1)*au2ang**2/au2kcal
          enddo
+      elseif (iustyp.eq.6) then
+         do while (uforce(ncst+1).gt.0)
+            ncst=ncst+1
+            if (ncst.gt.10) then
+               WRITE(IW,9020)
+               CALL ABRT
+            endif
+            uforce(ncst)=uforce(ncst)*au2ang**2/au2kcal
+            rzero(ncst)=rzero(ncst)/au2ang
+         enddo
+         IndexOH(1) = ipair(1)
+         IndexOH(2) = ipair(2)
+         IndexOH(3) = ipair(3)
+         IndexOH(4) = ipair(4)
+         IndexOH(5) = ipair(5)
+         IndexOH(6) = ipair(6)
+      elseif (iustyp.eq.7) then
+         do while (ipair(3*(ncst+2)).gt.0)
+            ncst=ncst+1
+            if (ncst.gt.10) then
+               WRITE(IW,9020)
+               CALL ABRT
+            endif
+            uforce(ncst)=uforce(ncst)*au2ang**2/au2kcal
+            rzero(ncst)=rzero(ncst)/au2ang
+         enddo
+         IndexOH(1) = ipair(1)
+         IndexOH(2) = ipair(2)
+         IndexOH(3) = ipair(3)
+         IndexOH(4) = ipair(4)
+         IndexOH(5) = ipair(5)
+         IndexOH(6) = ipair(6)
+      elseif (iustyp.eq.8) then
+         ncst=ncst+1
+         uforce(ncst)=uforce(ncst)*au2ang**2/au2kcal
+         rzero(ncst)=rzero(ncst)/au2ang
+         tmass(2)=zero
+         tmass(3)=zero
+         do i=1,nat
+            if (i.eq.ipair(i)) then
+               tmass(2)=tmass(2)+zmass(i)
+            else
+               tmass(3)=tmass(3)+zmass(i)
+            endif
+         enddo
+      elseif (iustyp.eq.9) then
+         ncst=ncst+1
+         uforce(ncst)=uforce(ncst)*au2ang**2/au2kcal
+         rzero(ncst)=rzero(ncst)/au2ang
+         tmass(2)=zero
+         do i=1,nat
+            tmass(2)=tmass(2)+zmass(i)
+         enddo
+      endif
+      endif
+c
+      if (ssbp) then
+c        force constant : kcal/mol-A^2 to Eh/Bohr^2, distance : Angstrom to Bohr
+         droff(1)=droff(1)/au2ang
+         droff(2)=droff(2)/au2ang
+         sforce=sforce*au2ang**2/au2kcal
+      endif
+      if (ccms) then
+c        force constant : kcal/mol-A^2 to Eh/Bohr^2, distance : Angstrom to Bohr
+         cforce=cforce*au2ang**2/au2kcal
+         do i=1,nat
+            tmass(1)=tmass(1)+zmass(i)
+         enddo
       endif
 c
       RETURN
@@ -1331,7 +1514,7 @@ c
       COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
      *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
-      dimension ipair(*),rij(3,2)
+      dimension ipair(*),rij(3,2), A(3)
 c
       ia1=ipair(1)
       ia2=ipair(2)
@@ -1362,17 +1545,27 @@ c     applying constraints
       ia2=3*(ipair(2)-1)
       ia3=3*(ipair(3)-1)
 c
+      A(1)=eg(ia1+1)/f2f
+      A(2)=eg(ia1+2)/f2f
+      A(3)=eg(ia1+3)/f2f
+      if (maswrk) write(iw,2003) A(1),A(2),A(3)
       do j=1,3
          eg(ia1+j)=eg(ia1+j)+ufactor*(rij(j,2)-rij(j,1))
          eg(ia2+j)=eg(ia2+j)+ufactor*rij(j,1)
          eg(ia3+j)=eg(ia3+j)-ufactor*rij(j,2)
       enddo
+      if (maswrk) write(iw,2004) eg(ia1+1)/f2f,eg(ia1+2)/f2f,
+     *   eg(ia1+3)/f2f
       if (maswrk) write(iw,2002) rasym*au2ang
 c
       return
  2001 format(5x,'Atoms',3i5/
      *       ,5x,'R21= ',F15.10,5x,'R31=',F15.10)
  2002 format(5x,'Current Distance (Ang.) = ',F15.10)
+ 2003 format(5x,'Gradient on Moving Atom = '/
+     *      ,5x,3ES20.10)
+ 2004 format(5x,'Gradient on Moving Atom with Uforce = '/
+     *      ,5x,3ES20.10)
       end
 C*MODULE MDEFP   *DECK rccor
       SUBROUTINE rccor(ipair,uforce,f2f,uV)
@@ -1490,6 +1683,13 @@ c
      *       ,5x,'Current Distance (Ang.) = ',F15.10)
       end
 C*MODULE MDEFP   *DECK csttor
+C>
+C>     @brief constraint potential for torsion 
+C>
+C>     @details Add constraint potential for torsion. 
+C>
+C>     @author Cheol Ho Choi 
+C>
       SUBROUTINE csttor(ipair,uforce,rzero,f2f,uV)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 c
@@ -1513,8 +1713,17 @@ c
       enddo
 c
       call ctor(rijkl,gijkl,theta)
+c     if(abs(theta).gt.pi.and.maswrk) 
+c    *  write(iw,*) 'too large angle',theta 
 c
       rdisp=theta-rzero
+      if (abs(rdisp).gt.pi) then
+         if (rdisp.lt.-pi) then
+            rdisp=rdisp+2*pi
+         elseif (rdisp.gt.pi) then
+            rdisp=rdisp-2*pi
+         endif
+      endif
       ufactor=uforce*rdisp*f2f
       uV=uforce*rdisp**2*half
 c
@@ -1634,12 +1843,13 @@ C
      *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
 C
       DOUBLE PRECISION MDINT
-      logical ssbp,usamp,rstemp,rsrand,prod
-      common /cstpot/ DROFF,SFORCE,uforce(10),rzero(10),dtemp,
+      logical ccms,ssbp,usamp,rstemp,rsrand,prod
+      common /cstpot/ DROFF(2),SFORCE,uforce(10),rzero(10),dtemp,
      *                rzeroC(3,MXATM),Tmin,uV,batht(NRepca),mdint,
      *                ipair(50),iustyp,ncst,nrand,nvtoff,
      *                jevery,kevery,levery,mremd,
-     *                rstemp,rsrand,prod,SSBP,Usamp
+     *                rstemp,rsrand,prod,SSBP,ccms,Usamp,IndexOH(50),
+     *                movemm(200),nefpmv,cforce,tmass(3)
       COMMON /CONVMD/ AU2KCAL, EK2KCAL, AU2ANG, AU2SEC, AU2AMU, EK2BAR
       COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
      *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
@@ -4649,7 +4859,7 @@ C
       COMMON /VIRPR / VIR(3), PRXX, PRYY, PRZZ
 C
 C          output energy and property values to log file.
-C     this is used when qm atoms are absent, see also MDRPRAB.
+C     this is used when QM atoms are absent, see also MDRPRAB.
 C
       IF(.NOT.MASWRK) RETURN
 C
@@ -4767,7 +4977,7 @@ C
       COMMON /VIRPR / VIR(3), PRXX, PRYY, PRZZ
 C
 C          output energy and property values to log file.
-C     this is used when qm atoms are present, see also MDRPREF.
+C     this is used when QM atoms are present, see also MDRPREF.
 C
       IF (.NOT.MASWRK ) RETURN
 C
@@ -4840,6 +5050,13 @@ C        *** report formats
       END
 C
 C*MODULE MDEFP   *DECK MDPRTCORVEL
+C>
+C>     @brief output data for MD
+C>
+C>     @details Output particle coordinates and velocity information.
+C>
+C>     @author unknown 
+C>
       SUBROUTINE MDPRTCORVEL(ISTEP,TTOTAL,INTMD,iptraj)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
@@ -4860,7 +5077,7 @@ C
       LOGICAL GOPARR, DSKWRK, MASWRK
       LOGICAL IFRCPNT
       double precision mdint
-      logical ssbp,usamp,rstemp,rsrand,prod
+      logical ccms,ssbp,usamp,rstemp,rsrand,prod
       logical ISGDDI,PAROUT,INITGDDI,wasgddi
       COMMON /ATMDAT/ VX(MXFRG), VY(MXFRG), VZ(MXFRG),
      *                QW(MXFRG), QX(MXFRG), QY(MXFRG), QZ(MXFRG),
@@ -4903,11 +5120,12 @@ C
       COMMON /PBC/    PBCOUT,PBCWRI
       COMMON /RUNLAB/ TITLE(10),ANAM(MXATM),BNAM(MXATM),BFLAB(MXAO)
       COMMON /NOSEHO/ GNH(2),VNH(2),XNH(2),QNH(2),EKT0,GFREE0,NVTNH
-      common /cstpot/ DROFF,SFORCE,uforce(10),rzero(10),dtemp,
+      common /cstpot/ DROFF(2),SFORCE,uforce(10),rzero(10),dtemp,
      *                rzeroC(3,MXATM),Tmin,uV,abatht(NRepca),mdint,
      *                ipair(50),iustyp,ncst,nrand,nvtoff,
      *                jevery,kevery,levery,mremd,
-     *                rstemp,rsrand,prod,SSBP,Usamp
+     *                rstemp,rsrand,prod,SSBP,ccms,Usamp,IndexOH(50),
+     *                movemm(200),nefpmv,cforce,tmass(3)
       COMMON /GOFR  / GOFR(NBIN,3), GENFR(NBIN,MAXRDF), CCRDF(NBIN),
      *                GEN2FR(NBIN,2),
      *                DELR, NUMG, NUMSAM1,NUMSAM2,NUMSAM3
@@ -4916,6 +5134,7 @@ C        output particle coordinates and velocity information
 C                 used for QM, QM/EFP, or EFP runs
 C
       IF(.NOT.MASWRK) RETURN
+      IPRST=35
       IPREMD=44
       if (iptraj.ne.ipremd) then
 C
@@ -5060,7 +5279,9 @@ c
       endif
 C
       convfac=au2kcal/au2ang**2
-      if(ssbp) write(IPTRAJ,3010) sforce*convfac,droff*au2ang
+      if(ssbp) write(IPTRAJ,3010) sforce*convfac,droff(1)*au2ang,
+     *                            droff(2)*au2ang    
+      if(ccms) write(IPTRAJ,3019) cforce*convfac
       if(usamp) then
          write(IPTRAJ,3011) uforce(1)*convfac,uforce(2)*convfac,
      *    uforce(3)*convfac,rzero(1)*au2ang,rzero(2)*au2ang,
@@ -5167,7 +5388,7 @@ C
      *      'JEVERY=',I6)
  3004 FORMAT(' PROD=',A3,3x,'KEVERY=',I6,1x,'DELR=',F8.3)
  3005 format('Batht(1)=',F6.2)
- 3010 FORMAT(' SSBP=.T.   SFORCE= ',F5.1,' DROFF=',F5.1)
+ 3010 FORMAT(' SSBP=.T.   SFORCE= ',F5.1,' DROFF=',2F5.1)
  3011 FORMAT(' USAMP=.T.  UFORCE(1)=',3F5.1/
      *     10x,'  RZERO(1)= ',3F5.1)
  3012 FORMAT(' ipair(1)=',2I3)
@@ -5177,6 +5398,7 @@ C
  3016 FORMAT(' ipair(1)=',9I3)
  3017 FORMAT(' ipair(1)=',12I3)
  3018 FORMAT(' IUSTYP=',I3)
+ 3019 FORMAT(' CCMS=.T.   CFORCE= ',F5.1)
  3020 FORMAT('TVELQM(1)=',5X,'! QM ATOM TRANS. VELOCITIES (BOHR/PS) !')
  3030 FORMAT(2X,1P,E16.9,2X,E16.9,2X,E16.9)
  3040 FORMAT(2X,1P,E16.9,2X,E16.9,2X,E16.9,2X,E16.9)
@@ -7134,6 +7356,13 @@ C--   WINT  = (VIR(1) + VIR(2) + VIR(3))/(3.0D+00*VOL)
       RETURN
       END
 C*MODULE MDEFP   *DECK cstssbp
+C>
+C>     @brief spherical boundary energy 
+C>
+C>     @details Add spherical boundary energy.
+C>
+C>     @author Cheol Ho Choi 
+C>
       SUBROUTINE cstssbp(f2f)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
@@ -7143,7 +7372,7 @@ C
       PARAMETER (MXFGPT=12000, MXFRG=1050,
      *           MXDFG=5, MXDPPT=MXFRG*MXDFG*12)
 C
-      logical goparr,maswrk,dskwrk,ssbp,usamp,rstemp,rsrand,prod
+      logical goparr,maswrk,dskwrk,ccms,ssbp,usamp,rstemp,rsrand,prod
 c     COMMON /CONVMD/ AU2KCAL, EK2KCAL, AU2ANG, AU2SEC, AU2AMU, EK2BAR
       COMMON /FGRAD / DEF(3,MXFGPT),DEFT(3,MXFRG),TORQ(3,MXFRG),
      *                EFCENT(3,MXFRG),FRGMAS(MXFRG),FRGMI(6,MXFRG),
@@ -7160,22 +7389,25 @@ c     COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
 c     COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
 c     COMMON /VIRPR / VIR(3), PRXX, PRYY, PRZZ
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
-      common /cstpot/ DROFF,SFORCE,uforce(10),rzero(10),dtemp,
+      common /cstpot/ DROFF(2),SFORCE,uforce(10),rzero(10),dtemp,
      *                rzeroC(3,MXATM),Tmin,uV,batht(NRepca),mdint,
      *                ipair(50),iustyp,ncst,nrand,nvtoff,
      *                jevery,kevery,levery,mremd,
-     *                rstemp,rsrand,prod,SSBP,Usamp
+     *                rstemp,rsrand,prod,SSBP,ccms,Usamp,IndexOH(50),
+     *                movemm(200),nefpmv,cforce,tmass(3)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
 c     DATA GRDKWD/8HGRADIENT/
 c
 c     Note that we do not support FMO for the moment!
 C
-C     QM
+C     QM : apply QM boundary, droff(2)
 c
 C JMODB: Added essbp (spherical boundary potential energy)
       essbp=0.0D+00
+      ntotala=0
       do i=1,Nat
           r=sqrt(c(1,i)**2+c(2,i)**2+c(3,i)**2)
-          rflag=r-droff
+          rflag=r-droff(2)
           if(rflag.gt.0) then
              essbp=essbp+0.5D+00*sforce*rflag**2
              sfactor=-f2f*sforce*rflag/r
@@ -7183,31 +7415,250 @@ C JMODB: Added essbp (spherical boundary potential energy)
              do j=1,3
                 eg(idx+j) =  eg(idx+j) - sfactor*c(j,i)
              enddo
+             ntotala=ntotala+1
           endif
       enddo
 c
-c     EFP
+c     EFP :  apply MM or total boundary, droff(1)
 c
-      ntotal=0
+      ntotalf=0
       DO I = 1, NFRG
           r=sqrt(efcent(1,i)**2+efcent(2,i)**2+efcent(3,i)**2)
-          rflag=r-droff
+          rflag=r-droff(1)
           if(rflag.gt.0) then
              essbp=essbp+0.5D+00*sforce*rflag**2
              sfactor=-f2f*sforce*rflag/r
              do j=1,3
                 DEFT(j,I) =  DEFT(j,I) - sfactor*efcent(j,i)
              enddo
-             ntotal=ntotal+1
+             ntotalf=ntotalf+1
           endif
       ENDDO
-      if (maswrk) write(*,1000) ntotal
+      if (maswrk) write(IW,1000) ntotala,ntotalf
       E=E+essbp
 C
 C JMODE
       RETURN
  1000 format(/5x,'Applying Solvent Boundary Conditions ...'/
-     *       ,5x,'Total number of solvents affected by SSBP = ',i5/)
+     *       ,5x,'Number of ab initio atoms and solvent molecules'
+     *          ,' affected = ',2i6/)
+      END
+C*MODULE MDEFP   *DECK cstccms
+C>
+C>     @brief center potential for MD
+C>
+C>     @details Add spherical potential to push atoms towards the center.
+C>
+C>     @author Cheol Ho Choi 
+C>
+      SUBROUTINE cstccms(f2f)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      double precision mdint
+      PARAMETER (MXATM=2000,NRepca=100)
+C
+      logical goparr,maswrk,dskwrk,ccms,ssbp,usamp,rstemp,rsrand,prod
+      COMMON /CONVMD/ AU2KCAL, EK2KCAL, AU2ANG, AU2SEC, AU2AMU, EK2BAR
+c     COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
+      COMMON /FUNCT / E, EG(3*MXATM)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+c     COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+c     COMMON /VIRPR / VIR(3), PRXX, PRYY, PRZZ
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      common /cstpot/ DROFF(2),SFORCE,uforce(10),rzero(10),dtemp,
+     *                rzeroC(3,MXATM),Tmin,uV,batht(NRepca),mdint,
+     *                ipair(50),iustyp,ncst,nrand,nvtoff,
+     *                jevery,kevery,levery,mremd,
+     *                rstemp,rsrand,prod,SSBP,ccms,Usamp,IndexOH(50),
+     *                movemm(200),nefpmv,cforce,tmass(3)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /MASSES/ ZMASS(MXATM)
+      dimension cR(3)
+c
+c     Keeping QM atoms to the center of Spherical Boundary Potential.
+c
+      eccms=0.0D+00
+      cR(1)=0.0d+00
+      cR(2)=0.0d+00
+      cR(3)=0.0d+00
+      do i=1,nat
+         cR(1)=cR(1) + zmass(i)*c(1,i)
+         cR(2)=cR(2) + zmass(i)*c(2,i)
+         cR(3)=cR(3) + zmass(i)*c(3,i)
+      enddo
+      cR(1)=cR(1)/Tmass(1)
+      cR(2)=cR(2)/Tmass(1)
+      cR(3)=cR(3)/Tmass(1)
+      eccms=0.5D+00*cforce*(cR(1)**2+cR(2)**2+cR(3)**2)
+      cfactor=f2f*cforce/Tmass(1)
+      do i=1,Nat
+         idx=3*(i-1)
+         eg(idx+1) = eg(idx+1) + cfactor*cR(1)*zmass(i)
+         eg(idx+2) = eg(idx+2) + cfactor*cR(2)*zmass(i)
+         eg(idx+3) = eg(idx+3) + cfactor*cR(3)*zmass(i)
+      enddo
+c
+      if (maswrk) write(IW,1000) cR(1)*au2ang,cR(2)*au2ang,
+     *            cR(3)*au2ang 
+      E=E+eccms
+C
+      RETURN
+ 1000 format(/5x,'Applying CCMS on the QM Center of Mass of'/
+     *       ,5x,' = (',3F10.5,')'/)
+      END
+C*MODULE MDEFP   *DECK cstcms
+C>
+C>     @brief Constraint for Center of Mass Coordinate
+C>
+C>     @details Center of Mass coordinate for Umbrella Sampling
+C>
+C>     @author Cheol Ho Choi 
+C>
+      SUBROUTINE cstcms(f2f,uVt)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      double precision mdint
+      PARAMETER (MXATM=2000,NRepca=100)
+      PARAMETER (zero=0.0d+00)
+      logical goparr,maswrk,dskwrk,ccms,ssbp,usamp,rstemp,rsrand,prod
+      COMMON /FUNCT / E, EG(3*MXATM)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      common /cstpot/ DROFF(2),SFORCE,uforce(10),rzero(10),dtemp,
+     *                rzeroC(3,MXATM),Tmin,uV,batht(NRepca),mdint,
+     *                ipair(50),iustyp,ncst,nrand,nvtoff,
+     *                jevery,kevery,levery,mremd,
+     *                rstemp,rsrand,prod,SSBP,ccms,Usamp,IndexOH(50),
+     *                movemm(200),nefpmv,cforce,tmass(3)
+      COMMON /MASSES/ ZMASS(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /CONVMD/ AU2KCAL, EK2KCAL, AU2ANG, AU2SEC, AU2AMU, EK2BAR
+      dimension cRa(3),cRb(3),cRab(3)
+c
+c     Inter center of mass coordinate
+c
+      do i=1,3
+         cRa(i)=zero
+         cRb(i)=zero
+         cRab(i)=zero
+      enddo
+c
+      do i=1,nat
+         if (i.eq.ipair(i)) then
+            do j=1,3
+               cRa(j)=cRa(j) + zmass(i)*c(j,i)
+            enddo
+         else
+            do j=1,3
+               cRb(j)=cRb(j) + zmass(i)*c(j,i)
+            enddo
+         endif
+      enddo
+c
+      do i=1,3
+         cRa(i)=cRa(i)/tmass(2)
+         cRb(i)=cRb(i)/tmass(3)
+      enddo
+c
+      do i=1,3
+         cRab(i)=cRa(i) - cRb(i)
+      enddo
+c
+      Rab=cRab(1)**2+cRab(2)**2+cRab(3)**2
+      Rab=sqrt(Rab)
+      uVt=0.5D+00*uforce(1)*(Rab-rzero(1))**2
+      cfactora=f2f*uforce(1)*(Rab-rzero(1))/(Rab*Tmass(2))
+      cfactorb=-f2f*uforce(1)*(Rab-rzero(1))/(Rab*Tmass(3))
+c
+      do i=1,Nat
+         idx=3*(i-1)
+         if (i.eq.ipair(i)) then
+            eg(idx+1) = eg(idx+1) + cfactora*cRab(1)*zmass(i)
+            eg(idx+2) = eg(idx+2) + cfactora*cRab(2)*zmass(i)
+            eg(idx+3) = eg(idx+3) + cfactora*cRab(3)*zmass(i)
+         else
+            eg(idx+1) = eg(idx+1) + cfactorb*cRab(1)*zmass(i)
+            eg(idx+2) = eg(idx+2) + cfactorb*cRab(2)*zmass(i)
+            eg(idx+3) = eg(idx+3) + cfactorb*cRab(3)*zmass(i)
+         endif
+      enddo
+c
+      if (maswrk) write(IW,2000) Rab*au2ang
+c
+      RETURN
+ 2000 format(5x,'Inter center of mass'/
+     *      ,5x,'Current Distance (Ang.) = ',F15.10)
+      END
+C*MODULE MDEFP   *DECK cstpos
+C>
+C>     @brief Constraint for Center of Mass Coordinate of Position
+C>
+C>     @details Center of Mass coordinate for Umbrella Sampling
+C>      with respect to the center of sphere
+C>
+C>     @author Cheol Ho Choi 
+C>
+      SUBROUTINE cstpos(f2f,uVt)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      double precision mdint
+      PARAMETER (MXATM=2000,NRepca=100)
+      PARAMETER (zero=0.0d+00)
+      logical goparr,maswrk,dskwrk,ccms,ssbp,usamp,rstemp,rsrand,prod
+      COMMON /FUNCT / E, EG(3*MXATM)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      common /cstpot/ DROFF(2),SFORCE,uforce(10),rzero(10),dtemp,
+     *                rzeroC(3,MXATM),Tmin,uV,batht(NRepca),mdint,
+     *                ipair(50),iustyp,ncst,nrand,nvtoff,
+     *                jevery,kevery,levery,mremd,
+     *                rstemp,rsrand,prod,SSBP,ccms,Usamp,IndexOH(50),
+     *                movemm(200),nefpmv,cforce,tmass(3)
+      COMMON /MASSES/ ZMASS(MXATM)
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /CONVMD/ AU2KCAL, EK2KCAL, AU2ANG, AU2SEC, AU2AMU, EK2BAR
+      dimension cRab(3)
+c
+c     This routine is for umbrella sampling constraint of
+c     position of a particular atom.
+c
+      do i=1,3
+         cRab(i)=zero
+      enddo
+c
+      do i=1,nat
+        do j=1,3
+           cRab(j)=cRab(j) + zmass(i)*c(j,i)
+        enddo
+      enddo
+c
+      do i=1,3
+         cRab(i)=cRab(i)/tmass(2)
+      enddo
+c
+      Rab=cRab(1)**2+cRab(2)**2+cRab(3)**2
+      Rab=sqrt(Rab)
+      uVt=0.5D+00*uforce(1)*(Rab-rzero(1))**2
+      cfactora=f2f*uforce(1)*(Rab-rzero(1))/(Rab*Tmass(2))
+c
+      do i=1,Nat
+         idx=3*(i-1)
+         eg(idx+1) = eg(idx+1) + cfactora*cRab(1)*zmass(i)
+         eg(idx+2) = eg(idx+2) + cfactora*cRab(2)*zmass(i)
+         eg(idx+3) = eg(idx+3) + cfactora*cRab(3)*zmass(i)
+      enddo
+c
+      if (maswrk) write(IW,2000) Rab*au2ang
+c
+      RETURN
+ 2000 format(5x,'Center of Mass Position'/
+     *      ,5x,'Current Radius (Ang.) = ',F15.10)
       END
 C*MODULE MDEFP   *DECK REMD_V_RESCALE
       SUBROUTINE REMD_V_RESCALE(T_New)
@@ -7277,3 +7728,81 @@ C
 C
       RETURN
       END
+C*MODULE MDEFP   *DECK rearrangeIPAIR
+C>
+C>     @brief rearrange atomic pairs 
+C>
+C>     @details Rearrange atomic pairs. 
+c>     Rearrange the ipair based on the minimum energy of uV for 
+c>     the atomic pair (OH) distance.
+c>
+c>      IndexOH: 1 2 3 Oxygen index
+c>               4 5 6 Hydrogen index
+c>
+c>       1                 5
+c>       O                 H
+c>       |                 |  
+c>     C-C=O  ---------- H-O-H 6 
+c>         2             4 3
+c>
+c>    There are total 2x3=6 combination.  
+c>    And atomic pair 4 2 and 4 3 should result in minimal energy.
+C>
+C>     @author Tae Hoon Choi
+C>
+c
+      SUBROUTINE rearrangeIPAIR
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (MXATM=2000, NRepca=100)
+      LOGICAL ccms,ssbp,usamp,rstemp,rsrand,prod
+      double precision mdint
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      common /cstpot/ DROFF(2),SFORCE,uforce(10),rzero(10),dtemp,
+     *                rzeroC(3,MXATM),Tmin,uV,batht(NRepca),mdint,
+     *                ipair(50),iustyp,ncst,nrand,nvtoff,
+     *                jevery,kevery,levery,mremd,
+     *                rstemp,rsrand,prod,SSBP,ccms,Usamp,IndexOH(50),
+     *                movemm(200),nefpmv,cforce,tmass(3)
+      dimension uvec1(3),IndexO(3),IndexH(3),ISave(3)
+c
+      NumO =3
+      NumH =3
+      IndexO(1)=IndexOH(1)
+      IndexO(2)=IndexOH(2)
+      IndexO(3)=IndexOH(3)
+      IndexH(1)=IndexOH(4)
+      IndexH(2)=IndexOH(5)
+      IndexH(3)=IndexOH(6)
+      vecn_save = 1000000.0d+00
+      do iO=1, NumO-1
+        do iH=1, NumH
+          uvecn1=0
+          do i=1,3
+             uvec1(i)=c(i,IndexO(iO))-c(i,IndexH(iH))
+             uvecn1=uvecn1+uvec1(i)**2
+          enddo
+c
+          vecn1=sqrt(uvecn1)
+          if ( vecn1 .lt. vecn_save) then
+            vecn_save = vecn1
+            ISave(1)=IndexO(iO)
+            ISave(2)=IndexH(iH)
+            ISave(3)=IndexO(3)
+          endif
+        enddo
+      enddo
+c
+c  rearrange ipair
+      if (iustyp .eq. 6) then
+        ipair(1)=ISave(2)
+        ipair(2)=Isave(1)
+        ipair(3)=ISave(2)
+        ipair(4)=Isave(3)
+      else if (iustyp .eq. 7) then
+        ipair(1)=ISave(2)
+        ipair(2)=Isave(1)
+        ipair(3)=Isave(3)
+      endif
+      return
+      end

@@ -1,12 +1,20 @@
+C 21 May 13 - DGF,HN,TN - changes for FMO 5.0
 C 19 Oct 12 - MWS - synchronize FRGINF common
 C  2 Sep 12 - MWS - synchronize MCINP
-C 21 JUN 12 - DGF - CHANGES FOR FMO 4.3
-C 23 MAR 12 - DGF - PAD COMMON BLOCKS
+C 21 JUN 12 - DGF - changes for FMO 4.3
+C 23 MAR 12 - DGF - pad common blocks
 C 28 DEC 11 - DGF - pad commons for FMO 4.2
 C 15 Apr 11 - MWS - synch FMOPNT common
 C 11 Aug 10 - TN  - new module for Hessians in FMO
 c
 C*MODULE FMOHSS  *DECK FMODEH
+C>
+C>     @brief Hessian contributions 
+C>
+C>     @details Accumulates Hessian contributions. 
+C>
+C>     @author Takeshi Nagata
+C>
       SUBROUTINE FMODEH(ida,FCM,fmoddm,FMOFCM,fmopg,iaglob)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
@@ -30,8 +38,12 @@ c
 c     gather FMO HESSIAN contributions coming from the analytic gradient of a
 c     monomer/dimer.
 c
-c     write(6,*) 'Grad accs',ida
+c     Add the contribution from electrostatic potential 
       if(ida.eq.0) return
+      da  = ida
+      neh = natfmo * natfmo * 9
+      if(maswrk) call daxpy(neh,da,FCM,1,FMOFCM,1)
+C
       if(nat.lt.0) write(iw,*) fmopg(1,1)
       NC1 = 3*NAT
 c
@@ -85,6 +97,13 @@ CZCZ *   .and.IESDPPC.eq.0) call daxpy(natfmo*3,da,fmopg,1,fmode,1)
       return
       end
 C*MODULE FMOHSS  *DECK FMOHESSX
+C>
+C>     @brief FMO Hessian driver
+C>
+C>     @details Perform FMO Hessian calculations. 
+C>
+C>     @author Takeshi Nakata
+C>
       SUBROUTINE FMOHESSX(VIBOVR,GOTWFN)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
@@ -164,7 +183,7 @@ c
      *                lstonep,lmapsu,lfrgmul,lclmo,lialmo,lindlmo,
      *                latclmo,llmobdf,lfgflmo,lnfglmo,llfglmo,lpfglmo,
      *                LPOPDMAT,lidmpnt,liddpnt,livmpnt,liactfg,lcrfrg,
-     *                lzlmfrgv
+     *                lzlmfrgv,lYlmfrgv
       COMMON /MACHIN/ NWDVAR,MAXFM,MAXSM,LIMFM,LIMSM
 C
 C     COSMO information
@@ -743,7 +762,7 @@ CZ    NATM = NAT+2*NFRG
      *               X(LSVT),X(LSVR),X(LSVTT),X(LSVRT),
      *               X(Lfmoc),X(LCOM),X(Lfmomas),X(LBUF1),X(LBUF2),
      *               NC1,NC2,NPART,X(LDDM),GOTDDM,X(LADM),GOTADM,
-     *               PROJCT,STATPT,SCFOK)
+     *               PROJCT,STATPT,SCFOK,nfg)
       ELSE
          CALL FGMTRX_NEO(X(LVEC),X(LFCM),X(LE),X(LSCR),X(LIA),X(LRM),
      *               X(LSVT),X(LSVR),X(LSVTT),X(LSVRT),
@@ -868,7 +887,7 @@ CZ
      *                lstonep,lmapsu,lfrgmul,lclmo,lialmo,lindlmo,
      *                latclmo,llmobdf,lfgflmo,lnfglmo,llfglmo,lpfglmo,
      *                LPOPDMAT,lidmpnt,liddpnt,livmpnt,liactfg,lcrfrg,
-     *                lzlmfrgv
+     *                lzlmfrgv,lYlmfrgv
 czcz
 C
       DATA CLAB /4H   X,4H   Y,4H   Z/
@@ -960,3 +979,957 @@ C
  9070 FORMAT(16X,A4,12F9.6)
  9080 FORMAT(/20X,'FRAGMENT',I3,3X,'TRANSLATION',13X,'ROTATION ')
       END
+C
+C*MODULE FMOHSS  *DECK FMOESHSS
+C>
+C>    @brief ESP in FMO Hessian
+C>
+C>    @details Add ESP contributions to FMO Hessian. 
+C>
+C>    @author Hiroya Nakata 
+C>     
+C>    @param L1 :
+C>    @param L2 :
+C>    @param DA :
+C>    @param SCFFRG :
+C>    @param IDMREC0 :
+C>    @param DC :
+C>    @param WRK1 :
+C>    @param MAPI :
+C>    @param MAPJ :
+C>    @param MAP3 :
+C>    @param MAXL1D :
+C>    @param IREC00 :
+C>    @param ORBXCH1 :
+C>    @param ENEXCH1 :
+C>    @param KODEXCH :
+C>    @param JODEXCH :
+C>    @param IODEXCH :
+C>    @param NQMTFG :
+C>    @param YALAG :
+C>    @param IPTYA :
+C>    @param YAWRK :
+C>    @param FCM :
+C>    @param numfrg :
+C>
+      SUBROUTINE FMOESHSS(L1,L2,DA,SCFFRG,IDMREC0,DC,WRK1,
+     *                    MAPI,MAPJ,MAP3,MAXL1D,IREC00,
+     *                    ORBXCH1,ENEXCH1,KODEXCH,JODEXCH,IODEXCH,
+     *                    NQMTFG,
+     *                    YALAG,IPTYA,YAWRK,FCM,
+     *                    numfrg)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (MXATM=2000,MXSH=5000,MXGTOT=20000, MXRT=100 )
+c     LOGICAL DIRSCF,FDIFF,PACK2E,GOPARR,DSKWRK,MASWRK,QFMM,QOPS
+      LOGICAL ORBXCH1,ENEXCH1,KODEXCH,JODEXCH,IODEXCH
+      LOGICAL LCFLAG,LRINT,CAMFLAG 
+      LOGICAL GOPARR,DSKWRK,MASWRK
+C
+      DIMENSION DA(*),SCFFRG(*),IDMREC0(*)
+      DIMENSION DC(*),WRK1(*),MAPI(*),MAPJ(*),MAP3(MAXL1D,3)
+      DIMENSION NQMTFG(*), numfrg(1)
+C
+      COMMON /DFTCAM/ ALPHAC,BETAC,CAMMU,CAMVWN,CAMLYP,CAMFLAG
+      COMMON /ENRGYS/ ENUCR,EELCT,ETOT,SZ,SZZ,ECORE,ESCF,EERD,E1,E2,
+     *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2),EDISP
+      COMMON /FMCOM / X(1)
+c     COMMON /IJPAIR/ IA(MXAO)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+c     COMMON /INTFIL/ NINTMX,NHEX,NTUPL,PACK2E,INTTYP,IGRDTYP
+C     COMMON /INTOPT/ ISCHWZ,IECP,NECP,IEFLD
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /NLRC  / LCFLAG,LRINT,EMU,EMU2,LRFILE
+      COMMON /NSHEL / EX(MXGTOT),CS(MXGTOT),CP(MXGTOT),CD(MXGTOT),
+     *                CF(MXGTOT),CG(MXGTOT),CH(MXGTOT),CI(MXGTOT),
+     *                KSTART(MXSH),KATOM(MXSH),KTYPE(MXSH),KNG(MXSH),
+     *                KLOC(MXSH),KMIN(MXSH),KMAX(MXSH),NSHELL
+c     COMMON /OPTSCF/ DIRSCF,FDIFF
+c     COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+c     COMMON /QMFM  / SIZE,EPS1,DPGD,QFMM,NP,NS,IWS,NPGP,MPMTHD,NUMRD,
+c    *                ITERMS,QOPS,ISCUT
+c     COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+c     COMMON /RESTAR/ TIMLIM,IREST,NREC,INTLOC,IST,JST,KST,LST
+c     COMMON /SHLEXC/ NORGSH(3),NORGSP(3),IEXCH,NANGM,NGTH(4)
+c     COMMON /FMODIM/ MAXBND,MAXKND,MAXCBS,MAXCAO,MAXVEC,MAXL1,MAXNAT,
+c    *                MAXABD,MAXBAS,MAXBBD,MAXLMO,MAXSLO,MAXABD2
+      COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
+c     COMMON /FMOOPT/ ESPSCA(9),RESPAP(2),RESPPC(2),RESDIM,RESTRI(4),
+c    *                RCORSD,RESPCT,CONVFG,CNVDMP,COROFF,RFLMO(4),
+c    *                ORSHFT,ORSHFT2,CNVAFO,ASCREEN(4),IXESP,MXITFG,
+c    *                NGUESS,NBSSE,MODORB,MODPAR,IRSTSTP,IRSTLAY,NPRFMO,
+c    *                NFMOPAL,MODPRP,MAXL1C,IPIEDA,MODGRD,MODESP,IVMUL,
+c    *                modlmo,nopden,mofock,modfd,modfmm,ncentm
+      COMMON /FMOPNT/ LICHFG,LMULFG,LIDMREC,LFRGNAM,LLAYFRG,LINDAT,
+     *                LNCBS,LFMOZAN,LFMOC,LFMOMAS,LIZBAS,LIAGLOB,LIBDGH,
+     *                LIABDFG,LJABDFG,LNCAO,LIDXCAO,LIAPRJO,LJAPRJO,
+     *                LCOREAO,LOCCCOR,LSHIFTB,LIODFMO,LFMODA,LFMODB,
+     *                LFMOESPA,LFMOESPB,LLOCFMO,LSCFFRG,LFMOSCF,LRIJ,
+     *                LPOPMUL,LPOPMAT,LIALOC,LINDBD,LIATFRG,LINDFRG,
+     *                LINDGFRG,LNATFRG,LNAT0FRG,LIANFRG,LZANFRG,LCFRG,
+     *                LLIBISH,LLIBNSH,LLIBNG,LINDATG,LFMOBUF(3),LFMODE,
+     *                LNUMFRG,LLOCTAT,LIAOGLOB,LLOADM,LFMOGE,LDGRID,
+     *                LIODCFMO,LJOB2GRP,LFMOPG,LEMOCDR,LUNTXYZ,LUNTROT,
+     *                LSTONEP,LMAPSU,LFRGMUL,LCLMO,LIALMO,LINDLMO,
+     *                LATCLMO,LLMOBDF,LFGFLMO,LNFGLMO,LLFGLMO,LPFGLMO,
+     *                LPOPDMAT,LIDMPNT,LIDDPNT,LIVMPNT,liactfg,lcrfrg,
+     *                lzlmfrgv,lYlmfrgv
+      COMMON /FMORUN/ ESPSCF,E0SCF(2),EMP2S,IDAFMO,ICURFG,JCURFG,KCURFG,
+     *                ICURLAY,ICURUNT,NAT1E,NCURSH,NGAU,ICURPOP,IFMOSTP,
+     *                MONCOR,NEEDR,MODRST,NORBPROJ,NUNESP,ISKIPESP,
+     *                IESDPPC,IDOPROP,MP2RUN,ICURIT,IDMFMO,IDDFMO,
+     *                IDDCUR,NDDLEFT,IVMFMO,nzmtfmo
+c     common /ppcpnt/ lddijpot,lzppcpot,lvipot,lgrdtest
+c     COMMON /SCZLAG/ LZVLAG,LZVWRK,LYALAG,LYAWRK
+c     COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
+c    *                MPLEVL,MPCTYP
+C
+c     COMMON /GRAD  / DE(3,MXATM)
+C   
+C     FMO second derivative 
+C     This subroutine calculate the contribution
+C     which come from the Electrostatic Potential
+C     For the detail mathmatical equation:  J. Chem. Phys. 138, 164103 (2013)
+C      
+C
+      DIMENSION YALAG(*),IPTYA(*),YAWRK(*),FCM(3*natfmo,*)
+C
+      CALL TIMIT(1)
+      IF(MASWRK) WRITE(IW,*) 'BEGIN FMOESHSS'
+C
+      LWRKDEN =LFMOBUF(1) ! MAXL1D+MAXL2D+MAXL3D
+      LWRKESP =LFMOBUF(2) ! MAXL2D
+      IFG=ICURFG
+      JFG=JCURFG
+      L1IJ=L1
+      L2IJ=L2
+      IF(IFG.EQ.0) RETURN
+      L1I  = IAND(NUMFRG(IFG),65535)
+      IF (JFG.NE.0) THEN
+        L1J  = IAND(NUMFRG(JFG),65535)
+      END IF
+      L2I   = (L1I*L1I + L1I)/2
+      L2J   = (L1J*L1J + L1J)/2
+      NDSIJ = L2  * NAT  * 3
+C
+      LCFLAG=.FALSE.
+      camFLAG=.FALSE.
+      LRINT=.FALSE.
+C
+      CALL DERCHK(NDER)
+      if(nder.ne.2) call abrt
+C 
+      CALL MONBSR(NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,NSHELL,NGAU,ENUCR,
+     *            NAT0,ICH0,MUL0,NUM0,NQMT0,NE0,NA0,NB0,
+     *            NCURSH,NGAU0,ENUCR0)
+C 
+      IESDPPC = 1
+C    allocate memory 
+      CALL VALFM(LOADFM)
+      LEG  = LOADFM + 1
+      LEH  = LEG    + 3 *  NATFMO
+      LFD  = LEH    + 9 * (NATFMO*NATFMO+NATFMO)/2
+      LAST = LFD    + 3 *  NATFMO * L2 
+      NEED = LAST-LOADFM-1
+      CALL GETFM(NEED)
+CZ
+      NFD  = 3*NATFMO*L2
+      NEGH = 3*NATFMO+9*(NATFMO*(NATFMO+1))/2
+c
+      call vclr(x(leg),1,NEGH)
+      call vclr(x(lfd),1,NFD)
+C     Get Density ||  S^{a,I} || S^{a,J}
+CZ    DA is  Delta DIJ - DI - DJ
+      call ESDDVDD(l1,l2,DA,X(LFMODB),DC,X(LWRKDEN),WRK1,
+     *     X(LFMOESPA),X(LWRKESP),X(LNUMFRG),MAPI,MAPJ,MAP3,
+     *     MAXL1D,IREC00,ORBXCH1,ENEXCH1,
+     *     KODEXCH,JODEXCH,IODEXCH,NQMTFG, scffrg,0,
+     *     l1i,l1j)
+c     Second derivative for one-electron terms
+      call esddv1d(DA,LEG,LEH,LFD)
+c     Second derivative for two-electron terms
+      kfg = 0
+      call esddv2d(IFG,JFG,KFG,L1IJ,L1I,L1J,l1k,nak,nbk,natk,
+     *     X(LFMOESPA),X(LIAGLOB),X(LEG), X(LEH),l2ij,NQMTFG,
+     *     X(LFMODB),X(LWRKDEN),x(LLAYFRG),IDMREC0,DA,x(LFD),FCM)
+C     summing up contribution (\Delta D * V^ab)
+      call addhss(natfmo,natfmo,x(LEH),FCM,0,x(liaglob))
+C
+      CALL MONBSR(NAT0,ICH0,MUL0,NUM0,NQMT0,NE0,NA0,NB0,NCURSH,NGAU0,
+     *           ENUCR0,NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,NSHELL,NGAU,ENUCR)
+C
+      NCURSH = 0
+C
+      CALL VALFM(LOADFM)
+      LDSIJ  = LOADFM + 1
+      LAST   = LDSIJ  + NDSIJ
+      NEEDIJ = LAST-LOADFM-1
+      CALL GETFM(NEEDIJ)
+C
+c     calcualting S^a * V^b terms in ( fmohss1a.src )
+      call ESPSDXVD(l1,l2,X(LFMODB),X(LWRKDEN),WRK1,
+     *     X(LNUMFRG),MAPI,MAPJ,MAP3, x(liaglob), MAXL1D,IREC00,
+     *     ORBXCH1, KODEXCH,JODEXCH,IODEXCH,NQMTFG, scffrg,0,
+     *     x(LDSIJ),l1i,l2i,x(LDSIJ),l1j,l2j,x(LDSIJ),l2ij,x(LFD),
+     *     NQMT0,FCM,YALAG,IPTYA,YAWRK)
+c     
+      NQMT = NQMT0
+C
+      CALL RETFM(NEEDIJ)
+      CALL RETFM(NEED)
+
+      IF(MASWRK) WRITE(IW,*) 'DONE FMOESHSS'
+      CALL TIMIT(1)
+      return
+      end
+
+C*MODULE FMOHSS  *DECK ESDDVDD
+C>
+C>    @brief Density contributions from ESP for FMO Hessian
+C>
+C>    @details Construct density difference matrix
+C>             DIJ - DI - DJ for FMO Hessian.
+C>
+C>    @author Hiroya Nakata 
+C>
+C>    @param l1 :
+C>    @param l2 :
+C>    @param DA :
+C>    @param DB :
+C>    @param DC :
+C>    @param WRK :
+C>    @param WRK1 :
+C>    @param ESPA :
+C>    @param WRKESP :
+C>    @param NUMFRG :
+C>    @param MAPI :
+C>    @param MAPJ :
+C>    @param MAP3 :
+C>    @param MAXL1D :
+C>    @param IREC0 :
+C>    @param ORBXCH1 :
+C>    @param ENEXCH1 :
+C>    @param KODEXCH :
+C>    @param JODEXCH :
+C>    @param IODEXCH :
+C>    @param NQMTFG :
+C>    @param scffrg :
+C>    @param IMODE :
+C>    @param l1i :
+C>    @param l1j :
+      subroutine ESDDVDD(l1,l2,DA,DB,DC,WRK,WRK1,
+     *     ESPA,WRKESP,NUMFRG,MAPI,MAPJ,MAP3,
+     *     MAXL1D,IREC0,ORBXCH1,ENEXCH1,
+     *     KODEXCH,JODEXCH,IODEXCH,NQMTFG,
+     *     scffrg,IMODE,l1i,l1j)
+
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      PARAMETER (MXATM=2000,ONE=1.0D+00)
+C
+c     LOGICAL GOPARR,DSKWRK,MASWRK
+      LOGICAL SOME1,ORBXCH1,ENEXCH1
+      LOGICAL KODEXCH,JODEXCH,IODEXCH
+C
+C
+      DIMENSION DA(1),DB(1),DC(1)
+      DIMENSION ESPA(1),WRK(1),WRK1(1),WRKESP(1)
+      DIMENSION NUMFRG(1),NQMTFG(*)
+      DIMENSION MAPI(1),MAPJ(1),MAP3(MAXL1D,3) 
+      DIMENSION scffrg(*)
+c     DIMENSION DSI(l2i,*),DSJ(l2j,*),DSIJ(l2ij,*)
+C
+      COMMON /FMCOM / X(1)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+c     COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+c     COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
+c     COMMON /FMOOPT/ ESPSCA(9),RESPAP(2),RESPPC(2),RESDIM,RESTRI(4),
+c    *                RCORSD,RESPCT,CONVFG,CNVDMP,COROFF,RFLMO(4),
+c    *                ORSHFT,ORSHFT2,CNVAFO,ASCREEN(4),IXESP,MXITFG,
+c    *                NGUESS,NBSSE,MODORB,MODPAR,IRSTSTP,IRSTLAY,NPRFMO,
+c    *                NFMOPAL,MODPRP,MAXL1C,IPIEDA,MODGRD,MODESP,IVMUL,
+c    *                MODLMO,NOPDEN,MOFOCK,modfd,modfmm,ncentm
+      COMMON /FMOPNT/ LICHFG,LMULFG,LIDMREC,LFRGNAM,LLAYFRG,LINDAT,
+     *                LNCBS,LFMOZAN,LFMOC,LFMOMAS,LIZBAS,LIAGLOB,LIBDGH,
+     *                LIABDFG,LJABDFG,LNCAO,LIDXCAO,LIAPRJO,LJAPRJO,
+     *                LCOREAO,LOCCCOR,LSHIFTB,LIODFMO,LFMODA,LFMODB,
+     *                LFMOESPA,LFMOESPB,LLOCFMO,LSCFFRG,LFMOSCF,LRIJ,
+     *                LPOPMUL,LPOPMAT,LIALOC,LINDBD,LIATFRG,LINDFRG,
+     *                LINDGFRG,LNATFRG,LNAT0FRG,LIANFRG,LZANFRG,LCFRG,
+     *                LLIBISH,LLIBNSH,LLIBNG,LINDATG,LFMOBUF(3),LFMODE,
+     *                LNUMFRG,LLOCTAT,LIAOGLOB,LLOADM,LFMOGE,LDGRID,
+     *                LIODCFMO,LJOB2GRP,LFMOPG,LEMOCDR,LUNTXYZ,LUNTROT,
+     *                LSTONEP,LMAPSU,LFRGMUL,LCLMO,LIALMO,LINDLMO,
+     *                LATCLMO,LLMOBDF,LFGFLMO,LNFGLMO,LLFGLMO,LPFGLMO,
+     *                LPOPDMAT,LIDMPNT,LIDDPNT,LIVMPNT,liactfg,lcrfrg,
+     *                lzlmfrgv,lYlmfrgv
+      COMMON /FMORUN/ ESPSCF,E0SCF(2),EMP2S,IDAFMO,ICURFG,JCURFG,KCURFG,
+     *                ICURLAY,ICURUNT,NAT1E,NCURSH,NGAU,ICURPOP,IFMOSTP,
+     *                MONCOR,NEEDR,MODRST,NORBPROJ,NUNESP,ISKIPESP,
+     *                IESDPPC,IDOPROP,MP2RUN,ICURIT,IDMFMO,IDDFMO,
+     *                IDDCUR,NDDLEFT,IVMFMO,nzmtfmo
+      COMMON /IOFILE/ IR,IW,IP,IJK,IPK,IDAF,NAV,IODA(950)
+CZ    COMMON /SCZVEC/ IDFZVEC,LIPTZVEC,LIPTLG
+c     COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
+c    *                MPLEVL,MPCTYP
+c     COMMON /GRAD  / DE(3,MXATM)
+      DATA   UHF/8HUHF     / 
+CZ
+CZ    DENSITY DERIVATIVES OF EXTERNAL ELECTROSTATIC POTENTIALS
+CZ
+C     dummy argument it is used later implementation
+      DC(1)=0.0D+00
+      DUM  = ESPA(1)
+      if(imode.ne.0) write(*,*) "imode =",
+     * imode,map3(1,1),nqmtfg(1),kodexch
+C
+      IFG=ICURFG
+      JFG=JCURFG
+      l3 =l1 * l1
+
+C     Notice record number 16 is written by diminid  subroutine
+      CALL DAREAD(IDAF,IODA,da(l2+1),L3,15,0)
+      call dmtx2(wrkesp,da(l2+1),na,l1,l1,na) 
+
+      L1I  = IAND(NUMFRG(IFG),65535)
+      NAI  = ISHFT(NUMFRG(IFG),-16)
+c     NATI = IXFTCH(X(LNATFRG),IFG)
+      MULI = IXFTCH(X(LMULFG),IFG)
+      NBI  = NAI-MULI+1
+      NQI  = IAND(NQMTFG(IFG),65535)
+      IF (JFG.NE.0) THEN
+        L1J  = IAND(NUMFRG(JFG),65535)
+        NAJ  = ISHFT(NUMFRG(JFG),-16)
+c       NATJ = IXFTCH(X(LNATFRG),JFG)
+        MULJ = IXFTCH(X(LMULFG),JFG)
+        NBJ  = NAJ-MULJ+1
+        NQJ  = IAND(NQMTFG(JFG),65535)
+      END IF
+c
+      some1=.False.
+      CALL DIMINID(0,JFG,IFG,L1J,L1I,NQJ,NQI,NAJ,NAI,NBJ,NBI,L1,DA,DB,
+     *             WRK,WRK1,X(LIODFMO),IREC0,X(LIABDFG),X(LJABDFG),
+     *             X(LINDAT),X(LIAGLOB),X(LLOCFMO),MAPJ,MAPI,
+     *             ORBXCH1,ENEXCH1,JODEXCH,IODEXCH,0,DUM,1,
+     *             scffrg(jfg).eq.uhf,scffrg(ifg).eq.uhf,some1)
+
+      CALL DAXPY(L2,-ONE,WRKESP,1,DA,1)
+      CALL DSCAL(L2,-ONE,DA,1)
+c     NCURS  = NCURSH
+c     NCURSH = 0
+c     write(*,*) "check density"
+c     call prtril(DA,L1)
+C
+C
+c     CALL MAKEMOL(IFG,0,0,ILAY,0,0,0,0,0,0,0,.FALSE.)
+c     CALL EXTSDER(WRK,DSI,L1I,L2I,.TRUE.,.TRUE.,0)
+c     IF(GOPARR) CALL DDI_GSUMF(1501,DSI,L2I*3*NATI)
+C
+c     CALL MAKEMOL(JFG,0,0,ILAY,0,0,0,0,0,0,0,.FALSE.)
+c     CALL EXTSDER(WRK,DSJ,L1J,L2J,.TRUE.,.TRUE.,0)
+c     IF(GOPARR) CALL DDI_GSUMF(1501,DSJ,L2J*3*NATJ)
+C
+c     CALL MAKEMOL(IFG,JFG,0,ILAY,0,0,0,0,0,0,0,.true.)
+c     CALL EXTSDER(WRK,DSIJ,L1,L2IJ,.TRUE.,.TRUE.,0)
+c     IF(GOPARR) CALL DDI_GSUMF(1501,DSIJ,L2IJ*3*NAT)
+
+c     NCURSH = NCURS  
+      return
+      end
+C
+C*MODULE FMOHSS  *DECK YALGMEM1
+C>
+C>    @brief Measure size of Ya
+C>
+C>    @details Get total dimension of  U^{a} and max dimension of U^{a,X}.
+C>
+C>    @author Hiroya Nakata 
+C>
+C>    @param NYA : 
+C>    @param MXYAWK : 
+C>    @param NFG : 
+C>    @param NQMTFG : 
+C>    @param scffrg : 
+C>    @param mulfg : 
+C>    @param natfrg : 
+C>
+      SUBROUTINE YALGMEM1(NYA,MXYAWK,NFG,NQMTFG,scffrg,mulfg,natfrg)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      DIMENSION NQMTFG(1),natfrg(1)
+C     FOR UHF 
+      DIMENSION mulfg(nfg),scffrg(nfg)
+      DATA UHF/8HUHF     /
+c
+C     dummy arguments
+      if(scffrg(1).eq.uhf) write(*,*) "mulfg=",mulfg(1)
+c
+      NYA = 0
+      MXYAWK = 0
+      DO I = 1, NFG
+        NQMT = IAND(NQMTFG(I),65535)
+        NAI  = ISHFT(NQMTFG(I),-16)
+        NOCV = NAI * (NQMT - NAI)
+        NXYZI= natfrg(i) * 3
+c       write(*,*) "NXYZI NOCV = ",NXYZI,NOCV
+        NYA  = NYA + NOCV * NXYZI
+        DO j=1,I-1
+           NXYZJ = natfrg(j) * 3
+           NATOMT= NXYZI + NXYZJ
+           MXYAWK= max(MXYAWK,NATOMT)
+c          write(*,*) " NATOMT = " , NATOMT
+        END DO
+      END DO
+C
+      RETURN
+      END
+c
+C*MODULE FMOHSS* DECK YALGMEM2 
+C>
+C>    @brief Mapping for U^a
+C>
+C>    @details Get point for respective U^{a,X}.
+C>
+C>    @author Hiroya Nakata 
+C>
+C>    @param NFG :
+C>    @param IPTLG :
+C>    @param NQMTFG :
+C>    @param scffrg :
+C>    @param mulfg :
+C>    @param natfrg :
+C>
+      SUBROUTINE YALGMEM2(NFG,IPTLG,NQMTFG,scffrg,mulfg,natfrg)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      DIMENSION IPTLG(1),NQMTFG(1),natfrg(1)
+c     For UHF fragment
+      DIMENSION mulfg(nfg),scffrg(nfg)
+      DATA UHF/8HUHF     /
+c
+C     dummy arguments
+      if(scffrg(1).eq.uhf) write(*,*) "mulfg=",mulfg(1)
+C
+      IPT = 1
+      DO I = 1, NFG
+        IPTLG(I) = IPT
+        NQMT =  IAND(NQMTFG(I),65535)
+        NAI  = ISHFT(NQMTFG(I),-16)
+        NOCV = NAI * (NQMT - NAI)
+        NXYZI= natfrg(i) * 3
+c       write(*,*) "NXYZI NOCV = ",NXYZI,NOCV
+        IPT = IPT + NOCV * NXYZI
+      END DO
+      IPTLG(NFG+1) = IPT - 1
+C
+      RETURN
+      END
+C
+C*MODULE FMOHSS  *DECK addhss
+C>
+C>    @brief   Add V^{ab} contributions to FMO Hessian
+C>
+C>    @details Add FCMWRK to FCM.
+C>
+C>    @author Hiroya Nakata 
+C>
+C>    @param nat :
+C>    @param natfmo :
+C>    @param FCMWRK :
+C>    @param FCM :
+C>    @param imode :
+C>    @param iaglob :
+C>
+      subroutine addhss(nat,natfmo,FCMWRK,FCM,imode,iaglob) 
+      implicit double precision(A-H,O-Z)
+c    
+      DIMENSION FCMWRK(9,(nat*nat+nat)/2)
+      DIMENSION FCM(natfmo*3,natfmo*3),iaglob(*)
+c
+      do iatom = 1,nat
+         do jatom = 1,iatom
+            if(imode.eq.0) then
+              ij = (iatom * iatom - iatom)/ 2 + jatom 
+              ix = (iatom-1) * 3 + 1
+              iy = (iatom-1) * 3 + 2
+              iz = (iatom-1) * 3 + 3
+              jx = (jatom-1) * 3 + 1
+              jy = (jatom-1) * 3 + 2
+              jz = (jatom-1) * 3 + 3
+            else if(imode.eq.1) then
+              ij = (iatom * iatom - iatom)/ 2 + jatom 
+              ix = (iaglob(iatom)-1) * 3 + 1
+              iy = (iaglob(iatom)-1) * 3 + 2
+              iz = (iaglob(iatom)-1) * 3 + 3
+              jx = (iaglob(jatom)-1) * 3 + 1
+              jy = (iaglob(jatom)-1) * 3 + 2
+              jz = (iaglob(jatom)-1) * 3 + 3
+            end if
+            if(iatom.ne.jatom) then
+               FCM(ix,jx) = FCM(ix,jx) + FCMWRK(1,ij) 
+               FCM(ix,jy) = FCM(ix,jy) + FCMWRK(2,ij)
+               FCM(ix,jz) = FCM(ix,jz) + FCMWRK(3,ij)
+               FCM(iy,jx) = FCM(iy,jx) + FCMWRK(4,ij)
+               FCM(iy,jy) = FCM(iy,jy) + FCMWRK(5,ij)
+               FCM(iy,jz) = FCM(iy,jz) + FCMWRK(6,ij)
+               FCM(iz,jx) = FCM(iz,jx) + FCMWRK(7,ij)
+               FCM(iz,jy) = FCM(iz,jy) + FCMWRK(8,ij)
+               FCM(iz,jz) = FCM(iz,jz) + FCMWRK(9,ij)
+C
+               FCM(jx,ix) = FCM(jx,ix) + FCMWRK(1,ij) 
+               FCM(jy,ix) = FCM(jy,ix) + FCMWRK(2,ij)
+               FCM(jz,ix) = FCM(jz,ix) + FCMWRK(3,ij)
+               FCM(jx,iy) = FCM(jx,iy) + FCMWRK(4,ij)
+               FCM(jy,iy) = FCM(jy,iy) + FCMWRK(5,ij)
+               FCM(jz,iy) = FCM(jz,iy) + FCMWRK(6,ij)
+               FCM(jx,iz) = FCM(jx,iz) + FCMWRK(7,ij)
+               FCM(jy,iz) = FCM(jy,iz) + FCMWRK(8,ij)
+               FCM(jz,iz) = FCM(jz,iz) + FCMWRK(9,ij)
+            else
+               FCM(ix,jx) = FCM(ix,jx) + FCMWRK(1,ij) 
+               FCM(ix,jy) = FCM(ix,jy) + FCMWRK(2,ij)
+               FCM(ix,jz) = FCM(ix,jz) + FCMWRK(3,ij)
+               FCM(iy,jx) = FCM(iy,jx) + FCMWRK(4,ij)
+               FCM(iy,jy) = FCM(iy,jy) + FCMWRK(5,ij)
+               FCM(iy,jz) = FCM(iy,jz) + FCMWRK(6,ij)
+               FCM(iz,jx) = FCM(iz,jx) + FCMWRK(7,ij)
+               FCM(iz,jy) = FCM(iz,jy) + FCMWRK(8,ij)
+               FCM(iz,jz) = FCM(iz,jz) + FCMWRK(9,ij)
+C
+            end if 
+         end do
+      end do
+      return
+      end
+c
+C*MODULE FMOHSS  *DECK FMOCPHOP
+C>
+C>    @brief Add P^a contributions to CPHF equation 
+C>
+C>    @details Add (S DD S^a) contributions to FMO Hessian.
+C>
+C>    @author Hiroya Nakata 
+C>
+C>    @param nocc :
+C>    @param nvir :
+C>    @param l1 :
+C>    @param l2 :
+C>    @param nxyz :
+C>    @param WAX :
+C>    @param nrot :
+C>    @param AA :
+C>    @param nocc2 :
+C>    @param SS :
+C>    @param SDER :
+C>    @param DD :
+C>    @param NAO :
+C>    @param NMO :
+C>    @param ILOC :
+C>    @param PARRGO :
+C>    @param WRK3 :
+C>    @param nomit :
+C>
+      SUBROUTINE FMOCPHOP(nocc,nvir,l1,l2,nxyz,WAX,nrot,AA,nocc2,
+     *            SS,  SDER,DD,NAO,NMO,ILOC,PARRGO,WRK3,nomit)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+c     LOGICAL GOPARR,DSKWRK,MASWRK
+      LOGICAL PARRGO
+      DIMENSION SDER(L2,3,NAT), DD(1),  SS(L1,*)
+      DIMENSION WAX(nocc,nvir,*), AA(nocc2,*),WRK3(*)
+C
+      PARAMETER (ONE=1.0D+00,TWO=2.0D+00,MXATM=2000,MXAO=8192)
+      PARAMETER (ZERO=0.0D+00)
+c
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /IJPAIR/ IA(MXAO)
+      common /fmopnt/ lichfg,lmulfg,lidmrec,lfrgnam,llayfrg,lindat,
+     *                lnCBS,lfmozan,lfmoc,lfmomas,lizbas,liaglob,libdgh,
+     *                liabdfg,ljabdfg,lnCAO,lidxCAO,liaprjo,ljaprjo,
+     *                lCoreAO,lOccCor,lshiftb,liodfmo,lfmoda,lfmodb,
+     *                lfmoespa,lfmoespb,llocfmo,lscffrg,lfmoscf,lrij,
+     *                lpopmul,lpopmat,lialoc,lindbd,liatfrg,lindfrg,
+     *                lindgfrg,lnatfrg,lnat0frg,lianfrg,lzanfrg,lcfrg,
+     *                llibish,llibnsh,llibng,lindatg,lfmobuf(3),lfmode,
+     *                lnumfrg,lloctat,liaoglob,lloadm,lfmoge,ldgrid,
+     *                liodcfmo,ljob2grp,lfmopg,lemocdr,luntxyz,luntrot,
+     *                lstonep,lmapsu,lfrgmul,lclmo,lialmo,lindlmo,
+     *                latclmo,llmobdf,lfgflmo,lnfglmo,llfglmo,lpfglmo,
+     *                LPOPDMAT,lidmpnt,liddpnt,livmpnt,liactfg,lcrfrg,
+     *                lzlmfrgv,lYlmfrgv
+c
+      l3 = l1 * l1
+      LC = L3 *  3 + 1
+      if(nrot.eq.0) write(*,*) "dumm =",NMO,parrgo,NXYZ,lcrfrg
+c     MAXIC = NATFMO
+c     call setatz(1,MAXIC,fastvesp,lfvesp,needfv)
+c      
+      do 30 iatom = 1,nat
+c       IAZ=IXFTCH(X(LIAGLOB),iatom)
+c       icind=lfvesp+(IAZ-1)*6
+c       FRACESPI=x(icind+1)
+c       write(*,*) "fracespi =",fracespi,IAZ
+        SCAL = TWO * TWO
+c       if(fracespi.ge.0.5D+00.and.fracespi.ne.zero) go to 30
+c       if(fracespi.ne.zero) go to 30
+        do ixyz = 1,3          
+          izxyz = (iatom - 1) * 3 + ixyz
+          CALL CPYTSQ(SDER(1,ixyz,iatom),WRK3,l1,1)
+          CALL CPYTSQ(DD,WRK3(l3+1),NAO,1)
+C         S^a(l1,nao) * DD(NAO,NAO) *  S(l1,nao)^T
+          CALL DGEMM('N','N',l1,NAO,NAO,ONE,WRK3(iloc*l1-l1+1),L1,
+     *                wrk3(l3+1),NAO,ZERO, WRK3(L3*2+1),L1)
+          CALL DGEMM('N','T',l1, l1,NAO,ONE,WRK3(l3*2+1),L1,
+     *                SS(1,iloc),l1,ZERO, WRK3,L1)
+          CALL SQ2TRI(L1,L1,WRK3,WRK3(l3+1),one)
+C         C^T *  P * C   ( AO --> MO)
+          CALL TFTRI(WRK3,wrk3(l3+1),wrk3(LC),WRK3(2*l3+1),NQMT,l1,l1)
+C         summing up contributions
+          do 10 iocc = 1,nocc 
+            do 20 jocc = 1,iocc
+              IJ = IA(IOCC) + JOCC
+              AA(ij,izxyz) = AA(ij,izxyz) + WRK3(IJ) * SCAL 
+c             if(iatom.eq.3.and.ixyz.eq.3) write(*,*) WRK3(IJ),IJ
+ 20         continue
+ 10       continue
+c         do 15 ivir = 1,nvir
+          do 15 ivir = 1,nvir-nomit
+            do 25 iocc = 1,nocc
+              ij = IA(nocc+ivir) + iocc
+              WAX(iocc,ivir,izxyz)=WAX(iocc,ivir,izxyz)+WRK3(IJ)*SCAL
+c             if(iatom.eq.3.and.ixyz.eq.3) write(*,*) "val=",WRK3(IJ),IJ
+ 25         continue
+ 15       continue
+        end do
+ 30   continue
+c
+c     if(fastvesp) call retfm(needfv)
+c
+      return
+      END
+C
+C*MODULE FMOHSS  *DECK FMOCPHOP2
+C>
+C>    @brief Add P^a contribution to CPHF equation 
+C>
+C>    @details Add (S DD^a S) contribution to CPHF equation.
+C>
+C>    @author Hiroya Nakata 
+C>
+C>    @param L1 :
+C>    @param IRGHT :
+C>    @param LEFT :
+C>    @param ILOC :
+C>    @param PARRGO :
+C>    @param JJ :
+C>    @param JAT :
+C>    @param NAO :
+C>    @param NMO :
+C>    @param CLCAO :
+C>    @param LDC :
+C>    @param ROTLCAO :
+C>    @param LDR :
+C>    @param NSHELL :
+C>    @param KATOM :
+C>    @param KTYPE :
+C>    @param KLOC :
+C>    @param KMIN :
+C>    @param SHIFTB :
+C>    @param IBDTYP :
+C>    @param IAPRJO :
+C>    @param JAPRJO :
+C>    @param ISIDE :
+C>    @param SS :
+C>    @param ZAXIS :
+C>    @param BOND :
+C>    @param WAX :
+C>    @param AA :
+C>    @param WRK3 :
+C>    @param nomit :
+C>    @param nocc :
+C>    @param nvir :
+C>    @param nocc2 :
+C>
+      SUBROUTINE FMOCPHOP2(L1,IRGHT,LEFT,ILOC,PARRGO,JJ,JAT,
+     *                    NAO,NMO,CLCAO,LDC,ROTLCAO,LDR,NSHELL,
+     *                    KATOM,KTYPE,KLOC,KMIN,SHIFTB,IBDTYP,
+     *                    IAPRJO,JAPRJO,ISIDE, SS,ZAXIS,BOND,
+     *                    WAX,AA,WRK3,nomit,nocc,nvir,nocc2)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+C
+      PARAMETER (MXSH=5000, MXATM=2000,MXAO=8192)
+      PARAMETER (ZERO=0.0D+00,ONE=1.0D+00,TWO=2.0D+00)
+C
+c     LOGICAL GOPARR,DSKWRK,MASWRK
+      LOGICAL PARRGO
+      DIMENSION CLCAO(LDC,NMO),ROTLCAO(LDR,NMO),
+     *          KATOM(*),KTYPE(*),KLOC(*),KMIN(*)
+      DIMENSION SHIFTB(MAXCAO,*),IAPRJO(MAXCAO,*),JAPRJO(MAXCAO,*)
+      DIMENSION SS(L1,*),ZAXIS(3),BOND(3)
+      DIMENSION WAX(nocc,nvir,*), AA(nocc2,*),WRK3(*)
+C
+      COMMON /FMCOM / X(1)
+      common /fmodim/ maxbnd,maxknd,maxcbs,maxcao,maxvec,maxl1,maxnat,
+     *                maxabd,maxbas,maxbbd,maxlmo,maxslo,maxabd2
+      common /fmopnt/ lichfg,lmulfg,lidmrec,lfrgnam,llayfrg,lindat,
+     *                lnCBS,lfmozan,lfmoc,lfmomas,lizbas,liaglob,libdgh,
+     *                liabdfg,ljabdfg,lnCAO,lidxCAO,liaprjo,ljaprjo,
+     *                lCoreAO,lOccCor,lshiftb,liodfmo,lfmoda,lfmodb,
+     *                lfmoespa,lfmoespb,llocfmo,lscffrg,lfmoscf,lrij,
+     *                lpopmul,lpopmat,lialoc,lindbd,liatfrg,lindfrg,
+     *                lindgfrg,lnatfrg,lnat0frg,lianfrg,lzanfrg,lcfrg,
+     *                llibish,llibnsh,llibng,lindatg,lfmobuf(3),lfmode,
+     *                lnumfrg,lloctat,liaoglob,lloadm,lfmoge,ldgrid,
+     *                liodcfmo,ljob2grp,lfmopg,lemocdr,luntxyz,luntrot,
+     *                lstonep,lmapsu,lfrgmul,lclmo,lialmo,lindlmo,
+     *                latclmo,llmobdf,lfgflmo,lnfglmo,llfglmo,lpfglmo,
+     *                LPOPDMAT,lidmpnt,liddpnt,livmpnt,liactfg,lcrfrg,
+     *                lzlmfrgv,lYlmfrgv
+      COMMON /SYMTRY/ MAPSHL(MXSH,48),MAPCTR(MXATM,48),
+     *                TT(432),INVT(48),NT
+      COMMON /IJPAIR/ IA(MXAO)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+C 
+C     COMPUTE DERIVATIVES OF HOP COEFFICIENTS
+      if(l1.eq.0) write(*,*) "PARRGO =",PARRGO
+C 
+      CALL VALFM(LOADFM)
+      LPTRD  = LOADFM + 1
+      LDTRD  = LPTRD  + 3*3
+      LFTRD  = LDTRD  + 6*6
+      LGTRD  = LFTRD  + 10*10
+      LDROT  = LGTRD  + 15*15
+      LAST   = LDROT  + LDR*NAO
+
+      NEED  = LAST - LOADFM - 1
+      CALL GETFM(NEED)
+C
+C     wrk1 : LWAX
+C     wrk2 : LAA
+C     wrk3 : l3 * 4 free space
+      l3   = l1 * l1
+      lc   = l3 *  3 + 1
+      ilin = 0
+      irin = 0
+      DO iatom = 1, nat
+        IAZ=IXFTCH(X(LIAGLOB),iatom)
+        if(iaz.eq.LEFT ) ilin = iatom
+        if(iaz.eq.IRGHT) irin = iatom
+      END DO
+c     write(*,*) "in fmohop =",nomit
+      DO IC = 1, 3
+        CALL VECROTDER(ISKIP,IC,ZAXIS,BOND,TT)
+        IF (ISKIP.EQ.0) THEN
+          CALL TRMATDER(X(LPTRD),X(LDTRD),X(LFTRD),X(LGTRD))
+          CALL VCLR(X(LDROT),1,LDR*NAO)
+          ! note that nao is reset here
+          CALL ROTCAO(JJ,JAT,X(LPTRD),X(LDTRD),X(LFTRD),X(LGTRD),NAO,
+     *                NMO,CLCAO,LDC,X(LDROT),LDR,NSHELL,KATOM,KTYPE,
+     *                KLOC,KMIN,.TRUE.)
+c
+          CALL VCLR(WRK3,1,NAO*NAO+l3)
+          DO IMO = 1, NMO
+            if(iside.eq.0.and.iaprjo(imo,ibdtyp).ne.0.or.
+     *         iside.ne.0.and.japrjo(imo,ibdtyp).ne.0) then
+
+             BSHIFT = SHIFTB(imo,ibdtyp)
+             CALL DGEMM('N','T',NAO,NAO,1,BSHIFT,X(LDROT+LDR*(IMO-1)),
+     *                   LDR,ROTLCAO(1,IMO),LDR,ZERO,WRK3,NAO)
+             CALL DAXPY(NAO*NAO,ONE,WRK3,1,WRK3(l3+1),1)
+            end if
+          END DO
+          CALL SQ2TRI(NAO,NAO,WRK3(l3+1),WRK3(l3*2+1),one)
+          CALL TFTRI0(WRK3(l3+1),WRK3(L3*2+1),SS(ILOC,1),WRK3,
+     *                L1,NAO,L1)
+c       C^T *  P * C   ( AO --> MO)
+          CALL TFTRI(WRK3,wrk3(l3+1),wrk3(LC),WRK3(2*l3+1),NQMT,l1,l1)
+          do 10 iocc = 1,nocc 
+            do 20 jocc = 1,iocc
+             IJ = IA(IOCC) + JOCC
+             ll = (ilin - 1) * 3 + IC
+             kk = (irin - 1) * 3 + IC
+c            write(*,*) "IJ =",IJ,nocc2,WRK3(IJ)
+             if(ilin.ne.0) AA(IJ,ll) = AA(IJ,ll) - WRK3(IJ) *two*two
+             if(irin.ne.0) AA(IJ,kk) = AA(IJ,kk) + WRK3(IJ) *two*two
+ 20         continue
+ 10       continue
+c         write(*,*) "U-a P^b terms"
+c         do 15 mm = 1,nvir
+          do 15 mm = 1,nvir - nomit
+            do 25 ii = 1,nocc
+              ij = IA(nocc+mm) + ii
+              ll = (ilin - 1) * 3 + IC
+              kk = (irin - 1) * 3 + IC
+c             write(*,*) "IJ =",IJ,WRK3(IJ)
+             if(ilin.ne.0) 
+     *          wax(ii,mm,ll) = wax(ii,mm,ll) - WRK3(IJ) * two * two
+             if(irin.ne.0)                                          
+     *          wax(ii,mm,kk) = wax(ii,mm,kk) + WRK3(IJ) * two * two
+ 25         continue
+ 15       continue
+        END IF
+      END DO
+c
+      CALL RETFM(NEED)
+      RETURN
+      END
+C
+C*MODULE FMOHSS  *DECK HOPSHSS
+C>
+C>    @brief Add P^ab contribution to FMO Hessian
+C>
+C>    @details Add P^ab contribution to FMO Hessian.
+C>
+C>    @author Hiroya Nakata 
+C>
+C>    @param L1 :
+C>    @param L2 :
+C>    @param ILOC :
+C>    @param NAO :
+C>    @param PARRGO :
+C>    @param SDER :
+C>    @param DD :
+C>    @param DENS :
+C>    @param SS :
+C>    @param WRK1 :
+C>    @param WRK2 :
+C>    @param WRK3 :
+C>    @param FCM :
+C>
+      SUBROUTINE HOPSHSS(L1,L2,ILOC,NAO,PARRGO,SDER,DD,DENS,SS,
+     *                   WRK1,WRK2,WRK3,FCM)
+C
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+
+      PARAMETER (MXATM=2000)
+      PARAMETER (ZERO=0.0D+00,ONE=1.0D+00,two=2.0D+00)
+  
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      LOGICAL PARRGO
+      DIMENSION SDER(L2,*), DD(1), DENS(1), SS(L1,*)
+      DIMENSION WRK1(L1,*), WRK2(L1,*),WRK3(*)
+      DIMENSION FCM(natfmo*3,*)
+
+      COMMON /FMCOM / X(1)
+      COMMON /INFOA / NAT,ICH,MUL,NUM,NQMT,NE,NA,NB,
+     *                ZAN(MXATM),C(3,MXATM),IAN(MXATM)
+      COMMON /MACHIN/ NWDVAR,MAXFM,MAXSM,LIMFM,LIMSM
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      Common /fmoinf/ nfg,nlayer,natfmo,nbdfg,naotyp,nbody
+      common /fmopnt/ lichfg,lmulfg,lidmrec,lfrgnam,llayfrg,lindat,
+     *                lnCBS,lfmozan,lfmoc,lfmomas,lizbas,liaglob,libdgh,
+     *                liabdfg,ljabdfg,lnCAO,lidxCAO,liaprjo,ljaprjo,
+     *                lCoreAO,lOccCor,lshiftb,liodfmo,lfmoda,lfmodb,
+     *                lfmoespa,lfmoespb,llocfmo,lscffrg,lfmoscf,lrij,
+     *                lpopmul,lpopmat,lialoc,lindbd,liatfrg,lindfrg,
+     *                lindgfrg,lnatfrg,lnat0frg,lianfrg,lzanfrg,lcfrg,
+     *                llibish,llibnsh,llibng,lindatg,lfmobuf(3),lfmode,
+     *                lnumfrg,lloctat,liaoglob,lloadm,lfmoge,ldgrid,
+     *                liodcfmo,ljob2grp,lfmopg,lemocdr,luntxyz,luntrot,
+     *                lstonep,lmapsu,lfrgmul,lclmo,lialmo,lindlmo,
+     *                latclmo,llmobdf,lfgflmo,lnfglmo,llfglmo,lpfglmo,
+     *                LPOPDMAT,lidmpnt,liddpnt,livmpnt,liactfg,lcrfrg,
+     *                lzlmfrgv,lYlmfrgv
+c     COMMON /SCZLAG/ LZVLAG,LZVWRK,LYALAG,LYAWRK
+C
+C     SDER is Overlap derivative, DD is projection matrix
+C     DENS is Density matrix (density or symmetrized ZVEC)
+C     SS   is Overlap matrix in the square form  
+      if(l1.eq.0) write(*,*) "jjjjj =",PARRGO
+      L3   = l1   * l1
+      LC   = l3   * 3   + 1
+c     NLOC = ILOC + NAO - 1
+c     call vclr(FCM,1,negh)
+c     write(*,*) "check01 =",NAO,ILOC
+      CALL TFTRI0(WRK1,DD,SS(ILOC,1),WRK3,L1,NAO,L1)
+      CALL TFTRI(WRK3(l3+1),wrk1,wrk3(LC),WRK3,NQMT,l1,l1)
+      IJ = 0
+      DO 130 I = 1,L1
+         DO 120 J = 1,I
+            IJ = IJ+1
+            DUM = ZERO
+            DO 110 K = 1,NA
+               II  = LC + l1 * (K - 1)  + I - 1
+               JJ  = LC + l1 * (K - 1)  + J - 1
+               KK  = (K * K  - K)/2 + 1 + L3
+               DUM = DUM+WRK3(KK)*WRK3(II)*WRK3(JJ)
+  110       CONTINUE
+c           WRK3(IJ) = DUM + DUM
+            WRK3(IJ) = DUM 
+  120    CONTINUE
+  130 CONTINUE
+C-
+      do 200 iat =  1,nat
+        IAZ=IXFTCH(X(LIAGLOB),IAT)
+        do ixyz = 1,3
+          izxyz = (iaz - 1) * 3 + ixyz
+          ii    = (iat - 1) * 3 + ixyz 
+c         CALL CPYTSQ(DENS,WRK3,L1,1)
+          CALL CPYTSQ(SDER(1,ii),WRK2,L1,1)
+          CALL CPYTSQ(WRK3,WRK3(L3+1),L1,1)
+          CALL DGEMM('N','N',L1,L1,L1,ONE,WRK2,L1,wrk3(l3+1),L1,ZERO,
+     *               WRK1,L1)
+          do 100 jat = 1,nat
+            JAZ=IXFTCH(X(LIAGLOB),JAT)
+            do jxyz = 1,3
+              jzxyz = (jaz - 1) * 3 + jxyz
+              jj    = (jat - 1) * 3 + jxyz
+              CALL CPYTSQ(SDER(1,jj),WRK2,L1,1)
+              CALL DGEMM('N','N',L1,L1,L1,ONE,WRK1,L1,wrk2,L1,ZERO,
+     *               WRK3(l3+1),L1)
+              CALL CPYTSQ(DENS,WRK2,L1,1)
+              val = ddot(l1*l1,WRK3(L3+1),1,WRK2,1) 
+C   
+              FCM(izxyz,jzxyz) =  FCM(izxyz,jzxyz) - val  
+              FCM(jzxyz,izxyz) =  FCM(jzxyz,izxyz) - val  
+c             write(*,*) "val01  =",val,izxyz,jzxyz
+            end do
+ 100      continue          
+        end do
+ 200  continue
+C
+C
+      CALL VALFM(LOADFM)
+      NGOTMX=LIMFM-LOADFM
+c     
+      LSX    = 1     + LOADFM
+      LSY    = LSX   + L2
+      LSZ    = LSY   + L2
+      LDSDX  = LSZ   + L2
+      LDSDY  = LDSDX + L3
+      LDSDZ  = LDSDY + L3
+      LDE    = LDSDZ + L3
+      LDH    = LDE   + NAT * 3
+      LAST   = LDH   + (NAT+NAT*NAT)*9/2
+      NEED   = LAST  - LSX
+      IF(NEED.GT.NGOTMX) THEN
+         IF (MASWRK) WRITE(*,*) 'IN SD, NEED,NGOT=',NEED,NGOTMX
+         CALL ABRT
+      END IF
+      CALL GETFM(NEED)
+c 
+      NEGH = 3*NAT+9*(NAT*(NAT+1))/2
+      CALL VCLR(X(LDE),1,NEGH)
+      CALL VCLR(X(LDSDX),1,L3)
+      CALL VCLR(X(LDSDY),1,L3)
+      CALL VCLR(X(LDSDZ),1,L3)
+C
+      CALL DSCAL(L2,two,wrk3,1)
+C
+      CALL SDSPD(X(LDE),x(LDH),WRK3,X(LSX),X(LSY),X(LSZ),
+     *           X(LDSDX),X(LDSDY),X(LDSDZ),.false.,WRK1,.false.)
+      IF(GOPARR) CALL DDI_GSUMF(1625,x(LDE),NEGH)
+      call addhss(nat,natfmo,x(LDH),FCM,1,x(liaglob))
+C
+C-
+C
+      CALL RETFM(NEED)
+      RETURN
+      END
+C

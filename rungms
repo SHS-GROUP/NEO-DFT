@@ -155,6 +155,14 @@ endif
 #
 setenv NBOEXE /u1/mike/nbo6/bin/nbo6.i8.exe
 #
+#        choose remote shell execution program.
+#    Parallel run do initial launch of GAMESS on remote nodes by the
+#    following program.  Note that the authentication keys for ssh
+#    must have been set up correctly.
+#    If you wish, choose 'rsh/rcp' using .rhosts authentication instead.
+setenv DDI_RSH ssh
+setenv DDI_RCP scp
+#
 #    If a $GDDI input group is present, the calculation will be using
 #    subgroups within DDI (the input NGROUP=0 means this isn't GDDI).
 #
@@ -182,6 +190,43 @@ if ($ngddi > 0) then
    unset echo
 else
    set GDDIjob=false
+endif
+
+#             replica-exchange molecular dynamics (REMD)
+#     option is active iff runtyp=md as well as mremd=1 or 2.
+#     It utilizes multiple replicas, one per subgroup.
+#     Although REMD is indeed a GDDI kind of run, it handles its own
+#     input file manipulations, but should do the GDDI file defs above.
+set runmd=`grep -i runtyp=md $SCR/$JOB.F05 | wc -l`
+set mremd=`grep -i mremd= $SCR/$JOB.F05 | grep -iv 'mremd=0 ' | wc -l`
+if (($mremd > 0) && ($runmd > 0) && ($ngddi > 0)) then
+   set GDDIjob=false
+   set REMDjob=true
+   echo "This is a REMD run, keeping various output files on local disks"
+   set echo
+   setenv TRAJECT     $SCR/$JOB.F04
+   setenv RESTART $USERSCR/$JOB.rst
+   setenv    REMD $USERSCR/$JOB.remd
+   unset echo
+   set GDDIinp=(`grep -i '^ \$GDDI' $JOB.inp`)
+   set numkwd=$#GDDIinp
+   @ g = 2
+   @ gmax = $numkwd - 1
+   while ($g <= $gmax)
+      set keypair=$GDDIinp[$g]
+      set keyword=`echo $keypair | awk '{split($1,a,"="); print a[1]}'`
+      if (($keyword == ngroup) || ($keyword == NGROUP)) then
+         set nREMDreplica=`echo $keypair | awk '{split($1,a,"="); print a[2]}'`
+         @ g = $gmax
+      endif
+      @ g++
+   end
+   unset g
+   unset gmax
+   unset keypair
+   unset keyword
+else
+   set REMDjob=false
 endif
 
 #    data left over from a previous run might be precious, stop if found.
@@ -426,19 +471,6 @@ if ($TARGET == sockets) then
 #--echo "The generated host list is"
 #--echo $HOSTLIST
 #
-#
-#        choose remote shell execution program.
-#    Parallel run do initial launch of GAMESS on remote nodes by the
-#    following program.  Note that the authentication keys for ssh
-#    must have been set up correctly.
-#    If you wish, choose 'rsh' using .rhosts authentication on next line.
-   setenv DDI_RSH ssh
-#
-   if($DDI_RSH == ssh) then
-      setenv DDI_RCP scp
-   else
-      setenv DDI_RCP rcp
-   endif
 
 #        One way to be sure that the master node of each subgroup
 #        has its necessary copy of the input file is to stuff a
@@ -454,6 +486,10 @@ if ($TARGET == sockets) then
       end
    endif
 
+   if ($REMDjob == true) then
+      source $GMSPATH/tools/remd.csh $TARGET $nREMDreplica
+      if ($status > 0) exit $status
+   endif
 #
 #        Just make sure we have the binaries, before we try to run
 #
@@ -805,10 +841,10 @@ if ($TARGET == mpi) then
    #     has its necessary copy of the input file is to stuff a
    #     copy of the input file onto every single node right here.
    if ($GDDIjob == true) then
-      setenv DDI_RCP scp
       set nmax=`wc -l $HOSTFILE`
       set nmax=$nmax[1]
       set lasthost=$master
+      echo GDDI has to copy your input to every node....
       @ n=2   # input has already been copied into the master node.
       while ($n <= $nmax)
          set host=`sed -n -e "$n p" $HOSTFILE`
@@ -824,8 +860,16 @@ if ($TARGET == mpi) then
       #      in the physical node (just skip setting the value).
       #      Some FMO runs may benefit by choosing smaller logical node
       #      sizes, if the physical nodes have many cores.
-      #---setenv DDI_LOGICAL_NODE_SIZE $PPN
+      #      Perhaps, trial and error might show most efficient run times
+      #      of your particular problem occur using 4 cores per logical node?
+      #---setenv DDI_LOGICAL_NODE_SIZE 4
    endif
+
+   if ($REMDjob == true) then
+      source $GMSPATH/tools/remd.csh $TARGET $nREMDreplica
+      if ($status > 0) exit $status
+   endif
+
    #
    #  Now, at last, we can actually kick-off the MPI processes...
    #
