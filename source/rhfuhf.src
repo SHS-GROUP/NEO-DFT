@@ -1,4 +1,5 @@
-C 20 Feb 13 - DGF - Add an option to enable Kurt's trick in UHF 
+C 20 Sep 13 - ACW,MWS - UHFOP: generate VVOs for high spin ROHF
+C 20 Feb 13 - DGF - Add an option to enable Kurt's trick in UHF
 C 20 Feb 13 - JAM - UHFOP: implement Constrained UHF
 C  6 Feb 13 - MWS - shorten lines past column 72 (mostly format)
 C 19 Oct 12 - MWS - synchronize FRGINF common
@@ -6617,9 +6618,12 @@ C           WRITE(IW,*)"ADDING DIFFERENCE HNEW-HOLD TO F"
          CALL VADD(X(LFB),1,X(LH1),1,X(LFB),1,L2)
       END IF
 C
+C     UHF-style alpha and beta operators are now completed,
+C     including 1e- and 2e- contributions, DFT exchange/correlation
+C     contributions, and solvent modifications.
+C
       CALL DAWRIT(IDAF,IODA,X(LFA),L2,14,0)
       CALL DAWRIT(IDAF,IODA,X(LFB),L2,18,0)
-      IF(CVGED  .AND.  ICCFLG.GT.0) GO TO 710
 C
       IF(DBG) THEN
          WRITE(IW,*) 'ALPHA TOTAL FOCK MATRIX'
@@ -6627,6 +6631,8 @@ C
          WRITE(IW,*) 'BETA TOTAL FOCK MATRIX'
          CALL PRTRIL(X(LFB),L1)
       END IF
+C
+      IF(CVGED  .AND.  ICCFLG.GT.0) GO TO 710
 C
 C     ----- CALCULATE ENERGY -----
 C
@@ -6875,6 +6881,7 @@ C
       IF(NFG.NE.0)       EIGAVL = ITER.GT.1
 C
       IF(SOSCF .AND.  EIGAVL) THEN
+C               ROHF tucks the alpha operator away for safekeeping.
          IF(SCFTYP.EQ.ROHF) THEN
             IF (NDFTFG.EQ.0) THEN
                CALL DAWRIT(IDAF,IODA,X(LFA)  ,L2,51,0)
@@ -6956,6 +6963,7 @@ C     -LWRK1- IS TRIANGULAR, -LWRK2- IS SQUARE SCRATCH STORAGE.
 C
       IF(SCFTYP.EQ.ROHF) THEN
          IF(ITER.EQ.1) CALL DAREAD(IDAF,IODA,X(LVA),L3,15,0)
+C               ROHF tucks the alpha operator away for safekeeping.
          IF (NDFTFG.EQ.0) THEN
             CALL DAWRIT(IDAF,IODA,X(LFA)  ,L2,51,0)
          ELSE
@@ -6965,6 +6973,9 @@ C
          IF(MINMEM) CALL DAREAD(IDAF,IODA,X(LS),L2,12,0)
          CALL ROFOCK(X(LFA),X(LFB),X(LWRK1),X(LVA),X(LSCR),X(LS),
      *               X(LWRK2),NA,NB,0,L0,L1,L2,L3,DBG)
+C               the combined operator is saved as Fa, temporarily.
+C               this is reversed below, so that Fa/Fb are at the
+C               normal places, and the total F ends up at 51!
          CALL DAWRIT(IDAF,IODA,X(LFA),L2,14,0)
       END IF
 C
@@ -7192,6 +7203,7 @@ C
          CALL PRTRIL(X(LDB),L1)
          WRITE(IW,*) '*** END OF DEBUG OUTPUT FOR ITERATION',ITER
       END IF
+C
 C     ----- COSMO SAVE ORBITALS AND DENSITIES AND ENERGIES -----
 C
       IF (ISEPS) THEN
@@ -7202,10 +7214,18 @@ C
       ENDIF
 C
 C     ----- RESTORE ALPHA ONLY PART OF FOCK MATRIX -----
+C     When we get here, the total Fock operator "a la John Montgomery"
+C     is stored at 14, with the pure alpha one tucked away at 51.
+C     Combined Fock operator will now be saved at record 51, so both
+C     records 14/18 and in-memory storage -Fa-/-Fb- return to being
+C     the separate alpha/beta operators.
 C
       IF(SCFTYP.EQ.ROHF) THEN
+         CALL DAREAD(IDAF,IODA,X(LFB),L2,14,0)
          CALL DAREAD(IDAF,IODA,X(LFA),L2,51,0)
+         CALL DAWRIT(IDAF,IODA,X(LFB),L2,51,0)
          CALL DAWRIT(IDAF,IODA,X(LFA),L2,14,0)
+         CALL DAREAD(IDAF,IODA,X(LFB),L2,18,0)
       END IF
 C
       CALL TSECND(TITER2)
@@ -7338,7 +7358,7 @@ C     ROHF MAKEFP RUNS MUST USE ROOTHAAN CANONICALIZATION,
 C     FORCE THESE PARAMETERS FOR THE FINAL SCF ITERATION
 C
       IF(CVGING  .AND.  RUNTYP.EQ.MAKEFP) THEN
-         IF(AROHF(1).NE.-HALF  .OR.  BROHF(1).NE.ONEPT5 .OR.
+         IF( AROHF(1).NE.-HALF  .OR.  BROHF(1).NE.ONEPT5 .OR.
      *       AROHF(2).NE. HALF  .OR.  BROHF(2).NE. HALF  .OR.
      *       AROHF(3).NE.ONEPT5 .OR.  BROHF(3).NE.-HALF) THEN
             IF(MASPRT  .AND.  .NOT.CVGED) WRITE(IW,9390)
@@ -7497,6 +7517,7 @@ C
             IF(MINMEM) CALL DAREAD(IDAF,IODA,X(LS),L2,12,0)
             CALL ROFOCK(X(LFA),X(LFB),X(LWRK1),X(LVA),X(LSCR),X(LS),
      *                  X(LWRK2),NA,NB,0,L0,L1,L2,L3,DBG)
+            CALL DAWRIT(IDAF,IODA,X(LFA),L2,51,0)
          END IF
          IF(ABINIT) THEN
             IF(MINMEM) CALL DAREAD(IDAF,IODA,X(LQ),L3,45,0)
@@ -7775,10 +7796,11 @@ C
       END IF
 C
 C     ----- VALENCE VIRTUAL ORBITALS -----
+C     ROHF passes combined Fock matrix in AO basis to VVO generator
 C
       IF(IVVOS.NE.0.AND.SCFTYP.EQ.ROHF) THEN
          CALL DAREAD(IDAF,IODA,X(LVA),L3,15,0)
-         CALL DAREAD(IDAF,IODA,X(LFA),L2,14,0)
+         CALL DAREAD(IDAF,IODA,X(LFA),L2,51,0)
          NOCC = NA
          CALL VVOS(X(LVA),X(LFA),X(LEA),
      *             X(LWRK1),X(LWRK2),X(LWRK3),X(LSCR),X(LIWRK),

@@ -1,3 +1,4 @@
+C 20 Sep 13 - MWS - fix spher.harm. for OCBSE, generate VVOs
 C 20 Feb 13 - MWS - synchronize SCFWFN common
 C 19 Oct 12 - MWS - synchronize FRGINF common
 C 15 APR 11 - HL  - ADD QUANPOL
@@ -119,7 +120,7 @@ C 24 APR 87 - STE - REDDEN: REMOVE IA
 C                   GVBITR: REMOVE IA FROM CALLS TO REDDEN,ORTHO
 C                   JKFORM: REMOVE IA FROM CALLS TO TFTRI
 C 24 NOV 86 - MWS - CHANGE RSHIFT TO RRSHFT
-C  3 NOV 86 - STE - SCHORT:USE DSCAL; UPOCBS:MOVE FAC=0; PARAMETERS
+C  3 NOV 86 - STE - SCHORT:USE DSCAL; OCBSE: MOVE FAC=0; PARAMETERS
 C                   REMOVE NAV REFERENCES
 C  8 JUL 86 - JAB - ADD BIT PACKING/UNPACKING FOR CRAY, CELERITY
 C  7 JUL 86 - JAB - RENAME ROUTINE "SHIFTR" TO "LVLGVB"
@@ -237,6 +238,13 @@ C
       RETURN
       END
 C*MODULE GVB     *DECK GVBCVG
+C>
+C>    @brief   check GVB convergence
+C>
+C>    @details evaluate GVB's root mean square rotation angles sum
+C>
+C>    @author  this is presumably original to the GVB-ONE program.
+C>
       SUBROUTINE GVBCVG(HOLD,E,L1,L0,SQCDF,OUT)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
@@ -245,7 +253,7 @@ C
 C
       LOGICAL OUT
 C
-      DIMENSION HOLD(L1,*),E(*)
+      DIMENSION HOLD(L1,L0),E(L0)
 C
       COMMON /GVBWFN/ CICOEF(2,12),F(25),ALPHA(325),BETA(325),NO(10),
      *                NCO,NSETO,NOPEN,NPAIR,NORB,NCONF(MXAO),NHAM
@@ -346,14 +354,26 @@ C
       RETURN
       END
 C*MODULE GVB     *DECK GVBFCK
+C>
+C>    @brief   GVB combined Fock operator
+C>
+C>    @details The Fock operators for every shell IHAM are combined
+C>             to a "single Fock operator".  This routine can handle
+C>             open shells and the shells from true GVB pairs.
+C>             Somewhat mysteriously, it is called for multi-pair
+C>             cases by SOSCF, but when DIIS is the converger,
+C>             this is called only for 0 or 1 pairs.
+C>
+C>    @author  Galina Chaban, circa 1995
+C>
       SUBROUTINE GVBFCK(JKUNIT,H,H2,S,TRANS,SCR,ERRMAT,WRK1,WRK2,DMP,
-     *                  DODIIS,L1,L2,L3,OUT,SOSCF)
+     *                  DODIIS,L0,L1,L2,L3,OUT,SOSCF,CVGING)
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
 C
       PARAMETER (MXAO=8192)
 C
-      LOGICAL DODIIS,OUT,SOSCF,MFRZ
+      LOGICAL DODIIS,OUT,SOSCF,CVGING,MFRZ
 C
       DIMENSION H(L2),H2(L2),S(L2),TRANS(L3),SCR(L1),ERRMAT(L3),
      *          WRK1(L3),WRK2(L3)
@@ -362,6 +382,7 @@ C
      *                NCO,NSETO,NOPEN,NPAIR,NORB,NCONF(MXAO),NHAM
       COMMON /IOFILE/ IR,IW,IP,IJK,IJKT,IDAF,NAV,IODA(950)
       COMMON /MFRPAR/ MFRZ,NUMFRZ,NORFRZ,IFRZ(MXAO)
+      COMMON /VVOPAR/ IVVOS,NVVOS,BNDDEN
 C
       PARAMETER (ZERO=0.0D+00)
 C
@@ -385,7 +406,7 @@ C      PROBLEMS OF SLOW CONVERGENCE WHEN THEY BECOME SMALL.
 C
 C      ON ENTRY, -S- AND -TRANS- ARE OVERLAPS AND LCAO EXPANSION COEFS.
 C
-      DO 170 I = NORB+1,L1
+      DO 170 I = NORB+1,L0
          NCONF(I) = NCONF(NORB)+1
   170 CONTINUE
 C
@@ -427,7 +448,7 @@ C
 C
       IF(OUT) THEN
          WRITE(IW,*) 'CORE FOCK MATRIX'
-         CALL PRTRI(H,L1)
+         CALL PRTRI(H,L0)
       END IF
 C
 C     --- READ SEPARATE FOCK MATRICES AND FORM SINGLE FOCK MATRIX ---
@@ -442,12 +463,12 @@ C
          CALL DSCAL(L2,F(IHAM),H2,1)
          IF(OUT) THEN
             WRITE(IW,*) 'FOCK MATRIX NO.',IHAM
-            CALL PRTRI(H2,L1)
+            CALL PRTRI(H2,L0)
          END IF
 C
          DO 380 I=NCO+1,NORB
             IF (NCONF(I).NE.IHAM) GO TO 380
-            DO 370 J=1,L1
+            DO 370 J=1,L0
                JI=J*(J-1)/2+I
                IF (J.LT.I) JI=I*(I-1)/2+J
                IF (.NOT.SOSCF) THEN
@@ -477,41 +498,52 @@ C
 C
       IF(OUT) THEN
          WRITE(IW,*) 'COMBINED FOCK MATRIX IN MO BASIS'
-         CALL PRTRI(H,L1)
+         CALL PRTRI(H,L0)
       END IF
 C
 C     IF MFRZ, ZERO OUT THE NON-DIAGONAL FROZEN ORBITAL ELEMENTS
 C
-      IF(MFRZ) CALL FRFOCK(H,L1)
+      IF(MFRZ) CALL FRFOCK(H,L0)
       IF(MFRZ.AND.OUT) THEN
          WRITE(IW,*)'FOCK MATRIX IN MO BASIS AFTER ZEROING',
      *              ' THE FROZEN THE OFF-DIAG ELEMENTS'
-         CALL PRTRI(H,L1)
+         CALL PRTRI(H,L0)
       END IF
 C
-      IF(.NOT.DODIIS) RETURN
+      IF(.NOT.DODIIS  .AND.  (IVVOS.EQ.0  .OR.  .NOT.CVGING)) RETURN
 C
-C        IF DIIS IS ACTIVE, -H- WILL BE THE SINGLE FOCK OPERATOR
+C        IF DIIS IS ACTIVE, -H- WILL BECOME THE SINGLE FOCK OPERATOR,
 C            AND -ERRMAT- THE ERROR MATRIX, BOTH IN THE AO BASIS.
+C        VVO GENERATION ALSO REQUIRES AO BASIS OPERATOR, IF LAST ITER.
 C
-C     ----- BACK-TRANSFORM GVB FOCK MATRIX TO AO BASIS -----
-C     FAO = (SC) * HMO * (SC)-DAGGER
-C
-      CALL MTARBR(S,L1,TRANS,L1,WRK1,L1,1)
-      CALL TRPOSQ(WRK1,L1)
+C        save the MO operator at H2 for error matrix step below
 C
       CALL DCOPY(L2,H,1,H2,1)
+C
+C     ----- BACK-TRANSFORM GVB FOCK MATRIX TO AO BASIS -----
+C               FAO = (SC) * H(MO) * (SC)-DAGGER
+C
+      CALL MTARBR(S,L1,TRANS,L0,WRK1,L1,1)
+      IF(L0.LT.L1) CALL VCLR(WRK1(L1*L0+1),1,(L1*(L1-L0)))
+      CALL TRPOSQ(WRK1,L1)
       CALL TFTRI(H,H2,WRK1,SCR,L1,L1,L1)
+C
       IF(OUT) THEN
          WRITE(IW,*) 'COMBINED FOCK MATRIX IN AO BASIS'
          CALL PRTRI(H,L1)
       END IF
 C
+      IF(IVVOS.NE.0) THEN
+         CALL DAWRIT(IDAF,IODA,H,L2,51,0)
+         IF(SOSCF) CALL DCOPY(L2,H2,1,H,1)
+      END IF
+      IF(.NOT.DODIIS) RETURN
+C
 C     ----- MAKE ERROR MATRIX -----
-C     IN THE MO BASIS, THIS IS ALL INTER-SHELL ELEMENTS OF FMO
+C     IN THE MO BASIS, THIS IS ALL INTER-SHELL ELEMENTS OF F(MO).
 C
       IJ = 0
-      DO 260 I = 1,L1
+      DO 260 I = 1,L0
          ISH = NCONF(I)
          DO 250 J = 1,I
             IJ = IJ + 1
@@ -524,6 +556,10 @@ C     ----- BACK TRANSFORM ERROR MATRIX TO AO BASIS -----
 C     EXPAND FMO INTO AN ANTISYMMETRIC MATRIX, THEN BACKTRANSFORM.
 C          AO ERR = (SC) * ERR * (SC)-DAGGER
 C     NOTE THAT FROM ABOVE -WRK1- CONTAINS (SC)-DAGGER
+C
+C     Note that all elements of MO operators above the spherical
+C     harmonic space should have been set to zero, so the following
+C     operates with full L1 dimensions.
 C
       CALL EXPND(H2,ERRMAT,L1,1)
       CALL MRARBR(ERRMAT,L1,L1,L1,WRK1,L1,L1,WRK2,L1)
@@ -542,7 +578,14 @@ C
       STOP
       END
 C*MODULE GVB     *DECK GVBGRD
-      SUBROUTINE GVBGRD(H,GRAD,L1,L2,NPR,ORBGRD)
+      SUBROUTINE GVBGRD(H,GRAD,L0,L2,NPR,ORBGRD)
+C>
+C>    @brief   orbital gradient for GVB
+C>
+C>    @details The GVB orbital gradient, for SOSCF converger, consists
+C>             of all inter-shell elements of the single Fock matrix.
+C>
+C>    @author  Galina Chaban, circa 1995
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
@@ -560,34 +603,47 @@ C           MATRIX ELEMENTS OF COMBINED FOCK MATRIX IN MO BASIS
 C           GRAD(JI) = (J | H(J)-H(I) | I>
 C
 C          H      - SINGLE COMBINED FOCK MATRIX IN MO BASIS
-C          L1     - NUMBER OF BASIS FUNCTIONS
+C          L0     - NUMBER OF MOLECULAR ORBITALS
 C          NPR    - NUMBER OF ROTATION PARAMETERS
 C          ORBGRD - MAXIMUM ORBITAL GRADIENT COMPONENT
 C
-      DO 210 I = NORB+1,L1
+      DO 210 I = NORB+1,L0
          NCONF(I) = NCONF(NORB)+1
   210 CONTINUE
 C
       K=0
-      ORBGRD=ZERO
       DO 290 IHAM = 1,NHAM
          DO 280 J = 1,NORB
             IF (NCONF(J) .NE. IHAM) GO TO 280
-            DO 270 I = NCO+1,L1
+            DO 270 I = NCO+1,L0
                IF (NCONF(I) .LE. IHAM) GO TO 270
-               IJ=I*(I-1)/2+J
                K=K+1
+               IJ=I*(I-1)/2+J
                GRAD(K)=-H(IJ)
                IF (ABS(GRAD(K)).LT.1.0D-08) GRAD(K)=ZERO
   270       CONTINUE
   280    CONTINUE
   290 CONTINUE
+      IF(K.NE.NPR) THEN
+         WRITE(6,*) 'GVBGRD: UNEXPECTED ERROR, K,NPR=',K,NPR
+         CALL ABRT
+      END IF
+C
       IMAX   = IDAMAX(NPR,GRAD,1)
       ORBGRD = ABS(GRAD(IMAX))
+C
       RETURN
       END
 C*MODULE GVB     *DECK GVBHAM
-      SUBROUTINE GVBHAM(JKUNIT,DJ,DK,H,IA,L1,L2,OUT)
+C>
+C>    @brief   CALCULATE A FOCK MATRIX FOR EACH SHELL
+C>
+C>    @details calculate kinetic and total energy as well as a
+C>             different Fock operator for every shell
+C>
+C>    @author  this is presumably original to the GVB-ONE program.
+C>
+      SUBROUTINE GVBHAM(JKUNIT,DJ,DK,H,IA,L0,L1,L2,OUT)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
@@ -595,7 +651,7 @@ C
 C
       LOGICAL OUT
 C
-      DIMENSION DJ(L2),DK(L2),H(L2),IA(L2)
+      DIMENSION DJ(L2),DK(L2),H(L2),IA(L1)
 C
       COMMON /CONV  / DENTOL,EN,ETOT,EHF,EHFO,DIFF,ITER,ICALP,ICBET
       COMMON /GVBENG/ EK,VIR,TKIN(25),TPLUSV(25),ASYM
@@ -605,8 +661,7 @@ C
 C
       PARAMETER (ZERO=0.0D+00, ONE=1.0D+00)
 C
-C     ----- CALCULATE A FOCK MATRIX FOR EACH FOCK OPERATOR -----
-C     ----- CALCULATE T AND T + V
+C     ----- CALCULATE T AND T + V -----
 C
       EK = ZERO
       EHF = ZERO
@@ -616,6 +671,9 @@ C
   100 CONTINUE
 C
 C     ----- LOOP OVER FOCK OPERATORS -----
+C     J and K from disk are in the MO basis, and should have zero
+C     values above the spherical harmonic variation space.
+C     Thus DAXPY operations on the entire L2 matrices do no harm.
 C
       NCORE = 1
       IF(NCO.EQ.0) NCORE=0
@@ -625,7 +683,7 @@ C
          CALL SQREAD(JKUNIT,H,L2)
          IF (OUT) THEN
             WRITE(IW,*) 'INCOMPLETE CORE FOCK OP. IN MO BASIS'
-            CALL PRTRI(H,L1)
+            CALL PRTRI(H,L0)
          END IF
          NHAM1 = NHAM
          IF (NCO.NE.0) NHAM1 = NHAM - 1
@@ -640,19 +698,18 @@ C
             FACTB =  BETA(NXIHAM)*FACT
             IF (OUT) THEN
                WRITE(IW,9801) IHAM,K,FACT,FACTA,FACTB
- 9801          FORMAT(' IHAM =',I3,' K =',I3,' FACT =',G12.5,
-     *                ' FACTA =',G13.5,' FACTB =',G13.5)
                WRITE(IW,*) 'OPEN SHELL J OPERATOR FOR SHELL',K
-               CALL PRTRI(DJ,L1)
+               CALL PRTRI(DJ,L0)
                WRITE(IW,*) 'OPEN SHELL K OPERATOR FOR SHELL',K
-               CALL PRTRI(DK,L1)
+               CALL PRTRI(DK,L0)
             END IF
             CALL DAXPY(L2,FACTA,DJ,1,H,1)
             CALL DAXPY(L2,FACTB,DK,1,H,1)
   140    CONTINUE
+C
          IF (OUT) THEN
             WRITE(IW,*) 'TOTAL FOCK MATRIX FOR SHELL IHAM',IHAM
-            CALL PRTRI(H,L1)
+            CALL PRTRI(H,L0)
          END IF
 C
 C        ----- ADD THE TWO ELECTRON CONTRIBUTION TO TOTAL ENERGY -----
@@ -675,6 +732,9 @@ C
          CALL SQWRIT(JKUNIT,H,L2)
   240 CONTINUE
       RETURN
+C
+ 9801 FORMAT(' IHAM =',I3,' K =',I3,' FACT =',G12.5,
+     *       ' FACTA =',G13.5,' FACTB =',G13.5)
       END
 C*MODULE GVB     *DECK GVBHES
       SUBROUTINE GVBHES(JKUNIT,HESS,HI,DIAGH,DIAGJ,DIAGK,
@@ -790,6 +850,23 @@ C
       RETURN
       END
 C*MODULE GVB     *DECK GVBITR
+C>
+C>    @brief   main driver of GVB iterations
+C>
+C>    @details GVB driver, for low or high-spin SCF, and true GVB-PP.
+C>             An iteration includes formation of J,K operators,
+C>             their combination to shell F operators, and for
+C>             cases with 0 or 1 pairs, to a single Fock matrix.
+C>             SOSCF converger works for the general case, while
+C>             the DIIS converger works for 0 or 1 GVB pairs, so
+C>             the original OCBSE converger takes non-SOSCF NPAIR>1.
+C>             Various solvent modifications are programmed.
+C>             F.W.Bobrowicz and W.A.Goddard, in Modern Theoretical
+C>             Chemistry, Vol 3, H.F.Schaefer III, Ed., Chapter 4.
+C>
+C>    @author  this is presumably original to the GVB-ONE program,
+C>             with an extensive revision history while in GAMESS.
+C>
       SUBROUTINE GVBITR(TRANS,DJ,DK,H,H2,E,EIG,XP,XK,IXPK,NIJS,NKLS,
      *                  S,Q,SCR,IWRK,IA,DSH,XINTS,GHONDO,DDIJ,
      *                  MXFOCK,NINTMX,L0,L1,L2,L3,NSH2,MAXG,INTTYP,
@@ -894,6 +971,7 @@ C
       COMMON /SCFWFN/ AROHF(3),BROHF(3),PACAVO(6),IACAVO,IUHFNO,ICUHF,
      *                MVOQ
       COMMON /SVPOPT/ ISVP,NSVP,MTHSVP,NCAV,NVLPL,IQP
+      COMMON /VVOPAR/ IVVOS,NVVOS,BNDDEN
       COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
      *                MPLEVL,MPCTYP
       COMMON /ZRFPAR/ GZRF,FIND(3),GNUCF,EBORN,DIELEC,IZRF,ICALC
@@ -1041,7 +1119,8 @@ C        RUNS W/O PAIRS SEEM TO BENEFIT FROM ONE CONVENTIONAL
 C        MATRIX DIAGONALIZATION STEP.  SO TOO WILL HESSIAN
 C        RUNS, AT ALL NUMERIC DISPLACEMENTS, SINCE THE DIAGS
 C        WILL BREAK THE ORBITAL SYMMETRY FROM VIB 0 UP.  IT
-C        SEEMS BEST TO START SOSCF AT ONCE FOR ALL PAIR RUNS.
+C        SEEMS BEST TO START SOSCF AT ONCE FOR ALL PAIR RUNS,
+C        ALTHOUGH THIS DOES EXECUTE ONE -OCBSE- STEP ANYWAY.
 C
       ITSO=0
       NSO=1
@@ -1054,7 +1133,7 @@ C     ----- INITIALIZE DISK FOR EXTRAPOLATION -----
 C
       NDAF = 71
       LNOC = L1*NORB
-      IF(LNOC.LT.L2) LNOC = L2
+      IF(LNOC.LT.L2) LNOC=L2
       CALL WDISK(TRANS,TRANS,TRANS,NDAF,LNOC)
 C
 C     ----- PRINT ITERATION HEADER -----
@@ -1532,7 +1611,7 @@ C
   140 CONTINUE
       IF(OUT) THEN
          WRITE(IW,*) 'CURRENT MO-S'
-         CALL PREV(TRANS,E,L1,L1,L1)
+         CALL PREV(TRANS,E,L0,L1,L1)
       END IF
 C
 C     ----- SET UP THE DATA FOR THE VIRIAL CALCULATION -----
@@ -1567,14 +1646,14 @@ C     ----- EVALUATE THE FOCK MATRICES -----
 C     DJ USED AS 2*L2 (DK IS SECOND PART OF DJ)
 C     H  USED AS L2
 C
-      CALL GVBHAM(JKUNIT,DJ,DK,H,IA,L1,L2,OUT)
+      CALL GVBHAM(JKUNIT,DJ,DK,H,IA,L0,L1,L2,OUT)
 C
 C     ----- SECOND ORDER GVB ORBITAL OPTIMIZATION -----
 C
       SOSTART=SOSCF .AND. ITER.GE.NSO
       IF (SOSTART) THEN
          CALL GVBFCK(JKUNIT,H,DJ,S,TRANS,SCR,WRK3,WRK2,WRK1,DMPDII,
-     *               DODIIS,L1,L2,L3,OUT,SOSCF)
+     *               DODIIS,L0,L1,L2,L3,OUT,SOSCF,CVGING)
          CALL GVBGRD(H,GRAD,L0,L2,NPR,ORBGRD)
          IF(ORBGRD.LT.SOGTOL .OR. ITSO.GT.0) THEN
             IF(ITSO.EQ.0) THEN
@@ -1602,7 +1681,7 @@ C            AND MO BASIS FOCK MATRIX IS IN -DJ-
 C
       IF(NPAIR.LE.1) THEN
          CALL GVBFCK(JKUNIT,H,DJ,S,TRANS,SCR,WRK3,WRK2,WRK1,DMPDII,
-     *               DODIIS,L1,L2,L3,OUT,SOSCF)
+     *               DODIIS,L0,L1,L2,L3,OUT,SOSCF,CVGING)
 C
 C        ----- POSSIBLE DIIS INTERPOLATION -----
 C        IF DIIS TURNS ON, ITDIIS WILL BE .GT. 1
@@ -1627,16 +1706,19 @@ C
          IERR = 0
          CALL GLDIAG(L1,L0,L0,H,SCR,EIG,TRANS,IERR,IWRK)
          IF (IERR.NE.0) THEN
-            IF(MASWRK) WRITE(IW,*) 'GVBITR,1: FAILED TO DIAGONALIZE F'
+            IF(MASWRK) WRITE(IW,*) 'GVB-COMB: FAILED TO DIAGONALIZE F'
             CALL ABRT
          END IF
 C
 C        ----- SELECT OCCUPIED ORBITALS -----
 C
-         DO 150 IH = 1,NHAM
-  150    CALL SELGV1(TRANS,EIG,L1,IH,RSTRCT)
-         IF (OUT) WRITE(IW,*) 'ROTATION TO NEW ORBITALS'
-         IF (OUT) CALL PREV(TRANS,EIG,L1,L1,L1)
+         DO IH = 1,NHAM
+            CALL SELGV1(TRANS,EIG,L0,L1,IH,RSTRCT)
+         ENDDO
+         IF (OUT) THEN
+            WRITE(IW,*) 'ROTATION TO NEW ORBITALS'
+            CALL PREV(TRANS,EIG,L1,L1,L1)
+         ENDIF
          CALL DCOPY(L3,TRANS,1,DJ,1)
          CALL DCOPY(L1,EIG,1,E,1)
          CALL TSECND(TIMDUM)
@@ -1648,6 +1730,10 @@ C     ----- CONVENTIONAL GVB-ONE ORBITAL OPTIMIZATION -----
 C     ----- DO THE 2X2 ROTATIONS AMONG OCCUPIED ORBITALS ----
 C     DJ USED AS L3
 C     H  USED AS 2*L2 (H2 IS SECOND PART OF H)
+C
+C     ROTB initializes the rotation held at DJ, which has additional
+C     OCBSE-style rotations added in the loop 260 just below,
+C     one for every shell.
 C
          ROTWT = ZERO
          IF (ROTDMP) ROTWT = DAMP
@@ -1677,13 +1763,13 @@ C
 C
 C     ----- ZERO OUT THE MATRIX ELEMENTS CONNECTING THE ORBITALS OF
 C           THE IHAM'TH FOCK OPERATOR TO THE ORBITALS OF THE OTHER
-C           FOCK OPERATORS, THE LOOP SHIFTS DIAGONAL ELEMENTS OF THE
-C           OTHER FOCK OPERATORS OUT OF THE INTERACTION RANGE -----
+C           FOCK OPERATORS, AND SHIFT THE DIAGONAL ELEMENTS OF THE
+C           OTHER OCCUPIED ORBITALS OUT OF THE INTERACTION RANGE -----
 C
-            DO 220 I = 1,L1
-               EIG(I) = 1000-3*I
-  220       CONTINUE
-            CALL ZEROH(H,EIG,IHAM,IA,L1,L2)
+            DO I = 1,L0
+               EIG(I) = 1000.0D+00 + I
+            ENDDO
+            CALL ZEROH(H,EIG,IHAM,IA,L0,L2)
 C
 C     ----- INVOKE LEVEL SHIFTING IF NEEDED -----
 C
@@ -1700,18 +1786,19 @@ C
 C     ----- DIAGONALIZE THE CURRENT FOCK MATRIX -----
 C
             IERR = 0
-            CALL GLDIAG(L1,L1,L1,H,SCR,EIG,TRANS,IERR,IWRK)
+            CALL GLDIAG(L1,L0,L0,H,SCR,EIG,TRANS,IERR,IWRK)
             IF (IERR.NE.0) THEN
                IF(MASWRK) WRITE(IW,*)
-     *             'GVBITR,2: FAILED TO DIAGONALIZE F'
+     *             'GVBITR-OCBSE: FAILED TO DIAGONALIZE F'
                CALL ABRT
             END IF
 C
 C     ----- SELECT THE ORBITALS WHICH LOOK MOST LIKE CURRENT ITER ----
 C     ----- UPDATE THE ORBITALS WITH THE NEW OCBSE CONTRIBUTIONS -----
+C     total rotation DJ has new contribution TRANS added to it here.
 C
-            CALL SELGV1(TRANS,EIG,L1,IHAM,RSTRCT)
-            CALL UPOCBS(DJ,TRANS,E,EIG,L1,IHAM)
+            CALL SELGV1(TRANS,EIG,L0,L1,IHAM,RSTRCT)
+            CALL OCBSE(DJ,TRANS,E,EIG,L0,L1,IHAM)
   260    CONTINUE
          CALL TSECND(TIMDUM)
          TIMEO = TIMEO + TIMDUM - TIMITT
@@ -1719,15 +1806,14 @@ C
       END IF
 C
 C     ----- SCHMIDT ORTHONORMALIZE THE ORBITAL ROTATION MATRIX -----
-C     ----- CALCULATE EXTENT OF ORBITAL ROTATION ----
+C        ----- CALCULATE THE EXTENT OF THE ORBITAL ROTATION -----
 C
       DSKWRK = SVDSKW
       CALL SCHORT(DJ,L0,L0,L1)
       CALL GVBCVG(DJ,E,L1,L0,SQCDF,OUT)
 C
 C     ----- SAVE THE ROTATION MATRIX -----
-C     ----- TRANSFORM THE ORBITALS BACK TO THE AO BASIS -----
-C     ----- CLEAN UP THE ORBITALS -----
+C     ----- GENERATE THE LCAO EXPANSION BY APPLYING THIS ROTATION -----
 C
       CALL DAWRIT(IDAF,IODA,DJ,L3,61,0)
       CALL DAREAD(IDAF,IODA,TRANS,L3,15,0)
@@ -1887,8 +1973,9 @@ C
 C               DIAGONALIZE COMBINED FOCK MATRIX
          CALL GVBDIA(H,TRANS,E,SCR,IWRK,L0,L1,L2,L1)
 C               POSSIBLY RESTRICT ORBITAL INTERCHANGES
-         DO 370 IHAM = 1,NHAM
-  370    CALL SELGV1(TRANS,E,L1,IHAM,RSTRCT)
+         DO IHAM = 1,NHAM
+            CALL SELGV1(TRANS,E,L0,L1,IHAM,RSTRCT)
+         ENDDO
 C               GET TOTAL ORBITAL ROTATION (FINAL SOSCF X CANON)
          CALL DAREAD(IDAF,IODA,DJ,L3,61,0)
          CALL MRARBR(DJ,L0,L0,L0,TRANS,L1,L0,DK,L1)
@@ -2048,6 +2135,23 @@ C
      *              Q,SCR,IWRK,XP,IXPK,
      *              NOPK,NINTMX,L0,L1,L2,L3,NFROZ)
          DSKWRK = SVDSKW
+      END IF
+C
+C     ----- VALENCE VIRTUAL ORBITALS -----
+C     SOSCF always has formed the AO basis total Fock matrix
+C     during its final iteration, as will have the TCSCF subcase.
+C
+      IF(IVVOS.NE.0) THEN
+         IF(.NOT.SOSCF  .AND.  NPAIR.GT.1) THEN
+            CALL DAREAD(IDAF,IODA,TRANS,L3,15,0)
+            CALL GVBFCK(JKUNIT,H,DJ,S,TRANS,SCR,WRK3,WRK2,WRK1,
+     *                  DMPDII,.FALSE.,L0,L1,L2,L3,OUT,SOSCF,.TRUE.)
+         END IF
+         CALL DAREAD(IDAF,IODA,TRANS,L3,15,0)
+         CALL DAREAD(IDAF,IODA,DJ   ,L2,51,0)
+         NOCC = NORB
+         CALL VVOS(TRANS,DJ,E,WRK1,WRK2,WRK3,SCR,IWRK,
+     *             L0,L1,L2,L3,NOCC)
       END IF
 C
 C     ----- PRINT AND PUNCH THE ORBITALS -----
@@ -2246,6 +2350,14 @@ C
      *  1X,58(1H*)//)
       END
 C*MODULE GVB     *DECK GVBOUT
+C>
+C>    @brief   print converged GVB wavefunction
+C>
+C>    @details print GVB pair information and converged orbitals,
+C>             generate and print non-orthogonal "Gi" VB orbitals.
+C>
+C>    @author  this is presumably original to the GVB-ONE program.
+C>
       SUBROUTINE GVBOUT(TRANS,S,Q,IWRK,GI,INORDR,E,WRK,L0,L1,L2,L3)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
@@ -2273,6 +2385,7 @@ C
       COMMON /RUNLAB/ TITLE(10),ANAM(MXATM),BNAM(MXATM),BFLAB(MXAO)
       COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
       COMMON /SCFOPT/ CONVHF,MAXIT,MCONV,NPUNCH,NPREO(4)
+      COMMON /VVOPAR/ IVVOS,NVVOS,BNDDEN
 C
       PARAMETER (ZERO=0.0D+00, ONE=1.0D+00, TWO=2.0D+00)
 C
@@ -2303,8 +2416,13 @@ C
 C
 C     ----- ORDER VIRTUAL ORBITALS BY ORBITAL ENERGY -----
 C
-      NVIR = L0-NORB
-      IVIR = NORB+1
+      IF(IVVOS.EQ.0) THEN
+         NVIR = L0-NORB
+         IVIR = NORB+1
+      ELSE
+         NVIR = L0-NORB-NVVOS
+         IVIR = NORB+NVVOS+1
+      END IF
       CALL ORDERV(TRANS(1,IVIR),E(IVIR),INORDR,GI,NVIR,NVIR,L1)
 C
       IF(MASWRK) WRITE (IW,9288) ASYM
@@ -2518,6 +2636,14 @@ C
       RETURN
       END
 C*MODULE GVB     *DECK GVBTRN
+C>
+C>    @brief   transform GVB orbitals
+C>
+C>    @details rotate GVB orbitals into the next iteration,
+C>             using rotation of the quasi-Newton SOSCF converger.
+C>
+C>    @author  this is presumably original to the GVB-ONE program.
+C>
       SUBROUTINE GVBTRN(X,C,G,WRK,L0,L1,NPR,SQCDF,RSTRCT)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
@@ -2584,7 +2710,7 @@ C
       IF(RSTRCT) THEN
          CALL VCLR(WRK,1,L0)
          DO 500 IHAM = 1,NHAM
-            CALL SELGV1(G,WRK,L0,IHAM,RSTRCT)
+            CALL SELGV1(G,WRK,L0,L0,IHAM,RSTRCT)
   500    CONTINUE
       END IF
 C
@@ -3023,6 +3149,15 @@ C
       RETURN
       END
 C*MODULE GVB     *DECK JKFORM
+C>
+C>    @brief   GVB shell Fock operator
+C>
+C>    @details The J and K operators for every shell IHAM are combined
+C>             to a "Hamiltonian", which is this program's term for
+C>             a Fock operator.
+C>
+C>    @author  this is presumably original to the GVB-ONE program.
+C>
       SUBROUTINE JKFORM(JKUNIT,TRANS,HFM,DFM,XP,XK,IXPK,NIJS,NKLS,IA,
      *                  SCR,DSH,XINTS,GHONDO,DDIJ,L0,L1,L2,MXFOCK,
      *                  NPASS,NINTMX,NOPK,INTTYP,NSH2,MAXG,SCHWRZ,
@@ -3166,11 +3301,19 @@ C
          WRITE(IW,*) 'COMPLETE CORE FOCK MATRIX IN AO BASIS'
          CALL PRTRI(HFM,L1)
       END IF
+C
       IF (.NOT.DIRSCF) DSKWRK = .TRUE.
+C
+C        ENSURE UPPER PART OF MO OPERATORS, PAST SPHERICAL HARMONICS,
+C        IS ZERO AFTER ALL TRFTRI CALLS IN THIS ROUTINE.
+C
+      IF(L0.LT.L1) CALL VCLR(DFM,1,L2)
+C
       CALL TFTRI(DFM,HFM,TRANS,SCR,L0,L1,L1)
+C
       IF(OUT) THEN
          WRITE(IW,*) 'COMPLETE CORE FOCK MATRIX IN MO BASIS'
-         CALL PRTRI(DFM,L1)
+         CALL PRTRI(DFM,L0)
       END IF
       CALL SQWRIT(JKUNIT,DFM,L2)
       IF(NCO.EQ.0) CALL DCOPY(L2,DFM(L2+1),1,HFM,1)
@@ -3184,13 +3327,13 @@ C
             CALL TFTRI(DFM,HFM(1+IOFF),TRANS,SCR,L0,L1,L1)
             IF(OUT) THEN
                WRITE(IW,*) 'J OPERATOR IN MO BASIS FOR SHELL',IFO
-               CALL PRTRI(DFM,L1)
+               CALL PRTRI(DFM,L0)
             END IF
             CALL SQWRIT(JKUNIT,DFM,L2)
             CALL TFTRI(DFM,HFM(1+IOFF+L2),TRANS,SCR,L0,L1,L1)
             IF(OUT) THEN
                WRITE(IW,*) 'K OPERATOR IN MO BASIS FOR SHELL',IFO
-               CALL PRTRI(DFM,L1)
+               CALL PRTRI(DFM,L0)
             END IF
             CALL SQWRIT(JKUNIT,DFM,L2)
             IOFF = IOFF + L2 + L2
@@ -3339,6 +3482,13 @@ C
       RETURN
       END
 C*MODULE GVB     *DECK NEWCI
+C>
+C>    @brief   GVB-PP CI optimization
+C>
+C>    @details a single perfect pair's CI coefficients are found.
+C>
+C>    @author  this is presumably original to the GVB-ONE program.
+C>
       SUBROUTINE NEWCI(H,DJ,DK,L1,CONCI,HCI,EIG,ECI,SCR,IWRK,
      *                 IA,NTERM,OUT)
 C
@@ -3474,9 +3624,18 @@ C
  9068 FORMAT(5X,I5,5X,8HENERGY= ,F20.10/(5X,5E15.8))
  9088 FORMAT(//5X,'JOB ABORTED WITH OCCUPATION NUMBER BELOW ',1P,E12.3/
      *         5X,'PAIR',I4,' HAS OCC NOS=',1P,2E15.8)
- 9108 FORMAT(//5X,'CI COEFS ARE SAME SIGN - GOODBYE' ,2E15.8//)
+ 9108 FORMAT(//5X,'CI COEFS ARE THE SAME SIGN - GOODBYE',2E15.8//)
       END
 C*MODULE GVB     *DECK OPTCI
+C>
+C>    @brief   GVB CI coefficient optimization
+C>
+C>    @details iterative pair-by-pair optimization of CI perfect-
+C>             pairing coefficients.
+C>             See section 5.3 of the chapter about GVB for formulae.
+C>
+C>    @author  this is presumably original to the GVB-ONE program.
+C>
       SUBROUTINE OPTCI(JKUNIT,H,DJ,SCR,IWRK,IA,L1,L2,OUT)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
@@ -3545,10 +3704,10 @@ C
          CALL NEWCI(H,DJ,DJ(IAA),L1,CONCI,HCI,EIG,ECI,
      *              SCR,IWRK,IA,NTERM,OUT)
   180 CONTINUE
-      IF (NPAIR .EQ. 1) CONCI = ZERO
 C
 C     ----- TEST FOR CONVERGENCE OF THE CI OPTIMIZATION -----
 C
+      IF (NPAIR .EQ. 1) CONCI = ZERO
       IF (CONCI .GT. TEST) GO TO 160
 C
 C     ----- NORMALIZE THE CI COEFFICIENTS AND UPDATE THE F, ALPHA,
@@ -3898,6 +4057,15 @@ C
      *       1X,'ADD AT LEAST',I10,' WORDS MORE MEMORY AND RESUBMIT.')
       END
 C*MODULE GVB     *DECK ROTB
+C>
+C>    @brief   rotation of occupied orbitals
+C>
+C>    @details rotation of occupied orbitals for GVB optimization,
+C>             OCBSE calls later take care of mixing with virtuals.
+C>             See section 5.2 of the chapter about GVB for formulae.
+C>
+C>    @author  this is presumably original to the GVB-ONE program.
+C>
       SUBROUTINE ROTB(JKUNIT,HOLD,H,H2,ROTWT,IA,L1,L2,OUT)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
@@ -3917,6 +4085,9 @@ C
       PARAMETER (TM9=1.0D-09)
 C
 C     ----- ROTATE THE OCCUPIED ORBITALS AMONG THEMSELVES -----
+C           The entire rotation matrix -B- is zero'd out,
+C             and then only NORBxNORB elements are set.
+C           Note that the storage for -B- is named HOLD.
 C
       SQCDF = ZERO
       ROTTOL = DENTOL
@@ -3924,6 +4095,7 @@ C
       ATEST = ROTTOL/TEN
       DTEST = ATEST/TEN
       ROTMAX = HALF
+C
       CALL VCLR(HOLD,1,L1*L1)
 C
       CALL SEQREW(JKUNIT)
@@ -4018,6 +4190,13 @@ C
  9028 FORMAT(5X,'ROTWT USED IN ROTB= ',1P,E15.8)
       END
 C*MODULE GVB     *DECK SCHORT
+C>
+C>    @brief   GVB Schmidt orthogonalization
+C>
+C>    @details orthogonalization of GVB's orbital rotation matrix.
+C>
+C>    @author  this is presumably original to the GVB-ONE program.
+C>
       SUBROUTINE SCHORT(U,NROW,NCOL,NDIM)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
@@ -4036,29 +4215,39 @@ C           TRANSFORMED REPRESENTATION -----
 C
       DO 160 J = 1,NCOL
          SUM = ZERO
-         DO 120 K = 1,J
+         DO K = 1,J
             SUM = DDOT(NROW,U(1,K),1,U(1,J),1)
-            IF (K .EQ. J) GO TO 140
-            CALL DAXPY(NROW,-SUM,U(1,K),1,U(1,J),1)
-  120    CONTINUE
-  140    IF (SUM .LT. THRESH) GO TO 180
+            IF (K.LT.J) CALL DAXPY(NROW,-SUM,U(1,K),1,U(1,J),1)
+         ENDDO
+         IF (SUM .LT. THRESH) GO TO 180
          SUM = SQRT(SUM)
          CALL DSCAL(NROW,ONE/SUM,U(1,J),1)
   160 CONTINUE
       RETURN
 C
-  180 IF (MASWRK) THEN
-         WRITE (IW,9028) J
-         WRITE (IW,9008) SUM
-      END IF
+  180 CONTINUE
+      IF (MASWRK) WRITE (IW,9028) J,SUM,NROW,NCOL,NDIM
       CALL ABRT
       STOP
 C
- 9008 FORMAT(9H NORM IS ,E13.6)
- 9028 FORMAT(1H1/5X,12HEIGENVECTOR ,I4,5X,14HHAS ZERO NORM  /)
+ 9028 FORMAT(/1X,'EIGENVECTOR',I5,' HAS SMALL NORM',1P,E15.6/
+     *        1X,'SCHORT CALLED WITH NROW=',I6,' NCOL=',I6,' NDIM=',I6//
+     *        1X,'A FAIRLY LIKELY CAUSE FOR THIS ERROR IS THE EXCHANGE'/
+     *        1X,'OF AN OCCUPIED ORBITAL OF ONE SYMMETRY TYPE,'/
+     *        1X,'WITH A VIRTUAL ORBITAL OF A DIFFERENT SYMMETRY.'/
+     *        1X,'EXAMINATION OF YOUR STARTING ORBITALS IS LIKELY TO',
+     *           ' HELP SOLVE THIS!'/)
       END
 C*MODULE GVB     *DECK SELGV1
-      SUBROUTINE SELGV1(VECTOR,EIG,L1,IHAM,RSTRCT)
+C>
+C>    @brief   GVB orbital selection
+C>
+C>    @details Rotation to the next iteration's orbitals is permuted
+C>             to be closer to a unit matrix.
+C>
+C>    @author  this is presumably original to the GVB-ONE program.
+C>
+      SUBROUTINE SELGV1(VECTOR,EIG,L0,L1,IHAM,RSTRCT)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
@@ -4066,7 +4255,7 @@ C
 C
       LOGICAL RSTRCT
 C
-      DIMENSION VECTOR(L1,*),EIG(L1)
+      DIMENSION VECTOR(L1,L0),EIG(L0)
       DIMENSION ICH(MXAO)
 C
       COMMON /GVBWFN/ CICOEF(2,12),F(25),ALPHA(325),BETA(325),NO(10),
@@ -4075,7 +4264,7 @@ C
 C     ----- SORT THE NEW ORBITALS BASED ON OVERLAP WITH OLD,
 C           OR BASED ON LOWEST EIGENVECTORS -----
 C
-      DO 100 K = 1,L1
+      DO 100 K = 1,L0
          ICH(K) = 0
   100 CONTINUE
 C
@@ -4088,7 +4277,7 @@ C
   120    CONTINUE
       END IF
 C
-      CALL SELGV2(VECTOR,EIG,L1,L1,L1,ICH)
+      CALL SELGV2(VECTOR,EIG,L1,L0,L1,ICH)
       RETURN
       END
 C*MODULE GVB     *DECK SELGV2
@@ -4126,33 +4315,43 @@ C
   120 CONTINUE
       RETURN
       END
-C*MODULE GVB     *DECK UPOCBS
-      SUBROUTINE UPOCBS(HOLD,TRANS,E,EIG,L1,IHAM)
-C
+C*MODULE GVB     *DECK OCBSE
+      SUBROUTINE OCBSE(HOLD,TRANS,E,EIG,L0,L1,IHAM)
+C>
+C>    @brief   GVB orbital rotaton by OCBSE
+C>
+C>    @details Orthogonality Constrained Basis Set Expansion:
+C>             W.J.Hunt, T.H.Dunning, W.A.Goddard
+C>             Chem. Phys. Lett. 3, 606-610(1969)
+C>
+C>    @author  this is presumably original to the GVB-ONE program.
+C>
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
       PARAMETER (MXAO=8192)
 C
-      DIMENSION TRANS(L1,1),HOLD(L1,1),E(1),EIG(1)
+      DIMENSION TRANS(L1,L0),HOLD(L1,L0),E(L0),EIG(L0)
 C
       COMMON /GVBWFN/ CICOEF(2,12),F(25),ALPHA(325),BETA(325),NO(10),
      *                NCO,NSETO,NOPEN,NPAIR,NORB,NCONF(MXAO),NHAM
 C
-C     ----- ADDS THE OCBSE CONTRIBUTIONS TO THE NEW COEFFICIENTS -----
+C     ----- ADDS THE OCBSE CONTRIBUTIONS TO THE TRANSFORMATION -----
 C
       PARAMETER (ZERO=0.0D+00, ONE=1.0D+00)
 C
-      DO 160 JBF = 1,L1
-         FAC = ZERO
-         DO 100 K = 1,NORB
-            IF (JBF .NE. K) GO TO 100
+      DO 160 J = 1,L0
+         DO K = 1,NORB
+            FAC = ZERO
+            IF (J.EQ.K) THEN
                FAC = ONE
                IF (NCONF(K)-IHAM) 160,120,160
-  100    CONTINUE
+            ENDIF
+         ENDDO
+C
   120    CONTINUE
-         E(JBF) = EIG(JBF)
-         DO 140 I = 1,L1
-            HOLD(I,JBF) = HOLD(I,JBF)*FAC +TRANS(I,JBF)
+         E(J) = EIG(J)
+         DO 140 I = 1,L0
+            HOLD(I,J) = HOLD(I,J)*FAC + TRANS(I,J)
   140    CONTINUE
   160 CONTINUE
       RETURN
@@ -4188,32 +4387,42 @@ C
       RETURN
       END
 C*MODULE GVB     *DECK ZEROH
-      SUBROUTINE ZEROH(H,E,IHAM,IA,L1,L2)
+C>
+C>    @brief   zero GVB "Hamiltonian"
+C>
+C>    @details shell IHAM's Fock matrix will have all interactions
+C>             with any other occupied shell zero'd out.
+C>             Diagonalization thus only mixes this shell with virtuals.
+C>
+C>    @author  this is presumably original to the GVB-ONE program.
+C>
+      SUBROUTINE ZEROH(H,E,IHAM,IA,L0,L2)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
       PARAMETER (MXAO=8192)
 C
-      DIMENSION H(L2),E(L1),IA(L1)
+      DIMENSION H(L2),E(L0),IA(L0)
 C
       COMMON /GVBWFN/ CICOEF(2,12),F(25),ALPHA(325),BETA(325),NO(10),
      *                NCO,NSETO,NOPEN,NPAIR,NORB,NCONF(MXAO),NHAM
 C
       PARAMETER (ZERO=0.0D+00)
 C
-C     ----- ZERO OUT MATRIX ELEMENTS CONNECTING ORBITALS IF THE
-C           IHAM'TH FOCK OPERATOR WITH ALL OTHER FOCK OPERATORS -----
+C     ----- ZERO OUT MATRIX ELEMENTS CONNECTING ORBITALS OF THE
+C           IHAM'TH FOCK OPERATOR WITH ALL OTHER OCCUPIED SHELLS -----
 C
-      DO 200 J = 1,NORB
-         IF (NCONF(J) .EQ. IHAM) GO TO 200
-         DO 180 K = 1,L1
-            IJ = IA(J) + K
-            IF(K.GT.J) IJ = IA(K) + J
-            H(IJ) = ZERO
-  180    CONTINUE
-         JJ = IA(J) + J
-         H(JJ) = E(J)
-  200 CONTINUE
+      DO J = 1,NORB
+         IF (NCONF(J) .NE. IHAM) THEN
+            DO K = 1,L0
+               IJ = IA(J) + K
+               IF(K.GT.J) IJ = IA(K) + J
+               H(IJ) = ZERO
+            ENDDO
+            JJ = IA(J) + J
+            H(JJ) = E(J)
+         END IF
+      ENDDO
       RETURN
       END
 C*MODULE GVB     *DECK BUFDEN
