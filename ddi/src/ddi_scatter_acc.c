@@ -104,8 +104,10 @@ void DDI_Scatter_AccS(int handle,DDI_Scattered *scattered,double alpha,long *ibu
       /* --------------------------------------------- *\
 	 Sort buffers from low->high values in ibuff
       \* --------------------------------------------- */
-      
+
+      if(np > 1 )
       DDI_Quicksort(ibuff,buff,0,(scattered->nelem)-1);
+
 
       /* ------------------------------------------------------- *\
          Determine where the pieces of scattered data exist
