@@ -57,12 +57,14 @@ c> @param singls perform singles correction
 c> @param nthrds number of threads to spawn in mpqc
 c> @param f12exp f12 exponent in gemincal function
 c> @param set_r12_exp flag to indicate if f12exp is set in input
-c>
+c> @param R12 flag to indicate wether we compute r12 energy
+c> @param SYSCALL flag to indicate if we use 'call system'
       SUBROUTINE GET_PT2R12_INFO(NFRZCR12,NINACTR12,NACTR12,NFRZVR12,
-     $     NCORR_R12,DFBS,RUNR12,SINGLS,NTHRDS,F12EXP,SET_F12_EXP)
+     $     NCORR_R12,DFBS,RUNR12,SINGLS,NTHRDS,F12EXP,SET_F12_EXP,R12,
+     $     SYSCALL)
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
       LOGICAL GOPARR,DSKWRK,MASWRK,DSKSAV,DFBS,RUNR12,SINGLS,
-     $     SET_F12_EXP
+     $     SET_F12_EXP,R12,SYSCALL
 
       PARAMETER (MXATM=2000, MXRT=100, MAXA=103, MAXL=7)
 
@@ -80,6 +82,11 @@ c>
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
       CHARACTER*120 BASISINFO
       CHARACTER*256 FILENM2
+      CHARACTER*256 PT2R12_LOC
+      CHARACTER*256 FILE_LOC
+      CHARACTER*256 F12_char
+      CHARACTER*512 EXTRA_OPTS
+      CHARACTER*256 thread_info
       CHARACTER*1 NULL
       DATA C2H/8HC2H     /
 
@@ -181,11 +188,72 @@ c>
   202 CONTINUE
       KOL=KOL-1
 
-c$$$         CALL SYSINP(MEMORY,MEMDDI)                    
-c$$$         write(6,*)MEMORY                              
 
       if(MASWRK)then
-         if(RUNR12.or.SINGLS)then
+         if(RUNR12)then
+
+!     Do WE WANT TO USE A SYSTEM CALL TO START UP MPQC
+            if(syscall)then
+
+            basis_name = ' '
+            if(GBASIS.eq.BASACD)basis_name='aug-cc-pVDZ'
+            if(GBASIS.eq.BASACT)basis_name='aug-cc-pVTZ'
+            if(GBASIS.eq.BASACQ)basis_name='aug-cc-pVQZ'
+            if(GBASIS.eq.BASAC5)basis_name='aug-cc-pV5Z'
+            if(GBASIS.eq.BASAC6)basis_name='aug-cc-pV6Z'
+
+!NEW STUFF FOR SYSTEM CALL...
+      EXTRA_OPTS = ' '
+
+!HOW MANY THREADS ARE WE USING
+      write(thread_info,'(I3)')nthrds
+      extra_opts = '-threadgrp '//
+     $     '"<PthreadThreadGrp>:(num_threads='//trim(thread_info)//')" '
+
+!ARE WE NOT USING THE RECOMMENDED F12 EXPONENT
+      if(set_f12_exp)then
+         write(f12_char,*)f12exp
+         extra_opts = trim(extra_opts)//' -f12exp '//f12_char
+      endif
+
+!ARE WE USING DENSITY FITTING      
+      if(.not.DFBS)then
+         extra_opts = trim(extra_opts)//' -dfbs none '
+      endif
+
+!ARE WE DOING THE CABS SINGLES CORRECTION
+      if(singls)extra_opts = trim(extra_opts)//' -singles true '
+
+!ARE WE DOING THE R12 CORRECTION
+      if(.not.r12)extra_opts = trim(extra_opts)//' -r12 false '
+
+!WHERE IS MPQC
+      If (MASWRK) CALL GMS_GETENV('PT2R12_LOC',PT2R12_LOC)
+
+!MAKE SURE WE HAVE AND KNOW WHERE MPQC IS INSTALLED
+      if(pt2r12_LOC.eq.' ')then
+         write(6,1000)
+         call abrt
+      endif
+
+!WHERE ARE THE PT2R12 INPUTS LOCATED
+      IF (MASWRK) CALL GMS_GETENV('FILE_LOC',FILE_LOC)
+      write(6,*)trim(PT2r12_loc)//' '//trim(FILE_LOC)//'/'//
+     $     FILENM2(1:KOL)//'.input '//'-obs '//trim(basis_name)//' '//
+     $     trim(extra_opts)
+
+!SYSTEM CALL TO MPQC
+      call system(trim(PT2r12_loc)//'/src/bin/pt2r12/pt2r12 '//
+     $     '-prefix '//trim(FILE_LOC)//'/'//FILENM2(1:KOL)//'.input '//
+     $     '-obs '//trim(basis_name)//' '//
+     $     trim(extra_opts))
+
+
+
+      ELSE !OLD POTENTIALLY BROKEN WAY TO USE PT2R12
+
+
+
 !// fortran hides arguement length...
 !// determined the name of the disk files needed by MPQC
             call add_arg('-prefix')
@@ -243,7 +311,11 @@ c$$$         write(6,*)MEMORY
 !// call MPQC interface
             call pt2r12_main()
 
-     
+         ENDIF
+
+
+
+
 !// delete MPQC interface files
             OPEN(UNIT=99,FILE=FILENM2(1:KOL)//'.input.pt2r12.dat',
      $           STATUS='UNKNOWN')
@@ -260,6 +332,10 @@ c$$$         write(6,*)MEMORY
       DSKWRK = DSKSAV
 !
       RETURN
+ 1000 FORMAT(//'ERROR:'/
+     $     'YOU DID NOT SPECIFY WHERE MPQC IS INSTALLED ',
+     $        'WITH THE PT2R12_LOC ENVIRONMENTAL VARIABLE'//)
+
       END
 !------------------------------------------------------------------------
 !========================================================================
@@ -296,10 +372,13 @@ c> @param nthrds number of threads to spawn in mpqc
 c> @param f12exp f12 exponent in gemincal function
 c> @param set_r12_exp flag to indicate if f12exp is set in input
 c> @param puntol 2-pdm punch to disk tolerance
+c> @param r12 run r12 correction
+c> @param syscall use a system call to execute mpqc
 C>
       SUBROUTINE GET_EXCORR_INPUT(TO_OUTPUT,R12CORR,NFRZC_R12,
      $     NINACT_R12,NACT_R12,NFRZV_R12,PUNTOL,NCORR_R12,
-     $     DFBS,RUNR12,SINGLS,NTHRDS,F12EXP,SET_F12_EXP)
+     $     DFBS,RUNR12,SINGLS,NTHRDS,F12EXP,SET_F12_EXP,R12,
+     $     SYSCAL)
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
       PARAMETER (MXRT=100)
       COMMON /DETWFN/ WSTATE(MXRT),SPINS(MXRT),CRIT,PRTTOL,S,SZ,
@@ -309,17 +388,19 @@ C>
      *                IGPDET,KSTSYM,NFTGCI,IDWEIGH
       COMMON /IOFILE/ IR,IW,IP,IS,IJKT,IDAF,NAV,IODA(950)
       LOGICAL PT2R12,TO_OUTPUT,CCR12,R12CORR,RUNR12,SINGLS,DFBS,
-     $     SET_F12_EXP,TPDM_CHECK,SANCHK
+     $     SET_F12_EXP,TPDM_CHECK,SANCHK,R12,SYSCAL
 
-      PARAMETER (NNAM=14)
+      PARAMETER (NNAM=16)
       DIMENSION QNAM(NNAM),KQNAM(NNAM)
       DATA QNAM/8HPT2R12  ,8HNFRZV   ,8HNFRZC   ,8HNINACT  ,8HNACT    ,
      $          8HNCORR   ,8HPUNTOL  ,8HCCR12   ,8HDFBS    ,8HRUNR12  ,
-     $          8HSINGLS  ,8HNTHRDS  ,8HF12EXP  ,8HSANCHK  /
+     $          8HSINGLS  ,8HNTHRDS  ,8HF12EXP  ,8HSANCHK  ,8HR12     ,
+     $          8HSYSCAL  /
 
       DATA KQNAM/0,1,1,1,1,
      $           1,3,0,0,0,
-     $           0,1,3,0/
+     $           0,1,3,0,0,
+     $           0/
 
       DATA EXCORR/8HEXCORR  /
 !
@@ -339,12 +420,14 @@ C>
       F12EXP = 0.0D+00
       SET_F12_EXP = .FALSE.
       SANCHK = .FALSE.
+      R12 = .TRUE.
+      SYSCAL = .TRUE.
 !     
       CALL NAMEIO(IR,JRET,EXCORR,NNAM,QNAM,KQNAM,
      $     PT2R12,NFRZV,NFRZC,NINACT,NACT,
      $     NCORR,PUNTOL,CCR12,DFBS,RUNR12,
-     $     SINGLS,NTHRDS,F12EXP,SANCHK,    
-     $     0,0,0,0,0,    0,0,0,0,0,
+     $     SINGLS,NTHRDS,F12EXP,SANCHK,R12,
+     $     SYSCAL,0,0,0,    0,0,0,0,0,
      $     0,0,0,0,0,    0,0,0,0,0,    0,0,0,0,0,    0,0,0,0,0,
      $     0,0,0,0,0,    0,0,0,0,0,    0,0,0,0,0,    0,0,0,0,0)
       IF(PT2R12.AND.JRET.NE.0)THEN
@@ -366,7 +449,7 @@ C>
       IF(F12EXP.GT.1.0D-6)SET_F12_EXP = .TRUE.
       IF(PT2R12.AND.TO_OUTPUT)THEN
          if(RUNR12)THEN
-            WRITE(6,1000)RUNR12,SINGLS
+            WRITE(6,1000)R12,SINGLS,SYSCAL
 
             IF(SET_F12_EXP)THEN
                WRITE(6,1010)F12EXP
@@ -376,13 +459,14 @@ C>
 
             WRITE(6,1030)DFBS,NTHRDS,NFRZC_R12,
      $           NINACT_R12, NACT_R12,NFRZV_R12,NCORR_R12,PUNTOL
+
          ELSE
+
+!JUST CREATE PT2R12 INPUT FILES
             WRITE(6,1050)RUNR12,SINGLS,NFRZC_R12,
      $           NINACT_R12, NACT_R12,NFRZV_R12,NCORR_R12,PUNTOL
+
          ENDIF
-      ELSEIF(CCR12.AND.TO_OUTPUT)THEN
-         WRITE(6,1100)NFRZC_R12,NINACT_R12,NACT_R12,NFRZV_R12,NCORR_R12,
-     $        PUNTOL
       ENDIF  
 !     
       RETURN
@@ -391,8 +475,9 @@ C>
      $     15X,'CREATING INPUTS FOR MPQC PT2R12 CORRECTION',/
      $     5X,60(1H-)/
      $     /8X,16(1H-),X,'PT2R12 SPECIFICATION',X,16(1H-)/
-     $    12X, 'COMPUTE [2]_R12 WITH MPQC INTERFACE:',L8/
-     $    12X, 'COMPUTE [2]_S WITH MPQC INTERFACE:  ',L8)
+     $    12X, 'COMPUTE [2]_R12 WITH MPQC:          ',L8/
+     $    12X, 'COMPUTE [2]_S WITH MPQC:            ',L8/
+     $    12X, 'COMPUTE PT2R12 WITH SYSTEM CALL:    ',L8)
  1010 FORMAT(12X,'F12 EXPONENT:                       ',F8.4)
  1020 FORMAT(12X,'F12 EXPONENT:                    ',A17)
  1030 FORMAT(12X,'USE DENSITY FITTING:                ',L8/
@@ -416,17 +501,6 @@ C>
      $    12X, 'NUMBER OF FROZEN VIRTUAL ORBITALS:  ',2X,I6/
      $    12X, 'TOTAL ORBITALS TO BE CORRELATED:    ',2X,I6//
      $    12X, 'TWO-RDM PUNCH TOLERANCE:            ',2X,D8.2/
-     $     8X,54(1H-))
- 1100  FORMAT(/5X,60(1H-)/
-     $     12X,'CREATING INPUTS FOR MPQC CCSD(T)-R12 CORRECTION',/
-     $     5X,60(1H-)/
-     $     /8X,13(1H-),X,'CCSD(T)-R12 SPECIFICATION',X,14(1H-)/
-     $    12X, 'NUMBER OF FROZEN CORE ORBITALS:     ',X,I6/
-     $    12X, 'NUMBER OF INACTIVE ORBITALS:        ',X,I6/
-     $    12X, 'NUMBER OF ACTIVE ORBITALS:          ',X,I6/
-     $    12X, 'NUMBER OF FROZEN VIRTUAL ORBITALS:  ',X,I6/
-     $    12X, 'TOTAL ORBITALS TO BE CORRELATED:    ',X,I6//
-     $    12X, 'T1 AND T2 PUNCH TOLERANCE:          ',2X,D8.2/
      $     8X,54(1H-))
       END
 !------------------------------------------------------------------------

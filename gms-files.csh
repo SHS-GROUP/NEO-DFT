@@ -325,7 +325,9 @@ if ($pt2r12 > 0) then
   set echo
   setenv R12INP $SCR/$JOB
   setenv PT2BAS $SCR/$JOB.F300
+# setenv PT2R12_LOC /path/to/mpqc
   unset echo
+  setenv FILE_LOC $SCR
  else 
   set echo
   setenv R12INP $USERSCR/$JOB
