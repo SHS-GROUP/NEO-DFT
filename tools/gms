@@ -1,6 +1,6 @@
 #!/bin/csh
 #
-#   2 Aug 2013:    This front-end 'gms' script runs interactively,
+#   20 Nov 2013:    This front-end 'gms' script runs interactively,
 #   to send the back-end 'rungms' GAMESS job to a batch scheduler,
 #   namely Sun Grid Engine (SGE) -or- Portable Batch System (PBS)
 #
@@ -10,11 +10,12 @@
 #        exalted  = SGE,  6 core nodes, many Fermi GPUs, one Kepler GPU
 #        bolt     = SGE,  6 core nodes, 9 with Kepler and 9 with MIC
 #        CyEnce   = PBS, 16 core nodes, 148 plain (others with Kepler/MIC)
+#        thebunny = PBS, 4 and 12 core nodes, no GPUs
 #   All of them use Infiniband.  That means that the 'rungms' back-end
 #   is either using execution target 'mpi' to run GAMESS, or execution
 #   target 'ga' to run GAMESS+LIBCCHEM on the GPUs.  The mpi/ga parts
 #   of 'rungms' contain SGE and PBS portions, to detect the nodes that
-#   are assigned to each particular job.
+#   are assigned by each scheduler.
 #
 #   This 'gms' and the 'rungms' which it submits certainly can't be used
 #   elsewhere without customization, but if you know your own hardware
@@ -91,6 +92,17 @@ switch (`hostname`)
       set PPN_MAX=16
       set NUMGPU=0
       breaksw
+   case thebunny.fi.ameslab.gov:
+#                  necessary 'rungms' customizations for thebunny:
+#           change the MPI to mvapich2,
+#              and also hop down the bunny path for MPI/ifort.
+#           new nodes (compute-1-x) have 12 cores, and Qlogics infiniband.
+#           old nodes (compute-0-x) have 4 cores, and Mellanox infiniband.
+      set SCHED=PBS
+      set CLUSTER=thebunny
+      set PPN_MAX=12
+      set NUMGPU=0
+      breaksw
    default:
       echo "This cluster is unrecognized, please customize for your site."
       exit 12
@@ -128,24 +140,43 @@ while ($#argv > 0)
       case -cluster:
         set JOB=cluster_config
         breaksw
-#           job/queue resource options
+#            next two specify GAMESS binary's "version number" and pathname
+      case -v:
+        set VERNO=$argv[1]
+        shift
+        breaksw
+      case -exepath:
+        set XPATH=$argv[1]
+        shift
+        breaksw
+#            log file (output) name
       case -l:
         set LOGFILE=$argv[1]
         shift
         breaksw
+#
+#           job/queue resource options:
+#                       processor count (number of cores to run on)
       case -p:
         set NCPUS=$argv[1]
         shift
         breaksw
+#                       wall clock time limit
       case -w:
         set WALL=$argv[1]
         shift
         breaksw
-      case -hog:
-        set HOG=true
-        breaksw
+#                       processors per node.
       case -ppn:
         set PPN=$argv[1]
+        shift
+        breaksw
+#                   these now become rather specialized, for example:
+#              thebunny has old/new nodes w/specific queues,
+#              some of our clusters have programming (test) queues,
+#              some of our clusters have GPU boards.
+      case -que:
+        set BUNNYQUEUE=$argv[1]
         shift
         breaksw
       case -test:
@@ -179,15 +210,7 @@ while ($#argv > 0)
         set CCMEM=$argv[1]
         shift
         breaksw
-#            next two specify GAMESS binary's "version number" and pathname
-      case -v:
-        set VERNO=$argv[1]
-        shift
-        breaksw
-      case -exepath:
-        set XPATH=$argv[1]
-        shift
-        breaksw
+#
 #             next four are special file saving/reuse options.
       case -b:
         set EXTBAS=$argv[1]
@@ -229,7 +252,6 @@ if ($?LOGFILE == 0) set LOGFILE=default
 if ($?XPATH == 0)   set XPATH=none
 if ($?NCPUS == 0)   set NCPUS=0
 if ($?WALL == 0)    set WALL=default
-if ($?HOG == 0)     set HOG=false
 if ($?TESTJOB == 0) set TESTJOB=false
 if ($?KEPLER == 0)  set KEPLER=false
 if ($?NUMGPU == 0)  set NUMGPU=0
@@ -252,9 +274,6 @@ if ($JOB == help) then
    echo "             of cores per node in this cluster ($PPN_MAX), then"
    echo "             X will be rounded downward to a multiple of $PPN_MAX,"
    echo "             or rounded to a multiple of Y, if -ppn is selected."
-   #### "   -hog      reserves one (1) entire node for this run, so you may"
-   #### "             choose -p from 1 to $PPN_MAX, but be assured that the"
-   #### "             entire memory of the node can be used by your run."
    echo "   -ppn Y    run only Y compute processes in each node.  Of course,"
    echo "             Y cannot exceed this cluster's core/node count, $PPN_MAX."
    echo "   -w        wall clock time, as dd:hh:mm:ss (default=12:00:00=12 hrs)"
@@ -266,7 +285,7 @@ if ($JOB == help) then
    echo " "
    echo "$CLUSTER runs only a GAMESS+LIBCCHEM binary: it is a GPU cluster."
    echo "The -p argument is actually a NODE count, not a CPU count."
-   echo "The -ppn argument is hardwired to 1 in all jobs (always -hog)."
+   echo "The -ppn argument is hardwired to 1 in all jobs."
    echo "MPI/GA execution will use all cores in the 'X' nodes assigned by -p,"
    echo "as well as using all GPUs."
    echo "Only SCF, MP2, and CCSD(T) single point energies can be run."
@@ -330,6 +349,8 @@ if ($JOB == morehelp) then
    breaksw
  case chemphys:
  case CyEnce:
+ case thebunny:
+ default:
    breaksw
  endsw
  echo "Basic flags can be displayed by typing just 'gms'."
@@ -440,7 +461,7 @@ if ($JOB == cluster_config) then
    echo "and all the usual software: gfortran/ifort, MKL, various MPIs..."
    echo " "
    breaksw
-#            next is distilled from 
+#            next is distilled from
 #              http://hpcgroup.public.iastate.edu/HPC/CyEnce/description.html
  case CyEnce:
    echo "The head node of this cluster is named "share","
@@ -467,6 +488,19 @@ if ($JOB == cluster_config) then
    echo " "
    echo "     To see a summary of the batch queues, type 'qstat -q'"
    echo " "
+   breaksw
+#
+ case thebunny:
+   echo "The head node of this cluster is named "thebunny.fi.ameslab.giv","
+   echo "Hopping right along, we see that"
+   echo "   it has 32 old nodes named compute-0-x"
+   echo "       with  4 cores, 20 GBytes memory, and Mellanox Infiniband."
+   echo "   it has  4 new nodes named compute-1-x"
+   echo "       with 12 cores, 64 GBytes memory, and  Qlogics Infiniband."
+   echo "A special option '-que default/test/new' selects old/test/new nodes."
+   breaksw
+#
+ default:
    breaksw
  endsw
  exit
@@ -571,29 +605,22 @@ endif
 if ($PPN > $PPN_MAX) then
    echo "This cluster has $PPN_MAX core nodes, so -ppn cannot request more"
    echo "than $PPN_MAX processors per node."
-   exit
+   exit 4
 endif
 #
-#        'hog' is a non-functional concept below, we are no longer
-#        trying to share nodes for multiple serial jobs,
-#        as it just fragments the cluster.
 if ($NCPUS < $PPN) then
    set NNODES=1
-   #--set WHOLENODE=false
-   #--if ($HOG == true) set WHOLENODE=true
-   set WHOLENODE=true
 else
 #     jobs running more than one node come here, to ensure the
 #     the core count is rounded down to multiple of PPN.
-#        gms -p 50 -ppn 6   will produce NCPUS=48, NNODES=8, PPN=6
+#     Thus   gms -p 50 -ppn 6   will produce NCPUS=48, NNODES=8, PPN=6
    @ xx = $NCPUS / $PPN
    @ yy = $PPN * $xx
    set NCPUS=$yy
    set NNODES=$xx
-   set WHOLENODE=true
+   unset xx
+   unset yy
 endif
-unset xx
-unset yy
 #
 #  we must know the wall clock time limit:
 #      PBS will take the days:hours:minutes:seconds just as it comes.
@@ -640,12 +667,11 @@ set PBS_RESOURCES=""
 #   this requires passing a node count to the -pe prolog/epilog scripts.
 #
 if ($SCHED == SGE) then
-   set WHOLENODE=true
    if ($TESTJOB == false) then
 #
 #          at ISU, production runs allocate entire nodes to a batch job,
-#                  by picking up the right queue in our SGE configurations,
-#                  so all cores/GPUs/RAM/disk belong to this job.
+#                  by asking for the right queue in our SGE configuration,
+#                  so all cores/GPUs/RAM/disk will belong to this job.
       switch ($CLUSTER)
          case dynamo:
          case exalted:
@@ -655,7 +681,7 @@ if ($SCHED == SGE) then
            set SGE_RESOURCES="$SGE_RESOURCES -q k20dev.q"
            breaksw
          default:
-           echo No exclusive queue setup for this cluster.
+           echo missing SGE exclusive queue setup for this cluster.
            exit 8
            breaksw
       endsw
@@ -702,6 +728,19 @@ if ($CLUSTER == dynamo) then
    endif
 endif
 #
+if ($CLUSTER == thebunny) then
+   if ($?BUNNYQUEUE) then
+   else
+      echo "thebunny has batch queues named 'default/test/new'."
+      echo "the following question has no standard answer."
+      echo -n "enter queue name: "
+      set BUNNYQUEUE=$<
+   endif
+   if ($BUNNYQUEUE == default) set PPN_MAX=4
+   if ($BUNNYQUEUE == test)    set PPN_MAX=4
+   if ($BUNNYQUEUE == new)     set PPN_MAX=12
+endif
+#
 #    Some clusters may have graphical processing units on some nodes.
 #    ISU's  dynamo cluster has some nodes with 0, and some with 2 GPUs,
 #                  most runs are non-GPU using mpi target,
@@ -716,13 +755,6 @@ endif
 #    the CyEnce cluster doesn't have CUDA installed yet (as of 7/2013).
 #
 switch ($CLUSTER)
-   case chemphys2011:
-   case CyEnce:
-      if ($NUMGPU > 0) then
-         echo Ignoring GPU request, this cluster has no GPUs.
-         set NUMGPU=0
-      endif
-      breaksw
    case dynamo:
       if ($NUMGPU > 2) set NUMGPU=2
       set SGE_RESOURCES="$SGE_RESOURCES -l gpu=$NUMGPU"
@@ -749,6 +781,15 @@ switch ($CLUSTER)
 #        For this script's convenience, force the presence of that K20.
       if ($NUMGPU >= 0) set NUMGPU=1
       breaksw
+   case chemphys2011:
+   case CyEnce:
+   case thebunny:
+   default:
+      if ($NUMGPU > 0) then
+         echo Ignoring GPU request, this cluster has no GPUs.
+         set NUMGPU=0
+      endif
+      breaksw
 endsw
 #
 #    ===== next section prepares the job script
@@ -763,8 +804,11 @@ switch ($CLUSTER)
   case CyEnce:
      cp /home/mschmidt/gamess/rungms $USERSCR/$JOB.script
      breaksw
+  case thebunny:
+     cp /home/westac/gamess/rungms $USERSCR/$JOB.script
+     breaksw
   default:
-     echo "front end gms script cannot locate the back-end rungms script..."
+     echo "front end 'gms' script cannot find the back-end 'rungms' script..."
      exit 4
      breaksw
 endsw
@@ -837,7 +881,7 @@ if ($SAVE70 == true) then
    mv $USERSCR/$JOB.mung $USERSCR/$JOB.script
 endif
 #
-#    ===== last section actually submits the run
+#    ===== last section actually submits the GAMESS job!
 #
 echo Submitting GAMESS job $JOB.inp using $NCPUS cores...
 #
@@ -904,15 +948,20 @@ if ($SCHED == PBS) then
    echo "$USERSCR/$JOB.script >& $LOGFILE"   >> $USERSCR/$JOB.pbsjob
    echo "rm -f $USERSCR/$JOB.script"         >> $USERSCR/$JOB.pbsjob
    #
+   #   at least at ISU, the PBS :ppn option ensures whole nodes,
+   #   and there may be some queue-specific things needed too.
    switch ($CLUSTER)
       case chemphys:
-#   at least at our site, the PBS :ppn option ensures whole nodes.
-        if ($WHOLENODE == true) set PBS_RESOURCES=":ppn=$PPN"
+        set PBS_RESOURCES=":ppn=$PPN"
         set QUEUE_SPEC='-q gordon'
         breaksw
       case CyEnce:
         set PBS_RESOURCES=":ppn=$PPN_MAX"
         set QUEUE_SPEC=''
+        breaksw
+      case thebunny:
+        set PBS_RESOURCES=":ppn=$PPN"
+        set QUEUE_SPEC="-q $BUNNYQUEUE"
         breaksw
       default:
         echo Need to define PBS extras for this cluster
