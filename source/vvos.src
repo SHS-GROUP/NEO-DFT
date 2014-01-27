@@ -1,3 +1,4 @@
+C 27 Jan 14 - MWS - demonstrate direct VVO generation by SVD rotation.
 C 20 Sep 13 - ACW,MWS - make VVOs for high spin ROHF and all GVB cases.
 C  3 Jul 13 - MWS - VVOS: orthog atomic side, TFAO5D: fix d transf.
 C  6 Feb 13 - MWS - remove small AXP compiler warning
@@ -61,7 +62,7 @@ C
       DIMENSION NBFS(4),MINF(4),MAXF(4),NANGM(4)
 C
       LOGICAL GOPARR,DSKWRK,MASWRK,OK,DZ,ORIENT,ORIKIN,ORMFUL,RNNTSCF,
-     *        CANONC,FCORE,FORS,EKT,LINSER
+     *        CANONC,FCORE,FORS,EKT,LINSER,QUAMBO
 C
       PARAMETER (MXGTOT=20000, MXSH=5000, MXAO=8192, MXATM=2000,
      *           MXRT=100, MXNORO=250)
@@ -132,6 +133,12 @@ C     REPRESENTATION OF ELECTRONIC STRUCTURES IN CRYSTALS IN TERMS OF
 C     HIGHLY LOCALIZED QUASIATOMIC MINIMAL BASIS ORBITALS.
 C     W.C.LU, C.Z.WANG, T.L.CHAN, K.RUEDENBERG, K.M.HO
 C     PHYS.REV.B 70, 041101/1-4(2004)
+C
+C     A COMPREHENSIVE ANALYSIS OF MOLECULE-INTRINSIC QUASI-ATOMIC,
+C     BONDING, AND CORRELATING ORBITALS.
+C     I.  HARTREE-FOCK WAVE FUNCTIONS
+C     A.C.WEST, M.W.SCHMIDT, M.S.GORDON, K.RUEDENBERG
+C     J.CHEM.PHYS. 139, 234107/1-21(2013)
 C
 C     ON ENTRY, -FAO- CONTAINS THE RHF FOCK OPERATOR IN THE AO BASIS,
 C     WHILE OTHER ARRAYS ARE TREATED AS WORK SPACES.
@@ -405,10 +412,16 @@ C
   110 CONTINUE
       CALL RETFM(NEED2)
       CALL RETFM(NEED1)
-      IF(EXETYP.EQ.CHECK) GO TO 310
+      IF(EXETYP.EQ.CHECK) GO TO 210
 C
 C        STEP (II), FORM CAPITAL-B (IN -WRK2-) AND DIAGONALIZE IT
 C                   TO OBTAIN ITS -P- (NVIRVAL) LARGEST VALUES
+C
+C        Note that we are squaring an SVD equation, to convert it
+C        into an ordinary eigenvalue problem (B is symmetric).
+C        The order of the squaring means we solve for the rotation
+C        only on the molecular side of the SVD, since we don't
+C        intend to do anything with the atom's side of the SVD.
 C
       IJ=0
       DO I=1,NVIR
@@ -428,20 +441,57 @@ C         DIAGONALIZATION SHOULD GET EIGENVALUES IN DESCENDING ORDER
       ENDDO
 C
 C        SHOW THE USER THE BREAK IN EIGENVALUES FOR -B-.
+C        print SQRT to correspond to the SVD problem, not its square.
 C
       MINPRT=MAX(   1,NVIRVAL-4)
       MAXPRT=MIN(NVIR,NVIRVAL+5)
       IF(MASWRK) THEN
          WRITE(IW,9040)
          WRITE(IW,9050)
-         WRITE(IW,9070) (EIG(III),III=MINPRT,NVIRVAL)
+         WRITE(IW,9070) (SQRT(EIG(III)),III=MINPRT,NVIRVAL)
          WRITE(IW,9060)
-         WRITE(IW,9070) (EIG(III),III=NVIRVAL+1,MAXPRT)
+         WRITE(IW,9070) (SQRT(EIG(III)),III=NVIRVAL+1,MAXPRT)
+      END IF
+C
+C        Create QUAMBOs?
+C
+  210 CONTINUE
+      QUAMBO=.TRUE.
+C
+C        The mathematics in the 1st 2004 paper is now known to be
+C        that of the Singular Value Decomposition.  The overlap
+C        between the pre-orthogonalized AAMBS orbitals A* indexed 'j'
+C        and the SCF virtuals 'v' is the little-a-star generated at
+C        step (I).  Its SVD would be
+C           T-dagger(w,v) * a*(v,j) * U(j,k) = lambda-w * delta(w,k)
+C        The 2004 paper chooses to square this equation, generating
+C        the ordinary eigenvalue problem T-dagger * B * T = lambda**2,
+C        for B= sum-on-j a*(v,j)a*(w,j), which avoids the need to call
+C        an SVD routine here.
+C
+C        If our only concern is creating the pseudo-canonical VVO space,
+C        we can rotate the SCF virtuals by T(v,w) (at -WRK3-) and thus
+C        entirely skip QUAMBO projection.  The first few columns of T
+C        correspond to the largest singular values, and the remaining
+C        columns span the external space.  Since there are many zero
+C        eigenvalues in the external space (high degeneracy for the
+C        diagonalization), those eigenvectors might be a little dodgy?
+C        We therefore choose not to branch around the procedure to
+C        generate an external space by orthogonality to the internals.
+C        Of course, we must still canonicalize, as a way to clean up
+C        both the internal and external virtual spaces.
+C
+      IF(.NOT.QUAMBO) THEN
+         IF(MASWRK) WRITE(IW,9200)
+         CALL DGEMM('N','N',L1,NVIR,NVIR,1.0D+00,VEC(1,NOCC+1),L1,
+     *              WRK3,NVIR,0.0D+00,WRK2,L1)
+         CALL DCOPY(L1*NVIR,WRK2,1,VEC(1,NOCC+1),1)
+         CALL DCOPY(L1*L0,VEC,1,WRK1,1)
+         GO TO 600
       END IF
 C
 C        STEP (III), FORM CAPITAL-R, CAPITAL-D, BOTH LITTLE-A-PRIME'S
 C
-  310 CONTINUE
       CALL VALFM(LOADFM)
       LR    = LOADFM + 1
       LD    = LR     + NVIR*NVIR
@@ -450,7 +500,7 @@ C
       LAST  = LWRK5  + L0MBS*L0MBS
       NEED = LAST-LOADFM-1
       CALL GETFM(NEED)
-      IF(EXETYP.EQ.CHECK) GO TO 500
+      IF(EXETYP.EQ.CHECK) GO TO 800
 C
 C          NOTE THAT THE PROJECTOR R FORMED HERE SATISFIES R*R=R
 C
@@ -552,6 +602,8 @@ C          CAN GENERATE THESE BY ORTHOGONALIZING, THUS
 C          GENERATING AN EXTERNAL VIRTUAL SPACE.  WE SAVE
 C          THE QUAMBO'S AND THIS RATHER ARBITRARY EXTERNAL SET.
 C
+  600 CONTINUE
+C
 C          -S- MATRIX AT WRK2, -Q- MATRIX AT WRK3
       CALL DAREAD(IDAF,IODA,WRK2,L2,12,0)
       CALL DAREAD(IDAF,IODA,WRK3,L3,45,0)
@@ -559,6 +611,7 @@ C           WE SEEK ORBITALS ORTHOGONAL TO THE -L0MBS- QUAMBO'S
       CALL ORTHO(WRK3,WRK2,WRK1,SCR,L0MBS,L0,L1,L2,L1)
       CALL TFSQB(WRK1,WRK3,SCR,L0,L1,L1)
       CALL DAWRIT(IDAF,IODA,WRK1,L3,470,0)
+C
 C
 C       ----- TWO STEP GENERATION OF "SEMI-CANONICAL" ORBITALS -----
 C          WE WANT TO DIAGONALIZE THE DIAGONAL BLOCKS OF F, ONCE
@@ -575,7 +628,7 @@ C          TRANSFORM THE VECTORS BACK TO THE ATOMIC BASIS SET.
 C          VEC TO RECEIVE SEMI-CANONICAL QUAMBO/EXTERNAL SPACE
 C
 C          in case there is no external space, skip separating it.
-      IF(L0.EQ.L0MBS) GO TO 300
+      IF(L0.EQ.L0MBS) GO TO 700
 C
       CALL TFTRI(WRK3,FAO,WRK1,SCR,L0,L1,L1)
       CALL GLDIAG(L1,L0MBS,L0MBS,WRK3,SCR,EIG,VEC,IERR,IWRK)
@@ -629,8 +682,8 @@ C            ORIGINAL OCCUPIED CANONICAL ORBITALS
 C            VALENCE VIRTUAL ORBITALS
 C            EXTERNAL VIRTUAL ORBITALS
 C
-  300 CONTINUE
-      IF(NT.EQ.1) GO TO 500
+  700 CONTINUE
+      IF(NT.EQ.1) GO TO 800
 C
 C         -F IN SEMI-CANONICAL QUAMBO/EXTERNAL SPACE- AT WRK3
 C         ONLY THE VIRTUAL VALENCE/EXTERNAL VIRTUAL BLOCK SHOULD
@@ -709,8 +762,8 @@ C            WHICH IS TAKEN CARE OF IN THE HARTREE-FOCK DRIVER.
 C         2. FOR IVVOS=0 AND ISVDOP=10 RUNS, WE EXIT OUT EARLY
 C            TO PRESERVE THE TRUE CANONICAL MCSCF ORBITALS.
 C
-  500 CONTINUE
-      CALL RETFM(NEED)
+  800 CONTINUE
+      IF(QUAMBO) CALL RETFM(NEED)
       IF(L0.GT.L0MBS) THEN
          IEXTBEG = NOCC+NVIRVAL+1
          IEXTEND = L0
@@ -823,8 +876,8 @@ C
      *           ' OF -B- BETWEEN THE'/
      *           ' VALENCE VIRTUAL AND EXTERNAL VIRTUAL ORBITALS,',
      *           ' PLEASE CHECK THIS.')
- 9050 FORMAT(1X,'LAST FEW EIGENVALUES KEPT AS VALENCE:')
- 9060 FORMAT(1X,'FIRST FEW EIGENVALUES REJECTED AS EXTERNAL:')
+ 9050 FORMAT(1X,'LAST FEW SVD EIGENVALUES KEPT AS VALENCE:')
+ 9060 FORMAT(1X,'FIRST FEW SVD EIGENVALUES REJECTED AS EXTERNAL:')
  9070 FORMAT(1X,5F15.10)
  9080 FORMAT(/1X,'THE QUASIATOMIC MINIMAL-BASIS-SET ORBITALS',
      *          ' (QUAMBO''S) HAVE BEEN PUNCHED.'/
@@ -878,6 +931,8 @@ C
  9100 FORMAT(/1X,'WARNING:  IVVOS=0 FOR VVOS RUN AFTER CHANGING',
      *        1X,'DAF FILE 15,ETC.',
      *       /1X,'THERE MIGHT BE SOMETHING WRONG WITH YOUR RUN.')
+ 9200 FORMAT(/1X,'CARRYING OUT ONLY THE SVD VIRTUAL SIDE ROTATION',
+     *           ' (NO QUAMBOS)')
       END
 C
 C*MODULE VVOS    *DECK NVVOS_NUMCOR
@@ -4335,7 +4390,7 @@ C        STO      -759.7355200000 -759.6986000000
 C        SS-WTBS  -759.7356986455 -759.6986539344
 C        SA-WTBS  -759.7274117960 -759.6928849687
 C   N.B. the 3d2,4s1 configuration contains an extra 2-D term
-C   wstate(1)=5,5,5,5,5,5,5,7,7,7,7,7 in mcscf state averaging
+C   wstate(1)=5,5,5,5,5,5,5,7,7,7,7,7 in MCSCF state averaging
 C
 C       Scandium
   100 CONTINUE
@@ -4518,7 +4573,7 @@ C        SS-WTBS    -848.4059757772   -848.3860539469
 C        SA-WTBS    -848.3904982575   -848.3745545189
 C    N.B. SA energies for each term symbol only match to the 5th decimal
 C    N.B the 3d3, 4s1 configuration contains an extra 3-D term
-C      wstate(1)=1,1,1,1,1,1,1,1,1,1,1,1,1,1 in mcscf state averaging
+C      wstate(1)=1,1,1,1,1,1,1,1,1,1,1,1,1,1 in MCSCF state averaging
 C
 C        TITANIUM
   200 CONTINUE
@@ -4700,7 +4755,7 @@ C        STO        -942.8842000000    -942.8795100000
 C        SS-WTBS    -942.8843137109    -942.8796927247
 C        SA-WTBS    -942.8645636474    -942.8640051983
 C        N.B. the 3d4,4s1 configuration contains an extra 4-F term
-C         wstate(1)=7,7,7,7,7,5,5,5,5,5,5,5 in mcscf state averaging
+C         wstate(1)=7,7,7,7,7,5,5,5,5,5,5,5 in MCSCF state averaging
 C
 C        VANADIUM
   300 CONTINUE
@@ -4883,7 +4938,7 @@ C        SS-WTBS    -1043.3097842107    -1043.3563367622
 C        SA-WTBS    -1043.2876359856    -1043.3377060727
 C    N.B. 5-S term between 7-S and 5-D ignored during orbital optimiztn
 C    N.B. the 3d5,4s1 configuration has an extra 5-D term
-C      wstate(1)=5,0,1,1,1,1,1 in mcscf state averaging
+C      wstate(1)=5,0,1,1,1,1,1 in MCSCF state averaging
 C
 C        CHROMIUM
   400 CONTINUE
@@ -5064,7 +5119,7 @@ C                       3d5 4s2 6-S        3d6 4s1  6-D
 C        STO        -1149.8657000000    -1149.7432000000
 C        SS-WTBS    -1149.8662201136    -1149.7438470831
 C        SA-WTBS    -1149.8347283963    -1149.7164542891
-C        wstate(1)=5,1,1,1,1,1 in mcscf state averaging
+C        wstate(1)=5,1,1,1,1,1 in MCSCF state averaging
 C
 C        MANGANESE
   500 CONTINUE
@@ -5245,7 +5300,7 @@ C                     3d6 4s2  5-D        4s1 3d7 5-F
 C        STO        -1262.4432000000     -1262.3763000000
 C        SS-WTBS    -1262.4436279786     -1262.3775042526
 C        SA-WTBS    -1262.4116962863     -1262.3484787193
-C        wstate(1)=7,7,7,7,7,5,5,5,5,5,5,5 in mcscf state averaging
+C        wstate(1)=7,7,7,7,7,5,5,5,5,5,5,5 in MCSCF state averaging
 C
 C        IRON
   600 CONTINUE
@@ -5428,7 +5483,7 @@ C        SS-WTBS    -1381.4145090344        -1381.3582628778
 C        SA-WTBS    -1381.3801505567        -1381.3260065262
 C         N.B. while these are both 4-F terms the individual terms
 C              don't have extra 4-F contributions
-C        wstate(1)=1,1,1,1,1,1,1,1,1,1,1,1,1,1 in mcscf state averaging
+C        wstate(1)=1,1,1,1,1,1,1,1,1,1,1,1,1,1 in MCSCF state averaging
 C
 C        COBALT
   700 CONTINUE
@@ -5609,7 +5664,7 @@ C                      3d8 4s2  3-F        3d9 4s1  3-D
 C        STO        -1506.8705000000     -1506.8224000000
 C        SS-WTBS    -1506.8708567871     -1506.8238967383
 C        SA-WTBS    -1506.8338746090     -1506.7882482555
-C        wstate(1)=5,5,5,5,5,5,5,7,7,7,7,7 in mcscf state averaging
+C        wstate(1)=5,5,5,5,5,5,5,7,7,7,7,7 in MCSCF state averaging
 C
 C        NICKEL
   800 CONTINUE
@@ -5790,7 +5845,7 @@ C                     3d9 4s2 2-D            3d10 4s1  2-S
 C        STO       -1638.9496000000        -1638.9628000000
 C        SS-WTBS   -1638.9500276464        -1638.9636865898
 C        SA-WTBS   -1638.9113654992        -1638.9254149865
-C        wstate(1)=5,1,1,1,1,1 in mcscf state averaging
+C        wstate(1)=5,1,1,1,1,1 in MCSCF state averaging
 C
 C        COPPER
   900 CONTINUE
@@ -8481,8 +8536,20 @@ C                        4d1 5s2 2-D       3d2 4s1  4-F
 C        STO         -3331.6712000000     -3331.6550000000
 C        SS-WTBS     -3331.6840525933     -3331.6685501301
 C        SA-WTBS     -3331.6905967927     -3331.6670778694
-C        N.B. the 3d2,4s1 configuration contains an extra 2-D term
-C        wstate(1)=7,7,7,7,7,5,5,5,5,5,5,5 in mcscf state averaging
+C        wstate(1)=7,7,7,7,7,5,5,5,5,5,5,5 in MCSCF state averaging
+C
+C        The averaging for Y and for Zr uses a CAS-type space,
+C        in which case we can reproduce these SA-WTBS energies.
+C        So, what seems to have been done is to generate all
+C        determninants for s2,dn and s1,d(n+1) and s0,d(n+2)
+C        so that the state averaged runs are likely a bit
+C        multiconfigurational.
+C        Note that this really can't be helped: for Y, there
+C        is a 2-D as the only state in s2,d1, but there is
+C        also a 2-D state contained in the s1,d2.  Using ORMAS
+C        to request only s2,d1 and s1,d2 determinants gives
+C        SA-WTBS     -3331.6860987411     -3331.6668734079
+C        which continues to have the SA result lower than SS(2D)
 C
 C        YTTRIUM
   100 CONTINUE
@@ -8743,9 +8810,12 @@ C                  Zirconium
 C                       4d2 5s2 3-F          4d3 5s1  5-F
 C        STO       -3538.9821000000        -3538.9957000000
 C        SS-WTBS   -3538.9949381906        -3539.0094627358
-C        SA-WTBS   -3539.0061446076        -3538.9935293248
+C        SA-WTBS   -3538.9935293248        -3539.0061446076
 C        N.B the 3d3, 4s1 configuration contains an extra 3-D term
-C        wstate(1)=5,5,5,5,5,5,5,7,7,7,7,7 in mcscf state averaging
+C        wstate(1)=5,5,5,5,5,5,5,7,7,7,7,7 in MCSCF state averaging
+C        The SA result above is CAS for 4 electrons in 6 (s+d) orbitals
+C        Using ORMAS to limit the determinants to s2,d2 and s1,d3:
+C        SA-WTBS   -3538.9912921691        -3539.0056521633
 C
 C        ZIRCONIUM
   200 CONTINUE
@@ -10350,7 +10420,7 @@ C        STO            N/A     -4937.8815000000   -4937.9071000000
 C        SS-WTBS        N/A     -4937.7761387221   -4937.9208968747
 C        SA-WTBS        N/A     -4937.7655005767   -4937.9139527985
 C        SA-modified WTBS       -4937.8933084968   -4937.9208615233
-C        wstate(1)=5,1,1,1,1,1 in mcscf state averaging
+C        wstate(1)=5,1,1,1,1,1 in MCSCF state averaging
 C
 C                Palladium
   800 CONTINUE
@@ -10617,7 +10687,7 @@ C                       4d9 5s2 2-D           4d10 5s1  2-S
 C        STO         -5197.5029000000        -5197.6852000000
 C        SS-WTBS     -5197.5177383476        -5197.6983178793
 C        SA-WTBS     -5197.5015982486        -5197.6812925610
-C        wstate(1)=5,1,1,1,1,1 in mcscf state averaging
+C        wstate(1)=5,1,1,1,1,1 in MCSCF state averaging
 C
 C        SILVER
   900 CONTINUE
