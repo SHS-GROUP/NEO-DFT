@@ -876,6 +876,7 @@ C
 C
 C     Define simple items for Malmqvist work.
       NATOMS=NAT
+      MXRTMQ=MXRT
 ctemp--
       IF(ICH.NE.0.AND.ICIMALMQ.EQ.3) THEN
         IF(MASWRK) WRITE(IW,9001)
@@ -986,16 +987,21 @@ C
       LSP    = LEL    + MAXW1
       IBO    = LSP    + MAXW1
       LVTORB = IBO    + NTOT
-      LDMAT    = LVTORB + L1*L1
-      LDMAT2   = LDMAT + NATOMS*NATOMS
-      LFRHS    = LDMAT2    + NATOMS*(NATOMS+1)
-      LNATM    = LFRHS + NATOMS
-      LIORDACT2   = LNATM + L1
-      LAST        = LIORDACT2 + NATOMS
-      NEED2  = LAST - LOADFM - 1
-      NEEDCI = NEED1 + NEED2
-      IF(SOME) WRITE(IW,9130) NEEDCI
+      LDMAT       = LVTORB    + L1*L1
+      LDMAT2      = LDMAT     + NATOMS*NATOMS
+      LFRHS       = LDMAT2    + NATOMS*(NATOMS+1)
+      LNATM       = LFRHS     + NATOMS
+      LIORDACT2   = LNATM     + L1
+      LIWTSMQ     = LIORDACT2 + NATOMS
+      LWGTMQ      = LIWTSMQ   + MXRTMQ
+      LAST        = LWGTMQ    + MXRTMQ
+      NEED2       = LAST - LOADFM - 1
       CALL GETFM(NEED2)
+C
+C        print memory for the CI step
+C
+      NEEDCI   = NEED1 + NEED2
+      IF(SOME) WRITE(IW,9130) NEEDCI
 C
       CALL DAREAD(IDAF,IODA,X(IBO),NTOT,262,1)
       CALL CORTRA(X(IBO),NTOT,NTCO)
@@ -1029,7 +1035,8 @@ C
      *           X(LIFA),X(LSP),X(LEL),X(LDWRK),IDS,X(LIWRK),IIS,
      *           IGPDET,KSTSYM,NSYM,X(IBO),NALP,NBLP,ISTAT,
      *           X(LVTORB),L1,NCORSV,ICIMALMQ,NATOMS,X(LDMAT),X(LDMAT2),
-     *           X(LFRHS),X(LNATM),X(LIORDACT2))
+     *           X(LFRHS),X(LNATM),X(LIORDACT2),MXRTMQ,X(LIWTSMQ),
+     *           X(LWGTMQ))
 C
       DO I=1,MIN(K,MXRT)
          ESTATE(I) = X(LEL-1+I) + ECONST
@@ -2417,14 +2424,19 @@ C>                 when icimalmq equals 1,3.
 C> @param NATOMS   is the number of atoms.
 C> @param DMAT     is a NATOMS-by-NATOMS matrix
 C>                 for charge transfer run.
-C> @param DMAT2    is a NATOMS-by-NATOMS+1 matrix integer scratch matrix.
+C> @param DMAT2    is a NATOMS-by-NATOMS+1 matrix integer
+C>                 scratch matrix.
 C> @param FRHS     is a vector with NATOMS length
 C>                 for charge transfer run.
 C> @param NATM     is a vector with L1 length
 C>                 that defines atoms for each orbital number.
 C>                 For quasi-atomic orbitals,
-C>                 these orbital limits assign each orbital to a single atom.
+C>                 these orbital limits assign
+C>                 each orbital to a single atom.
 C> @param IORDACT2 is NATOMS integer scratch array.
+C> @param MXRTMQ   equals MXRT parameter in many common blocks.
+C> @param IWTSMQ   is the index of SA-CI roots.
+C> @param WGTMQ    contains the weights of the SA-CI roots.
 C>
       SUBROUTINE DAVCI(IW,SOME,ECONST,SI1,SI2,NORB,NCOR,NCI,NA,NB,
      *    CI,SPIN,EL,K,KST,MAXP,MAXW1,NITER,CRIT,
@@ -2433,7 +2445,8 @@ C>
      *    IMUL,ISPA,ISPB,ISAS,ISBS,ISAC,ISBC,NSYM,IOB,NALP,NBLP,
      *      IHMCON,GR,ISTRB,ISTRP,ISTAR,ISTAT,
      *    VTORB,L1,NCORSV,ICIMALMQ,NATOMS,DMAT,DMAT2,
-     *    FRHS,NATM,IORDACT2)
+     *    FRHS,NATM,IORDACT2,MXRTMQ,IWTSMQ,
+     *    WGTMQ)
 C     --------------------------------------------------------
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
       LOGICAL SOME,GOPARR,DSKWRK,MASWRK,ANALYS,UNSTUCK,DSKSAV,
@@ -2469,8 +2482,8 @@ C
 C
 C     ATOMIC-LIKE VARS HERE
       DIMENSION VTORB(L1,L1),DMAT(NATOMS,NATOMS),DMAT2(NATOMS,NATOMS+1),
-     *          FRHS(NATOMS)
-      DIMENSION NATM(L1),IORDACT2(NATOMS)
+     *          FRHS(NATOMS),WGTMQ(MXRTMQ)
+      DIMENSION NATM(L1),IORDACT2(NATOMS),IWTSMQ(MXRTMQ)
 C
 C
 C   Code to do a full CI almost completely directly.  Written by
@@ -2712,8 +2725,8 @@ C     PERFORM MALMQVIST TRANSFORMATION IF REQUESTED.
 C
 C       OBTAIN CORRECT ROOT TO ACCESS FOR NEXT ROUTINE.
 C       NOTE:  ALSO CHECK MEMORY IS THERE.
-        CALL MALMQ_CIGRB(ITMPCI,IW,MASWRK,SOME)
-        IF(MAXP.LT.2.OR.ITMPCI.EQ.MAXP) THEN
+        CALL MALMQ_IWTS(MXRTMQ,IRTMQ,IWTSMQ,WGTMQ)
+        IF(MAXP.LT.2.OR.IWTSMQ(IRTMQ).GT.MAXP-1) THEN
           IF(MASWRK) WRITE(IW,9016)
           CALL FLSHBF(IW)
           CALL ABRT
@@ -2723,7 +2736,7 @@ C
 C       CONFIGURATION TRANSFORMATION WITHOUT DOING CI.
         IF(ICIMALMQ.EQ.1) THEN
           CALL MALMQ_RINAB(
-     *         VTORB,L1,NCORSV,ITMPCI,KST,
+     *         VTORB,L1,NCORSV,KST,MXRTMQ,IWTSMQ,WGTMQ,
      *         AB,CI,NORB,NCOR,NCI,NA,NB,
      *         IACON1,IACON2,IBCON1,IBCON2,IFA,
      *         ISPA,ISPB,NALP,NBLP)
@@ -2732,11 +2745,12 @@ C
 C       FIND WAVEFUNCTION WITH NO CHARGE TRANSFER.
         IF(ICIMALMQ.EQ.3) THEN
           CALL MALMQ_CHARGE_TRANSFER1(
-     *         NATOMS,ITMPCI,NV,L1,
+     *         NATOMS,MXRTMQ,IWTSMQ,WGTMQ,KST,L1,
      *         AB,CI,NORB,NCOR,NCI,NA,NB,
      *         IACON1,IBCON1,
      *         ISPA,ISPB,NALP,NBLP,
-     *         DMAT,DMAT2,FRHS,NATM,IORDACT2,AB(1,MAXP),
+     *         DMAT,DMAT2,FRHS,NATM,IORDACT2,
+     *         AB(1,MAXP),
      *         MASWRK,SOME)
         ENDIF
 C
@@ -3190,7 +3204,7 @@ C
  9016 FORMAT(/1X,'ERROR ON THE SIDE OF CAUTION FOR MALMQVIST.',
      *        1X,'MOST OF THE TIME, TWO STATES IS NOT TOO MUCH',
      *        1X,'BURDEN.',
-     *       /1X,'ITMPCI CANNOT BE MAXP.')
+     *       /1X,'STATE OUT OF IWTSMQ CANNOT BE MAXP.')
  9020 FORMAT(1X,'INITIAL FULL CI ITERATION TIME:',F13.1)
  9040 FORMAT(/1X,'ITERATION',6X,'ENERGY',11X,'GRADIENT')
  9050 FORMAT(1X,I5,F20.10,F15.8)
@@ -7454,7 +7468,7 @@ C> @details    This routine grabs memory for full CI run and
 C>             davci call, which is the guts of aldeci full CI run.
 C>
 C> @date November 08, 2012-Aaron West
-C> -Added vtorb,L1,ncorsv, and icimalmq arguments for Malmqvist.
+C> -Added VTORB,L1,NCORSV, and ICIMALMQ arguments for Malmqvist.
 C>
 C> @param VTORB contains Malmqvist' factorized orbital transformation.
 C> @param L1 denotes the length of the AO coefficients.
@@ -7464,21 +7478,27 @@ C>                 when icimalmq equals 1,3.
 C> @param NATOMS   is the number of atoms.
 C> @param DMAT     is a NATOMS-by-NATOMS matrix
 C>                 for charge transfer run.
-C> @param DMAT2    is a NATOMS-by-NATOMS+1 matrix integer scratch matrix.
+C> @param DMAT2    is a NATOMS-by-NATOMS+1 matrix integer
+C>                 scratch matrix.
 C> @param FRHS     is a vector with NATOMS length
 C>                 for charge transfer run.
 C> @param NATM     is a vector with L1 length
 C>                 that defines atoms for each orbital number.
 C>                 For quasi-atomic orbitals,
-C>                 these orbital limits assign each orbital to a single atom.
+C>                 these orbital limits assign
+C>                 each orbital to a single atom.
 C> @param IORDACT2 is NATOMS integer scratch array.
+C> @param MXRTMQ   equals MXRT parameter in many common blocks.
+C> @param IWTSMQ   is the index of SA-CI roots.
+C> @param WGTMQ    contains the weights of the SA-CI roots.
 C>
       SUBROUTINE DETCI(IW,SOME,ECONST,SI1,SI2,ISI1,ISI2,
      *         NORB,NCOR,NCI,NA,NB,K,KST,MAXP,MAXW1,NITER,CRIT,
      *         IFA,SPIN,EL,CI,IDS,IWRK,IIS,
      *         IDSYM,ISYM1,NSYM,IOB,NALP,NBLP,ISTAT,
      *         VTORB,L1,NCORSV,ICIMALMQ,NATOMS,DMAT,DMAT2,
-     *         FRHS,NATM,IORDACT2)
+     *         FRHS,NATM,IORDACT2,MXRTMQ,IWTSMQ,
+     *         WGTMQ)
 C     --------------------------------------------------------
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
 C
@@ -7493,8 +7513,8 @@ C
 C
 C     ATOMIC-LIKE VARS HERE
       DIMENSION VTORB(L1,L1),DMAT(NATOMS,NATOMS),DMAT2(NATOMS,NATOMS+1),
-     *          FRHS(NATOMS)
-      DIMENSION NATM(L1),IORDACT2(NATOMS)
+     *          FRHS(NATOMS),WGTMQ(MXRTMQ)
+      DIMENSION NATM(L1),IORDACT2(NATOMS),IWTSMQ(MXRTMQ)
 C
 C
 C   Code to do determinantal CI, here we partition the memory up
@@ -7621,7 +7641,8 @@ C
      *       IWRK(ISBC),NSYM,IOB,NALP,NBLP,IWRK(IHMCON),
      *       CI(KGR),IWRK(ISTRB),IWRK(ISTRP),IWRK(ISTAR),ISTAT,
      *       VTORB,L1,NCORSV,ICIMALMQ,NATOMS,DMAT,DMAT2,
-     *       FRHS,NATM,IORDACT2)
+     *       FRHS,NATM,IORDACT2,MXRTMQ,IWTSMQ,
+     *       WGTMQ)
 C
       RETURN
       END
@@ -9791,7 +9812,7 @@ C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
 C
       LOGICAL SOME,SKIP,BLOCK,FDIRCT,QCORR,NONABEL,ABELPT,SALAST,
-     *        SAFLG,ANALYS,ORIENT,ORIKIN,ORMFUL,RNNTSCF
+     *        SAFLG,ANALYS,ORIENT,ORIKIN,ORMFUL,RNNTSCF,SVDCOPT
 C
       DIMENSION DMO(M2),DAO(L2),VAO(L1,L1),VNO(L1,L1),OCCNO(L1),
      *          IWRK(L1),WRK(L1,8),SCR(L3),S(L2)
@@ -9812,7 +9833,7 @@ C
       COMMON /MACHSW/ KDIAG,ICORFL,IXDR,modio
       COMMON /ORNTMO/ EXTLOC,EREFATM,
      *                NATMOR(MXAO),ISVMOR(MXATM),ISVDOP,L0DEP0,
-     *                ORIENT,ORIKIN,ORMFUL,RNNTSCF
+     *                ORIENT,ORIKIN,ORMFUL,RNNTSCF,SVDCOPT
       COMMON /PSILVL/ IPSI,ISKPRP
       COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
       COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
@@ -10353,16 +10374,20 @@ C>                          for wavefunction with no charge transfer.
 C-----------------------------------------------------------------------
       IMPLICIT NONE
 C     VARS
-      LOGICAL EXIT,SOME,CLABEL,SAVDSKWRK,DDITRF
+      LOGICAL EXIT,SOME,CLABEL,SAVDSKWRK,DDITRF,OKSYM_SVDDET
       INTEGER ISTATUS_INT,I1PDM,I2PDM
-      INTEGER ICIMALMQ,IORBF1,IORBF2,IPRINT,IPRINT2,L0,L1,L2,L3,NACT
+      INTEGER ICIMALMQ,IORBF1,IORBF2,IPRINT,IPRINT2,L0,L1,L2,L3,NACT,
+     *        IRTMQ
       INTEGER LOADFM,LAST,NGOTMX,
-     *        LEIG,LIPVT,LIWRK,LS,LSCR,LUVEC,LVMAT,LVSCR,LVTORB,LVTP,
-     *        LVOR,LWRKINV,NEEDMALMQ1,NEEDMALMQ2,LDEN,LDEN2,LSIGN,LNORD
+     *        LVWRK1,LEIG,LIWRK,LS,LSCR,LUVEC,LVSCR,LVTORB,LVTP,
+     *        LVOR,NEEDMALMQ1,NEEDMALMQ2,NEEDMALMQ3,
+     *        LDEN,LDEN2,LSIGN,LNORD,
+     *        LIWTSMQ,LWGTMQ,LSTATE_CHK,LSTATE_CHK2
       DOUBLE PRECISION :: ETOT_SAV,ESTATE_SAV,
      *                    ETOT_KEEPS,ESTATE_KEEPS,
      *                    TMP,ALDET,ORMAS,CHECK,RMC,RNONE
-      INTEGER I,IERR,IDUM,IROOT_NOW
+      INTEGER I,IERR,IDUM
+
 C-----------------------------------------------------------------------
 C
       DOUBLE PRECISION ::
@@ -10391,7 +10416,7 @@ C
      *        NPFLG,NOFO,MCFMO,IDIABAT
       LOGICAL CANONC,FCORE,FORS,EKT,LINSER
 C
-      LOGICAL ORIENT,ORIKIN,ORMFUL,RNNTSCF
+      LOGICAL ORIENT,ORIKIN,ORMFUL,RNNTSCF,SVDCOPT
       DOUBLE PRECISION :: EXTLOC,EREFATM
       INTEGER NATMOR,ISVMOR,ISVDOP,L0DEP0
 C
@@ -10406,10 +10431,6 @@ C
       DOUBLE PRECISION ::
      *       RUNTYP,EXETYP
       INTEGER NEVALS,NGLEVL,NHLEVL
-C
-      DOUBLE PRECISION :: GROUP,COMPLX
-      INTEGER IGROUP,NAXIS,ILABMO
-      LOGICAL ABEL
 C
       DOUBLE PRECISION :: SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP
       INTEGER MPLEVL,MPCTYP
@@ -10436,14 +10457,11 @@ C-----------------------------------------------------------------------
      *                CANONC,FCORE,FORS,EKT,LINSER
       COMMON /ORNTMO/ EXTLOC,EREFATM,
      *                NATMOR(MXAO),ISVMOR(MXATM),ISVDOP,L0DEP0,
-     *                ORIENT,ORIKIN,ORMFUL,RNNTSCF
+     *                ORIENT,ORIKIN,ORMFUL,RNNTSCF,SVDCOPT
       COMMON /OUTPUT/ NPRINT,ITOL,ICUT,NORMF,NORMP,NOPK
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
       COMMON /PRPOPT/ ETOLLZ,ILOCAL,IAHARD
       COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
-ctemp--
-      COMMON /SYMMOL/ GROUP,COMPLX,IGROUP,NAXIS,ILABMO,ABEL
-ctemp--
       COMMON /WFNOPT/ SCFTYP,VBTYP,DFTYPE,TDDFTYP,CITYP,CCTYP,
      *                MPLEVL,MPCTYP
 C-----------------------------------------------------------------------
@@ -10465,12 +10483,17 @@ C     SOME OTHER BASICS
 C     E.G. PRINT INFO
       SOME = NPRINT.NE.-5 .AND. MASWRK
 C
+C     INIT. OKSYM_SVDDET VAR.
+      CALL LOCAL_SVD_CHKSYM(OKSYM_SVDDET)
+C
 C     SOME EXITS.
       EXIT=.FALSE.
+ctemp-- aaron will remove this line after
+ctemp-- some testing and extending to more states for SA-MCSCF.
       IF(ILOCAL.NE.4) EXIT=.TRUE.
       IF(EXTLOC.NE.RNONE) EXIT=.TRUE.
 ctemp--  removing this line requires much work in aldeci and ormas1.
-      IF(IGROUP.NE.1) EXIT=.TRUE.
+      IF(.NOT.OKSYM_SVDDET) EXIT=.TRUE.
 ctemp--
       IF(EXIT) THEN
         IF(SOME) WRITE(IW,9100)
@@ -10493,7 +10516,7 @@ C     --NEVER DO MOLECULAR SYM FOR ILOCAL=4 OPTION.
         CALL ABRT
         STOP
       ENDIF
-      IF(IGROUP.NE.1.AND.ILOCAL.EQ.4) THEN
+      IF(.NOT.OKSYM_SVDDET.AND.ILOCAL.EQ.4) THEN
         IF(MASWRK) WRITE(IW,9004)
         CALL FLSHBF(IW)
         CALL ABRT
@@ -10505,22 +10528,17 @@ C     GET ALL MEMORY FOR ORBITAL TRANSFORMATIONS AND CI MANIPULATIONS
       CALL GOTFM(NGOTMX)
       CALL VALFM(LOADFM)
 C     ORBITAL MEMORY
-      LVSCR = LOADFM + 1
-      LVTP = LVSCR + L3
-      LVOR  = LVTP + L3
-      LVTORB = LVOR + L3
-      LVMAT  = LVTORB + L3
-C     MORE ORBITAL MEMORY FOR INVERTING MATRICES.
-      LWRKINV = LVMAT + NACT*NACT
-      LIPVT = LWRKINV + L1
-      LEIG = LIPVT + L1
-C     MEMORY FOR OVLSEL ROUTINE
-      LS = LEIG + L1
-      LSCR = LS + L2
-      LIWRK = LSCR + L1*8
-      LUVEC = LIWRK + L1
-C     LAST ITEM IS MORE ORBITAL MEMORY FOR TMP VARS.
-      LAST = LUVEC + L3
+      LVSCR   = LOADFM + 1
+      LVTP    = LVSCR  + L3
+      LVOR    = LVTP   + L3
+      LVTORB  = LVOR   + L3
+      LVWRK1  = LVTORB + L3
+      LEIG    = LVWRK1 + L3
+      LS      = LEIG   + L1
+      LSCR    = LS     + L2
+      LIWRK   = LSCR   + L1*8
+      LUVEC   = LIWRK  + L1
+      LAST    = LUVEC  + L3
       NEEDMALMQ1 = LAST - LOADFM - 1
       CALL GETFM(NEEDMALMQ1)
       IF(SOME) WRITE(IW,9006) NGOTMX,NEEDMALMQ1
@@ -10556,9 +10574,14 @@ C       ---SAVE REORDERED ORBITALS INTO DAF15 AND DAF529.
         CALL DAWRIT(IDAF,IODA,X(LVOR),L3,529,0)
 C
 C       OBTAIN ORBITAL TRANSFORMATION
-        CALL MALMQ_TORB(X(LVTP),X(LVOR),X(LVTORB),X(LUVEC),X(LVSCR),
-     *                  X(LVMAT),X(LWRKINV),X(LIPVT),X(LS),L0,L1,L2,L3,
-     *                  NCORSV,NACT,MASWRK)
+        CALL DAREAD(IDAF,IODA,X(LS),L2,12,0)
+        CALL DAREAD(IDAF,IODA,X(LVTP),L3,IORBF1,0)
+        !    LVOR ALREADY CONTAINS REORDERED IORBF2 ORBITALS.
+        CALL MALMQ_TORB(
+     *       X(LS),X(LVTP),X(LVOR),X(LUVEC),X(LVSCR),X(LVTORB),
+     *       X(LVWRK1),X(LEIG),X(LSCR),X(LIWRK),
+     *       L0,L1,L2,L3,
+     *       MASWRK,IW)
 C
 C       ORBITAL TRANSFORMATION CONDITIONS
         CALL MALMQ_TCHK(X(LVTORB),L1,NACT,NCORSV,CISTEP,MASWRK)
@@ -10640,9 +10663,29 @@ C     ---ONLY ONE CI ROOT IS UPDATED
 C        I.E. THE LOWEST ROOT OF A GIVEN MULTIPLICITY
 C     ---THE PRINTING IS RE-PRESSED BY IPRINT=-5.
 C        (MAYBE ADD THIS ITEM TO NPRINT ABOVE LATER ON...)
-      IPRINT=-5
+C-----------------------------------------
+      CALL GOTFM(NGOTMX)
+      CALL VALFM(LOADFM)
+      LSTATE_CHK  = LOADFM      + 1
+      LSTATE_CHK2 = LSTATE_CHK  + MXRT
+      LIWTSMQ     = LSTATE_CHK2 + MXRT
+      LWGTMQ      = LIWTSMQ     + MXRT
+      LAST        = LWGTMQ      + MXRT
+      NEEDMALMQ2  = LAST - LOADFM - 1
+      CALL GETFM(NEEDMALMQ2)
+C-----------------------------------------
+C     SET UP THE IWTSMQ ARRAY RIGHT AWAY.
+      CALL MALMQ_IWTS(MXRT,IRTMQ,X(LIWTSMQ),X(LWGTMQ))
+C-----------------------------------------
 C
+      IF(NPRINT.EQ.-5) THEN
+        IPRINT=NPRINT
+      ELSE
+        IPRINT=0
+      ENDIF
+C---------------
       CALL ONEEI
+C---------------
       ISTATUS_INT=1
       CALL MALMQ_INTEGRALS(IPRINT,ISTATUS_INT)
       IF(IPRINT.EQ.-5.AND.SOME) WRITE(IW,9007)
@@ -10660,15 +10703,18 @@ C        OCCUR BELOW IT, ETOT GETS SET TO THE TRIPLET.
 C     ---LATER FOR ENERGY ANALYSIS,
 C        MIGHT NEED TO UPDATE DAF FILE 2.
 C------------------------------------------------
-C     FIND PROPER STATE ROOT
-      CALL MALMQ_CIGRB(IROOT_NOW,IW,MASWRK,.FALSE.)
-C     SAVE AND RESET ETOT,ESTATE.
+      DO I=1,IRTMQ
+        CALL ICOPY(1,X(LIWTSMQ+I-1),1,IDUM,1)
+        X(LSTATE_CHK+IDUM-1)=ESTATE(IDUM)
+      ENDDO
       ETOT_SAV=ETOT
-      ESTATE_SAV=ESTATE(IROOT_NOW)
       ETOT=0.0D+00
       IF(CISTEP.EQ.ALDET) THEN
         CALL DETFCI(IPRINT,CLABEL,DDITRF,ICIMALMQ)
-        ESTATE_KEEPS=ESTATE(IROOT_NOW)
+        DO I=1,IRTMQ
+          CALL ICOPY(1,X(LIWTSMQ+I-1),1,IDUM,1)
+          X(LSTATE_CHK2+IDUM-1)=ESTATE(IDUM)
+        ENDDO
         ETOT_KEEPS=ETOT
         IPRINT2=0
         CALL DETDM1(IPRINT2)
@@ -10679,7 +10725,10 @@ C       SO, WE SET THE FOLLOWING AS 0 AND 1.
         I1PDM=0
         I2PDM=1
         CALL DEFCCI(IPRINT,CLABEL,DDITRF,I1PDM,I2PDM,0,IPRINT,ICIMALMQ)
-        ESTATE_KEEPS=ESTATE(IROOT_NOW)
+        DO I=1,IRTMQ
+          CALL ICOPY(1,X(LIWTSMQ+I-1),1,IDUM,1)
+          X(LSTATE_CHK2+IDUM-1)=ESTATE(IDUM)
+        ENDDO
         ETOT_KEEPS=ETOT
       ELSE
         IF(MASWRK) WRITE(IW,9008)
@@ -10694,31 +10743,34 @@ C
 C     CHECK THE NEW ENERGY AGAINST THE OLD ENERGY
 C     NOTE:  IN THE FUTURE, DAF FILE 2 WRITE MIGHT BE NEEDED.
       IF(ICIMALMQ.EQ.1) THEN
-        TMP=ESTATE_SAV-ESTATE_KEEPS
-        TMP=ABS(TMP)
-        IF(TMP.GT.5.0D-07) THEN
+        DO 300 I=1,IRTMQ
+          CALL ICOPY(1,X(LIWTSMQ+I-1),1,IDUM,1)
+          ESTATE_SAV=X(LSTATE_CHK+IDUM-1)
+          ESTATE_KEEPS=X(LSTATE_CHK2+IDUM-1)
+          TMP=ABS(ESTATE_SAV-ESTATE_KEEPS)
+          IF(TMP.LE.5.0D-07) GO TO 300
           IF(MASWRK) WRITE(IW,9010) ESTATE_SAV,ESTATE_KEEPS
           CALL FLSHBF(IW)
           CALL ABRT
-        ENDIF
-        TMP=ETOT_SAV-ETOT_KEEPS
-        TMP=ABS(TMP)
+  300   CONTINUE
+        TMP=ABS(ETOT_SAV-ETOT_KEEPS)
         IF(TMP.GT.5.0D-07) THEN
           IF(SOME) WRITE(IW,9011) ETOT_SAV,ETOT_KEEPS
           CALL FLSHBF(IW)
         ENDIF
       ENDIF
+      CALL RETFM(NEEDMALMQ2)
 C
 C     MEMORY FOR THE DENSITY MATRIX,ETC.
       CALL GOTFM(NGOTMX)
       CALL VALFM(LOADFM)
-      LDEN  = LOADFM + 1
-      LNORD = LDEN + NACT*NACT
-      LDEN2  = LNORD + L1
-      LSIGN  = LDEN2 + NACT*NACT
-      LAST  = LSIGN + NACT*NACT
-      NEEDMALMQ2 = LAST - LOADFM - 1
-      CALL GETFM(NEEDMALMQ2)
+      LDEN       = LOADFM  + 1
+      LNORD      = LDEN    + NACT*NACT
+      LDEN2      = LNORD   + L1
+      LSIGN      = LDEN2   + NACT*NACT
+      LAST       = LSIGN   + NACT*NACT
+      NEEDMALMQ3 = LAST - LOADFM - 1
+      CALL GETFM(NEEDMALMQ3)
 C
 C     ACCOUNT FOR SIGN CHANGES
 C     OR
@@ -10729,7 +10781,8 @@ C     GRAB NO-TRANSFER DENSITY
      *                 NACT,NCORSV,
      *                 ICIMALMQ,IPRINT,ORIENT,SOME)
       ENDIF
-      CALL RETFM(NEEDMALMQ2)
+C
+      CALL RETFM(NEEDMALMQ3)
 C
 C     FOR ICIMALMQ=1...
 C     COULD RE-RUN CI HERE FROM SCRATCH OR USING THESE GUESS VECTORS.
@@ -10814,7 +10867,7 @@ C> @param L1     is the LCAO length.
 C> @param L2     is the triangular length of L1.
 C> @param L3     is the square of L1.
 C> @param NCORSV will be the MCSCF core orbitals.
-C> @param NACTSV will be the MCSCF active orbitals.
+C> @param NACT   will be the MCSCF active orbitals.
 C> @param IORBF1 is the DAF file for orbital set 1.
 C> @param IORBF2 is the DAF file for orbital set 2.
 C> @param VOPT   is an array for orbital set 1.
@@ -10955,120 +11008,99 @@ C>
 C> @author     Aaron West and Klaus Ruedenberg
 C>             -November 08, 2012
 C>
-C> @details    THIS ROUTINE OBTAINS THE ORBITAL TRANSFORMATION MATRIX BETWEEN
-C>             TWO MO SETS.
-C>             This MO transformation is for Malmqvist, but the correct array
-C>             could be written out to DAF file to grab any MO transformation.
-C>             Another argument into MALMQ_CIDRIV with some mods would work out.
+C> @details    THIS ROUTINE OBTAINS THE
+C>             ORBITAL TRANSFORMATION MATRIX BETWEEN TWO MO SETS.
 C>
-C> @param VOPT   is an array for orbital set 1.
-C> @param VOR    is an array for orbital set 2.
-C> @param VTORB  holds the orbital transformation.
-C> @param SBAR   will hold VOPT-TRANS * S * VOPT.
-C> @param SHAT   will hold VOPT-TRANS * S * VOR.
-C> @param VMAT   is an nact-by-nact work array.
-C> @param WRKINV is a work array for inverting matrices.
-C> @param IPVT   is an integer work array.
-C> @param S      denotes the AO overlap matrix.
-C> @param L0     denotes NUM from INFOA common.
-C> @param L1     is the length of the AO coefficients.
-C> @param L2     is the triangular piece of L1.
-C> @param L3     is the square of L1.
-C> @param NCORSV is the number of MCSCF core orbitals.
-C> @param NACT   is the number of MCSCF active oribtals.
-c> @param MASWRK indicates master process.
-      SUBROUTINE MALMQ_TORB(VOPT,VOR,VTORB,SBAR,SHAT,
-     *                      VMAT,WRKINV,IPVT,S,L0,L1,L2,L3,
-     *                      NCORSV,NACT,MASWRK)
+C> @note       Use MALMQ_TORB to get the transformation.
+C>             Use LOCAL_SQMAT_INV to invert that transformation.
+C>             Then, generally transform a density matrix.
+C>
+C> @date January 3, 2014-Aaron West
+C> -Make routine simple.
+C>
+C> @param S        holds the LCAO overlap integrals upon entry.
+C> @param VOPT     holds IORBF1 orbitals upon entry.
+C> @param VOR      holds reordered IORBF2 orbitals upon entry.
+C> @param TRANSO   is L3 scratch space.
+C> @param TRANSINV is L3 scratch space.
+C> @param VTORB    will hold the orbital transformation of interest.
+C>                 For nonorthogonal orbital sets,
+C>                 the result will be a transform
+C>                 rather than just a projection.
+C> @param VWRK1    is L3 scratch space.
+C> @param EIG      is L1 scratch space.
+C> @param SCR      is L1*8 scratch space.
+C> @param IWRK     is L1 integer scratch space.
+C> @param L0       is the total number of variational MOs.
+C> @param L1       is the LCAO length.
+C> @param L2       is the triangular length of L1.
+C> @param L3       is the square of L1.
+C> @param MASWRK   denotes the master process.
+C> @param IW       is the integer variable for printing to log files.
+      SUBROUTINE MALMQ_TORB(
+     *           S,VOPT,VOR,TRANSO,TRANSINV,VTORB,
+     *           VWRK1,EIG,SCR,IWRK,
+     *           L0,L1,L2,L3,
+     *           MASWRK,IW)
 C-----------------------------------------------------------------------
       IMPLICIT NONE
-C     VARS
       LOGICAL MASWRK
-      INTEGER I,L0,L1,L2,L3,NACT,NCORSV
-      DOUBLE PRECISION RCOND1,RCOND2
-C     NEW CODING STANDARDS VARS
-      INTEGER IDAF,IODA,IP,IPK,IR,IS,IW,NAV
-C-----------------------------------------------------------------------
-      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
-      INTEGER IPVT(L1)
+      INTEGER IW,
+     *        L0,L1,L2,L3
+      INTEGER IWRK(L1)
       DOUBLE PRECISION ::
-     *       VOPT(L1,L1),VOR(L1,L1),VTORB(L1,L1),
-     *       SBAR(L1,L1),SHAT(L1,L1),S(L2),
-     *       VMAT(NACT,NACT),WRKINV(L1),
-     *       DET(2)
+     *       S(L2),VOPT(L1,L1),VOR(L1,L1),
+     *       TRANSO(L1,L1),TRANSINV(L1,L1),VTORB(L1,L1),
+     *       VWRK1(L1,L1),EIG(L1),SCR(L1,8)
+C
+      LOGICAL ALINDEP
+      INTEGER IKIND,L0TRI
+C-----------------------------------------------------------------------
 C
 C     SUPPOSE INITIAL ORBITALS = MCSCF OPTIMIZED ORBITALS
 C     SUPPOSE FINAL ORBITALS = ORIENTED ORBITALS
 C
 C     T = ORBITAL TRANSFORMATION
-C     V_OR = V_OPT * T
-C     V_OR * T-INV = V_OPT
-C     T-INV = V_OR-INV * V_OPT
-C
-C     TO OBTAIN THIS SEQUENCE, USE:
-C     SBAR = VOPT-TRANS * S * VOPT
-C     SHAT = VOPT-TRANS * S * VOR
-C     OBTAIN SBAR-INV.
-C     VTORB = SBAR-INV * SHAT
-C     THEN, OBTAIN VTORB-INV.
+C     V_OPT = V_OR * T
+C     LET TRANS  = <V_OR | V_OR>
+C     LET TRANSO = <V_OR | V_OPT>
+C     THEN, T = TRANSINV * TRANSO
 C-----------------------------------------------------------------------
 C
 C     PRESERVE IORBF2(=V_OR) ORBITAL ORDERING
 C     I.E. DON'T DESTROY VOR
 C
-C     CLEAR OUR SOME VARS
-      CALL VCLR(SBAR,1,L3)
-      CALL VCLR(SHAT,1,L3)
+C     FORM TRANS.
+      CALL VCLR(TRANSO,1,L3)
+      CALL TFTRI(TRANSO,S,VOR,VWRK1,L0,L1,L1)
+C
+C     FORM TRANSINV.
+C     NOTE:  FOR IKIND=4, "WGT" AND WRK CAN BE THE SAME MEMORY.
+      IKIND=4
+      ALINDEP=.TRUE.
+      L0TRI=(L0*L0+L0)/2
+      CALL LOCAL_WEIGHTED_SYM_ORTHOG(
+     *     IKIND,L0,TRANSO,SCR,
+     *     TRANSINV,VWRK1,VTORB,EIG,IWRK,SCR,
+     *     L1,L3,L0TRI,ALINDEP,
+     *     IW,MASWRK)
+C
+C     FORM TRANSO.
+      CALL VCLR(VWRK1,1,L3)
+      CALL VCLR(TRANSO,1,L3)
+      CALL MTARBR(S,L1,VOPT,L0,VWRK1,L1,1)
+      CALL MRTRBR(VOR,L1,L1,L0,
+     *            VWRK1,L1,L0,
+     *            TRANSO,L1)
+C
+C     FORM TRANSFORMATION T.
       CALL VCLR(VTORB,1,L3)
-C
-C     GET THE METRIC S
-      CALL DAREAD(IDAF,IODA,S,L2,12,0)
-C
-C     FORM SBAR
-      CALL MTARBR(S,L1,VOPT,L0,VTORB,L1,1)
-      CALL MRTRBR(VOPT,L1,L1,L0,VTORB,L1,L0,SBAR,L1)
-C
-C     FORM SHAT
-      CALL MTARBR(S,L1,VOR,L0,VTORB,L1,1)
-      CALL MRTRBR(VOPT,L1,L1,L0,VTORB,L1,L0,SHAT,L1)
-C
-C     FORM SBAR-INV
-      CALL DGECO(SBAR,L1,L0,IPVT,RCOND1,WRKINV)
-      CALL DGEDI(SBAR,L1,L0,IPVT,DET,WRKINV,01)
-C
-C     FORM VTORB
-      CALL VCLR(VTORB,1,L3)
-      CALL MRARBR(SBAR,L1,L0,L0,SHAT,L1,L0,VTORB,L1)
-cdsav--
-cdsav--C
-cdsav--C     FORM VTORB-INV
-cdsav--      CALL DGECO(VTORB,L1,L0,IPVT,RCOND2,WRKINV)
-cdsav--      CALL DGEDI(VTORB,L1,L0,IPVT,DET,WRKINV,01)
-C
-C     IN ACT-ACT BLOCK, FORM VTORB-INV
-      DO I=1,NACT
-        CALL DCOPY(NACT,VTORB(NCORSV+1,NCORSV+I),1,VMAT(1,I),1)
-      ENDDO
-      CALL DGECO(VMAT,NACT,NACT,IPVT,RCOND2,WRKINV)
-      CALL DGEDI(VMAT,NACT,NACT,IPVT,DET,WRKINV,01)
-      DO I=1,NACT
-        CALL DCOPY(NACT,VMAT(1,I),1,VTORB(NCORSV+1,NCORSV+I),1)
-      ENDDO
-C
-C     ERROR OUT IF RCOND TOO SMALL.
-      IF(RCOND1.LT.1.0D-10.OR.RCOND2.LT.1.0D-10) THEN
-        IF(MASWRK) WRITE(IW,9000)
-        CALL FLSHBF(IW)
-        CALL ABRT
-        STOP
-      ENDIF
-C
-C
-C     LEAVE NON ACT-ACT BLOCKS AS THEY ARE.
-C     WE DO NOT NEED THEM.
+      CALL MRARBR(TRANSINV,L1,L0,L0,
+     *            TRANSO,L1,L0,
+     *            VTORB,L1)
+      CALL VCLR(VTORB(1,L0+1),1,L1*(L1-L0))
 C
       RETURN
- 9000 FORMAT(1X,'PROBLEM IN MALMQ_TORB ROUTINE.')
       END
 C*MODULE ALDECI  *DECK MALMQ_TCHK
 C> @brief      This routine checks orbitals for Malmqvist.
@@ -11329,8 +11361,10 @@ C>
 C> @param VTORB  will contain the factorized orbital transformation.
 C> @param L1     is the length of the AO coefficients.
 C> @param NCORSV is the number of core orbitals.
-C> @param ITMPCI denotes the CI root number to be transformed.
 C> @param NV     denotes total number of CI states for run.
+C> @param MXRTMQ is MXRT from many common blocks.
+C> @param IWTSMQ contains the true SA-CI roots.
+C> @param WGTMQ  contains the weights of the SA-CI roots.
 C> @param AB     denotes temporary storage with length of CI vector.
 C> @param CI     denotes the CI vectors.
 C> @param NORB   is the number of total occupied (active if ncor is 0)
@@ -11355,7 +11389,7 @@ C>               for each beta string.
 C> @param NALP   denotes the total number of alpha strings.
 C> @param NBLP   denotes the total number of beta strings.
       SUBROUTINE MALMQ_RINAB(
-     *           VTORB,L1,NCORSV,ITMPCI,NV,
+     *           VTORB,L1,NCORSV,NV,MXRTMQ,IWTSMQ,WGTMQ,
      *           AB,CI,NORB,NCOR,NCI,NA,NB,
      *           IACON1,IACON2,IBCON1,IBCON2,IFA,
      *           ISPA,ISPB,NALP,NBLP)
@@ -11364,7 +11398,7 @@ C-----------------------------------------------------------------------
 C     VARS
       INTEGER NCI,IBAT,IBAT2,ICAT,ICAT2,ICI1,ICI2,IIDET,IPER1,IPET,IJK,
      *        KJI,NA,NB,NALP,NBLP,NAT,NBT,NORB,NCOR,NCORSV,NV,
-     *        IHOLD,NACT,IPTH,JTH,ITMPCI,L1,L3,I
+     *        IHOLD,NACT,IPTH,JTH,L1,L3,I,J,IRTMQ
       DOUBLE PRECISION ::
      *       TCI2,TMP
 C     NEW CODING STANDARDS VARS
@@ -11374,9 +11408,11 @@ C-----------------------------------------------------------------------
       INTEGER POSDET,IFA(0:NORB-NCOR,0:NORB-NCOR),
      *        IACON1(NA+NCOR),IBCON1(NA+NCOR),
      *        IACON2(NA+NCOR),IBCON2(NB+NCOR),
-     *        ISPA(NALP),ISPB(NBLP)
+     *        ISPA(NALP),ISPB(NBLP),
+     *        MXRTMQ,IWTSMQ(MXRTMQ)
       DOUBLE PRECISION ::
-     *       VTORB(L1,L1),AB(NCI,NV),CI(NCI,NV)
+     *       VTORB(L1,L1),AB(NCI,NV),CI(NCI,NV),
+     *       WGTMQ(MXRTMQ)
 C
 C     THE NEXT CALL MIGHT BE USEFUL AT SOME POINT.
 C     SO, WE FAKE A CALL HERE FOR FTNCHK.
@@ -11396,9 +11432,14 @@ C
 C     READ IN THE FACTORIZED ORBITAL TRANSFORMATION.
       CALL DAREAD(IDAF,IODA,VTORB,L3,520,0)
 C
+C     SET UP IRTMQ AND IWTSMQ.
+      CALL MALMQ_IWTS(MXRTMQ,IRTMQ,IWTSMQ,WGTMQ)
+C
 C     INITIALIZE CORRECT ARRAY WITH CI COEFF
       DO I=1,NCI
-        AB(I,1)=CI(I,ITMPCI)
+        DO J=1,IRTMQ
+          AB(I,IWTSMQ(J))=CI(I,IWTSMQ(J))
+        ENDDO
       ENDDO
 C
 C     LOOP OVER THE IPTH PRODUCT FOUND IN CONFIG. TRANSFORM.
@@ -11406,7 +11447,9 @@ C     LOOP OVER THE IPTH PRODUCT FOUND IN CONFIG. TRANSFORM.
 C
 C       RESET CI VECTORS FOR (I + F) TRANSFORM.
         DO I=1,NCI
-          CI(I,ITMPCI)=AB(I,1)
+          DO J=1,IRTMQ
+            CI(I,IWTSMQ(J))=AB(I,IWTSMQ(J))
+          ENDDO
         ENDDO
 C
 C       --------------------------------------------------
@@ -11476,7 +11519,10 @@ C             MULTIPLY IN PERMUTATION
               TCI2=TCI2*IPER1
 C
 C             MANIPULATE CI COEFF
-              AB(ICI2,1)=AB(ICI2,1)+TCI2*CI(ICI1,ITMPCI)
+              DO J=1,IRTMQ
+                AB(ICI2,IWTSMQ(J))=
+     *          AB(ICI2,IWTSMQ(J))+TCI2*CI(ICI1,IWTSMQ(J))
+              ENDDO
 C
 C           END LOOP OVER ACTIVE ORBITALS (THE SUM OVER J)
   110       CONTINUE
@@ -11505,7 +11551,9 @@ C     LOOP OVER THE IPTH PRODUCT FOUND IN CONFIG. TRANSFORM.
 C
 C       RESET CI VECTORS FOR (I + F) TRANSFORM.
         DO I=1,NCI
-          CI(I,ITMPCI)=AB(I,1)
+          DO J=1,IRTMQ
+            CI(I,IWTSMQ(J))=AB(I,IWTSMQ(J))
+          ENDDO
         ENDDO
 C
 C       --------------------------------------------------
@@ -11574,7 +11622,10 @@ C             MULTIPLY IN PERMUTATION
               TCI2=TCI2*IPER1
 C
 C             MANIPULATE CI COEFF
-              AB(ICI2,1)=AB(ICI2,1)+TCI2*CI(ICI1,ITMPCI)
+              DO J=1,IRTMQ
+                AB(ICI2,IWTSMQ(J))=
+     *          AB(ICI2,IWTSMQ(J))+TCI2*CI(ICI1,IWTSMQ(J))
+              ENDDO
 C
 C           END LOOP OVER ACTIVE ORBITALS (THE SUM OVER J)
   210       CONTINUE
@@ -11599,16 +11650,20 @@ C
 C
 C     COPY OVER CI COEFF BACK TO ORIGINAL POSITION
       DO I=1,NCI
-        CI(I,ITMPCI)=AB(I,1)
+        DO J=1,IRTMQ
+          CI(I,IWTSMQ(J))=AB(I,IWTSMQ(J))
+        ENDDO
       ENDDO
 C
 C     RE-NORMALIZE CO COEFF
-      TMP=0.0D+00
-      DO I=1,NCI
-        TMP = TMP+CI(I,ITMPCI)*CI(I,ITMPCI)
+      DO J=1,IRTMQ
+        TMP=0.0D+00
+        DO I=1,NCI
+          TMP = TMP+CI(I,IWTSMQ(J))*CI(I,IWTSMQ(J))
+        ENDDO
+        TMP=1.0D+00/SQRT(TMP)
+        CALL DSCAL(NCI,TMP,CI(1,IWTSMQ(J)),1)
       ENDDO
-      TMP=1.0D+00/SQRT(TMP)
-      CALL DSCAL(NCI,TMP,CI(1,ITMPCI),1)
 C
       RETURN
       END
@@ -11739,81 +11794,6 @@ C
      *        1X,'SOME DETERMINANT IS NOT IN STANDARD ORDER.')
       RETURN
       END
-C*MODULE ALDECI  *DECK MALMQ_CIGRB
-C> @brief      This routine returns CI root for Malmqvist.
-C>
-C> @author     Aaron West
-C>             -November 09, 2012
-C>
-C> @details    This routine returns the state for CI transformation.
-C>             This routine is for the Malmqvist transformation.
-C>
-C> @param ITMP is the value of the CI root to undergo transformation.
-C> @param IW   is the integer variable for printing to log files.
-C> @param MASWRK indicates master process.
-C> @param SOME   is true for master process with nprint not equal -5.
-      SUBROUTINE MALMQ_CIGRB(ITMP,IW,MASWRK,SOME)
-C-----------------------------------------------------------------------
-      IMPLICIT NONE
-C     VARS
-      LOGICAL MASWRK,SOME
-      INTEGER I,ITMP,NXRT,NXRT2
-C     NEW CODING STANDARDS VARS
-      INTEGER IDWEIGH,IGPDET,IPURES,IROOT,IW,IWTS,K,KST,KSTSYM,
-     *        MAXP,MAXW1,MXRT,NA,NB,NACT,NCI,NCOR,NCORSV,NFLGDM,
-     *        NFTGCI,NITER,NORB
-      DOUBLE PRECISION ::
-     *       CRIT,DWPARM,GLIST,GRPDET,PRTTOL,S,SPINS,STSYM,SZ,WSTATE
-C-----------------------------------------------------------------------
-      PARAMETER (MXRT=100)
-      COMMON /DETWFN/ WSTATE(MXRT),SPINS(MXRT),CRIT,PRTTOL,S,SZ,
-     *                GRPDET,STSYM,GLIST,DWPARM,
-     *                NFLGDM(MXRT),IWTS(MXRT),NCORSV,NCOR,NACT,NORB,
-     *                NA,NB,K,KST,IROOT,IPURES,MAXW1,NITER,MAXP,NCI,
-     *                IGPDET,KSTSYM,NFTGCI,IDWEIGH
-C
-C     INTIALIZE ITMP
-      ITMP=0
-C
-C     PROBLEM CASE:
-C     MCSCF SINGLET WITH TRIPLET BELOW IT.
-C     --PRINT OFFS AT LEAST MAKE SENSE NOW.
-C     --REVISIT THIS LATER ON TO DOUBLE CHECK.
-C
-      NXRT2=0
-      DO 10 I=1,K
-         IF (IPURES.EQ.1.AND.ABS(SPINS(I)-S).GT.0.03D+00) GOTO 10
-         NXRT=I
-         NXRT2=NXRT2+1
-         IF(WSTATE(NXRT2).NE.0.0D+00) GOTO 20
-   10 CONTINUE
-C
-   20 CONTINUE
-C
-C     WRITE OUT ROOT FOR CI TRANSFORMATION.
-      ITMP=NXRT
-      IF(SOME) WRITE(IW,9001) ITMP
-C
-C     IF ITMP=0, ERROR OUT.
-C     IF S DOES NOT EQUAL SZ, ERROR OUT SINCE IT LOOKS TO MANGLE COEFF.
-      IF(ITMP.EQ.0.OR.
-     *   IPURES.NE.1
-     *   .OR.S.NE.SZ
-     *   .OR.WSTATE(NXRT2).EQ.0
-     *   .OR.ABS(SPINS(NXRT)-S).GT.0.03D+00
-     *  ) THEN
-        IF(MASWRK) WRITE(IW,9002)
-        CALL FLSHBF(IW)
-        CALL ABRT
-        STOP
-      ENDIF
-C
-      RETURN
- 9001 FORMAT(/1X,'**** ---MALMQ_CIGRB--- *****,'/
-     *        1X,'THIS RUN WILL NOW ACT ON OR USE CI ROOT=',I4)
- 9002 FORMAT(/1X,'**** ERROR IN ---MALMQ_CIGRB--- *****,'/
-     *        1X,'CANNOT ASSIGN ROOT FOR CONFIGURATIONAL TRANSFORM.')
-      END
 C*MODULE ALDECI  *DECK MALMQ_CHARGE_TRANSFER1
 C> @brief      This routine obtains charge-transfer-less CI.
 C>
@@ -11821,7 +11801,9 @@ C> @author     Aaron West and Klaus Ruedenberg
 C>             -November 16, 2012
 C>
 C> @param NATOMS   denotes the number of atoms.
-C> @param ITMPCI   denotes the CI root of interest.
+C> @param MXRTMQ   equals MXRT parameter in many common blocks.
+C> @param IWTSMQ   is the index of SA-CI roots.
+C> @param WGTMQ   contains the weights of the SA-CI roots.
 C> @param NV       denotes total number of CI states for run.
 C> @param L1       denotes the length of the AO coefficients.
 C> @param AB       will temporarily hold the new CI coefficients.
@@ -11859,21 +11841,23 @@ C>                 that defines atoms for each orbital number.
 C>                 For quasi-atomic orbitals,
 C>                 these orbital limits assign each orbital to a single atom.
 C> @param IORDACT2 is NATOMS integer scratch array.
-C> @param CISAVNT  is storage of NCI length for the NT algorithm.
+C> @param CISAVNT  is storage of NCI length
+C>                 for the NT algorithm.
 C> @param MASWRK   denotes the master process.
 C> @param SOME     is true for master process with nprint not equal -5.
       SUBROUTINE MALMQ_CHARGE_TRANSFER1(
-     *           NATOMS,ITMPCI,NV,L1,
+     *           NATOMS,MXRTMQ,IWTSMQ,WGTMQ,NV,L1,
      *           AB,CI,NORB,NCOR,NCI,NA,NB,
      *           IACON1,IBCON1,
      *           ISPA,ISPB,NALP,NBLP,
-     *           DMAT,DMAT2,FRHS,NATM,IORDACT2,CISAVNT,
+     *           DMAT,DMAT2,FRHS,NATM,IORDACT2,
+     *           CISAVNT,
      *           MASWRK,SOME)
 C-----------------------------------------------------------------------
       IMPLICIT NONE
 C     VARS
       LOGICAL MASWRK,SOME
-      INTEGER L1,I,J,ILOOP,ITER,ITMPCI,NA,NB,NALP,NBLP,
+      INTEGER L1,I,J,ILOOP,ITER,NA,NB,NALP,NBLP,
      *        NV,NCI,NORB,NCOR,NATOMS,IATHLD,IRESET
       DOUBLE PRECISION ::
      *       RESID,TMP,TMPOVR,QNEW,QOLD,QSAV,QDIFF,TPARAM,
@@ -11889,15 +11873,14 @@ C-----------------------------------------------------------------------
       PARAMETER (ZERO=0.0D+00, ONE=1.0D+00)
       INTEGER IACON1(NA+NCOR),IBCON1(NA+NCOR),
      *        ISPA(NALP),ISPB(NBLP),
-     *        NATM(L1),IORDACT2(NATOMS)
+     *        NATM(L1),IORDACT2(NATOMS),
+     *        IRTNOW,IRTMQ,MXRTMQ,IWTSMQ(MXRTMQ)
       DOUBLE PRECISION ::
-     *       AB(NCI,NV),CI(NCI,NV),CISAVNT(NCI),
+     *       AB(NCI,NV),CI(NCI,NV),CISAVNT(NCI),WGTMQ(MXRTMQ),
      *       DMAT(NATOMS,NATOMS),DMAT2(NATOMS,NATOMS+1),FRHS(NATOMS)
 C
-C     INITIATLIZE FIRST AB VECTOR TO CI COEFFICIENT OF INTEREST.
-      DO I=1,NCI
-        AB(I,1)=CI(I,ITMPCI)
-      ENDDO
+C     SET UP IRTMQ AND IWTSMQ.
+      CALL MALMQ_IWTS(MXRTMQ,IRTMQ,IWTSMQ,WGTMQ)
 C
 C     GRAB ATOM-ORBITAL CORRESPONDENCE.
       CALL DAREAD(IDAF,IODA,NATM,NORB,531,1)
@@ -11908,6 +11891,19 @@ C     GRAB ATOM-ORBITAL CORRESPONDENCE.
         ENDDO
       ENDIF
       CALL FLSHBF(IW)
+C---------------------------------------------------------------------
+C---------------------------------------------------------------------
+C     GIANT LOOP OVER SA-CI ELECTRONIC STATES.
+      DO 7000 IRTNOW=1,IRTMQ
+        IF(SOME) WRITE(IW,9210) IWTSMQ(IRTNOW)
+        CALL FLSHBF(IW)
+C---------------------------------------------------------------------
+C---------------------------------------------------------------------
+C
+C     INITIATLIZE FIRST AB VECTOR TO CI COEFFICIENT OF INTEREST.
+      DO I=1,NCI
+        AB(I,IWTSMQ(IRTNOW))=CI(I,IWTSMQ(IRTNOW))
+      ENDDO
 C
 C     DETERMINE ATOM WITH LEAST CHARGE TRANSFER NOW.
 C     NOTE:  SET IATHLD TO SOMETHING RIGHT NOW JUST TO SATISFY INITIALIZATION.
@@ -11919,6 +11915,7 @@ C     NOTE:  SET IATHLD TO SOMETHING RIGHT NOW JUST TO SATISFY INITIALIZATION.
      *     IACON1,IBCON1,
      *     ISPA,ISPB,NALP,NBLP,
      *     DMAT,FRHS,NATM,ILOOP,IATHLD,
+     *     MXRTMQ,IRTNOW,IWTSMQ,
      *     MASWRK,IW)
       IATHLD=1
       TMP=ABS(FRHS(1))
@@ -11945,7 +11942,7 @@ C----------------------------------
 C
 C     INITIALIZE ANY MORE ITEMS FOR THE NEXT MAIN DO LOOP
       DO I=1,NCI
-        CISAVNT(I)=AB(I,1)
+        CISAVNT(I)=AB(I,IWTSMQ(IRTNOW))
       ENDDO
       TPARAM=ONE
 C
@@ -11961,6 +11958,7 @@ C       FORM DMAT AND FRHS.
      *       IACON1,IBCON1,
      *       ISPA,ISPB,NALP,NBLP,
      *       DMAT,FRHS,NATM,ILOOP,IATHLD,
+     *       MXRTMQ,IRTNOW,IWTSMQ,
      *       MASWRK,IW)
 C
 C       DETERMINE Q=(SUM OVER ATOMS) FRHS**2.
@@ -12000,6 +11998,7 @@ C              UNCOMMENT 'CORIG' SECTION.
      *       ISPA,ISPB,NALP,NBLP,
      *       FRHS,DMAT,NATM,IATHLD,
      *       Q2NEW,Q1NEW,
+     *       MXRTMQ,IRTNOW,IWTSMQ,
      *       MASWRK,IW)
 C
 C       DETERMINE IRESET
@@ -12031,7 +12030,7 @@ C       PREP FOR NEXT ROUND:  PART 1
           IF(SOME) WRITE(IW,9006)
           QOLD=QSAV
           DO I=1,NCI
-            AB(I,1)=CISAVNT(I)
+            AB(I,IWTSMQ(IRTNOW))=CISAVNT(I)
           ENDDO
         ENDIF
 CORIGC
@@ -12044,7 +12043,7 @@ CORIG          IF(SOME) WRITE(IW,9006)
 CORIG          TPARAM=TPARAM/2.0D+00
 CORIG          QOLD=QSAV
 CORIG          DO I=1,NCI
-CORIG            AB(I,1)=CISAVNT(I)
+CORIG           AB(I,IWTSMQ(IRTNOW))=CISAVNT(I)
 CORIG          ENDDO
 CORIG        ENDIF
 CORIG        ENDIF
@@ -12068,7 +12067,8 @@ CKEEP        IF(SOME) WRITE(IW,9101) TPARAM
      *       NORB,NCOR,NCI,NA,NB,
      *       IACON1,IBCON1,
      *       ISPA,ISPB,NALP,NBLP,
-     *       FRHS,NATM,IATHLD,TPARAM)
+     *       FRHS,NATM,IATHLD,TPARAM,
+     *       MXRTMQ,IRTNOW,IWTSMQ)
 C
 C     END LOOP OVER ITERATES UNTIL NONLINEAR EQUATION CONVERGES.
       ENDDO
@@ -12082,6 +12082,7 @@ C     CHECK THE SOLUTION OVER ALL NATOMS RATHER THAN NATOMS-1
      *     IACON1,IBCON1,
      *     ISPA,ISPB,NALP,NBLP,
      *     DMAT,FRHS,NATM,ILOOP,IATHLD,
+     *     MXRTMQ,IRTNOW,IWTSMQ,
      *     MASWRK,IW)
       RESID=ABS(FRHS(1))
       DO I=1,NATOMS
@@ -12098,14 +12099,22 @@ C     ERROR OUT FOR NO CONVERGENCE.
 C
 C     NONLINEAR EQUATION IS CONVERGED.
   201 CONTINUE
+C---------------------------------------------------------------------
+C---------------------------------------------------------------------
+C     END GIANT LOOP OVER SA-CI ELECTRONIC STATES.
+ 7000 CONTINUE
+C---------------------------------------------------------------------
+C---------------------------------------------------------------------
 C
 C     CALCULATE CHARGE-TRANSFER-LESS AND QUASI-ATOMIC
 C               CI COEFFICIENT OVERLAP.
        TMPOVR=ZERO
-       DO I=1,NCI
-         TMP=AB(I,1)*CI(I,ITMPCI)
-         TMP=ABS(TMP)
-         TMPOVR=TMPOVR+TMP
+       DO J=1,IRTMQ
+         DO I=1,NCI
+           TMP=AB(I,IWTSMQ(J))*CI(I,IWTSMQ(J))
+           TMP=ABS(TMP)
+           TMPOVR=TMPOVR+WGTMQ(J)*TMP
+         ENDDO
        ENDDO
 C
 C     WRITE OUT RESULTS.
@@ -12115,7 +12124,9 @@ C
 C     NEED TO COMPUTE DENSITY OF NEW WAVEFUNCTION.
 C     SO, TRANSFER OVER CI COEFFICIENTS.
       DO I=1,NCI
-        CI(I,ITMPCI)=AB(I,1)
+        DO J=1,IRTMQ
+          CI(I,IWTSMQ(J))=AB(I,IWTSMQ(J))
+        ENDDO
       ENDDO
 C
       RETURN
@@ -12142,6 +12153,7 @@ C
  9041 FORMAT(1X,I4,10X,I4)
  9100 FORMAT(/1X,'IMAGINARY NUMBERS ARE NOT APPROPRIATE IN THIS',
      *        1X,'CONTEXT.  THE ALGORITHM IS INCORRECT.')
+ 9210 FORMAT(/1X,'FINDING NT FOR SA-CI ROOT=',I4)
 CKEEP 9101 FORMAT( 1X,'T PARAMETER =',1P,E10.2)
       END
 C*MODULE ALDECI  *DECK MALMQ_CHARGE_TRANSFER2
@@ -12185,6 +12197,9 @@ C> @param ILOOP    toggles between summing over NATOMS-1 or NATOMS.
 C>                 ILOOP=0 yields both DMAT and FRHS over NATOMS-1.
 C>                 ILOOP=1 yields only FRHS over NATOMS.
 C> @param IATHLD   is the index of the atom which is omitted.
+C> @param MXRTMQ   is MXRT parameter in many common blocks.
+C> @param IRTNOW   is the current SA-CI root in the big loop.
+C> @param IWTSMQ   is the index of SA-CI roots.
 C> @param MASWRK   denotes the master process.
 C> @param IW       is the integer variable for printing to log files.
       SUBROUTINE MALMQ_CHARGE_TRANSFER2(
@@ -12193,14 +12208,17 @@ C> @param IW       is the integer variable for printing to log files.
      *           IACON1,IBCON1,
      *           ISPA,ISPB,NALP,NBLP,
      *           DMAT,FRHS,NATM,ILOOP,IATHLD,
+     *           MXRTMQ,IRTNOW,IWTSMQ,
      *           MASWRK,IW)
 C-----------------------------------------------------------------------
       IMPLICIT NONE
 C     VARS
       LOGICAL MASWRK
-      INTEGER L1,I,IBAT,ICAT,ICHARG,ICHARGB,ICI1,IFRHS,IFRHSB,IIAA,IIBB,
+      INTEGER L1,IBAT,ICAT,ICHARG,ICHARGB,ICI1,IFRHS,IFRHSB,IIAA,IIBB,
      *        IATOM,IJK,KJI,ILOOP,ITMP,NA,NB,NALP,NBLP,
-     *        NAT,NBT,NCI,NCOR,NNELC,NORB,NV,NATOMS,IATHLD
+     *        NAT,NBT,NCI,NCOR,NNELC,NORB,NV,NATOMS,IATHLD,
+     *        I,
+     *        MXRTMQ,IRTNOW,IWTSMQ(MXRTMQ)
       DOUBLE PRECISION ::
      *       TMPCI
 C     NEW CODING STANDARDS VARS
@@ -12259,8 +12277,6 @@ C         GET DET POSITION
           ICI1=ICAT+IBAT
 C     --------------------------------------------------
 C     --------------------------------------------------
-C         DEFINE THE CI COEFFICIENT ONCE.
-          TMPCI=AB(ICI1,1)
 C
 C         LOOP OVER ATOMS
           DO 100 IIAA=1,NATOMS
@@ -12288,6 +12304,7 @@ C           LOOP OVER IACON1,IBCON1 FOR OCCUPIED ORBITALS
 C           FORM RHS CONTRIBUTION
             ICHARG=LOCAL_ATM_CH(IIAA)
             IFRHS=IFRHS-ICHARG
+            TMPCI=AB(ICI1,IWTSMQ(IRTNOW))
             FRHS(IIAA)=FRHS(IIAA)+IFRHS*TMPCI*TMPCI
 C
 C           SYMMETRIC LOOP OVER ATOMS
@@ -12314,7 +12331,9 @@ C             LOOP OVER IACON1,IBCON1 FOR OCCUPIED ORBITALS
 C             FORM MATRIX CONTRIBUTION
               ICHARGB=LOCAL_ATM_CH(IIBB)
               IFRHSB=IFRHSB-ICHARGB
-              DMAT(IIAA,IIBB)=DMAT(IIAA,IIBB)+IFRHS*IFRHSB*TMPCI*TMPCI
+              TMPCI=AB(ICI1,IWTSMQ(IRTNOW))
+              DMAT(IIAA,IIBB)=
+     *        DMAT(IIAA,IIBB)+IFRHS*IFRHSB*TMPCI*TMPCI
 C
 C             END SYMMETRIC LOOP OVER ATOMS
   101       CONTINUE
@@ -12363,7 +12382,8 @@ C> @param NATOMS   denotes the number of atoms.
 C> @param NV       denotes total number of CI states for run.
 C> @param L1       denotes the length of the AO coefficients.
 C> @param AB       will temporarily hold the new CI coefficients.
-C> @param CISAVNT  is storage of NCI length for the NT algorithm.
+C> @param CISAVNT  is storage of NCI length
+C>                 for the NT algorithm.
 C> @param NORB     is the number of total occupied (active if ncor is 0)
 C>                 orbitals in the CI.
 C> @param NCOR     is (if any) the number of chemical core orbitals.
@@ -12391,6 +12411,9 @@ C> @param TPARAM is essentially a step length that is made smaller when
 C>               the iterative difference in the sum of the squares
 C>               of the residual is positive.  This reset always forces
 C>               a negative iterative difference.
+C> @param MXRTMQ   is MXRT parameter in many common blocks.
+C> @param IRTNOW   is the current SA-CI root in the big loop.
+C> @param IWTSMQ   is the index of SA-CI roots.
 C>
       SUBROUTINE MALMQ_CHARGE_TRANSFER3(
      *           NATOMS,NV,L1,
@@ -12398,14 +12421,17 @@ C>
      *           NORB,NCOR,NCI,NA,NB,
      *           IACON1,IBCON1,
      *           ISPA,ISPB,NALP,NBLP,
-     *           FRHS,NATM,IATHLD,TPARAM)
+     *           FRHS,NATM,IATHLD,TPARAM,
+     *           MXRTMQ,IRTNOW,IWTSMQ)
 C-----------------------------------------------------------------------
       IMPLICIT NONE
 C     VARS
       INTEGER IATHLD
-      INTEGER L1,I,ITMP,IBAT,ICAT,ICHARG,ICI1,IFRHS,IIAA,IATOM,
+      INTEGER L1,ITMP,IBAT,ICAT,ICHARG,ICI1,IFRHS,IIAA,IATOM,
      *        IJK,KJI,NA,NB,NALP,NBLP,NAT,NBT,NCI,NV,NORB,NNELC,
-     *        NATOMS,NCOR
+     *        NATOMS,NCOR,
+     *        I,
+     *        MXRTMQ,IRTNOW,IWTSMQ(MXRTMQ)
       DOUBLE PRECISION ::
      *       TMP,TMPRHS,TPARAM
 C     NEW CODING STANDARDS VARS
@@ -12473,11 +12499,11 @@ C         END LOOP OVER ATOMS
   100     CONTINUE
 C-------------------------------------
 C         SAVE OLD CI COEFFICIENT FOR ALGORITHM
-          CISAVNT(ICI1)=AB(ICI1,1)
+          CISAVNT(ICI1)=AB(ICI1,IWTSMQ(IRTNOW))
 C         FORM NEW CI COEFFICIENT
           TMPRHS=ONE+TMPRHS*TPARAM
           TMPRHS=ABS(TMPRHS)
-          AB(ICI1,1)=AB(ICI1,1)/TMPRHS
+          AB(ICI1,IWTSMQ(IRTNOW))=AB(ICI1,IWTSMQ(IRTNOW))/TMPRHS
 C-------------------------------------
 C     --------------------------------------------------
 C     --------------------------------------------------
@@ -12493,10 +12519,10 @@ C
 C     NORMALIZE NEW CI COEFF
       TMP=ZERO
       DO I=1,NCI
-        TMP = TMP+AB(I,1)*AB(I,1)
+        TMP = TMP+AB(I,IWTSMQ(IRTNOW))*AB(I,IWTSMQ(IRTNOW))
       ENDDO
       TMP=ONE/SQRT(TMP)
-      CALL DSCAL(NCI,TMP,AB(1,1),1)
+      CALL DSCAL(NCI,TMP,AB(1,IWTSMQ(IRTNOW)),1)
 C
       RETURN
       END
@@ -12578,10 +12604,6 @@ C     SO, REMOVE CORES.
       DO I=1,L1-NCORSV
         NORD(I)=NORD(I+NCORSV)-NCORSV
       ENDDO
-ctemp--
-C     LATER, GIVEN NEW ORBITALS MACMOLPLOT OPTION, MAY OR MAY NOT KEEP THE
-C            REORDERING FOR THE PRINT OFF ONLY.
-ctemp--
       IF(ICIMALMQ.EQ.1) THEN
 C       NOTES:
 C       FILE 287 CONATINS ORIENTED DENSITY
@@ -12648,7 +12670,6 @@ C
 C       GRAB CURRENT NO TRANSFER DENSITY MATRIX FROM FILE 320.
         CALL VCLR(DEN,1,NACT*NACT)
         CALL DAREAD(IDAF,IODA,DEN,NACT2,320,0)
-ctemp--
 C
 C       RE-ORDER DENSITY BACK TO FILE 286 ORBITAL ORDER.
         CALL VCLR(DEN2,1,NACT*NACT)
@@ -12661,7 +12682,7 @@ C       RE-ORDER DENSITY BACK TO FILE 286 ORBITAL ORDER.
             DEN2(IJ2)=DEN(IJ)
           ENDDO
         ENDDO
-ctemp--
+        CALL DAWRIT(IDAF,IODA,DEN2,NACT2,552,0)
 C
 C       PRINT OUT THE DENSITY.
         IF(SOME2) THEN
@@ -12703,6 +12724,7 @@ C-----------------------------------------------------------------------
       INTEGER MXRT
       PARAMETER (MXRT=100)
 C-----------------------------------------------------------------------
+      LOGICAL OKSYM_SVDDET
       LOGICAL DOFOCK,DOEXCH,DDITRF,DOCORE,
      *        DOOOOO,DOVOOO,DOVVOO,DOVOVO,DOVVVO,DOVVVV
       DOUBLE PRECISION ::
@@ -12710,6 +12732,13 @@ C-----------------------------------------------------------------------
       INTEGER ISTATUS_INT,IPRINT,IWX,
      *        NCORES,NORBS,NORBEND
 C-----------------------------------------------------------------------
+      DOUBLE PRECISION ::
+     *       WSTATE,SPINS,CRIT,PRTTOL,SDET,SZDET,
+     *       GRPDET,STSYM,GLIST,DWPARM
+      INTEGER NFLGDM,IWTS,NCORSV,NCOR,NACTDT,NORBDT,
+     *        NADET,NBDET,KDET,KSTDET,IROOT,IPURES,MAXW1,NITDET,
+     *        MAXP,NCI,IGPDET,KSTSYM,NFTGCI,IDWEIGH
+C
       INTEGER IR,IW,IP,IS,IPK,IDAF,NAV,IODA
 C
       DOUBLE PRECISION :: RUNTYP
@@ -12718,12 +12747,9 @@ C
       INTEGER ME,MASTER,NPROC,IBTYP,IPTIM
       LOGICAL GOPARR,DSKWRK,MASWRK
 C
-      DOUBLE PRECISION ::
-     *       WSTATE,SPINS,CRIT,PRTTOL,SDET,SZDET,
-     *       GRPDET,STSYM,GLIST,DWPARM
-      INTEGER NFLGDM,IWTS,NCORSV,NCOR,NACTDT,NORBDT,
-     *        NADET,NBDET,KDET,KSTDET,IROOT,IPURES,MAXW1,NITDET,
-     *        MAXP,NCI,IGPDET,KSTSYM,NFTGCI,IDWEIGH
+      DOUBLE PRECISION :: ETOLLZ
+      INTEGER ILOCAL,IAHARD
+C
 C
 C
       LOGICAL         NDOOOO,NDVOOO,NDVVOO,NDVOVO,NDVVVO,NDVVVV,NDCORE,
@@ -12737,14 +12763,15 @@ C
 C
 C-----------------------------------------------------------------------
 C
-      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
-      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
-      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
       COMMON /DETWFN/ WSTATE(MXRT),SPINS(MXRT),CRIT,PRTTOL,SDET,SZDET,
      *                GRPDET,STSYM,GLIST,DWPARM,
      *                NFLGDM(MXRT),IWTS(MXRT),NCORSV,NCOR,NACTDT,NORBDT,
      *                NADET,NBDET,KDET,KSTDET,IROOT,IPURES,MAXW1,NITDET,
      *                MAXP,NCI,IGPDET,KSTSYM,NFTGCI,IDWEIGH
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /PRPOPT/ ETOLLZ,ILOCAL,IAHARD
       COMMON /TRFDMS/ D_OOOO,D_VOOO,D_VVOO,D_VOVO,D_VVVO,D_VVVV,
      *                D_OOOOAB,D_OOOOBB,D_VOOOAB,D_VOOOBA,D_VOOOBB,
      *                D_VVOOAB,D_VVOOBA,D_VVOOBB,D_VOVOAB,D_VOVOBB,
@@ -12765,17 +12792,25 @@ C     ISTATUS_INT= 1 --> CREATE DDI AND USE TRFMCX
 C     ISTATUS_INT= 2 --> DESTROY DDI
 C
       IF(ISTATUS_INT.EQ.1) THEN
+C       MAKE SOME CHECKS HERE.
+        IF(ILOCAL.EQ.4) THEN
+          CALL LOCAL_SVD_CHKSYM(OKSYM_SVDDET)
+          IF(.NOT.OKSYM_SVDDET) THEN
+            IF(MASWRK) WRITE(IW,9000)
+            CALL FLSHBF(IW)
+            CALL ABRT
+            STOP
+          ENDIF
+        ENDIF
       ELSEIF(ISTATUS_INT.EQ.2) THEN
         GO TO 500
       ELSE
-        IF(MASWRK) WRITE(IW,9000)
+        IF(MASWRK) WRITE(IW,9005)
         IWX=IW
         CALL FLSHBF(IWX)
         CALL ABRT
         STOP
       ENDIF
-
-
 C
 C     FIRST STEP IS A TRANNY, MAKING ONLY THE 4-ACTIVE MO INTS.
 C
@@ -12819,7 +12854,9 @@ C
         CALL DDI_DESTROY(D_OOOO)
       ENDIF
 C
- 9000 FORMAT(/1X,'MALMQ_INTEGRALS DOES',
+ 9000 FORMAT(/1X,'MALMQ_INTEGRALS ERROR:',
+     *       /1X,'SOME CONFLICT EXISTS FOR ILOCAL AND SYM.')
+ 9005 FORMAT(/1X,'MALMQ_INTEGRALS DOES NOT',
      *        1X,'HAVE THE IOPTION REQUESTED.')
  9010 FORMAT(/1X,'-----SETTING UP INTEGRALS FOR',
      *        1X,'MALMQ_CIDRIV RUN-----')
@@ -12914,6 +12951,9 @@ C>                 is Taylor expanded with a scaling factor TPARAM.
 C> @param Q1NEW    Q1NEW is FRHS(i)**2 terms summed over atoms i.
 C>                 It is the 1st order coefficient of Q1NEW when Q1NEW is
 C>                 Taylor expanded with a scaling factor TPARAM.
+C> @param MXRTMQ   is MXRT parameter in many common blocks.
+C> @param IRTNOW   is the current SA-CI root in the big loop.
+C> @param IWTSMQ   is the index of SA-CI roots.
 C> @param MASWRK   denotes the master process.
 C> @param IW       is the integer variable for printing to log files.
       SUBROUTINE MALMQ_CHARGE_TRANSFER4(
@@ -12923,14 +12963,17 @@ C> @param IW       is the integer variable for printing to log files.
      *           ISPA,ISPB,NALP,NBLP,
      *           FRHS,DMAT,NATM,IATHLD,
      *           Q2NEW,Q1NEW,
+     *           MXRTMQ,IRTNOW,IWTSMQ,
      *           MASWRK,IW)
 C-----------------------------------------------------------------------
       IMPLICIT NONE
 C     VARS
       LOGICAL MASWRK
-      INTEGER L1,I,IBAT,ICAT,ICHARG,ICHARGB,ICI1,IFRHS,IFRHSB,IIAA,IIBB,
+      INTEGER L1,IBAT,ICAT,ICHARG,ICHARGB,ICI1,IFRHS,IFRHSB,IIAA,IIBB,
      *        IATOM,IJK,KJI,ITMP,NA,NB,NALP,NBLP,
-     *        NAT,NBT,NCI,NCOR,NNELC,NORB,NV,NATOMS,IATHLD
+     *        NAT,NBT,NCI,NCOR,NNELC,NORB,NV,NATOMS,IATHLD,
+     *        I,
+     *        IRTNOW,MXRTMQ,IWTSMQ(MXRTMQ)
       DOUBLE PRECISION ::
      *       TMPCI,SUM1,Q2NEW,Q1NEW,ZERO,SIX
 C     NEW CODING STANDARDS VARS
@@ -12983,7 +13026,6 @@ C     --------------------------------------------------
 C         NOTE:  THIS SECTION MUST MATCH BETWEEN ALDECI AND ORMAS
 C                TRANSFER '4' ROUTINES.
 C         DEFINE THE CI COEFFICIENT ONCE.
-          TMPCI=AB(ICI1,1)
 C
 C         LOOP OVER ATOMS
           DO 100 IIAA=1,NATOMS
@@ -13038,6 +13080,7 @@ C           LOOP OVER IACON1,IBCON1 FOR OCCUPIED ORBITALS
 C           FORM SECOND PART OF THE Q2 CONTRIBUTION
             ICHARG=LOCAL_ATM_CH(IIAA)
             IFRHS=IFRHS-ICHARG
+            TMPCI=AB(ICI1,IWTSMQ(IRTNOW))
             DMAT(IIAA,1)=DMAT(IIAA,1)+IFRHS*TMPCI*TMPCI*SUM1
             DMAT(IIAA,2)=DMAT(IIAA,2)+IFRHS*TMPCI*TMPCI
 C
@@ -13074,4 +13117,115 @@ C
       RETURN
  9001 FORMAT(/1X,'ERROR IN MALMQ_CHARGE_TRANSFER4.'/
      *        1X,'NATOMS CANNOT BE LESS THAN 2.')
+      END
+C*MODULE ALDECI  *DECK MALMQ_FINDSTATE
+C> @brief      Compact routine for CI root selection.
+C>
+C> @author     Aaron West
+C>             -December 19, 2013
+C>
+C> @param IROOT_NOW  is the current iroot out of mxrt.
+C> @param NXRT       is the spin-allowed root.
+C> @param FINDSTATE  is a final logical for
+C>                   correct CI state selection.
+      SUBROUTINE MALMQ_FINDSTATE(IROOT_NOW,NXRT,FINDSTATE)
+      IMPLICIT NONE
+      LOGICAL FINDSTATE
+      INTEGER IROOT_NOW,NXRT
+C-----------------------------------------------------------------------
+      INTEGER MXRT
+      PARAMETER (MXRT=100)
+C-----------------------------------------------------------------------
+      DOUBLE PRECISION ::
+     *       WSTATE,SPINS,CRIT,PRTTOL,SDET,SZDET,
+     *       GRPDET,STSYM,GLIST,DWPARM
+      INTEGER NFLGDM,IWTS,NCORSV,NCOR,NACTDT,NORBDT,
+     *        NADET,NBDET,KDET,KSTDET,IROOT,IPURES,MAXW1,NITDET,
+     *        MAXP,NCI,IGPDET,KSTSYM,NFTGCI,IDWEIGH
+      COMMON /DETWFN/ WSTATE(MXRT),SPINS(MXRT),CRIT,PRTTOL,SDET,SZDET,
+     *                GRPDET,STSYM,GLIST,DWPARM,
+     *                NFLGDM(MXRT),IWTS(MXRT),NCORSV,NCOR,NACTDT,NORBDT,
+     *                NADET,NBDET,KDET,KSTDET,IROOT,IPURES,MAXW1,NITDET,
+     *                MAXP,NCI,IGPDET,KSTSYM,NFTGCI,IDWEIGH
+C-----------------------------------------------------------------------
+C
+      FINDSTATE=.FALSE.
+      IF(IROOT_NOW.EQ.1) NXRT=0
+      IF(IPURES.EQ.1
+     *   .AND.ABS(SPINS(IROOT_NOW)-SDET).GT.0.03D+00) RETURN
+      NXRT=NXRT+1
+      IF(WSTATE(NXRT).LE.0) RETURN
+      FINDSTATE=.TRUE.
+C
+      RETURN
+      END
+C*MODULE ALDECI  *DECK MALMQ_IWTS
+C> @brief      Count up and index the SA-CI roots.
+C>
+C> @author     Aaron West
+C>             -December 19, 2013
+C>
+C> @param MXRTB  is MXRT parameter in many common blocks.
+C> @param IRTMQ  is the total count of SA-CI roots.
+C> @param IWTSMQ is the index of SA-CI roots.
+C> @param WGTMQ  contains the weights of the SA-CI roots.
+      SUBROUTINE MALMQ_IWTS(MXRTB,IRTMQ,IWTSMQ,WGTMQ)
+      INTEGER MXRTB,IRTMQ,IWTSMQ(MXRTB)
+      DOUBLE PRECISION :: WGTMQ(MXRTB)
+      LOGICAL FINDST
+      INTEGER I,NXRT
+C-----------------------------------------------------------------------
+      PARAMETER (MXRT=100)
+C-----------------------------------------------------------------------
+      INTEGER ME,MASTER,NPROC,IBTYP,IPTIM
+      LOGICAL GOPARR,DSKWRK,MASWRK
+C
+      INTEGER IR,IW,IP,IS,IPK,IDAF,NAV,IODA
+C
+      DOUBLE PRECISION ::
+     *       WSTATE,SPINS,CRIT,PRTTOL,SDET,SZDET,
+     *       GRPDET,STSYM,GLIST,DWPARM
+      INTEGER NFLGDM,IWTS,NCORSV,NCOR,NACTDT,NORBDT,
+     *        NADET,NBDET,KDET,KSTDET,IROOT,IPURES,MAXW1,NITDET,
+     *        MAXP,NCI,IGPDET,KSTSYM,NFTGCI,IDWEIGH
+C-----------------------------------------------------------------------
+      COMMON /DETWFN/ WSTATE(MXRT),SPINS(MXRT),CRIT,PRTTOL,SDET,SZDET,
+     *                GRPDET,STSYM,GLIST,DWPARM,
+     *                NFLGDM(MXRT),IWTS(MXRT),NCORSV,NCOR,NACTDT,NORBDT,
+     *                NADET,NBDET,KDET,KSTDET,IROOT,IPURES,MAXW1,NITDET,
+     *                MAXP,NCI,IGPDET,KSTSYM,NFTGCI,IDWEIGH
+      COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C-----------------------------------------------------------------------
+      DOUBLE PRECISION :: ZERO
+      PARAMETER (ZERO=0.0D+00)
+C-----------------------------------------------------------------------
+C
+      CALL VICLR(IWTSMQ,1,MXRTB)
+      IRTMQ=0
+      DO 100 I=1,MXRTB
+        CALL MALMQ_FINDSTATE(I,NXRT,FINDST)
+        IF(.NOT.FINDST) GO TO 100
+        IRTMQ=IRTMQ+1
+        IWTSMQ(IRTMQ)=I
+  100 CONTINUE
+C
+      CALL VCLR(WGTMQ,1,MXRTB)
+      ICT=0
+      DO 200 I=1,MXRTB
+        IF(WSTATE(I).LE.ZERO) GO TO 200
+        ICT=ICT+1
+        WGTMQ(ICT)=WSTATE(I)
+  200 CONTINUE
+C
+      IF(ICT.NE.IRTMQ) THEN
+        IF(MASWRK) WRITE(IW,9100)
+        CALL FLSHBF(IW)
+        CALL ABRT
+        STOP
+      ENDIF
+C
+      RETURN
+ 9100 FORMAT(/1X,'MALMQ_IWTS ERROR',
+     *       /1X,'ICT MUST EQUAL IRTMQ HERE.')
       END
