@@ -54,7 +54,8 @@ C
      *                IMODEFCT,IDIMTYP
       COMMON /EFMOPO/ LNEFMOPTS,LEFMOPTS,LEFMOPPTS,LEFMODPTS,LNEFMOBAS,
      *                LEFMOBAS,LEFMOLMO,LEFMOFM,LEFMOCV,LEFMOCF,
-     *                LEFMODIMG,LEFMOTOTG,LEFMOIPT,LEFMOIGLOB
+     *                LEFMODIMG,LEFMOTOTG,LEFMOIPT,LEFMOIGLOB,
+     *     liexrep_offset
       COMMON /EFPFMO/ RUNEFP,REFFMO,REPNUCEFP,IEFPFMO,ISWENUC,EFPEFP
       COMMON /EDCMP / ZIJ(NMO),ZMO(5,NMO),OCCUP(NMO),DPFREQ(50),
      *                MOIDNO(5,NMO),IJMO(2,NMO),MOIJ(NMO),NMOIJ(NMO),
@@ -229,6 +230,9 @@ C>    @date October, 2012 - Colleen Bertoni
 C>    - Allows polarization, dispersion, exchange repulsion, and
 C>      charge transfer to be switched off before efsp is called.
 C>    - Moved the clearing of some values to efmoreset. 
+C>    @date March, 2014 - Colleen Bertoni
+C>    - Modified so that a new version of the exrep and charge
+C>      transfer EFP info storage could be used.
 C>
 C>    @param MXBSFN : Maximum number of basis functions for all
 C>    fragments (i.e. # for largest fragment).
@@ -242,8 +246,9 @@ C
       PARAMETER(MXFRG=1050,MXDFG=5,
      *          MXDPPT=MXFRG*MXDFG*12)
       PARAMETER (MXEFMOPTS=50,MXEFMOPPTS=60,MXNEFMOPTS=27,
-     *           MXNEFMOPPTS=15,MXGTOT=20000,MXSH=5000)
+     *           MXNEFMOPPTS=15)
 C
+      integer, parameter :: MAXNZ=137
       INTEGER DDI_WORLD,DDI_GROUP
       LOGICAL GOPARR,DSKWRK,MASWRK,ISGDDI,PAROUT,INITGDDI,wasgddi
       PARAMETER(DDI_WORLD=0,DDI_GROUP=1)
@@ -258,8 +263,11 @@ C
      *                IMODEFCT,IDIMTYP
       COMMON /EFMOPO/ LNEFMOPTS,LEFMOPTS,LEFMOPPTS,LEFMODPTS,LNEFMOBAS,
      *                LEFMOBAS,LEFMOLMO,LEFMOFM,LEFMOCV,LEFMOCF,
-     *                LEFMODIMG,LEFMOTOTG,LEFMOIPT,LEFMOIGLOB
+     *                LEFMODIMG,LEFMOTOTG,LEFMOIPT,LEFMOIGLOB,
+     *                liexrep_offset
       COMMON /FMCOM / X(1)
+      common /fmodim/ maxbnd,maxknd,maxcbs,maxcao,maxvec,maxl1,maxnat,
+     *                maxabd,maxbas,maxbbd,maxlmo,maxslo,maxabd2
       COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
       COMMON /FMOPNT/ LICHFG,LMULFG,LIDMREC,LFRGNAM,LLAYFRG,LINDAT,
      *                LNCBS,LFMOZAN,LFMOC,LFMOMAS,LIZBAS,LIAGLOB,LIBDGH,
@@ -298,26 +306,30 @@ C
         MXBSFN=0
         MXMOS=0
         MXMO2=0
-        LTWO=0
         DO I=1,NFG
         MXBSFN=MAX(MXBSFN,NBSFN(I))
         MXMOS=MAX(MXMOS,NMXMO(I))
         ENDDO
         MXMO2=(MXMOS*MXMOS+MXMOS)/2
-        LTWO=(MXBSFN*MXBSFN+MXBSFN)/2
       NFRG  = IEFMONFRG
       EFMOETOT = 0.0D+00
       CALL VCLR(X(LEFMODIMG),1,3*NATFMO+3*NBDFG)
+c$$$ calculates the exrep memory (the size of nefmobas
+c$$$ and efmobas arrays)
+      call calc_exrep_mem( x(llibnsh), x(llibng), L5, L6,
+     *     x(lizbas), x(liatfrg), x(lnatfrg), x(lianfrg), maxbas,
+     *     maxnz,nfg, dum, .false. )
+
       L1 = 7*NFRG
       L2 = NFRG*MXEFMOPTS*MXNEFMOPTS
       L3 = NFRG*MXEFMOPPTS*MXNEFMOPPTS
       L4 = NFRG*MXEFMOPPTS*MXNEFMOPPTS*12
-      L5 = NFRG*7*MXSH
-      L6 = NFRG*10*MXGTOT
+      L5 = L5*7
+      L5 = L6*10
       L7 = NFRG*MXBSFN*MXMOS
       L8 = NFRG*MXMO2
       L9 = NFRG*MXBSFN*MXBSFN
-      L10 = NFRG*LTWO
+      L10 = NFRG*MXMOS
 C
       IF( ISGDDI )
      *  CALL EFMOEXCH(NFRG,X(LNEFMOPTS),X(LEFMOPTS),X(LEFMOPPTS),
@@ -357,7 +369,7 @@ C
       CALL EFMOPOPEFP(IEFMONFRG,X(LNEFMOPTS),X(LEFMOPTS),X(LEFMOPPTS),
      *                X(LEFMODPTS),X(LNEFMOBAS),X(LEFMOBAS),X(LEFMOLMO),
      *                X(LEFMOFM),X(LEFMOCV),X(LEFMOCF),X(LEFMOIPT),
-     *                FRGNAM,MXBSFN,MXMOS,RIJ)
+     *                FRGNAM,MXBSFN,MXMOS,RIJ,x(liexrep_offset))
       IEFP = 1
       IEFDP = 1
       IEFC = 1
@@ -467,7 +479,8 @@ C      CHARACTER*8 POLNAM,DPOLNAM,FRGNME
      *                IMODEFCT,IDIMTYP
       COMMON /EFMOPO/ LNEFMOPTS,LEFMOPTS,LEFMOPPTS,LEFMODPTS,LNEFMOBAS,
      *                LEFMOBAS,LEFMOLMO,LEFMOFM,LEFMOCV,LEFMOCF,
-     *                LEFMODIMG,LEFMOTOTG,LEFMOIPT,LEFMOIGLOB
+     *                LEFMODIMG,LEFMOTOTG,LEFMOIPT,LEFMOIGLOB,
+     *     liexrep_offset
       COMMON /FMCOM / X(1)
       COMMON /FMOINF/ NFG,NLAYER,NATFMO,NBDFG,NAOTYP,NBODY
       COMMON /FRGINF/ NMPTS(MXFRG),NMTTPT,IEFC,IEFD,IEFQ,IEFO,
@@ -510,7 +523,7 @@ C     SETUP DEFAULT VALUES FOR EFP RUN. (TAKEN FROM SUBROUTINE START)
       CALL EFMOPOPEFP(IEFMONFRG,X(LNEFMOPTS),X(LEFMOPTS),X(LEFMOPPTS),
      *                X(LEFMODPTS),X(LNEFMOBAS),X(LEFMOBAS),X(LEFMOLMO),
      *                X(LEFMOFM),X(LEFMOCV),X(LEFMOCF),X(LEFMOIPT),
-     *                FRGNAM,MXBSFN,MXMOS,RIJ)
+     *                FRGNAM,MXBSFN,MXMOS,RIJ,x(liexrep_offset))
       IEFP = 0
       IEFC = 0
       IEFDP = 0
@@ -601,7 +614,8 @@ C
 C
       COMMON /EFMOPO/ LNEFMOPTS,LEFMOPTS,LEFMOPPTS,LEFMODPTS,LNEFMOBAS,
      *                LEFMOBAS,LEFMOLMO,LEFMOFM,LEFMOCV,LEFMOCF,
-     *                LEFMODIMG,LEFMOTOTG,LEFMOIPT,LEFMOIGLOB
+     *                LEFMODIMG,LEFMOTOTG,LEFMOIPT,LEFMOIGLOB,
+     *     liexrep_offset
       COMMON /FMCOM / X(1)
 C
 C     --- SIMPLE WRAPPER FOR EFMOESG ---
@@ -1346,10 +1360,11 @@ C>    @param J : Indexing
 C>
 C>    @param IVALUE : Passed value from SUBROUTINE EFP2X
 C>
-      SUBROUTINE EFMOSTORNBAS(I,K,N,NEFMOBAS,J,IVALUE)
+      SUBROUTINE EFMOSTORNBAS(I,K,N,NEFMOBAS,iexrep_offset,J,IVALUE)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       PARAMETER (MXSH=5000)
-      DIMENSION NEFMOBAS(N,7,MXSH)
+      DIMENSION NEFMOBAS(7,*)
+      dimension iexrep_offset(2,n)
       LOGICAL GOPARR,DSKWRK,MASWRK
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
@@ -1369,7 +1384,7 @@ C
 C
 C     NO ERRORS, STORE THE VALUE
 C
-       NEFMOBAS(I,J,K) = IVALUE
+       nefmobas( j,iexrep_offset(1,i) + k - 1 ) = ivalue
 C
  9000 FORMAT (/5X,"EFMO STORAGE FAILED.",/)
       RETURN
@@ -1400,10 +1415,10 @@ C>    @param J : Indexing
 C>
 C>    @param VALUE : Passed value from SUBROUTINE EFP2X
 C>
-      SUBROUTINE EFMOSTORBAS(I,M,N,EFMOBAS,J,VALUE)
+      SUBROUTINE EFMOSTORBAS(I,M,N,EFMOBAS,iexrep_offset,J,VALUE)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-      PARAMETER (MXGTOT=20000)
-      DIMENSION EFMOBAS(N,10,MXGTOT)
+      DIMENSION EFMOBAS(10,*)
+      dimension iexrep_offset(2,n)
       LOGICAL GOPARR,DSKWRK,MASWRK
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
@@ -1422,7 +1437,7 @@ C
 C
 C     NO ERRORS, STORE THE VALUE
 C
-       EFMOBAS(I,J,M) = VALUE
+       efmobas( j,iexrep_offset(2,i) + m - 1 ) = value
 C
  9000 FORMAT (/5X,"EFMO STORAGE FAILED.",/)
       RETURN
@@ -1591,6 +1606,9 @@ C>
 C>    @date 10/5/12 - Spencer Pruitt
 C>    - Created subroutine
 C>
+C>    @date March, 2014 - Colleen Bertoni
+C>    - Modified the dimensioning of efmocf
+C>
 C>    @param I : Current EFMO fragment
 C>
 C>    @param J : 1 through NA
@@ -1605,7 +1623,7 @@ C>    @param VALUE : Passed value from SUBROUTINE EFP2X
 C>
       SUBROUTINE EFMOSTORCF(I,J,L2,EFMOCF,N,VALUE)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-      DIMENSION EFMOCF(N,L2)
+      DIMENSION EFMOCF(N,*)
       LOGICAL GOPARR,DSKWRK,MASWRK
       COMMON /IOFILE/ IR,IW,IP,IS,IPK,IDAF,NAV,IODA(950)
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
@@ -1722,6 +1740,11 @@ C>      was set. Since the code's been modified to depend on different
 C>      flags for each short-range term, all checks of imodefd have been
 C>      changed to checks of a flag which is true if any of the short-range
 C>      terms are on.
+C>    @date March, 2014 - Colleen Bertoni
+C>    - Modified so that a new version of the exrep and charge
+C>      transfer EFP info storage can be used
+C>    - Pulled the code that populated the short-range term common blocks
+C>      into a subroutine that the two monomers in the dimer can use
 C>
 C>    @param EFMODPTS : Dynamic polarizable points
 C>
@@ -1742,10 +1765,13 @@ C>
 C>    @param MXMOS : Maximum number of MO's
 C>
 C>    @param RIJ : Distance between fragments from FMO code
+C>
+C>    @param iexrep_offset : Array that indexes into EFMOBAS and
+C>           NEFMOBAS for each fragment
 C
       SUBROUTINE EFMOPOPEFP(NFG,NEFMOPTS,EFMOPTS,EFMOPPTS,EFMODPTS,
      *           NEFMOBAS,EFMOBAS,EFMOLMO,EFMOFM,EFMOCV,EFMOCF,
-     *           NEFMOIPT,FMOFRGNAM,MXBSFN,MXMOS,RIJ)
+     *           NEFMOIPT,FMOFRGNAM,MXBSFN,MXMOS,RIJ,iexrep_offset)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
 C
@@ -1759,18 +1785,19 @@ C
       PARAMETER(MXFGPT=12000,MXFRG=1050,MXDFG=5,MXAO=8192,MXGEFP=4000,
      *          MXSHEF=1000,MXDPPT=MXFRG*MXDFG*12,MXIFRQ=12,MXPT=2000)
       PARAMETER (MXEFMOPTS=50,MXEFMOPPTS=60,MXNEFMOPTS=27,
-     *           MXNEFMOPPTS=15,MXSH=5000,MXGTOT=20000)
+     *           MXNEFMOPPTS=15)
 C
       DIMENSION EFMOPTS(NFG,MXEFMOPTS,MXNEFMOPTS),
      *          EFMOPPTS(NFG,MXEFMOPPTS,MXNEFMOPPTS),
      *          NEFMOPTS(7,NFG),NEFMOIPT(NFG),FMOFRGNAM(*),
      *          EFMODPTS(NFG,MXEFMOPPTS,12,MXNEFMOPPTS),
-     *          NEFMOBAS(NFG,7,MXSH),
-     *          EFMOBAS(NFG,10,MXGTOT),
+     *          nefmobas(7,*),efmobas(10,*),
      *          EFMOLMO(NFG,MXBSFN,MXMOS),
      *          EFMOFM(NFG,((MXMOS*MXMOS+MXMOS)/2)),
      *          EFMOCV(NFG,MXBSFN*MXBSFN),
-     *          EFMOCF(NFG,((MXBSFN*MXBSFN+MXBSFN)/2))
+     *          EFMOCF(NFG,MXMOS),
+     *     iexrep_offset(2,nfg)
+
 C
       COMMON /DOMULT/ DOMONO(MXFGPT),DODIPO(MXFGPT),DOQUAD(MXFGPT),
      *                DOOCTU(MXFGPT)
@@ -1794,7 +1821,6 @@ C
      *                NAT(MXDFG),NUM(MXDFG),NTPATM
       COMMON /EFPCT / NOCC(MXDFG),NVIR(MXDFG),NAO(MXDFG),NTAO,
      *                CTFOK(MXAO,MXDFG),NCTMO(MXDFG),NTCTMO
-      COMMON /EFPIO / MULMAT(MXFRG)
       COMMON /EFPPAR/ EFP(3,MXFGPT),EFPOL(9,MXFGPT),
      *                EFDP(3,MXIFRQ*MXFGPT),EFDPOL(9,MXIFRQ*MXFGPT),
      *                ENO,DIND(3,MXFGPT),DINDD(3,MXFGPT),
@@ -2044,8 +2070,6 @@ C
 C  SRP: STORING/TRANSFERRING XR DATA FROM EFMO TO EFP.
 C       THIS IS ONLY DONE FOR DIMERS.
 C
-        M=0
-        ICTOFFSET = 0
 C
 C  SRP: STORING ZNUC, COORDINATES, PROVEC (LMOS) AND FOCKMA FOR EACH
 C       FRAGMENT, THE LAST TWO IN MEMORY.  THIS HAD TO BE DONE TO 
@@ -2053,174 +2077,17 @@ C       PROPERLY ORDER THE LMOS AND FOCK MATRIX BEFORE HANDING THEM
 C       OFF TO THE EFP CODE.
 C
         IF(I.EQ.IEFMODIM(1))THEN
-          NORB(1) = NEFMOPTS(3,I)
-          NPBF(1) = NEFMOPTS(4,I)
-          NAO(1) = NEFMOPTS(4,I)
-          NOCC(1) = NEFMOPTS(7,I)
-          NVIR(1) = NAO(1) - NOCC(1)
-          NAT(1)  = NATEFMO
-          NSHELL(1) = NEFMOPTS(5,I)
-          MULMAT(1) = NEFMOPTS(6,I)
-C
-C  SRP: STORING BASIS SET INTEGER TYPE DATA IN /EFPBAS/
-C
-          DO J=1,NSHELL(1)
-            KSTART(J,1) = NEFMOBAS(I,1,J)
-            KATOM(J,1)  = NEFMOBAS(I,2,J)
-            KTYPE(J,1)  = NEFMOBAS(I,3,J)
-            KNG(J,1)    = NEFMOBAS(I,4,J)
-            KLOC(J,1)   = NEFMOBAS(I,5,J)
-            KMIN(J,1)   = NEFMOBAS(I,6,J)
-            KMAX(J,1)   = NEFMOBAS(I,7,J)
-          ENDDO
-
-C
-C  SRP: STORING NGAUSS FOR EACH FRAGMENT
-C
-          NGAUSS(1) = KSTART(NSHELL(1),1)
-C
-C  SRP: STORING BASIS SET FP TYPE DATA IN /EFPBAS/
-C
-          DO J=1,NGAUSS(1)
-            EX(J,1) = EFMOBAS(I,5,J)
-            CS(J,1) = EFMOBAS(I,6,J)
-            CP(J,1) = EFMOBAS(I,7,J)
-            CD(J,1) = EFMOBAS(I,8,J)
-            CF(J,1) = EFMOBAS(I,9,J)
-            CG(J,1) = EFMOBAS(I,10,J)
-          ENDDO
-C
-C  SRP: STORING ZNUC
-C
-          DO J=1,NAT(1)
-            EFZNUC(J) = EFMOBAS(I,4,J)
-          ENDDO
-C
-C  SRP: STORING COORDINATES 
-C
-          DO K=1,NAT(1)
-            PRCORD(1,K) = EFMOBAS(I,1,K)
-            PRCORD(2,K) = EFMOBAS(I,2,K)
-            PRCORD(3,K) = EFMOBAS(I,3,K)
-          ENDDO
-C
-          DO J=1,NORB(1)
-            DO K=1,NPBF(1)
-              M = 1
-              CALL EFMOSTORXR(NFG,1,M,K,J,X(LPROVEC),X(LFOCKMA),
-     *                        MXBF,MXMO2,NTMO,EFMOLMO(I,K,J))
-            ENDDO
-          ENDDO
-C
-          DO K=1,MXMO2
-            M = 2
-              L=0
-              CALL EFMOSTORXR(NFG,1,M,K,L,X(LPROVEC),X(LFOCKMA),
-     *                        MXBF,MXMO2,NTMO,EFMOFM(I,K))
-          ENDDO
-C
-C  SRP: STORING CTVEC FOR IEFMODIM(1)
-C
-          DO J=1,NPBF(1)
-            DO K=1,NPBF(1)
-              CALL EFMOSTORCT(K,J,X(LCTVEC),NTAOF,MXBF,
-     *                        EFMOCV(I,K+ICTOFFSET))
-            ENDDO
-                ICTOFFSET=ICTOFFSET + NPBF(1)
-          ENDDO
-C
-C  SRP: STORING CTFOK FOR IEFMODIM(1)
-C
-          DO J=1,MXBSFN
-            CTFOK(J,1)=EFMOCF(I,J)
-          ENDDO
-        ENDIF
-C
-        IF(I.EQ.IEFMODIM(2))THEN
-          NORB(2) = NEFMOPTS(3,I)
-          NPBF(2) = NEFMOPTS(4,I)
-          NAO(2) = NEFMOPTS(4,I)
-          NOCC(2) = NEFMOPTS(7,I)
-          NVIR(2) = NAO(2) - NOCC(2)
-          NSHELL(2) = NEFMOPTS(5,I)
-          MULMAT(2) = NEFMOPTS(6,I)
-          IPOFFSET = NORB(1)
-          ICOFFSET = NPBF(1)
-          NAT(2) = NATEFMO - NAT(1)
-C
-C  SRP: STORING BASIS SET INTEGER TYPE DATA IN /EFPBAS/
-C
-          DO J=1,NSHELL(2)
-            KSTART(J,2) = NEFMOBAS(I,1,J)
-            KATOM(J,2)  = NEFMOBAS(I,2,J)
-            KTYPE(J,2)  = NEFMOBAS(I,3,J)
-            KNG(J,2)    = NEFMOBAS(I,4,J)
-            KLOC(J,2)   = NEFMOBAS(I,5,J)
-            KMIN(J,2)   = NEFMOBAS(I,6,J)
-            KMAX(J,2)   = NEFMOBAS(I,7,J)
-          ENDDO
-
-C
-C  SRP: STORING NGAUSS
-C
-          NGAUSS(2) = KSTART(NSHELL(2),2)
-C
-C  SRP: STORING BASIS SET FP TYPE DATA IN /EFPBAS/
-C
-          DO J=1,NGAUSS(2)
-            EX(J,2) = EFMOBAS(I,5,J)
-            CS(J,2) = EFMOBAS(I,6,J)
-            CP(J,2) = EFMOBAS(I,7,J)
-            CD(J,2) = EFMOBAS(I,8,J)
-            CF(J,2) = EFMOBAS(I,9,J)
-            CG(J,2) = EFMOBAS(I,10,J)
-          ENDDO
-
-C
-          DO J=1,NAT(2)
-            JOFFSET = NAT(1)
-            EFZNUC(J+JOFFSET) = EFMOBAS(I,4,J)
-          ENDDO
-C
-          DO K=1,NAT(2)
-            KOFFSET=NAT(1)
-            PRCORD(1,K+KOFFSET) = EFMOBAS(I,1,K)
-            PRCORD(2,K+KOFFSET) = EFMOBAS(I,2,K)
-            PRCORD(3,K+KOFFSET) = EFMOBAS(I,3,K)
-          ENDDO
-C
-          DO J=1,NORB(2)
-            DO K=1,NPBF(2)
-              L = J + IPOFFSET
-              M = 1
-              CALL EFMOSTORXR(NFG,2,M,K,L,X(LPROVEC),X(LFOCKMA),
-     *                        MXBF,MXMO2,NTMO,EFMOLMO(I,K,J))
-            ENDDO
-          ENDDO
-C
-          DO K=1,MXMO2
-            M = 2
-              CALL EFMOSTORXR(NFG,2,M,K,L,X(LPROVEC),X(LFOCKMA),
-     *                        MXBF,MXMO2,NTMO,EFMOFM(I,K))
-          ENDDO
-C
-C  SRP: STORING CTVEC FOR IEFMODIM(2)
-C
-          DO J=1,NPBF(2)
-            DO K=1,NPBF(2)
-              L = J + ICOFFSET
-              CALL EFMOSTORCT(K,L,X(LCTVEC),NTAOF,MXBF,
-     *                        EFMOCV(I,K+ICTOFFSET))
-            ENDDO
-                ICTOFFSET=ICTOFFSET + NPBF(2)
-          ENDDO
-C
-C  SRP: STORING CTFOK FOR IEFMODIM(2)
-C
-          DO J=1,MXBSFN
-            CTFOK(J,2)=EFMOCF(I,J)
-          ENDDO
-        ENDIF
+           call pop_dimer_terms( 1, i, nefmobas, efmobas,0,
+     *          0, 0, efmocf,mxbsfn,nfg,lprovec, natefmo,
+     *          lfockma,mxbf,mxmo2,efmolmo,efmofm,lctvec,efmocv,
+     *          ntaof,mxmos,nefmopts, iexrep_offset )
+        else if( i .eq. iefmodim(2) ) then
+           call pop_dimer_terms( 2, i, nefmobas, efmobas,
+     *          nat(1), NORB(1), npbf(1),
+     *          efmocf,mxbsfn,nfg,lprovec,natefmo,lfockma,mxbf,mxmo2,
+     *          efmolmo,efmofm,lctvec,efmocv,ntaof,mxmos,nefmopts,
+     *          iexrep_offset )
+        endif
       ENDIF
       ENDDO
 C
@@ -2888,7 +2755,8 @@ C>
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       COMMON /EFMOPO/ LNEFMOPTS,LEFMOPTS,LEFMOPPTS,LEFMODPTS,LNEFMOBAS,
      *                LEFMOBAS,LEFMOLMO,LEFMOFM,LEFMOCV,LEFMOCF,
-     *                LEFMODIMG,LEFMOTOTG,LEFMOIPT,LEFMOIGLOB
+     *                LEFMODIMG,LEFMOTOTG,LEFMOIPT,LEFMOIGLOB,
+     *     liexrep_offset
       COMMON /FMCOM / X(1)
 C
 C
@@ -2996,3 +2864,322 @@ C
 C
       RETURN
       END
+
+
+*MODULE EFMO     *DECK calc_exrep_mem
+C>
+C>    @brief Calculates the total number of shells and gaussians
+C>           in all fragments in a FMO calculation, and can fill an array
+C>           with the index into the nefmobas and efmobas arrays
+C>           for each fragment
+C>           
+C>
+C>    @details This loops through FMO's arrays that hold fragment
+C>             information, and sums up the tot number of shells
+C>             and gaussians for all fragments. If the parameter
+C>             fill_index_array is true, the second to last parameter
+C>             is filled with the index of the first shell/gaussian
+C>             for the fragment. This is used in indexing the EFMO arrays in
+C>             x(lefmobas) and x(lnefmobas), which are used in the
+C>             evaluation of the exchange repulsion energy.  
+C>             This is modeled after how the FMO makmol subroutine copies
+C>             basis set info. This only works for unilayer runs.
+C>             
+C>    @author Colleen Bertoni, March 2014
+C>
+C>    @param libnsh : array of number of shells associated with a certain atom 
+C>           indexed by (atomic number, basis set number, ilayer)
+C>    @param libng : array of number of gaussians associated with a certain atom
+C>           indexed by (atomic number, basis set number, ilayer)
+C>    @param nsh_tot : total number of shells are returned in this parameter
+C>    @param ng_tot : total number of gaussians are returned in this parameter
+C>    @param iz_bas : array holding the basis set number for a given atom index
+C>    @param iatfrg : array holding the index into FMO arrays for a given atom
+C>    @param natfrg : array holding the number of atoms in a given fragment
+C>    @param ianfrg : array holding the atomic number of a given atom 
+C>    @param maxbas : maximum number of basis sets used 
+C>    @param maxnz  : maximum number of atomic number  
+C>    @param nfg    : total number of fragments
+C>    @param iexrep_offset : array of indices for nefmobas and efmobas
+C>           for each fragment.
+C>           (1,frag)=The index of the first shell for frag in the
+C>                    nefmobas array.
+C>           (2,frag)=The index of the first gaussian for frag in
+C>                    the efmobas array.
+C>    @param fill_index_array : If this is true, fill iexrep_offset.
+C>           If this is false, do not.
+C>
+C>
+      subroutine calc_exrep_mem( libnsh, libng, nsh_tot,
+     *     ng_tot, izbas, iatfrg, natfrg, ianfrg,maxbas,
+     *     maxnz, nfg,iexrep_offset, fill_index_array )
+
+      implicit none
+      logical fill_index_array
+      integer nsh_tot, ng_tot,index,i,j,maxbas,
+     *     nfg, nsh_sum_i, ng_sum_i, maxnz
+      integer, dimension(*) :: izbas,iatfrg,ianfrg,
+     *     natfrg
+      integer, dimension(maxnz, maxbas,*) :: libnsh, libng
+      integer, dimension(2,nfg) :: iexrep_offset
+
+      nsh_tot = 0
+      ng_tot = 0
+      index = 1
+
+      if( fill_index_array ) then
+         iexrep_offset(1,1) = 1
+         iexrep_offset(2,1) = 1
+      endif
+
+      do i=1,nfg
+         nsh_sum_i = 0
+         ng_sum_i = 0
+         
+         do j=1,natfrg(i)
+            nsh_sum_i = nsh_sum_i
+     *           + libnsh(ianfrg(index),izbas(iatfrg(index)),1)
+            ng_sum_i = ng_sum_i
+     *           + libng(ianfrg(index),izbas(iatfrg(index)),1)
+
+            index = index + 1
+         enddo
+
+         nsh_tot = nsh_tot + nsh_sum_i
+         ng_tot = ng_tot + ng_sum_i
+
+         if( i .lt. nfg .and. fill_index_array ) then
+            iexrep_offset(1,i+1) = iexrep_offset(1,i) + nsh_sum_i
+            iexrep_offset(2,i+1) = iexrep_offset(2,i) + ng_sum_i
+         endif
+      enddo
+
+      return
+      end
+
+*MODULE EFMO     *DECK pop_dimer_terms
+C>
+C>    @brief Fills the common blocks and the lprovec, lctvec, and
+C>           lfockma arrays for the short-range terms for an EFP
+C>           dimer interaction energy calculation during an EFMO
+C>           run
+C>
+C>    @details This fills the EFP common blocks for some of the
+C>             short range terms so that the normal EFP routines
+C>             can be called on the EFMO fragment information,
+C>             allowing EFMO to add EFP interaction energy to the
+C>             total energy.
+C>             This takes the EFP information previously stored
+C>             in EFMO arrays (see common block EFMOPO) for fragment
+C>             "i" (the second parameter), and stores it in the normal
+C>             EFP common blocks in index "index" (the first parameter).
+C>             This allows the normal EFP routines to be called using
+C>             the EFMO fragment information.
+C>             Spencer originally wrote the contents in Oct. 2012,
+C>             Colleen pulled it into a subroutine in March 2014.
+C>             
+C>    @author Colleen Bertoni, Spencer Pruitt
+C>
+C>    @param index : This is the EFP dimer index that is filled with
+C>                   information from the fragment in the second parameter
+C>    @param i : This is the fragment whose information is stored in
+C>           the EFP common blocks, at the index in the first parameter
+C>    @param nefmobas : array holding the integer type basis set
+C>           information (kstart, katom, etc.) for each shell in
+C>           each fragment. Indexed as nefmobas(num, shell_num),
+C>           where num is in the range from 1 to 7, and indicates
+C>           whether it's kstart, katom, ktype, etc., and shell_num
+C>           is the index of the shell which information is requested from.
+C>           The shells for each fragment are stored one after another
+C>           in nefmobas. The iexrep_offset array holds the starting
+C>           index for a given fragment. For instance:
+C>           nefmobas(1,iexrep_offset(1,i)) gives the value for
+C>           kstart(1,index), and nefmobas(1,iexrep_offset(1,i+j-1))
+C>           gives the value for kstart(j,index) for each shell j in
+C>           fragment i (where j=1,num_shells in fragment i)
+C>    @param efmobas : array holding the floating point-type basis
+C>           set information. Indexed as efmobas(num,gaussian_num),
+C>           where num is in the range from 1 to 10, and indicates
+C>           whether it stores the ex, cs, efznuc, etc. value, and
+C>           gaussian_num is the index of the gaussian or atom which
+C>           information is requested from. Note that this is indexed
+C>           in a similar manner as nefmobas, except it uses a "2"
+C>           in the first parameter into iexrep_offset.
+C>           For instance:
+C>           efmobas(5,iexrep_offset(2,i)) gives the value for
+C>           ex(1,index), and efmobas(5,iexrep_offset(2,i+j-1))
+C>           gives the value for ex(j,index) for each gaussian j in
+C>           fragment i (where j=1,num gaussians in fragment i)
+C>    @param koffset : integer offset which places information in the
+C>           right location in atom-indexed atoms
+C>    @param ipoffset : integer offset which places information in the
+C>           right location in orbital-indexed atoms
+C>    @param icoffset : integer offset which places information in the
+C>           right location in basis function-indexed atoms
+C>    @param efmocf : array holding the occupied diagonal terms of the
+C>           fock matrix for the charge transfer term using CMOs. this
+C>           is for all fragments in the EFMO run
+C>    @param mxbsfn : maximum number of basis functions of all the
+C>           fragments in the EFMO run
+C>    @param nfg  : the total number of fragments in the EFMO run 
+C>    @param lprovec  : index into X() which will hold the LMO coefficient
+C>           information for just the EFP interaction energy run
+C>    @param natefmo  : number of atoms in the EFP interaction energy
+C>           calculation (not necessarily the number of atoms in the
+C>           EFMO energy calculation)
+C>    @param lfockma  : index into X() which will hold the fock matrix
+C>           over LMOs (for just the EFP interaction energy run) over
+C>           the occupied-occupied block in triangular matrix format
+C>    @param mxbf : maximum number of basis functions in just the EFP
+C>           interaction energy run
+C>    @param mxmo2 : the number of elements in a triangular matrix
+C>           where the dimension is the maximum number of occupied MOs
+C>           in just the EFP interaction energy run
+C>    @param efmolmo : array holding the LMO coefficients for each
+C>           fragment in the EFMO run 
+C>    @param efmofm : array holding the LMO coefficients for each
+C>           fragment in the EFMO run
+C>    @param lctvec : index into X() which will hold the occupied and
+C>           virtual CMO coefficients for the charge transfer term 
+C>           in the EFP interaction energy run
+C>    @param efmocv : array holding the occupied and
+C>           virtual CMO coefficients for the charge transfer term
+C>           each fragment in the EFMO run
+C>    @param ntaof : number of fragments in the EFP interaction energy
+C>           run times the overall maximum number of basis functions (mxbsfn)
+C>           among all EFMO fragments 
+C>    @param mxmos :  maximum number of occupied MOs of all the
+C>           fragments in the EFMO run
+C>    @param nefmopts : array of multipole moment data for all fragments
+C>           in the EFMO run
+C>    @param iexrep_offset : array of indices for nefmobas and efmobas
+C>           for each fragment.
+C>           (1,frag)=The index of the first shell for frag in the
+C>                    nefmobas array.
+C>           (2,frag)=The index of the first gaussian for frag in
+C>                    the efmobas array.
+C>
+C>
+      subroutine pop_dimer_terms( index,i,nefmobas, efmobas,
+     *     koffset, ipoffset, icoffset,efmocf,mxbsfn,
+     *     nfg, lprovec, natefmo,lfockma, mxbf, mxmo2, efmolmo,
+     *     efmofm, lctvec, efmocv, ntaof,mxmos,nefmopts,
+     *     iexrep_offset)
+
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+
+      PARAMETER(MXFGPT=12000,MXFRG=1050,MXDFG=5,MXAO=8192,MXGEFP=4000,
+     *          MXSHEF=1000)
+
+      COMMON /EFPIO / MULMAT(MXFRG)
+      COMMON /EFPCT / NOCC(MXDFG),NVIR(MXDFG),NAO(MXDFG),NTAO,
+     *                CTFOK(MXAO,MXDFG),NCTMO(MXDFG),NTCTMO
+      COMMON /EFPBAS/ EX(MXGEFP,MXDFG),CS(MXGEFP,MXDFG),
+     *                CP(MXGEFP,MXDFG),CD(MXGEFP,MXDFG),
+     *                CF(MXGEFP,MXDFG),CG(MXGEFP,MXDFG),
+     *                PRNAME(MXFGPT),PRCORD(3,MXFGPT),EFZNUC(MXFGPT),
+     *                KSTART(MXSHEF,MXDFG),KATOM(MXSHEF,MXDFG),
+     *                KTYPE(MXSHEF,MXDFG),KNG(MXSHEF,MXDFG),
+     *                KLOC(MXSHEF,MXDFG),KMIN(MXSHEF,MXDFG),
+     *                KMAX(MXSHEF,MXDFG),NSHELL(MXDFG),NGAUSS(MXDFG),
+     *                NAT(MXDFG),NUM(MXDFG),NTPATM
+      COMMON /FMCOM / X(1)
+      COMMON /PAULMO/ CENTNM(MXFGPT),CENTCD(3,MXFGPT),NORB(MXFRG),
+     *                NPBF(MXFRG),NTMO
+      DIMENSION EFMOLMO(NFG,MXBSFN,MXMOS),
+     *          EFMOFM(NFG,((MXMOS*MXMOS+MXMOS)/2)),
+     *          EFMOCV(NFG,MXBSFN*MXBSFN),
+     *          EFMOCF(NFG,MXMOS),
+     *     NEFMOPTS(7,NFG),
+     *     efmobas(10,*),nefmobas(7,*),iexrep_offset(2,nfg)
+      
+      ictoffset = 0
+
+      NORB(index) = NEFMOPTS(3,I)
+      NPBF(index) = NEFMOPTS(4,I)
+      NAO(index) = NEFMOPTS(4,I)
+      NOCC(index) = NEFMOPTS(7,I)
+      NVIR(index) = NAO(index) - NOCC(index)
+      NAT(index)  = NATEFMO-koffset
+      NSHELL(index) = NEFMOPTS(5,I)
+      MULMAT(index) = NEFMOPTS(6,I)
+C
+C     SRP: STORING BASIS SET INTEGER TYPE DATA IN /EFPBAS/
+C     
+      DO J=1,NSHELL(index)
+         
+         KSTART(J,index) = nefmobas(1,iexrep_offset(1,i) + j - 1 )
+         KATOM(J,index)  = nefmobas(2,iexrep_offset(1,i) + j - 1 )
+         KTYPE(J,index)  = nefmobas(3,iexrep_offset(1,i) + j - 1 )
+         KNG(J,index)    = nefmobas(4,iexrep_offset(1,i) + j - 1 )
+         KLOC(J,index)   = nefmobas(5,iexrep_offset(1,i) + j - 1 )
+         KMIN(J,index)   = nefmobas(6,iexrep_offset(1,i) + j - 1 )
+         KMAX(J,index)   = nefmobas(7,iexrep_offset(1,i) + j - 1 )
+
+      ENDDO
+
+C
+C  SRP: STORING NGAUSS FOR EACH FRAGMENT
+C
+          NGAUSS(index) = KSTART(NSHELL(index),index)
+C
+C  SRP: STORING BASIS SET FP TYPE DATA IN /EFPBAS/
+C
+          DO J=1,NGAUSS(index)
+            EX(J,index) = efmobas(5,iexrep_offset(2,i) + j - 1 )
+            CS(J,index) = efmobas(6,iexrep_offset(2,i) + j - 1 )
+            CP(J,index) = efmobas(7,iexrep_offset(2,i) + j - 1 )
+            CD(J,index) = efmobas(8,iexrep_offset(2,i) + j - 1 )
+            CF(J,index) = efmobas(9,iexrep_offset(2,i) + j - 1 )
+            CG(J,index) = efmobas(10,iexrep_offset(2,i) + j - 1 )
+
+          ENDDO
+C
+C  SRP: STORING ZNUC
+C
+          DO J=1,NAT(index)
+             EFZNUC(J+koffset) = efmobas(4,iexrep_offset(2,i) + j - 1 )
+          ENDDO
+C
+C  SRP: STORING COORDINATES 
+C
+          DO K=1,NAT(index)
+            PRCORD(1,koffset+K) = efmobas(1,iexrep_offset(2,i) + k - 1 )
+            PRCORD(2,koffset+K) = efmobas(2,iexrep_offset(2,i) + k - 1 )
+            PRCORD(3,koffset+K) = efmobas(3,iexrep_offset(2,i) + k - 1 )
+          ENDDO
+C
+          DO J=1,NORB(index)
+            DO K=1,NPBF(index)
+              M = 1
+              CALL EFMOSTORXR(NFG,index,M,K,J + ipoffset,X(LPROVEC),
+     *             X(LFOCKMA),MXBF,MXMO2,NTMO,
+     *             EFMOLMO(I,K,J))
+            ENDDO
+          ENDDO
+C
+          DO K=1,MXMO2
+            M = 2
+            L = 0
+              CALL EFMOSTORXR(NFG,index,M,K,L,X(LPROVEC),X(LFOCKMA),
+     *                        MXBF,MXMO2,NTMO,EFMOFM(I,K))
+          ENDDO
+C
+C  SRP: STORING CTVEC FOR IEFMODIM(1)
+C
+          DO J=1,NPBF(index)
+            DO K=1,NPBF(index)
+              CALL EFMOSTORCT(K,J+icoffset,X(LCTVEC),NTAOF,MXBF,
+     *                        EFMOCV(I,K+ICTOFFSET))
+            ENDDO
+                ICTOFFSET=ICTOFFSET + NPBF(index)
+          ENDDO
+C
+C  SRP: STORING CTFOK FOR IEFMODIM(1)
+C
+          DO J=1,MXMOS
+            CTFOK(J,index)=EFMOCF(I,J)
+          ENDDO
+
+      return
+      end
