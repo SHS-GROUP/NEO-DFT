@@ -412,7 +412,7 @@ void DDI_Scatter_Acc_remote(double alpha, void *buff, void *ibuff,void *scattere
 
       if(msg->size > MAX_DS_MSG_SIZE/3) {
 
-         DEBUG_OUT(LVL6,(stdout,"%s: nr=%i; nc=%i.\n",DDI_Id(),nr,nc));
+         DEBUG_OUT(LVL6,(stdout,"%s: msg_size=%i.\n",DDI_Id(),msg->size));
       /* --------------------------------------------------- *\
          this message will be received in multiple segements
       \* --------------------------------------------------- */

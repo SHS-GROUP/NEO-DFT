@@ -1,0 +1,218 @@
+#!/bin/csh
+#
+#  Interactive "front end" GAMESS submitter for Argonne's BG/Q,
+#  which sends the "back end" script 'rungms' to a COBALT queue.
+#
+#  Select the appropriate directories etc. for your GAMESS installation
+#
+set SCR=/projects/bulk_properties_dd14/spruitt/scr
+set GMSPATH=/projects/bulk_properties_dd14/spruitt/gms-spencer
+#
+set MAXNODE=16384
+set PROJECT=bulk_properties_dd14
+#
+#   ----- parse command line arguments -----
+#   any switch not recognized is taken as input file name.
+#
+while ($#argv > 0)
+   set val=$argv[1]
+   shift
+   switch ($val)
+      case -l:
+        set LOGFILE=$argv[1]
+        shift
+        breaksw
+      case -ddi:
+        set DDI_NODES=$argv[1]
+        shift
+        breaksw
+      case -p:
+        set NCPUS=$argv[1]
+        shift
+        breaksw
+      case -n:
+        set NNODES=$argv[1]
+        shift
+        breaksw
+      case -w:
+        set TIMLIM=$argv[1]
+        shift
+        breaksw
+      case -v:
+        set VERNO=$argv[1]
+        shift
+        breaksw
+      case -c:
+        set MODE=$argv[1]
+        shift
+        breaksw
+      default:
+        if ($?JOB == 1) then
+           echo You\'ve given too many input file names, $JOB and $val.
+           exit 4
+        else
+           set JOB=$val
+           if ($JOB =~ *.inp) set JOB=$JOB:r
+        endif
+        breaksw
+   endsw
+end
+#
+if ($?LOGFILE == 0) set LOGFILE=default
+if ($?NCPUS == 0)   set NCPUS=default
+if ($?DDI_NODES == 0)   set DDI_NODES=default
+if ($?NNODES == 0)   set NNODES=default
+if ($?TIMLIM == 0)  set TIMLIM=default
+if ($?VERNO == 0)   set VERNO=default
+if ($?MODE == 0)    set MODE=default
+if ($?JOB == 0)     set JOB=help
+#
+#  Select the version...
+#
+if ($VERNO == default) then
+   set VERNO=00
+endif
+#
+set SCRIPT=$SCR/$JOB.script
+#
+echo -n "\n"
+echo -n "Be sure to check your allocation for $PROJECT ... \n \n"
+cbank
+echo -n "\n"
+#    Make sure requested version actualy exists!
+#
+if (-e $GMSPATH/gamess.$VERNO.x) then
+   echo "Using GAMESS binary $GMSPATH/gamess.$VERNO.x \n"
+else
+   echo "WARNING:  Requested version $GMSPATH/gamess.$VERNO.x does not exist!"
+endif
+#
+#   ----- tests to see if necessary files/directories exist -----
+#
+#     The input file must be where the user is submitting, and the
+#     batch job has to find its way back to that directory too in
+#     order to find the input file.
+#
+if (-e $JOB.inp) then
+   cp $JOB.inp $SCR/$JOB.F05
+else
+   echo I could not find $JOB.inp in your current directory.
+   echo Bombing out...
+   exit 4
+endif
+#
+#     The $SCR subdirectory is used to store all temporary scratch files.
+#
+if (-e $SCR) then
+else
+   echo You do not have a $SCR subdirectory at present.
+   echo This is needed to store the jjj.F* temporary scratch files.
+   echo I am creating this directory for you...
+   mkdir $SCR
+   sleep 5
+endif
+#
+#     The 'scr' subdirectory is used for supplementary ASCII output
+#     by the main 'rungms' script, and this front end script uses it
+#     as a place to dump the batch script being created.
+#
+set SAVDIR=$SCR
+if (-e $SAVDIR) then
+else
+   echo You do not have a $SAVDIR subdirectory at present.
+   echo This is needed to store the jjj.dat and possible jjj.irc files.
+   echo These files have data possibly useful for subsequent runs.
+   echo I am creating this directory for you...
+   mkdir $SAVDIR
+   sleep 5
+endif
+#
+if ($LOGFILE == default) then
+   set LOGFILE=$JOB.log
+   echo -n "output file name? [$LOGFILE] "
+   set ans=$<
+   if (null$ans != null) set LOGFILE=$ans
+endif
+#
+if (-e $LOGFILE) then
+   echo -n "Logfile $LOGFILE already exists.  OK to delete the old one? [y] "
+   set ans=$<
+   if (null$ans == null) set ans=y
+   if ($ans == y) then
+      rm $LOGFILE
+   else
+      echo "Exiting, so you can think about your old log file's value."
+      exit
+   endif
+endif
+#
+if ($NNODES == default) then
+#   if ($NCPUS == 1) set NNODES=1
+   echo -n "How many nodes do you want (not to exceed $MAXNODE) do you want? [$NNODES] "
+   set ans=$<
+   if (null$ans != null) set NNODES=$ans
+endif
+#
+if ($MODE == default) then
+   set MODE=16
+   echo -n "What mode (8, 16, 32, 64) would you like to run in? [default = 16] "
+   set ans=$<
+   if (null$ans != null) set MODE=$ans
+endif
+#
+@ NCPUS=$MODE * $NNODES
+
+set FMO=`grep -i 'NFRAG' $SCR/$JOB.F05 | wc -l`
+if ($FMO == 1) then
+echo "\n"
+echo "**************************************************************"
+echo "This is an FMO run, probably using GDDI. "
+echo "You can choose your node size by setting DDI_LOGICAL_NODE_SIZE"
+echo "**************************************************************"
+echo "\n"
+endif
+#
+if ($FMO == 1) then
+    if ($DDI_NODES == default) then
+	set DDI_NODES=$MODE
+	echo -n "What should we set DDI_LOGICAL_NODE_SIZE to? [default = $MODE] "
+	set ans=$<
+	if (null$ans != null) set DDI_NODES=$ans
+    endif
+else
+    set DDI_NODES=$MODE
+endif
+#
+#
+if ($TIMLIM == default) then
+   set TIMLIM=12:00
+   echo -n "wall clock time limit, in hours (hours:minutes)? [$TIMLIM] "
+   set ans=$<
+   if (null$ans != null) set TIMLIM=$ans
+#
+#  Append the seconds....
+#
+      set TIMLIM=${TIMLIM}:00
+endif
+#
+cp /home/spruitt/scripts/rungms $SCR/$JOB.script
+#
+   sed -e /JOB=\$1/s//JOB=$JOB/         \
+       -e /VERNO=\$2/s//VERNO=$VERNO/   \
+       -e /FMO=\$3/s//FMO=$FMO/ \
+       -e /MODE=\$4/s//MODE=$MODE/      \
+       -e /DDI_NODES=\$5/s//DDI_NODES=$DDI_NODES/      \
+#       -e /SAVDIR=\$5/s//SAVDIR=$SCR/      \
+           $SCR/$JOB.script > $SCR/$JOB.mung
+   mv $SCR/$JOB.mung $SCR/$JOB.script
+   chmod 755 $SCR/$JOB.script
+#
+echo Submitting GAMESS job $JOB.inp to $NCPUS processors on $NNODES nodes,
+echo Time limit=$TIMLIM
+#
+cp $JOB.inp $SCR/$JOB.F05
+#
+qsub -t $TIMLIM -n $NNODES --debuglog $SCR/$JOB.cobaltlog -e $SCR/$JOB.error -o $LOGFILE --mode script -A $PROJECT $SCRIPT
+#
+sleep 2
+exit

@@ -617,23 +617,10 @@ static size_t gv(mem_heap_total) = 0;
 #include "ddi_armci.h"
 #endif
 
-/* DDI Blue Gene/L header */
-#ifdef DDI_BGL
-#include "ddi_bgl.h"
-#endif
-
-/* DDI Blue Gene/P header */
-#ifdef DDI_BGP
-#include "ddi_bgp.h"
-#endif
-
 /* DDI FILE header */
 #ifdef DDI_FILE
 #include "ddi_file.h"
 #include "ddi_util.h"
 #endif
-
-/* Runtime functions */
-#include "ddi_runtime.h"
 
 #endif

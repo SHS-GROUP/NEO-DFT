@@ -182,7 +182,7 @@ int laddrs_(arg) int arg;
 /*----------------- International Business Machines ----------------*/
 /*  IBM32    = AIX operating system, 32 bits                        */
 /*  IBM64    = AIX operating system, 64 bits, includes SP machines  */
-/*  IBMBG    = Linux operating system, 32 bits, used on Blue Gene.  */
+/*  IBMBG    = Linux operating system, 64 bits, used on Blue Gene.  */
 /*  IBMPPC64 = Linux operating system, 64 bits, e.g. OpenPower      */
  
 #ifdef IBM32
@@ -228,7 +228,9 @@ void naptime(long *nptime)
 
 #endif
 
-/* it would be most excellent to get rid of this one, for LINUX32 */
+/*   This code is used on IBM Blue Gene systems.  */
+/*   It is very similar to LINUX versions here.   */
+
 #ifdef IBMBG
 
 #include <unistd.h>
@@ -237,19 +239,19 @@ void naptime(long *nptime)
 #include <time.h>
 #include <sys/times.h>
 
-int memget(int *nwords)
+long memget(long *nwords)
 {
-   int nbytes;
+   long nbytes;
    nbytes = (*nwords+2)*8;
-  return (int)malloc(nbytes);
+   return (long) malloc(nbytes);
 }
 
-void memrel(int *locmem)
+void memrel(long *locmem)
 {
    free((void *)*locmem);
 }
 
-int laddrs(arg) int arg;
+long laddrs(arg) long arg;
    { return(arg); }
 
 void naptime(nptime) int *nptime;
@@ -257,7 +259,8 @@ void naptime(nptime) int *nptime;
      istat=sleep(*nptime); }
 
 /*
-     etime - return elapsed execution time - see comments elsewhere.
+     etime - return elapsed execution time
+           - see comments about XQTIME elsewhere.
 */
 
 double etime(float *a)
@@ -286,8 +289,10 @@ void fdate(char *cht, int cht_len)
 
 #endif
 
-/* IBMPPC64 differs from LINUX64 by including LADDRS,   */
-/* and by having no underscores in the function names.  */
+/* IBMPPC64 is used when running Linux on IBM Power CPUs */
+/* IBMPPC64 differs from LINUX64 by including LADDRS,    */
+/* and by having no underscores in the function names.   */
+
 #ifdef IBMPPC64
 
 #include <stdlib.h>
@@ -310,32 +315,13 @@ long laddrs(void *arg)
 void naptime(nptime) FORTINT *nptime;
    { sleep((unsigned int) *nptime); }
 
-/*  
-     The 64 bit version of the etime clone was revised March 2007, after
-     looking at "man 2 times".  This was motivated by Suse Enterprise 10,
-     which is using a clock tick of 250, not 100!  Probably most Linux
-     systems running at 64 bit were installed since 'times' was updated.
-
-     The 32 bit routine was left untouched, for it gives us no trouble.
-     Some of these systems may be quite a bit older, and the code has
-     worked on everything we tried for many years, so let the dog sleep.
-
-     See the 32 bit version of ETIME for more information about using
-     it from FORTRAN.  Args here are identical to the 32 bit code.
-
-     The structure 'tms' is set up in <sys/time.h>, as
-        struct tms {clock_t tms_utime;   namely, user time
-                    clock_t tms_stime;   namely, system time
-                    clock_t tms_cutime;  namely, user time of children
-                    clock_t tms_cstime;  namely, system time of children
-     The return value of the function times, which also sets the structure,
-     is the number of clock ticks since an arbitrary time in the past:
-        # include <sys/times.h>
-        clock_t times(struct tms *buf);
-*/
 #include <sys/times.h>
 #include <unistd.h>
 
+/*
+     etime - return elapsed execution time
+           - see comments about XQTIME elsewhere.
+*/
 double etime(float *a)
    { double        elapsed;
      clock_t       elapticks;
@@ -356,8 +342,6 @@ double etime(float *a)
 
 /*----- 32 bit PC (e.g. Pentium, Athlon, ...) running Linux -------*/
 /*--------- this also includes the Apple running MAC OS X ---------*/
-/*   ETIME is included below, used to replace the one that might   */
-/*   be found in Linux libraries, with a different return value.   */
 
 #ifdef LINUX32
 
@@ -379,15 +363,17 @@ void naptime_(nptime) int *nptime;
      istat=sleep(*nptime); }
 
 /*
-     etime - return elapsed execution time - usage is:
+     XQTIME - return elapsed execution time - usage is:
 
-        double precision function etime (tarray)
+        double precision function xqtime (tarray)
         real*4 tarray(2)
 
-     the REAL*4 argument returns user and system CPU times, as is traditional
+     The REAL*4 argument returns user and system CPU times, as is traditional
      for ETIME in vendor Unix.  The REAL*8 return value, however, is not the 
      sum of these, but rather it gives the elapsed wall clock time (thus it
-     replaces the traditional TIME() function in vendor Unix libraries).
+     replaces the traditional TIME() function in some vendor Unix libraries).
+     The name of this routine was changed from ETIME to XQTIME in 3/2014,
+     to avoid name conflicts with a possible system routine.
 
      written by Klaus-Peter Gulden, January 3, 1994
 
@@ -405,7 +391,7 @@ void naptime_(nptime) int *nptime;
 # define CLK_TCK 100
 # endif
 
-double etime_(float *a)
+double xqtime_(float *a)
    { double        elapsed;
      struct tms    buf;
      elapsed= (float) times(&buf)/CLK_TCK;
@@ -460,7 +446,10 @@ void naptime_(nptime) FORTINT *nptime;
    { sleep((unsigned int) *nptime); }
 
 /*  
-     The 64 bit version of the etime clone was revised March 2007, after
+     See the 32 bit version of XQTIME for more information about using
+     this from FORTRAN.  Calling args here are identical to the 32 bit code.
+
+     The 64 bit version of the XQTIME routine was revised March 2007, by
      looking at "man 2 times".  This was motivated by Suse Enterprise 10,
      which is using a clock tick of 250, not 100!  Probably most Linux
      systems running at 64 bit were installed since 'times' was updated.
@@ -468,9 +457,6 @@ void naptime_(nptime) FORTINT *nptime;
      The 32 bit routine was left untouched, for it gives us no trouble.
      Some of these systems may be quite a bit older, and the code has
      worked on everything we tried for many years, so let the dog sleep.
-
-     See the 32 bit version of ETIME for more information about using
-     it from FORTRAN.  Args here are identical to the 32 bit code.
 
      The structure 'tms' is set up in <sys/time.h>, as
         struct tms {clock_t tms_utime;   namely, user time
@@ -485,7 +471,7 @@ void naptime_(nptime) FORTINT *nptime;
 #include <sys/times.h>
 #include <unistd.h>
 
-double etime_(float *a)
+double xqtime_(float *a)
    { double        elapsed;
      clock_t       elapticks;
      struct tms    buf;

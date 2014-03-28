@@ -7,6 +7,7 @@
  * compute processes and data servers.
  *
  * Author: Ryan M. Olson
+ * 22 Mar 14 - MWS - delete specialized Blue Gene hardware printing
  * 10 Jun 09 - RMO - allow for one data server/node on Cray
  *  4 May 10 - RMO - change to sanity check on myds value
  * 13 May 10 - SS  - accomodate Windows startup
@@ -107,19 +108,6 @@
       Initialize Data Servers
    \* ----------------------- */
       if(me >= np) DDI_Server();
-
-#if defined DDI_BGL || defined DDI_BGP
-      /* Print runtime header if requested.
-	 This works on any POSIX system. */
-      header = getenv("DDI_HEADER");
-      if(me == 0 && header != NULL) {
-	  if (strcmp(header,"RUNTIME") == 0) {
-	      DDI_Runtime_print(stdout);
-	      fprintf(stdout,"\n");
-	  }
-	  fflush(stdout);
-      }
-#endif
 
     # if defined CRAY_MPI
 /*
