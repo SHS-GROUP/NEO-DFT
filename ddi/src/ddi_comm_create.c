@@ -1,6 +1,7 @@
 /*
  * create communicators (i.e. subgroup computing)
  * author Ryan Olsen, 2002.
+ * 22 Mar 14 - MWS - remove special BG-L custom create (code not in use)
  *  6 Feb 13 - SRP - finish coding of communicator destruction
  */
 
@@ -28,14 +29,7 @@
          if(i < nr) list[i]++;
       }
 
-#if defined DDI_BGL
-      if (DDI_BGL_Comm_divide_custom(ngroups, list, comm_id, new_comm_id) != 0) {
-	  if (cur_comm->me == 0) printf("%s: Groups are not aligned to BG/L psets.\n", DDI_Id());
-	  Comm_divide_custom(ngroups,list,comm_id,new_comm_id);
-      }
-#else
       Comm_divide_custom(ngroups,list,comm_id,new_comm_id);
-#endif
 
       free(list);
    }
