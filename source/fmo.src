@@ -59,6 +59,15 @@ C>
 C>    @date 25/03/13 - Casper Steinmann
 C>     - Added EFMO/FD support
 C>
+C>    @date March, 2014 - Colleen Bertoni
+C>     - Changed how the memory for the EFMO exchange repuslion term
+C>       (nefmobas and efmobas) is calculated, and added the term
+C>       liexrep_mem to EFMOPO which is an array that indexes into the new
+C>       nefmobas and efmobas
+C>     - Decreased the amount of memory for one of the EFMO charge
+C>       transfer terms (lefmocf), since it only needs to hold the
+C>       occupied diagonal terms of the fock matrix
+C>   
       SUBROUTINE fmox(modeff)
 C
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
@@ -82,8 +91,7 @@ C
       Parameter(MXATM=2000,MXAO=8192,MXRT=100,MAXNZ=137,MaxLay=5,
      *          MXSFMO=MaxLay*40,MXGFMO=MaxLay*100,MXAFMO=MaxLay*10,
      *          MAXL=5,MXPTPT=100,MXFGPT=12000,MXFRG=1050,MXDFG=5,
-     *          MXDPPT=MXFRG*MXDFG*12,MXGRID=10,MaxNp=45,MXPLATE=10,
-     *          MXSH=5000,MXGTOT=20000)
+     *          MXDPPT=MXFRG*MXDFG*12,MXGRID=10,MaxNp=45,MXPLATE=10)
       parameter (nstfmo=10,maxpst=10,zero=0.0D+00,one=1.0D+00,maxelm=3,
      *           nextracc=17,nedft=2)
       PARAMETER (MXEFMOPTS=50,MXEFMOPPTS=60,MXNEFMOPTS=27,
@@ -116,7 +124,8 @@ C
      *                IMODEFCT,IDIMTYP
       COMMON /EFMOPO/ LNEFMOPTS,LEFMOPTS,LEFMOPPTS,LEFMODPTS,LNEFMOBAS,
      *                LEFMOBAS,LEFMOLMO,LEFMOFM,LEFMOCV,LEFMOCF,
-     *                LEFMODIMG,LEFMOTOTG,LEFMOIPT,LEFMOIGLOB
+     *                LEFMODIMG,LEFMOTOTG,LEFMOIPT,LEFMOIGLOB,
+     *                liexrep_offset
       COMMON /EFPFMO/ RUNEFP,REFFMO,REPNUCEFP,IEFPFMO,ISWENUC,EFPEFP
       COMMON /EFPOTD/ METHOF,ISCCHG,MOVE,nfrag
       COMMON /ELPROP/ ELDLOC,ELMLOC,ELPLOC,ELFLOC,
@@ -1933,26 +1942,32 @@ C
         MXBSFN=0
         MXMOS=0
         MXMO2=0
-        LTWO=0
         DO I=1,NFG
         MXBSFN=MAX(MXBSFN,NBSFN(I))
         MXMOS=MAX(MXMOS,NMXMO(I))
         ENDDO
         MXMO2=(MXMOS*MXMOS+MXMOS)/2
-        LTWO=(MXBSFN*MXBSFN+MXBSFN)/2
+
+c$$$ calculate the memory for exrep terms. this calculates the
+c$$$ total number of shells and gaussians needed, and puts
+C$$$ them in nsh_tot and ng_tot, respectively
+        call calc_exrep_mem( x(llibnsh), x(llibng), nsh_tot, ng_tot,
+     *       x(lizbas), x(liatfrg), x(lnatfrg), x(lianfrg), maxbas,
+     *       maxnz, nfg, dummy,.false.)
 C
         CALL VALFM(LOADFM)
-        lnefmopts = LOADFM + 1
+        liexrep_offset = LOADFM + 1
+        lnefmopts = liexrep_offset + 2*nfg
         lefmopts = lnefmopts + (7*nfg-1)/NWDVAR + 1
         lefmoppts = lefmopts + nfg*MXNEFMOPTS*MXEFMOPTS
         lefmodpts = lefmoppts + nfg*MXNEFMOPPTS*MXEFMOPPTS
         lnefmobas = lefmodpts + 12*nfg*MXNEFMOPPTS*MXEFMOPPTS
-        lefmobas =  lnefmobas + nfg*7*MXSH
-        lefmolmo = lefmobas + nfg*10*MXGTOT
+        lefmobas =  lnefmobas + nsh_tot*7
+        lefmolmo = lefmobas + ng_tot*10
         lefmofm = lefmolmo + nfg*MXBSFN*MXMOS
         lefmocv = lefmofm + nfg*MXMO2
         lefmocf = lefmocv + nfg*MXBSFN*MXBSFN
-        lefmodimg = lefmocf + nfg*LTWO
+        lefmodimg = lefmocf + nfg*MXMOS
 c       this next definition is a bit wierd for lefmodimg, but we
 c       need to store ALL of the efp gradient, i.e. the number
 c       of atoms + whatever common atoms that the fragments have.
@@ -1966,12 +1981,12 @@ c       of atoms + whatever common atoms that the fragments have.
         call vclr(x(lefmopts),1,nfg*MXNEFMOPTS*MXEFMOPTS)
         call vclr(x(lefmoppts),1,nfg*MXNEFMOPPTS*MXEFMOPPTS)
         call vclr(x(lefmodpts),1,12*nfg*MXNEFMOPPTS*MXEFMOPPTS)
-        call viclr(x(lnefmobas),1,nfg*7*MXSH)
-        call vclr(x(lefmobas),1,nfg*10*MXGTOT)
+        call viclr(x(lnefmobas),1,nsh_tot*7)
+        call vclr(x(lefmobas),1,ng_tot*10)
         call vclr(x(lefmolmo),1,nfg*MXBSFN*MXMOS)
         call vclr(x(lefmofm),1,nfg*MXMO2)
         call vclr(x(lefmocv),1,nfg*MXBSFN*MXBSFN)
-        call vclr(x(lefmocf),1,nfg*LTWO)
+        call vclr(x(lefmocf),1,nfg*MXMOS)
         call vclr(x(lefmodimg),1,3*natfmo+3*nbndfg)
         call vclr(x(lefmototg),1,3*natfmo)
         call viclr(x(lefmoipt),1,nfg)
@@ -1985,6 +2000,12 @@ c       of atoms + whatever common atoms that the fragments have.
           endif
         endif
       ENDIF
+c$$$ fills the iexrep_offset array, which allows
+c$$$ the nefmobas and efmobas array to be indexed into by fragment
+      call calc_exrep_mem( x(llibnsh), x(llibng), nsh_tot, ng_tot,
+     *     x(lizbas), x(liatfrg), x(lnatfrg), x(lianfrg), maxbas,
+     *     maxnz,nfg, x(liexrep_offset),.true.)
+
       if(modfmm.ne.0) call setmcent(ncentm,x(lcrfrg),x(llayfrg),units)
 c
       if(nder.gt.0) call vclr(x(lfmode),1,3*natfmo*mbody)
