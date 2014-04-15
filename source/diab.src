@@ -1,3 +1,4 @@
+C 15 Apr 14 - TZ,MWS - allow for separate MCQDPT dominant group inputs
 C 20 Sep 13 - MWS - fix MORMO convergence problems
 C  1 May 13 - MWS - extend diabatization to MCQDPT level
 C  9 Nov 12 - AAW - adjust calling args for DETFCI/DEFCCI
@@ -32,7 +33,7 @@ C
      *        CANONC,FCORE,FORS,EKT,LINSER,AVGGUGA
       LOGICAL DOCORE,DOOOOO,DOVOOO,DOVVOO,DOVOVO,DOVVVO,DOVVVV,
      *        DOEXCH,DOFOCK,DDITRF
-      LOGICAL OFFSYM,STDPHASE
+      LOGICAL OFFSYM,STDPHASE,GOTREFQD
 C
       PARAMETER (MXATM=2000, MXRT=100, MXNORO=250)
 C
@@ -58,7 +59,7 @@ C
      *                MAXP,NCIDET,IGPDET,KSTSYM,NFTGCI,IDWEIGH
       COMMON /DIABAT/ ALPHA_N,ALPHA_R,ALPHA_T,
      *                TH_DOC,TH_VIR,SLCTTH,CONV_TH,WBLOCK(3),
-     *                NDFRM,NDMOSYM,NRCSF,NMLAP,NDLAP,NORIENT,
+     *                NDFRM,NDMOSYM,NRCSF,NCSFMQ,NMLAP,NDLAP,NORIENT,
      *                MOSLAB_CHARACT(MXDIABACT),
      *                MAX_ITER,NGRSTATE,NEXSTATE,NSTDIAB,
      *                NSYMBOL_DOC,NSYMBOL_VAL,NSYMBOL_VIR
@@ -777,6 +778,14 @@ C
          LLSTCSF  = LDCIRF2  + MAXLIST*MAXRT
          LLSTGRP  = LLSTCSF  + MAXLIST
          LISTACK  = LLSTGRP  + MAXLIST
+C               a similar list, except for MCQDPT states
+         LLSTCSF2 = LLSTGRP  + MAXLIST
+         LLSTGRP2 = LLSTCSF2 + MAXLIST
+         LDPT     = LLSTGRP2 + MAXLIST
+         LDPTREF  = LDPT     + MAXLIST*MAXRT
+         LDPTRF2  = LDPTREF  + MAXLIST*MAXRT
+         LISTACK  = LDPTRF2  + MAXLIST*MAXRT
+C
          LCIVEC   = LISTACK  + NSTATE
          LLEVIR   = LCIVEC   + NWKS*NCIVEC
          LICASE   = LLEVIR   + NBF
@@ -800,16 +809,25 @@ C
          LWRKROT  = LQDPTROT + NSTDIAB*NSTDIAB
          LCIMXMC  = LWRKROT  + NSTDIAB
          LCIMXPT  = LCIMXMC  + NSTDIAB*10
-         LAST     = LCIMXPT  + NSTDIAB*10
+         LPTVEC   = LCIMXPT  + NSTDIAB*10
+         LAST     = LPTVEC   + NSTDIAB*NCSFMQ
          NEEDDIAB = LAST - LOADFM - 1
          CALL GETFM(NEEDDIAB)
 C
-C  (i) Create lists of dominate CSF groups G_k for each state k,
-C      or if the list is specified in the input, use the input.
+C  (i) Read possible list of dominate CSF groups G_k for each state k.
+C      Possibly, read a different dominant list for MCQDPT runs.
 C
          IF(NRCSF.NE.0) THEN
             CALL RDCSFGRPS(NSTDMO,NLIST,X(LDCIREF),X(LLSTCSF),
      &                     X(LLSTGRP),MAXLIST,MAXRT)
+            GOTREFQD = .FALSE.
+            IF((MPLEVL.EQ.2  .AND.  EXETYP.EQ.CHECK)  .OR.
+     *            NWFNFLG.EQ.1) THEN
+               CALL RDCSFGRPQD(GOTREFQD,NSTDIAB,NLIST2,
+     *                         X(LDPTREF),X(LLSTCSF2),X(LLSTGRP2),
+     *                         MAXLIST,MAXRT,NGRSTATE,
+     *                         NLIST,X(LDCIREF),X(LLSTCSF),X(LLSTGRP))
+            END IF
          END IF
 C
          IF(EXETYP.EQ.CHECK) THEN
@@ -823,6 +841,7 @@ C
          MODE = NWFNFLG
                        NDIMQD=1
          IF(MODE.EQ.1) NDIMQD=NSTDIAB
+C
          CALL REFADIAB(MODE,NFT21,
      &                 X(LLSTCSF),X(LLSTGRP),X(LDCI),X(LCIVEC),
      &                 X(LLEVIR),X(LICASE),X(LIECONF),X(LIECASE),
@@ -830,24 +849,46 @@ C
      &                 X(LIOUTIV),X(LQDPTROT),X(LWRKROT),
      &                 X(LCIMXMC),X(LCIMXPT),
      &                 NLIST,MAXLIST,MAXRT,NSTDMO,NDIMQD,
-     &                 NWKS,NROWS,4*NROWS,NBF,NCIVEC)
+     &                 NWKS,NROWS,4*NROWS,NBF,NCIVEC,
+     &                 GOTREFQD,X(LPTVEC),X(LDPTREF),
+     &                 X(LLSTCSF2),X(LLSTGRP2),NLIST2,X(LDPT))
 C
 C (iii) Make adiabatic/diabatic transformation matrix.
 C       Print diabatic state's CSF expansions.
 C       Print diabatic state's Hamiltonian elements.
 C
-         CALL MKDIAB(MODE,NRCSF,ECI_SAV,NLIST,X(LLSTGRP),
-     &               X(LLSTCSF),X(LDCI),X(LDCIREF),X(LDCIRF2),
-     &               X(LT),X(LTP),X(LS),X(LEIGVAL),X(LEIGBUF),
-     &               X(LSTRI),X(LIWORK),X(LWRKVEC),X(LU),X(LBUFF),
-     &               X(LWORK),NSTDMO,NGRSTATE,NSTDIAB,MAXLIST,MAXRT)
+         IF(MODE.EQ.0  .OR.   .NOT.GOTREFQD) THEN
+            CALL MKDIAB(MODE,NRCSF,ECI_SAV,NLIST,X(LLSTGRP),
+     &                  X(LLSTCSF),X(LDCI),X(LDCIREF),X(LDCIRF2),
+     &                  X(LT),X(LTP),X(LS),X(LEIGVAL),X(LEIGBUF),
+     &                  X(LSTRI),X(LIWORK),X(LWRKVEC),X(LU),X(LBUFF),
+     &                  X(LWORK),NSTDMO,NGRSTATE,NSTDIAB,MAXLIST,MAXRT)
+C
+         ELSE
+            CALL MKDIAB(MODE,NRCSF,ECI_SAV,NLIST2,X(LLSTGRP2),
+     &                  X(LLSTCSF2),X(LDPT),X(LDPTREF),X(LDPTRF2),
+     &                  X(LT),X(LTP),X(LS),X(LEIGVAL),X(LEIGBUF),
+     &                  X(LSTRI),X(LIWORK),X(LWRKVEC),X(LU),X(LBUFF),
+     &                  X(LWORK),NSTDMO,NGRSTATE,NSTDIAB,MAXLIST,MAXRT)
+         END IF
 C
 C
-C (iv) Punch out CSF list,
-C      CI coefficients of 'truncated' Diabatic states to $REFCSF
+C (iv) Punch out CSF list, to $REFCSF or $REFQD, namely the
+C      coefficients of 'dominant' parts of diabatic states,
 C
-         CALL PUCSFGRPS(NSTDMO,NLIST,X(LDCI),X(LLSTCSF),X(LLSTGRP),
-     &                  MAXLIST,MAXRT)
+         IF(MODE.EQ.0) THEN
+            CALL PUCSFGRPS(' $REFCSF ',NSTDMO,NLIST,X(LDCI),
+     &                     X(LLSTCSF),X(LLSTGRP),MAXLIST,MAXRT)
+         END IF
+C
+         IF(MODE.EQ.1) THEN
+          IF(NRCSF.EQ.0  .OR.  GOTREFQD) THEN
+            CALL PUCSFGRPS(' $REFQD  ',NSTDMO,NLIST2,X(LDPT),
+     &                     X(LLSTCSF2),X(LLSTGRP2),MAXLIST,MAXRT)
+          ELSE
+            IF(MASWRK) WRITE(IW,9430)
+          END IF
+         END IF
 C
   500    CONTINUE
          CALL RETFM(NEEDDIAB)
@@ -983,6 +1024,11 @@ C
      *           ' ADIABATIC "STATES",'/
      *        7X,'PREPARED BY ROTATING THE DMO-BASED CAS-CI STATES'/
      *       13X,'BY THE QDPT 2ND ORDER STATE ROTATION.'/)
+ 9430 FORMAT(/1X,'THIS RUN CANNOT OUTPUT $REFQD DATA FOR',
+     *           ' MCQDPT-LEVEL STATES'/
+     *        1X,'AS IT WAS FORCED TO WORK WITH THE APPROXIMATION',
+     *           ' THAT $REFCSF DATA'/
+     *        1X,'SHOULD BE USED IN THE MCQDPT DIABATIZATION, TOO.')
  9700 FORMAT(1X,'FREEING DISTRIBUTED STORAGE FOR',
      *          ' [OCC OCC|OCC OCC] INTEGRALS')
  9800 FORMAT(//1X,'ALAS, DETERMINANTS DON''T DO FINAL DIABATIZATION')
@@ -1007,7 +1053,7 @@ C--   implicit double precision(a-h,o-z)
       INTEGER I, IBTYP, IDAF, IJK, IJKT, IODA, IP,
      *        IPTIM, IR, IW, JRET1, KQNAMDIA, MASTER,
      *        MAX_ITER, ME, MOSLAB_CHARACT, MXDIABACT,
-     *        NAV, NDFRM, NDLAP, NDMOSYM, NERR,
+     *        NAV, NCSFMQ, NDFRM, NDLAP, NDMOSYM, NERR,
      *        NEXSTATE, NGRSTATE, NMLAP, NNAMDIA,
      *        NORIENT, NPROC, NRCSF, NSTDIAB,
      *        NSYMBOL_DOC, NSYMBOL_VAL, NSYMBOL_VIR
@@ -1018,7 +1064,7 @@ C
       PARAMETER (MXDIABACT=30)
       COMMON /DIABAT/ ALPHA_N,ALPHA_R,ALPHA_T,
      *                TH_DOC,TH_VIR,SLCTTH,CONV_TH,WBLOCK(3),
-     *                NDFRM,NDMOSYM,NRCSF,NMLAP,NDLAP,NORIENT,
+     *                NDFRM,NDMOSYM,NRCSF,NCSFMQ,NMLAP,NDLAP,NORIENT,
      *                MOSLAB_CHARACT(MXDIABACT),
      *                MAX_ITER,NGRSTATE,NEXSTATE,NSTDIAB,
      *                NSYMBOL_DOC,NSYMBOL_VAL,NSYMBOL_VIR
@@ -1172,7 +1218,8 @@ C
      *        1X,'PARAMETER FOR REFERENCE GEOMETRY MOS:'/
      *        5X,'REFMOS=',L8,' (IF TRUE, $DFMVEC INPUT REQUIRED)'/
      *        1X,'PARAMETER FOR DOMINANT CSF SELECTION'/
-     *        5X,'REFGRP=',L8,' (IF TRUE, $REFCSF INPUT REQUIRED)'/
+     *        5X,'REFGRP=',L8,' (IF TRUE, $REFCSF AND PERHAPS',
+     *           ' $REFQD INPUT REQUIRED)'/
      *        1X,'PARAMETERS FOR ADIABATIC STATE SELECTION:'/
      *        5X,'  NGRST=',I8,'  WITH BLOCK WEIGHTING',F6.3,
      *           ' IN 3-FOLD''S NO TERM'/
@@ -2211,7 +2258,7 @@ C*MODULE DIAB    *DECK MKSTAVGDM1
       PARAMETER (MXDIABACT=30)
       COMMON /DIABAT/ ALPHA_N,ALPHA_R,ALPHA_T,
      *                TH_DOC,TH_VIR,SLCTTH,CONV_TH,WBLOCK(3),
-     *                NDFRM,NDMOSYM,NRCSF,NMLAP,NDLAP,NORIENT,
+     *                NDFRM,NDMOSYM,NRCSF,NCSFMQ,NMLAP,NDLAP,NORIENT,
      *                MOSLAB_CHARACT(MXDIABACT),
      *                MAX_ITER,NGRSTATE,NEXSTATE,NSTDIAB,
      *                NSYMBOL_DOC,NSYMBOL_VAL,NSYMBOL_VIR
@@ -3618,7 +3665,7 @@ C
 C
       COMMON /DIABAT/ ALPHA_N,ALPHA_R,ALPHA_T,
      *                TH_DOC,TH_VIR,SLCTTH,CONV_TH,WBLOCK(3),
-     *                NDFRM,NDMOSYM,NRCSF,NMLAP,NDLAP,NORIENT,
+     *                NDFRM,NDMOSYM,NRCSF,NCSFMQ,NMLAP,NDLAP,NORIENT,
      *                MOSLAB_CHARACT(MXDIABACT),
      *                MAX_ITER,NGRSTATE,NEXSTATE,NSTDIAB,
      *                NSYMBOL_DOC,NSYMBOL_VAL,NSYMBOL_VIR
@@ -4330,7 +4377,7 @@ C
 C
       COMMON /DIABAT/ ALPHA_N,ALPHA_R,ALPHA_T,
      *                TH_DOC,TH_VIR,SLCTTH,CONV_TH,WBLOCK(3),
-     *                NDFRM,NDMOSYM,NRCSF,NMLAP,NDLAP,NORIENT,
+     *                NDFRM,NDMOSYM,NRCSF,NCSFMQ,NMLAP,NDLAP,NORIENT,
      *                MOSLAB_CHARACT(MXDIABACT),
      *                MAX_ITER,NGRSTATE,NEXSTATE,NSTDIAB,
      *                NSYMBOL_DOC,NSYMBOL_VAL,NSYMBOL_VIR
@@ -4813,7 +4860,7 @@ C
 C
       COMMON /DIABAT/ ALPHA_N,ALPHA_R,ALPHA_T,
      *                TH_DOC,TH_VIR,SLCTTH,CONV_TH,WBLOCK(3),
-     *                NDFRM,NDMOSYM,NRCSF,NMLAP,NDLAP,NORIENT,
+     *                NDFRM,NDMOSYM,NRCSF,NCSFMQ,NMLAP,NDLAP,NORIENT,
      *                MOSLAB_CHARACT(MXDIABACT),
      *                MAX_ITER,NGRSTATE,NEXSTATE,NSTDIAB,
      *                NSYMBOL_DOC,NSYMBOL_VAL,NSYMBOL_VIR
@@ -5110,15 +5157,140 @@ C
          CALL DDI_BCAST(2154,'F',COEF      ,NLIST*NSTDIAB,MASTER)
       END IF
 C
+      IF(MASWRK) THEN
+         WRITE(IW,9070) NLIST
+         DO I=1,NLIST
+            WRITE(IW,9080) LIST_CSF(I),LIST_GROUP(I)
+         ENDDO
+      END IF
       RETURN
 C
  9910 FORMAT(I8,1X,I2)
  9920 FORMAT(5X,5E15.8)
- 9020 FORMAT(1X,'READING DOMINANT CSF INFORMATION FROM THE',A8,
-     *          ' INPUT GROUP.')
+ 9020 FORMAT(1X,'READING MCSCF-LEVEL DOMINANT CSF INFORMATION',
+     *          ' FROM THE',A8,' INPUT GROUP.')
  9030 FORMAT(1X,'*** ERROR ***'/
      *       1X,'UNABLE TO FIND REQUIRED DOMINANT CSF INFO IN THE',
      *          A8,' GROUP.')
+ 9070 FORMAT(1X,'TOTAL NO. OF IMPORTANT CSF''S IN ALL STATES=',I5)
+ 9080 FORMAT(1X,'CSF',I8,' IS DOMINANT IN STATE',I5)
+      END
+C
+C*MODULE DIAB    *DECK RDCSFGRP2
+C>
+C>    @brief   read $REFQD  input
+C>
+C>    @details read reference MCQDPT configurations, and their CI coefs,
+C>             for the MCQDPT program, which has a different type
+C>             of GUGA CSFs than the MCSCF program would be using.
+C>
+C>    @author  Toby Zeng, by cloning RDCSFGRP in late 2013.
+C>
+      SUBROUTINE RDCSFGRPQD(GOTREFQD,NSTDIAB,NLIST2,PTREF,LIST_CSF2,
+     *                      LIST_GROUP2,MAXLIST,MAXRT,NGRSTATE,
+     *                      NLISTMC,COEFMC,LIST_CSFMC,LIST_GROUPMC)
+      IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+C
+      DIMENSION LIST_CSF2(MAXLIST),LIST_CSFMC(MAXLIST)
+      DIMENSION LIST_GROUP2(MAXLIST),LIST_GROUPMC(MAXLIST)
+      DIMENSION PTREF(MAXLIST,MAXRT),COEFMC(MAXLIST,MAXRT)
+C
+      LOGICAL GOTREFQD
+      LOGICAL GOPARR,DSKWRK,MASWRK
+      CHARACTER*8 REFCSF2
+C
+      COMMON /IOFILE/ IR,IW,IP,IJK,IJKT,IDAF,NAV,IODA(950)
+      COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+C
+      DATA REFCSF2 /' $REFQD '/
+C
+C         routine to read csf list for mcqdpt diabatic states
+C
+      IF(MASWRK) WRITE(IW,9020) REFCSF2
+      CALL SEQREW(IR)
+      CALL FNDGRP(IR,REFCSF2,IEOF)
+C
+C               if $REFQD input is found, read it in.
+C
+      IF(IEOF.EQ.0) THEN
+         GOTREFQD = .TRUE.
+         IF(MASWRK) READ(IR,*) NLIST2
+         IF(GOPARR) CALL DDI_BCAST(2170,'I',NLIST2,1,MASTER)
+C
+         IF(NLIST2.GT.MAXLIST) THEN
+            IF(MASWRK) THEN
+              WRITE(IW,*) 'STORAGE PROBLEM READING $REFQD'
+              WRITE(IW,*) 'YOUR INPUT IS NLIST2=',NLIST2
+              WRITE(IW,*) 'MAXIMUM ALLOWED IS',MAXLIST
+            END IF
+            CALL ABRT
+         END IF
+C
+C       read lists of dominant CSFs in this or that state
+C
+         IF(MASWRK) THEN
+           DO LIST=1,NLIST2
+             READ(IR,9910) LIST_CSF2(LIST),LIST_GROUP2(LIST)
+           ENDDO
+C
+C       read QDPT coefficients
+C
+            DO J=NGRSTATE+1,NGRSTATE+NSTDIAB
+              MAX=0
+   30         CONTINUE
+              MIN=MAX+1
+              MAX=MAX+5
+              IF (MAX.GT.NLIST2) MAX=NLIST2
+              IF (NLIST2.LE.99) READ(IR,9920) (PTREF(I,J),I=MIN,MAX)
+              IF (NLIST2.GT.99) READ(IR,9920) (PTREF(I,J),I=MIN,MAX)
+              IF (MAX.LT.NLIST2) GO TO 30
+            END DO
+         ENDIF
+C
+C ... broadcasting the CSF and group lists
+C
+         IF(GOPARR) THEN
+           CALL DDI_BCAST(2171,'I',LIST_CSF2,  NLIST2,        MASTER)
+           CALL DDI_BCAST(2172,'I',LIST_GROUP2,NLIST2,        MASTER)
+           CALL DDI_BCAST(2173,'F',PTREF      ,NLIST2*NSTDIAB,MASTER)
+         ENDIF
+C
+C               if $REFQD input is not found,
+C               inherit the same info used at the MCSCF level.
+C               This is problematic as the CSF indices in the two
+C               different GUGA programs disagree (as may some of
+C               the spin couplings).
+C
+      ELSE
+         IF(MASWRK) WRITE(IW,9030) REFCSF2
+         NLIST2 = NLISTMC
+         DO I=1,NLIST2
+            LIST_CSF2(I) = LIST_CSFMC(I)
+            LIST_GROUP2(I) = LIST_GROUPMC(I)
+            DO J=1,NSTDIAB
+               PTREF(I,J) = COEFMC(I,J)
+            ENDDO
+         ENDDO
+      END IF
+C
+      IF(MASWRK) THEN
+         WRITE(IW,9070) NLIST2
+         DO I=1,NLIST2
+            WRITE(IW,9080) LIST_CSF2(I),LIST_GROUP2(I)
+         ENDDO
+      END IF
+      RETURN
+C
+ 9020 FORMAT(/1X,'READING MCQDPT-LEVEL DOMINANT CSF INFORMATION',
+     *          ' FROM THE',A8,'INPUT GROUP.')
+ 9030 FORMAT(1X,'UNABLE TO FIND MCQDPT-LEVEL DOMINANT CSF INFO IN THE',
+     *          A8,'GROUP,'/
+     *       1X,'THEREFORE, WILL USE MCSCF-LEVEL $REFCSF INPUT AS',
+     *          ' THE $REFQD INPUT.')
+ 9070 FORMAT(1X,'TOTAL NO. OF IMPORTANT CSF''S IN ALL STATES=',I5)
+ 9080 FORMAT(1X,'CSF',I8,' IS DOMINANT IN STATE',I5)
+ 9910 FORMAT(I8,1X,I2)
+ 9920 FORMAT(5X,5E15.8)
       END
 C
 C*MODULE DIAB    *DECK REFADIAB
@@ -5135,10 +5307,12 @@ C>
      &                    ECI_SAV,ISTACK,TAB_COEF,IOUTIV,
      &                    QDPTROT,WRKROT,CIMXMC,CIMXPT,
      &                    NLIST,MAXLIST,MAXRT,NSTDMO,NDIMQD,
-     &                    NWKS,NROWS,NROWS4,NBF,NCIVEC)
+     &                    NWKS,NROWS,NROWS4,NBF,NCIVEC,
+     &                    GOTREFQD,PTVEC,DPTREF,
+     &                    LIST_CSF2,LIST_GROUP2,NLIST2,DPTCOEF)
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
-      LOGICAL GOPARR,DSKWRK,MASWRK,SVDSKW
+      LOGICAL GOPARR,DSKWRK,MASWRK,SVDSKW,GOTREFQD,HADIT
 C
       DIMENSION LIST_CSF(MAXLIST)
       DIMENSION LIST_GROUP(MAXLIST)
@@ -5157,13 +5331,17 @@ C                  NDIMQD is the same as NSTDIAB if doing MCQDPT,
 C                  or is set to 1 if CAS is not using this storage.
       DIMENSION QDPTROT(NDIMQD,NDIMQD),WRKROT(NDIMQD)
       DIMENSION CIMXMC(10,NDIMQD),CIMXPT(10,NDIMQD)
+C                  MCQDPT CSF lists.
+      DIMENSION PTVEC(NCSFMQ,NDIMQD),
+     *          DPTREF(MAXLIST,MAXRT),DPTCOEF(MAXLIST,MAXRT),
+     *          LIST_CSF2(MAXLIST),LIST_GROUP2(MAXLIST)
 C
       PARAMETER (MXRT=100)
       PARAMETER (MXDIABACT=30)
 C
       COMMON /DIABAT/ ALPHA_N,ALPHA_R,ALPHA_T,
      *                TH_DOC,TH_VIR,SLCTTH,CONV_TH,WBLOCK(3),
-     *                NDFRM,NDMOSYM,NRCSF,NMLAP,NDLAP,NORIENT,
+     *                NDFRM,NDMOSYM,NRCSF,NCSFMQ,NMLAP,NDLAP,NORIENT,
      *                MOSLAB_CHARACT(MXDIABACT),
      *                MAX_ITER,NGRSTATE,NEXSTATE,NSTDIAB,
      *                NSYMBOL_DOC,NSYMBOL_VAL,NSYMBOL_VIR
@@ -5171,12 +5349,14 @@ C
      *                VEN,VEE,EPOT,EKIN,ESTATE(MXRT),STATN,EDFT(2),EDISP
       COMMON /IOFILE/ IR,IW,IP,IJK,IJKT,IDAF,NAV,IODA(950)
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
+      COMMON /RUNOPT/ RUNTYP,EXETYP,NEVALS,NGLEVL,NHLEVL
 C
       PARAMETER (ZERO=0.0D+00)
 C
       DATA NFT11  /11/
       DATA NFT12  /12/
       DATA CVGTOL /1.0D-05/
+      DATA CHECK  /8HCHECK   /
 C
 C MODE=0 or 1  ... determines if CAS or MCQDPT level call
 C LIST_CSF(i)  ... i-th dominant CSF inex
@@ -5261,12 +5441,73 @@ C
       END IF
 C
 C              ---- create QDPT-CI target states ----
-C     this is of course just an approximation: apply the rotation
-C     that diagonalizes the 2nd order Hamiltonian to the 1st order
-C     CI vectors, to produce updated CI vectors.
 C     The adiabatic state's energy values need to be QDPT as well.
 C
       IF(MODE.EQ.1) THEN
+C
+C            Sift out the QDPT state coefficients using user's
+C            input $REFQD to specify the dominant QDPT CSFs, or
+C            prepare the entire MCQDPT reference CSF data set.
+C
+         IF(GOTREFQD  .OR.  NRCSF.EQ.0) THEN
+            IF(EXETYP.NE.CHECK) THEN
+               CALL DAREAD(IDAF,IODA,PTVEC,NCSFMQ*NDIMQD,546,0)
+            ELSE
+               CALL VCLR(PTVEC,1,NCSFMQ*NDIMQD)
+            END IF
+C
+C               REFGRP=.FALSE. in input requires us to generate the
+C               kind of information that would have been in $REFQD.
+C               Check to be sure we include each MCQDPT CSF only once.
+C
+            IF(NRCSF.EQ.0) THEN
+               NLIST2=0
+               DO ISTATE=1,NDIMQD
+                  DO ICSF=1,NCSFMQ
+                     IF(ABS(PTVEC(ICSF,ISTATE)).GT.SLCTTH) THEN
+                        HADIT = .FALSE.
+                        DO KKK=1,NLIST2
+                           IF(LIST_CSF2(KKK).EQ.ICSF) HADIT=.TRUE.
+                        ENDDO
+                        IF(.NOT.HADIT) THEN
+                           NLIST2=NLIST2+1
+                           LIST_GROUP2(NLIST2)=ISTATE
+                           LIST_CSF2(NLIST2)=ICSF
+                           DPTREF(ICSF,ISTATE+NGRSTATE) =
+     *                               PTVEC(ICSF,ISTATE)
+                        END IF
+                     END IF
+                  ENDDO
+               ENDDO
+               GOTREFQD = .TRUE.
+            END IF
+C                  store the COEFS of the dominant CSFs in DPTCOEF.
+C                 (the contents appear to duplicate DPTREF, actually.)
+            DO ISTATE=1,NDIMQD
+              DO ICSF=1,NLIST2
+                DPTCOEF(ICSF,NGRSTATE+ISTATE)
+     *               = PTVEC(LIST_CSF2(ICSF),ISTATE)
+              ENDDO
+            ENDDO
+C
+         ELSE
+C
+C     The following is Nakamura's original procedure, and is just
+C     an approximation: apply the rotation that diagonalizes the
+C     2nd order Hamiltonian to the 1st order CI vectors, to produce
+C     updated CI vectors.  This should give the same states as
+C     the QDPT, apart from the phase, but using the CSF indexing
+C     of the MCSCF program that gave us the CAS-CI vecotrs on NFT12.
+C     There is then a complicated matching of coefficients in the
+C     rotated CAS-CI vectors and the QDPT state vectors, to try to
+C     force the same phase onto the CAS-CI that happened in the QDPT.
+C     Since we have no idea how to predict the CSF position in the
+C     MCQDPT for any CSF in the CAS-CI, this is done by looking for
+C     the biggest coefficients, on the assumption this is the same CSF.
+C     That's of course dubious, but there is an additional problem,
+C     in that the CSFs with multiple open shells have different
+C     spin functions (including phase choices) for the GUGA codes.
+C     Not surprisingly, this procedure may fail!
 C
 C            Obtain all CI vectors, for CAS-level DMO-based CI states.
 C
@@ -5300,6 +5541,7 @@ C
                   CALL PRSQ(CIMXMC,NSTDIAB,MIN(10,NWKS),10)
                   WRITE(IW,9320)
                   CALL PRSQ(CIMXPT,NSTDIAB,MIN(10,NWKS),10)
+                  WRITE(IW,9330)
                END IF
                CALL ABRT
             END IF
@@ -5317,6 +5559,7 @@ C
             CALL SQWRIT(NFT21,CIVEC(1,IST),NWKS)
          ENDDO
          CALL SEQREW(NFT21)
+         END IF
 C
 C            grab the MCQDPT state energies.
 C
@@ -5333,26 +5576,46 @@ C    contain coefs for the user input's dominant CSF list.
 C
   100 CONTINUE
 C
-      CALL PRTADIAB(NRCSF,NFT11,NFT12,NFT21,NSTDMO,NWKS,ECI_SAV,
-     &              CIVEC,SLCTTH,LEVIR,ICASE,IECONF,IECASE,IARC,
-     &              LIST_CSF,LIST_GROUP,DCICOEF,TAB_COEF,IOUTIV,
-     &              NLIST,NBF,NROWS4,NROWS,MAXLIST,MAXRT)
+      IF(MODE.EQ.0  .OR.  .NOT.GOTREFQD) THEN
+         CALL PRTADIAB(NRCSF,NFT11,NFT12,NFT21,NSTDMO,NWKS,ECI_SAV,
+     &                 CIVEC,SLCTTH,LEVIR,ICASE,IECONF,IECASE,IARC,
+     &                 LIST_CSF,LIST_GROUP,DCICOEF,TAB_COEF,IOUTIV,
+     &                 NLIST,NBF,NROWS4,NROWS,MAXLIST,MAXRT)
 C
 C Print -CI- coefficients for every CSF in the list of dominant CSFs.
 C
-      IF(MASWRK) THEN
-         IF(MODE.EQ.0) WRITE(IW,9220)
-         IF(MODE.EQ.1) WRITE(IW,9225)
-         WRITE(IW,9228)
-         DO I=1,NSTDMO
-           WRITE(IW,9230) I,ECI_SAV(I)
-           WTTOT = 0.0D+00
-           DO J=1,NLIST
-              WRITE(IW,9240) LIST_CSF(J),LIST_GROUP(J),DCICOEF(J,I)
-              WTTOT = WTTOT + DCICOEF(J,I)**2
-           END DO
-           WRITE(IW,9250) WTTOT
-         END DO
+         IF(MASWRK) THEN
+            IF(MODE.EQ.0) WRITE(IW,9220)
+            IF(MODE.EQ.1) WRITE(IW,9225)
+            WRITE(IW,9228)
+            DO I=1,NSTDMO
+              WRITE(IW,9230) I,ECI_SAV(I)
+              WTTOT = 0.0D+00
+              DO J=1,NLIST
+                 WRITE(IW,9240) LIST_CSF(J),LIST_GROUP(J),DCICOEF(J,I)
+                 WTTOT = WTTOT + DCICOEF(J,I)**2
+              END DO
+              WRITE(IW,9250) WTTOT
+            END DO
+         END IF
+C
+      ELSE
+C
+         IF(MASWRK) THEN
+            WRITE(IW,9400)
+            IF(NRCSF.GT.0) WRITE(IW,9410)
+            IF(NRCSF.EQ.0) WRITE(IW,9420)
+            DO ISTATE=1,NDIMQD
+              WRITE(IW,9430) NGRSTATE+ISTATE,ECI_SAV(NGRSTATE+ISTATE)
+              WGTTOT=0.0D+00
+              DO ICSF=1,NLIST2
+                WRITE(IW,9440) ICSF,LIST_CSF2(ICSF),LIST_GROUP2(ICSF),
+     +                         DPTCOEF(ICSF,NGRSTATE+ISTATE)
+                WGTTOT=WGTTOT+DPTCOEF(ICSF,NGRSTATE+ISTATE)**2
+              ENDDO
+              WRITE(IW,9250) WGTTOT
+            ENDDO
+         ENDIF
       END IF
 C
 C         Back parameter NFT21 to the original value, if necessary
@@ -5392,6 +5655,27 @@ C
      *       1X,'CANNOT MATCH UP STATES IN THE NEXT SETS OF STATES:')
  9310 FORMAT(1X,'THE LARGEST COEFS IN THE DMO BASED CAS-CI ARE')
  9320 FORMAT(1X,'THE LARGEST COEFS IN THE MCQDPT CAS-CI STATES ARE')
+ 9330 FORMAT(/1X,'THE BEST REMEDY FOR THIS PROBLEM IS TO PROVIDE',
+     *          ' $REFQD INPUT,'/
+     *       1X,'SO THAT THE CRUDE REMAPPING OF $REFSCF',
+     *          ' INFORMATION ONTO THE'/
+     *       1X,'MCQDPT STATES (WHICH HAS JUST FAILED) IS NOT',
+     *          ' NECESSARY.'/
+     *       1X,'AN EXAMINATION OF THE TOTAL WEIGHTS OF DOMINANT'/
+     *       1X,'CSFS IN CAS-CI STATES MAY ALSO HELPFUL.')
+ 9400 FORMAT(/1X,'THE FULL CSF EXPANSIONS FOR THE ADIABATIC MCQDPT'/
+     *       1X,'STATES WERE PRINTED IN THE MCQDPT STEP, SEE ABOVE.')
+ 9410 FORMAT(/1X,'ONLY CONFIGURATIONS ENTERED IN $REFQD WILL BE',
+     *          ' PRINTED BELOW.')
+ 9420 FORMAT(/1X,'ONLY CONFIGURATIONS CONTAINED IN THE AUTOMATICALLY',
+     *           ' GENERATED $REFQD DATA'/
+     *       1X,'WILL BE PRINTED BELOW (THIS RUN HAS REFGRP=.FALSE.)')
+ 9430 FORMAT(/1X,'CI COEFS OF DOMINANT CSFS IN MCQDPT STATES.'/
+     *       1X,'IF THE TOTAL WEIGHT OF THE DOMINANT CSF LIST IN',
+     *          ' ANY ADIABATIC STATE IS SMALL,'/
+     *       1X,'THE LIST OF DOMINANT CSF''S SHOULD BE RECONSIDERED.'/
+     *       1X,'STATE #',I3,' ENERGY =',F15.8/)
+ 9440 FORMAT(5X,I4,I8,I4,F15.8)
       END
 C
 C*MODULE DIAB    *DECK SIFTADIAB
@@ -5962,7 +6246,7 @@ C
      &        1X,'---------------------------------------')
  9060 FORMAT(1X,'STATE # ',I2/1X,10(1H-)/
      &       1X,'   <CSF>      <COEFFICIENT>')
- 9070 FORMAT(1X,I7,5X,F12.6)
+ 9070 FORMAT(1X,I8,5X,F12.6)
  9080 FORMAT(/1X,'---------------------------------------'/
      &        1X,'    - ROTATION TO DIABATIC STATES -    '/
      &        1X,'---------------------------------------'/
@@ -5971,10 +6255,20 @@ C
       END
 C
 C*MODULE DIAB    *DECK PUCSFGRPS
-      SUBROUTINE PUCSFGRPS(NSTATE,NLIST,COEF,LIST_CSF,LIST_GROUP,
-     &                     MAXLIST,MAXCI)
+C>
+C>    @brief    output dominant CSF information
+C>
+C>    @details  punch $REFCSF or $REFQD inputs for future runs,
+C>              containing all dominant CSFs (list prepared elsewhere),
+C>              for all electronic states.
+C>
+C>    @author   Hisao Nakamura
+C>
+      SUBROUTINE PUCSFGRPS(GRPNAM,NSTATE,NLIST,COEF,
+     &                     LIST_CSF,LIST_GROUP,MAXLIST,MAXCI)
 C
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
+      CHARACTER*8 GRPNAM
 C
       COMMON /IOFILE/ IR,IW,IP,IJK,IJKT,IDAF,NAV,IODA(950)
 C
@@ -5982,19 +6276,18 @@ C
       DIMENSION LIST_GROUP(MAXLIST)
       DIMENSION COEF(MAXLIST,MAXCI)
 C
-      CHARACTER*8 REFCSF,ENDWRD
+      CHARACTER*8 ENDWRD
       LOGICAL GOPARR,DSKWRK,MASWRK
 C
       COMMON /PAR   / ME,MASTER,NPROC,IBTYP,IPTIM,GOPARR,DSKWRK,MASWRK
 C
-      DATA REFCSF /' $REFCSF'/
       DATA ENDWRD /' $END   '/
 C
 C        ---- punch out data for dominant CSFs ----
 C
       IF(.NOT.MASWRK) RETURN
 C
-      WRITE(IP,9900) REFCSF
+      WRITE(IP,9900) GRPNAM
 C
       WRITE(IP,*) NLIST
       MAX=0
@@ -6025,5 +6318,4 @@ C
 9910  FORMAT(I8,'(',I2,')')
 9920  FORMAT(I2,I3,5E15.8)
 9930  FORMAT(I3,I2,5E15.8)
-C
       END
