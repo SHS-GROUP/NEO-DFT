@@ -63,7 +63,7 @@
 
          $job     = $files{$i};
          $log     = "$files{$i}".".log";
-         $command = "/home/simon/gamess/rungms $job >& $log ";
+         $command = "/home/yy88/GAMESS/rungms $job >& $log ";
 
 	 if( ! -e $log ) { system( $command ); }  
 
