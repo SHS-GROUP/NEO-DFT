@@ -30,7 +30,7 @@
 #---quiet---set echo
 setenv AUXDATA $GMSPATH/auxdata
 setenv  EXTBAS /dev/null
-setenv  NUCBAS $SCR/nucbas
+setenv  NUCBAS /share/scratch/zhent2/nucbas
 setenv  POSBAS /dev/null
 #
 setenv ERICFMT $AUXDATA/ericfmt.dat

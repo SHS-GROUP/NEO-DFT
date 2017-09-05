@@ -43,7 +43,7 @@
 
          $job     = $files{$i};
          $log     = "$files{$i}".".log";
-         $command = "/home/yy88/GAMESS/rungms $job >& $log ";
+         $command = "/home/zhent2/gamess.git/NEO-DFT/rungms $job >& $log ";
 
 	 if( ! -e $log ) { system( $command ); }  
 
