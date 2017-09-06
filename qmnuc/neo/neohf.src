@@ -30,13 +30,17 @@ C
 C
       PARAMETER (TWO=2.0D+00)
 C
-      DATA ROHF/8HROHF    /
+      DATA ROHF/8HROHF    /, UHF/8HUHF     /
       DATA DIAGZN,RONHF/8HDIAGZN  ,8HRONHF   /
 C
 C     --- NEO-DFT REUIRES TRANSPOSED COEFFICIENT MATRICES, TRANSPOSE IN
 C         THE BEGINING. THEN TRNSPOSE BACK IN THE END ---
       IF(NEODFT.NE.RNONE) THEN
          CALL TRPOSE(COEFFA,SCR,L1,L1,1)
+C-@ZCT 
+         IF (SCFTYP.EQ. UHF) THEN
+           CALL TRPOSE(COEFFB,SCR,L1,L1,1)                                            
+         END IF                           
       END IF
 C
 C     --- DRIVER WHICH CALLS SUBROUTINE TO CALCULATE REQUESTED TYPE
@@ -85,11 +89,16 @@ C     --- ALL OTHER CASES ---
 C
       ELSE
 C
-         EHFA1 = TRACEP(DAE,FAE,L1)
+          EHFA1 = TRACEP(DAE,FAE,L1)
          IF(SCFTYP.EQ.ROHF) THEN
             EHFB1 = TRACEP(DBE,FBE,L1)
             CALL VADD(DAE,1,DBE,1,SCR,1,L2)
             CALL DCOPY(L2,SCR,1,SCR2,1)
+C-@ZCT
+         ELSE IF (SCFTYP .EQ. UHF) THEN 
+               EHFB1 = TRACEP(DBE,FBE,L1)
+               CALL VADD(DAE,1,DBE,1,SCR,1,L2)
+               CALL DCOPY(L2,SCR,1,SCR2,1)
          ELSE
             CALL DCOPY(L2,DAE,1,SCR,1)
             CALL DCOPY(L2,DAE,1,SCR2,1)
@@ -108,6 +117,11 @@ C
          EHFA2 = TWO*TRACEP(DAE,H1E,L1)
          EHFB2 = TWO*TRACEP(DBE,H1E,L1)
          EHFEL = (EHFA1 + EHFA2 + EHFB1 + EHFB2)/TWO + EN - VXCEXCDIFF
+C-@ZCT
+      ELSE IF (SCFTYP. EQ. UHF) THEN
+           EHFA2 = TWO*TRACEP(DAE,H1E,L1)
+           EHFB2 = TWO*TRACEP(DBE,H1E,L1)
+           EHFEL = (EHFA1 + EHFA2 + EHFB1 + EHFB2)/TWO + EN - VXCEXCDIFF
       ELSE
          EHFA2 = TWO*TRACEP(DAE,H1E,L1)
          EHFEL = (EHFA1+EHFA2)/TWO + EN - VXCEXCDIFF
@@ -132,6 +146,10 @@ C     --- NEO-DFT REUIRES TRANSPOSED COEFFICIENT MATRICES, TRANSPOSE IN
 C         THE BEGINING. THEN TRNSPOSE BACK IN THE END ---
       IF(NEODFT.NE.RNONE) THEN
          CALL TRPOSE(COEFFA,SCR,L1,L1,1)
+C-@ZCT
+         IF(SCFTYP.EQ.UHF) THEN
+            CALL TRPOSE(COEFFB,SCR,L1,L1,1)
+         END IF
       END IF
       RETURN
       END
@@ -149,7 +167,7 @@ C
 C
       PARAMETER (MXSH=5000, MXGTOT=20000, MXATM=2000)
       PARAMETER (MXGSH=30, MXG2=MXGSH*MXGSH)
-      PARAMETER (MXAO=8192, MXNEO=20)
+      PARAMETER (MXAO=8192, MXNEO=30)
 C
       COMMON /CONV  / DENTOL,EN,ETOT,EHF,EHF0,DIFF,ITER,ICALP,ICBET
       COMMON /FMCOM / X(1)
@@ -632,7 +650,7 @@ C
 C
       PARAMETER (MXSH=5000, MXGTOT=20000, MXGSH=30, MXG2=MXGSH*MXGSH,
      *           MXATM=2000)
-      PARAMETER (MXAO=8192, MXNEO=20)
+      PARAMETER (MXAO=8192, MXNEO=30)
 C
       SAVE ITNUCT,ETOT_NU
 C
@@ -669,7 +687,7 @@ C
       PARAMETER (ZERO=0.0D+00, ONE=1.0D+00, TWO=2.0D+00,
      *           FIVE=5.0D+00, ETOL=1.0D-09, HALF=5.0D-01)
 C
-      DATA ROHF/8HROHF    /
+      DATA ROHF/8HROHF    /, UHF/8HUHF     /
       DATA DEBUG/8HDEBUG   /
       DATA RNONE/8HNONE    /
 C
@@ -748,12 +766,12 @@ C
          LXP    = LAST
          LXK    = LXP    + NINTMX
          LIXPK  = LXK    + NINTMX * IFPK
-         LAST   = LIXPK  + NINTMX
-         LDWRK  = LAST
-         LXINTS = LAST
-         LGHOND = LAST
-         LDSH   = LAST
-         LDDIJ  = LAST
+         LDWRK  = LIXPK  + NINTMX
+         LXINTS = LDWRK  + N2
+         LGHOND = LXINTS + NSH2
+         LDDIJ  = LGHOND + MAXG
+         LDSH   = LDDIJ  + 16*MXG2
+         LAST   = LDSH   + NSH2
       END IF
 C
       IF(DIISNU) THEN
@@ -971,7 +989,8 @@ C
          VEPCP = ZERO
          VEPCEEPCDIFFEA = ZERO
          VEPCEEPCDIFFEB = ZERO
-         IF(NEODFT.NE.RNONE .AND. ICNT.GT.3) THEN
+         IF(NEODFT.NE.RNONE .AND. ((ICNT.GT.3).OR.(NEVALS.GT.0))) THEN
+c         IF(NEODFT.NE.RNONE .AND. ICNT.GT.3) THEN
             IF(FDIFF) THEN
                WRITE(IW,*) 'NEO-DFT CURRENTLY DOES NOT SUPPORT FDIFF'
                CALL ABRT
@@ -985,11 +1004,20 @@ C           NEEDS TO BE TRANSPOSED ---
 C           --- THEN TRANSPOSE BACK ---
             CALL TRPOSE(X(LVA),X(LWRK1),N1,N1,1)
             VEPCP=TRACEP(X(LDA),X(LADDTONA),N1)
-            VEPCEEPCDIFFEA=TRACEP(DAE,X(LADDTOEA),L1)/TWO-EEPC
-            VEPCEEPCDIFFEB=TRACEP(DAE,X(LADDTOEB),L1)/TWO-EEPC
-            CALL DAREAD(IDAF,IODA,X(LH1),N2,440,0)
+C-@ZCT
+            IF(SCFTYP .EQ. UHF) THEN
+               VEPCEEPCDIFFEA=TRACEP(DAE,X(LADDTOEA),L1)/TWO-EEPC/TWO
+               VEPCEEPCDIFFEB=TRACEP(DBE,X(LADDTOEB),L1)/TWO-EEPC/TWO
+            WRITE(IW,*)"E(EP CORR), EE(VCORR), EP(VCORR)" 
+            WRITE(IW,*)EEPC,TRACEP(DAE,X(LADDTOEA),L1)+
+     *                 TRACEP(DBE,X(LADDTOEB),L1),VEPCP 
+            ELSE
+               VEPCEEPCDIFFEA=TRACEP(DAE,X(LADDTOEA),L1)/TWO-EEPC
+C               VEPCEEPCDIFFEB=TRACEP(DAE,X(LADDTOEB),L1)/TWO-EEPC
             WRITE(IW,*)"E(EP CORR), EE(VCORR), EP(VCORR)"
             WRITE(IW,*)EEPC,TRACEP(DAE,X(LADDTOEA),L1),VEPCP
+            END IF
+            CALL DAREAD(IDAF,IODA,X(LH1),N2,440,0)
             CALL VADD(X(LH1),1,X(LADDTONA),1,X(LH1),1,N2)
          END IF
 C
@@ -1086,9 +1114,14 @@ C
 C
 C        --- REDUCE NUMBER OF NUCLEAR ITERATIONS EARLY ON ---
 C
-         IF(ICNT.EQ.1 .AND. ITER_NU.EQ.2) GOTO 600
-         IF(ICNT.LE.2 .AND. ITER_NU.EQ.10) GOTO 600
+c@@@krb
+C         IF((ICNT.EQ.1 .AND. ITER_NU.EQ.2).AND.(NEVALS.EQ.0))
+C     *               GOTO 600
+C         IF((ICNT.LE.2 .AND. ITER_NU.EQ.10).AND.(NEVALS.EQ.0)) 
+C     *                GOTO 600
 C
+          IF(ICNT.EQ.1 .AND. ITER_NU.EQ.2) GOTO 600 
+          IF(ICNT.LE.2 .AND. ITER_NU.EQ.10) GOTO 600 
 C        --- CHECK CONVERGENCE BEHAVIOR ---
 C
          CVDENS = (DIFF_NU.LT.DENTOL/FIVE)
@@ -1098,14 +1131,36 @@ C
          WRITE(IW,*)"DM CHANGE",DIFF_NU
 C
 !         IF(CVGED .AND. CVDENS) THEN
-         IF(DIFF_NU.LT.1.0D-05) THEN
-             IF(DBG) WRITE(IW,9080)
-            GO TO 600
-         END IF
-         IF(CVGED .AND. CVENGY) THEN
-             IF(DBG) WRITE(IW,9090)
-            GO TO 600
-         END IF
+
+c@@@krb
+C         IF(ITER.GE.15) THEN
+            IF(DIFF_NU.LT.1.0D-05) THEN
+                IF(DBG) WRITE(IW,9080)
+               GO TO 600
+            END IF
+            IF(CVGED .AND. CVENGY) THEN
+                IF(DBG) WRITE(IW,9090)
+               GO TO 600
+            END IF
+C         ELSE IF(ITER.GE.10) THEN
+C            IF(DIFF_NU.LT.1.0D-03) THEN
+C                IF(DBG) WRITE(IW,9080)
+C               GO TO 600
+C            END IF
+C            IF(CVGED .AND. CVENGY) THEN
+C                IF(DBG) WRITE(IW,9090)
+C               GO TO 600
+C            END IF
+C          ELSE
+C            IF(DIFF_NU.LT.1.0D-01) THEN
+C                IF(DBG) WRITE(IW,9080)
+C               GO TO 600
+C            END IF
+C            IF(CVGED .AND. CVENGY) THEN
+C                IF(DBG) WRITE(IW,9090)
+C               GO TO 600
+C            END IF
+C         ENDIF
 C
   500 CONTINUE
 C
@@ -1228,6 +1283,10 @@ C
           IF(SCFTYP .EQ. ROHF) THEN
              CALL VADD(FBE,1,X(LADDTOEB),1,FBE,1,L2)
           END IF
+C-ZCT
+          IF(SCFTYP .EQ. UHF) THEN
+              CALL VADD(FBE,1,X(LADDTOEB),1,FBE,1,L2)
+          END IF
       END IF
 C
 C     --- CLASSICAL-QUANTUM NUCLEI ENERGY ---
@@ -1238,6 +1297,10 @@ C
       ENUCA = TRACEP(X(LDA),X(LH1),N1) + TRACEP(X(LDA),X(LNUNU),N1)
       ENUC  = ENUCA/TWO
       ADDE = ENUC - VEPCEEPCDIFFEA - VEPCP
+C-ZCT
+      IF (SCFTYP .EQ. UHF) THEN
+          ADDE = ENUC - VEPCEEPCDIFFEA - VEPCEEPCDIFFEB - VEPCP 
+      END IF
 C
 C     --- PRINT FINAL RESULTS ---
 C
@@ -1607,7 +1670,7 @@ C
 C
       PARAMETER (MXSH=5000, MXGTOT=20000, MXGSH=30, MXG2=MXGSH*MXGSH,
      *           MXATM=2000)
-      PARAMETER (MXAO=8192, MXNEO=20)
+      PARAMETER (MXAO=8192, MXNEO=30)
 C
       COMMON /FMCOM / X(1)
       COMMON /IJPAIR/ IA(MXAO)
